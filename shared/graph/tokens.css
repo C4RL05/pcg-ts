@@ -57,6 +57,31 @@
  * enough from these that the editor reads as one surface anyway.
  */
 :root {
+  /**
+   * The same statement the block below makes, made to the BROWSER.
+   *
+   * Everything here says "dark on black" to the stylesheet, and the parts
+   * of the page the stylesheet does not draw were still being painted for
+   * a light one: a scrollbar down a panel is a bright slab on a surface
+   * that is otherwise pure black, and so are a select's dropdown, a
+   * number input's spinner and the caret. `color-scheme` is how a page
+   * tells the UA which set to use, and it is the only way to reach them —
+   * they are not elements, so no rule here can select them.
+   *
+   * ONE DECLARATION rather than a `::-webkit-scrollbar` reconstruction:
+   * that pseudo-element tree is WebKit-only and Firefox never had it, so
+   * hand-painting means writing the bar twice and getting the platform's
+   * own metrics wrong in both. The two `scrollbar-*` properties below are
+   * the standard, cross-engine pair, and they INHERIT — declared once
+   * here they reach all twelve scrolling surfaces (nine in the editor,
+   * the overlay panel and its <pre>, a demo's card) without any of them
+   * naming a scrollbar. `--ed-edge` because a scrollbar is the edge of a
+   * control, which is the value's whole job.
+   */
+  color-scheme: dark;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ed-edge) transparent;
+
   /* surfaces */
   --ed-panel: rgba(0, 0, 0, 0.92);      /* over the live render */
   --ed-solid: rgba(0, 0, 0, 0.97);      /* over the render AND itself */

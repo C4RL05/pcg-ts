@@ -4,10 +4,27 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="color-scheme" content="light dark" />
-<title>pcg-ts — real-time PCG for TypeScript</title>
+<title>pcg-ts — roadmap</title>
 <link rel="icon" href="./icon.svg" type="image/svg+xml" />
 </head>
 <body>
+<!--
+  THE RELEASE HISTORY, off the landing page.
+
+  It was the last section and the longest — one entry per release, each a
+  paragraph of what shipped — and a reader who wanted the footer scrolled
+  the whole history to reach it. It is also the one part of the site that
+  ages by growing: every release adds a row here and nothing to the page
+  it was on.
+
+  The version numbers in these entries are HISTORY, not stamps. Nothing
+  may rewrite them when the package version moves, which is what
+  `listRoadmapEntries` in `src/docs/site.ts` exists to prove — and that
+  proof now reads this page. See `src/docs/site.test.ts`.
+
+  The style block is index's, copied. See docs/architecture.html for why,
+  and for when to stop copying it.
+-->
 <style>
   /* Self-hosted rather than linked from a font CDN: no third-party
      request, nothing to block, and the page keeps its typography
@@ -667,206 +684,158 @@
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 
-<header>
-  <!-- The logo stands on plain black. The field is a different statement —
-       "this header is cooked from that seed" — and running it behind the
-       lockup made both harder to read: the animation is already a moving
-       figure, and a moving ground under it is two things competing for the
-       same glance. It belongs behind the sentence that claims it. -->
-  <div class="hero-logo">
-    <div class="wrap">
-      <h1 class="hero-title"><span class="vh">pcg-ts</span><span class="lockup" data-logo hidden aria-hidden="true"></span><svg class="wordmark" data-logo-static viewBox="0 0 1055 128" aria-hidden="true" focusable="false"><g fill-rule="nonzero" transform="translate(-9.14,127.96)"><path d="M147.76,-95.97L147.76,-127.96L9.14,-127.96L9.14,-95.97L147.76,-95.97ZM147.762,-95.97L147.762,-63.98L41.13,-63.98L9.14,-31.99L9.14,0L41.13,0L41.13,-31.99L147.762,-31.99L179.752,-63.98L179.752,-95.97L147.762,-95.97Z"/><path d="M368.768,-95.97L368.768,-127.96L230.145,-127.96L198.155,-95.97L198.155,-31.99L230.139,-31.99L230.139,0L368.768,0L368.768,-31.99L230.145,-31.99L230.145,-95.97L368.768,-95.97Z"/><path d="M557.783,-95.97L557.783,-127.96L419.16,-127.96L387.17,-95.97L387.17,-31.99L419.16,-31.99L419.16,-95.97L557.783,-95.97ZM478.925,0L510.917,-31.99L525.793,-31.99L525.793,0L557.783,0L557.783,-63.98L497.696,-63.98L465.706,-31.99L419.16,-31.99L419.16,0L478.925,0Z"/><rect x="576.186" y="-63.98" width="127.96" height="31.99"/><g transform="translate(-18.4628,0)"><path d="M823.908,0L823.908,-95.97L791.918,-95.97L791.918,0L823.908,0ZM893.218,-95.97L893.218,-127.96L823.911,-127.96L823.911,-95.97L893.218,-95.97ZM791.912,-95.97L791.912,-127.96L722.608,-127.96L722.608,-95.97L791.912,-95.97Z"/></g><g transform="translate(884.017944,0)"><path d="M41.13,-95.97L147.762,-95.97L147.762,-127.96L41.13,-127.96L9.14,-95.97L9.14,-63.98L179.752,0L179.752,-34.149L41.13,-86.156L41.13,-95.97ZM41.13,0L41.13,-31.99L9.14,-31.99L9.14,0L41.13,0ZM179.755,-63.986L179.755,-95.97L147.765,-95.97L147.765,-63.986L179.755,-63.986Z"/></g></g></svg></h1>
-    </div>
-  </div>
-  <div class="hero">
-    <canvas id="field" aria-hidden="true"></canvas>
-    <!-- TOP RIGHT OF THIS BAND, not of the header: the link is about the
-         dots, and the dots are what this band is. Outside the content
-         column on purpose — it belongs to the strip rather than to a line
-         of it.
-
-         It says "in the editor" and not "the graph behind this", which
-         would not be true: the field here is drawn straight onto a canvas
-         by the script at the foot of this page — the same construction the
-         library uses, in forty lines, so the landing page ships no bundle.
-         What this opens is the corpus graph that builds the same picture
-         with the library: a scatter, a noise field written to `density`,
-         and a thinning pass. The seed travels with it, so whatever is in
-         the box below arrives in the editor as the scatter's own seed. -->
-    <a
-      class="hero-open"
-      href="./editor/?graph=basics-filter-by-density"
-      title="Open the editor on a graph that builds this kind of field with the library — a scatter thinned by a noise field — starting from the seed you set here."><svg class="ic" viewBox="0 0 256 256" aria-hidden="true" focusable="false"><path d="M200,152a35.77,35.77,0,0,0-16.46,4l-21.39-16.64A35.49,35.49,0,0,0,164,128.65l10.35-3.44A36,36,0,1,0,164,100c0,1.11.06,2.21.16,3.3l-7.78,2.59A36,36,0,0,0,128,92c-1,0-1.88,0-2.81.12l-4.45-10A36,36,0,1,0,96,92c1,0,1.88,0,2.81-.12l4.45,10a35.91,35.91,0,0,0-8.59,39.7L73.39,160.49a36,36,0,1,0,15.94,17.93l21.28-18.91a35.91,35.91,0,0,0,36.8-1.21L167,173.56A36,36,0,1,0,200,152Zm0-64a12,12,0,1,1-12,12A12,12,0,0,1,200,88ZM84,56A12,12,0,1,1,96,68,12,12,0,0,1,84,56ZM56,204a12,12,0,1,1,12-12A12,12,0,0,1,56,204Zm60-76a12,12,0,1,1,12,12A12,12,0,0,1,116,128Zm84,72a12,12,0,1,1,12-12A12,12,0,0,1,200,200Z"/></svg>Editor →</a>
-    <div class="hero-overlay">
-      <div class="wrap">
-        <p class="hero-sub">Real-time procedural content generation for TypeScript — deterministic by construction, WebGPU accelerated, in the browser and Node, with optional three.js interop.</p>
-        <!-- ON the band, not under it. The sentence beside this box says
-             the dots come from this number, and the dots it means are the
-             ones this line now stands on: the control, the claim and the
-             evidence are in one place. -->
-        <span class="seed-ctl">
-      <label for="seed">seed</label>
-      <span class="numbox">
-        <input id="seed" type="number" value="42" step="1" />
-        <span class="steps">
-          <button type="button" tabindex="-1" data-step="-1" aria-label="decrease">&minus;</button>
-          <button type="button" tabindex="-1" data-step="1" aria-label="increase">+</button>
-        </span>
-      </span>
-      <!-- PLAIN WORDS, because this is the first control a stranger meets
-           and the old sentence explained it in three terms they have no
-           reason to know yet: "cooked" is what this library calls running
-           a graph, "header" is this band, and a "field" is a value that
-           varies over space. All three are in the manual and none of them
-           belong on a line whose whole job is to make someone touch the
-           box beside it. What is left is the one thing a reader needs in
-           order to try it: what the number is connected to. What happens
-           when you change it, and what happens when you set it back, the
-           box will show them in less time than a sentence takes to read
-           — and shown beats told for both. -->
-      <span class="seed-note">← every dot here comes from this number.</span>
-        </span>
-      </div>
-    </div>
-  </div>
-  <!-- After the band, because this is what you read once you are done with
-       the header. The two off-site links carry an outward arrow rather than
-       the forward one, which is the only thing distinguishing "another page
-       here" from "you are leaving". -->
-  <div class="wrap hero-bar">
-    <div class="hero-actions">
-      <span class="install">npm install pcg-ts</span>
-      <a href="./manual.html" class="manual-link">Read the manual →</a>
-      <a href="./editor/" class="editor-link">Open the editor →</a>
-      <a href="https://github.com/C4RL05/pcg-ts" class="out-link">GitHub ↗</a>
-      <a href="https://www.npmjs.com/package/pcg-ts" class="out-link">npm ↗</a>
-    </div>
-  </div>
-</header>
-
 <main class="wrap">
+  <p class="eyebrow"><a href="./index.html">pcg-ts</a> · roadmap</p>
+  <h1 class="page-title">What shipped in each release</h1>
+  <p class="lead">Every release since v0.1.0, in the order they landed, with
+  what each one added. The <a href="./index.html">landing page</a> introduces
+  the library; this is what has happened to it since.</p>
 
+  <!-- The section keeps its list and loses its heading: the page header
+       above already says both, and a page whose first two lines are the
+       same sentence twice reads as a mistake. -->
   <section>
-    <p class="eyebrow">What it is</p>
-    <h2>A node-graph PCG library, deterministic by construction</h2>
-    <!-- BORROWED FROM THE README, and generated into place: everything
-         between these markers is written in README.md and stamped here by
-         `npm run docs:site`. Editing it here is editing a build artifact —
-         the next docs run puts it back, and `src/docs/site.test.ts` fails
-         in the meantime. See LEDE_SOURCE in src/docs/site.ts.
-
-         The sentence that stood here listed six kinds of output in
-         forty-five words before saying how you build one. The README's
-         opening shows the recipe instead, and names the vocabulary as it
-         goes — which is what a first paragraph is for. -->
-    <!--pcg:lede-->
-      <p><strong>Build worlds out of rules instead of files.</strong> You write the recipe — scatter points over this ground, thin them out with noise, turn each survivor a random amount, put a tree on every one — and pcg-ts runs it. The recipe is a small graph of nodes; running it is called a <em>cook</em>. Feed it the same seed and you get the same world back, byte for byte, on any machine, forever.</p>
-      <p>pcg-ts is built for real-time use — cooking is budgeted and cancellable so it can run inside a frame, and the field grammar compiles to WGSL to run on a GPU device when one is there.</p>
-    <!--/pcg:lede-->
-    <p>Any parameter can vary across space instead of being a constant: a value can be a function of where it lands, resolved per point.</p>
-    <p>Every random decision flows from a seed through one hash chain, so the same graph and seed produce <strong>byte-identical output</strong> across runs, platforms, cook orders, and streaming paths. Cooking on a GPU device is the one documented exception, and <a href="./architecture.html">architecture</a> states its tolerances.</p>
-    <p>The heavy work moves to the GPU: field expressions compile to WGSL, and instance matrices are composed there and handed straight to three.js — without ever touching the CPU.</p>
-    <p>It is built to be driven by AI agents as much as by humans: nodes carry machine-readable schemas, graphs serialize to stable JSON, and every error names the node, pin, or param at fault and states the fix.</p>
-
-    <div class="stats">
-      <div class="stat"><b>4,323</b><span>tests, all green</span></div>
-      <div class="stat"><b>48</b><span>registered node types</span></div>
-      <div class="stat"><b>37</b><span>named primitives</span></div>
-      <div class="stat"><b>57</b><span>field-grammar functions</span></div>
-      <div class="stat"><b>0</b><span>required dependencies</span></div>
-      <div class="stat"><b><!--pcg:version-minor-->v0.16<!--/pcg:version-minor--></b><span>MIT · ESM · strict TS</span></div>
-    </div>
-  </section>
-
-  <section>
-    <p class="eyebrow">Foundations</p>
-    <h2>Four concepts the rest is built on</h2>
-    <div class="cards">
-      <div class="card">
-        <h3>Attribute data model</h3>
-        <p>Attributes live on four domains — point, vertex, primitive, detail — as SoA typed-array columns, with promote and transfer between them. The standard point carries transform, density, bounds, color, and its own seed. A 2-vertex polyline over shared points is an edge, so a network needs no fifth domain.</p>
-      </div>
-      <div class="card">
-        <h3>Deferred fields — <code>Field&lt;T&gt;</code></h3>
-        <p>A value can be a function of evaluation context, resolved only when it lands on a domain. Node params accept <code>T | Field&lt;T&gt;</code>; noise, trig, and combinators compose into expression trees that also serialize to JSON.</p>
-      </div>
-      <div class="card">
-        <h3>Graph runtime</h3>
-        <p>A pull-based executor with revision-keyed memoization, time-budgeted and cancellable cooking, per-output partial cooks, and serializable subgraphs. Recook an unchanged graph and every node is a cache hit.</p>
-      </div>
-      <div class="card">
-        <h3>Streaming world</h3>
-        <p>Hierarchical grid levels — 2D or 3D cells, plus an unbounded level — cook cells around a viewpoint with hysteresis and LRU eviction. Cell content is provably independent of cook order, path, and evictions.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- The two diagram sections used to sit here. They are the longest
-       things on the page and the slowest to read, and a landing page is
-       read in the order it is written — so everything after them was
-       behind two mermaid figures, a module list and a worked example.
-       They are a page now, and this is the door to it. -->
-  <section>
-    <p class="eyebrow">Architecture</p>
-    <h2>Layered core, optional adapters</h2>
-    <p>A core that imports nothing outside itself, and adapters that depend on
-    it one way only: three.js interop, the WebGPU compiler and device runtime,
-    the worker pool, the CLI. Above that, a streaming runtime that cooks a
-    world around a moving camera in budgeted, cancellable slices — and returns
-    the same result whatever order it cooked in.</p>
-    <p><a class="more-link" href="./architecture.html">The module layers and the cook path, in two figures →</a></p>
-  </section>
-
-  <section>
-    <p class="eyebrow">Built for agents</p>
-    <h2>Runtime introspection and stable serialization</h2>
-    <ul class="features">
-      <li><b>Self-describing registry</b> — every node type exposes pins, param schemas, defaults, and prose descriptions at runtime; the node reference is generated from it, never hand-written.</li>
-      <li><b>A command line that closes the loop</b> — <code>pcg nodes</code>, <code>fields</code>, <code>validate</code>, <code>cook</code>, <code>inspect</code>, <code>render</code>. <code>--json</code> picks a rendering of the same result rather than a separate code path, exit codes are 0 / 1 (failure) / 2 (misuse), and <code>render</code> writes a deterministic top-down SVG that diffs in git.</li>
-      <li><b>A vocabulary to reference, not rebuild</b> — 37 named primitives ship as <code>pcg-ts/primitives</code>, cited from JSON as <code>ref: { name, hash? }</code>. A name-only ref upgrades freely; a pinned one hard-errors on mismatch. No mode warns, and no mode cooks a near-miss.</li>
-      <li><b>Stable JSON everywhere</b> — graphs, subgraphs, and field expressions serialize to a versioned format that round-trips to byte-identical cooks; serialized form is stable across cooks.</li>
-      <li><b>Errors that state the fix</b> — validation names the offending node, pin, or param and lists the valid alternatives. Error messages are part of the API surface.</li>
-      <li><b>Introspectable execution</b> — cook stats report what cooked, what was cached, and how long it took; determinism makes every run reproducible.</li>
-      <li><b>Agent entry points</b> — <code>llms.txt</code> capability map, generated <code>docs/nodes.md</code> / <code>primitives.md</code> / <code>graphs.md</code> with their <code>.json</code> twins, three skills that cite every enumerable thing by path rather than inlining it, an authoring guide with recipes, and the <a href="./manual.html">user manual</a>, whose second half is written for an agent driving the library programmatically.</li>
-      <li><b>Independently audited</b> — each phase was reviewed by a separate agent before it landed, and the defects it found were fixed with regression tests before release.</li>
+    <ul class="roadmap">
+      <li>
+        <div class="rm-ver">v0.1.0 <small>2026-08-05</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>The full foundation in one unattended build: attribute data model, PCG32 + fields + five noise types, graph executor with budgeted cooking, 23-node standard library, streaming World, three.js adapter, five demos, agent docs. 429 tests; every phase independently audited.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.2.0 <small>2026-08-05</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>The entire post-v0.1 backlog: serializable subgraphs and dataInput, trig + orient-along-vector in the field grammar, normalized noise with published raw ranges, exact worley, string attributes for declarative multi-asset spawns, sanctioned per-cell seeding, per-output cooking, 3D cube cells, unbounded levels without dummy radii. 562 tests; old graphs cook byte-identically.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.3.0 <small>2026-08-05</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>The stretch tier: uv and raycast attribute transfer (barycentric interpolation, robust ray-triangle intersection, deterministic tie rules, acceleration grids provably equivalent to brute force) and the interactive graph editor — a Svelte node editor built entirely on the public registry, validation, and serialization APIs, with live cooking and byte-identical JSON round-trips. 597 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.4.0 <small>2026-08-05</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>Editor-grade graph APIs: removeNode / disconnect / removeOutput with exact cache surgery (delete a branch, everything else serves from cache), frozen describe() and getParams introspection, registry categories across all 25 node types, and per-instance subgraph pin introspection — proven by the graph editor adopting them wholesale. 627 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.5.0 <small>2026-08-06</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>WebGPU field kernels: the serializable field grammar compiles to WGSL compute kernels and cooks on a real device through <code>pcg-ts/gpu</code> — bit-exact u32 hash/random streams, measured per-op float budgets, cache provenance across the CPU/GPU toggle, cook stats with machine-readable fallback reasons, and a million-point live demo. The CPU stays the bit-exact reference. 769 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.6.0 <small>2026-08-06</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>Pervasive GPU + device-resident pipelines: five more nodes resolve their field params on the GPU, chunked dispatch retires the element-count ceiling, and pooled buffers bound the allocation churn. On top of that, maximal linear chains of count-preserving field nodes now fuse into <b>device-resident runs</b> — attribute columns stay in storage buffers across member kernels and only the run terminal reads back, under a strict cache contract (terminal-only entries, splits wherever the graph observes bytes). New counters: <code>residentRuns</code>, <code>fusedNodes</code>, <code>readbacksSaved</code>. The CPU stays the bit-exact reference. 842 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.6.1 <small>2026-08-06</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>Constant node params ride the run uniform instead of a device column: a plain <code>translate: [0, 0, 0]</code> now costs a 16-byte slot and no dispatch, cutting the demo chain's working set 23% and its member kernels from 12 to 9. Values live in the uniform and never in the generated WGSL, so editing a constant hits the pipeline cache instead of recompiling. 853 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.7.0 <small>2026-08-07</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>Instance transforms that never reach the CPU. <code>spawnInstances</code> can now terminate a device-resident run: a WGSL kernel composes the 4×4 matrices and the batch hands back an opaque buffer handle instead of a <code>Float32Array</code>. A renderer sharing the same <code>GPUDevice</code> adopts that buffer as a storage instance attribute, so a streamed world goes from compute kernel to draw call with no readback and no per-cell upload. Ownership is explicit — pool-owned, detached, then disposed by the holder — and handles are refcounted by identity, so a parent output aliased into several cells is freed once, in whichever order they evict. Single-asset only for now; <code>assetAttr</code> falls back to the CPU path with a named reason. The CPU path stays the reference. 955 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.8.0 <small>2026-08-07</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>Multi-asset spawns become device-resident too — composed on the GPU and never read back, closing v0.7's one limitation. A <code>spawnInstances</code> driven by <code>assetAttr</code> no longer falls back — and it needs no GPU sort, which is the interesting part. A resident run always starts from a host geometry and no resident node can produce a string attribute, so the asset key is host-resident <em>by construction</em>: the host plans the grouping with the same function the CPU spawner calls, uploads a permutation, and the device composes once per asset. Ordering is therefore identical by construction rather than by comparison, and it is now a documented contract — batches by ascending first-occurrence point index, ascending point index within each. A cell yields one buffer per asset, each detached and refcounted by identity. Remaining boundary, stated plainly: a string <code>setAttribute</code> is not resident-eligible, so a graph computing its key that way fuses only the spawn. 1023 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.9.0 <small>2026-08-08</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>Fields built with the ergonomic API stop being second-class. There were two ways to build a <code>Field</code> and only one of them was supported: <code>fieldFromJson</code> attached a spec, while <code>component(position(), 1)</code> attached nothing — so a graph holding a combinator field <b>could not be serialized at all</b>. Now every constructor derives its spec from its arguments, and those graphs round-trip. Only three cases still refuse, and they say which: a <code>makeField</code> closure, anything composed over one, and a tree past the spec depth limit — derivation refuses at exactly the depth the parser enforces, so a spec that could not be read back is never written. Device eligibility is the separate, narrower question: derived-spec fields reach the GPU only under <code>acceptDerivedSpecs</code>, <b>off by default</b>, because the device path is a documented approximation of the CPU one and no existing graph should change bytes just by upgrading. 1560 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.10.0 <small>2026-08-09</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>An agent can author, validate and cook a graph without writing TypeScript. A <code>pcg</code> CLI — <code>nodes</code>, <code>fields</code>, <code>validate</code>, <code>cook</code>, <code>inspect</code>, <code>render</code> — where <code>--json</code> selects a rendering of the same result rather than a separate code path, exit codes are 0 / 1 (failure) / 2 (misuse), and <code>render</code> writes a deterministic top-down SVG that diffs in git. Subgraph nodes gain exposed params, and a primitive becomes a registered subgraph cited from JSON as <code>ref: { name, hash? }</code> instead of an embedded payload — a name-only ref upgrades freely, a pinned one hard-errors on mismatch, so no mode warns and no mode cooks a near-miss. 29 named primitives ship as <code>pcg-ts/primitives</code>; node types go 25 → 32; 23 single-concept example graphs and two skills ship inside the package, every example cooking from JSON alone because an example an agent cannot run teaches nothing. The serialization format is now closed — an unknown key is a hard error at every object position, so a typo can no longer cook as something else. One cut names the gap it leaves: <code>place/along-curve</code> was dropped because <code>splineSample</code> needs a polyline and no node produced one. 2217 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.11.0 <small>2026-08-09</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>The polyline gap, closed from the producing side. The library had a polyline consumer, a type, a render branch and an inspect branch — and no in-graph producer, so <b>no path could exist in a serialized graph at all</b>; the gap had been sighted five times from five directions before it was fixed. <code>pointsToPath</code>, <code>pathResample</code> and <code>writeTangents</code> take node types 32 → 35 and restore <code>place/along-curve</code>. Primitives 29 → 34 with the first curve family, field-grammar functions 40 → 42, corpus 23 → 34 — including six staged pipeline graphs whose superset and edit-locality properties are machine-checked rather than asserted in prose. Silent truncation of a multi-geometry collection becomes a diagnostic, and a class of silent attribute clobber is refused across six reporting-slot params: a param naming an attribute the node shapes now refuses a differently-shaped existing column instead of destroying it. Breaking against the unpublished v0.10.0: <code>shape/ring</code>'s <code>count</code> now means exactly <code>count</code>. CI arrives, on Node 20 and 22 — and the first run it ever performed failed both legs with 79 type errors that cannot appear on a developer machine, because <code>editor/**</code> and <code>demos/**</code> import the library by package name, which resolves through the exports map into <code>dist/</code>, and a clean checkout has none. 2463 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.12.0 <small>2026-08-09</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>Scale-aware declutter. <code>selfPrune</code> gains a field-capable <code>minDistance</code>, so the radius is per point rather than per graph — big trees need more room than bushes — under a <code>max(rA, rB)</code> symmetry rule, so no kept point ever has another kept point inside its own radius. A <code>priority</code> attribute settles a contested spot: higher wins, ties fall to the lower index, so an authored plot beats a procedural one because of a value it carries rather than where it sits in a merge. Rewiring the corpus onto it exposed that the lesson it had been teaching never fired — the authored stage's 8-unit exclusion already exceeded the prune's 7-unit radius, so no authored and procedural pair had ever contested anything, and with <code>priority</code> deleted all 12 authored plots still survived. The exclusion is now 3, the contest is real, and a test requires that deleting <code>priority</code> costs authored plots. The topology phase this release replaced was re-surveyed and split in three: no existing source could derive a halo, because <code>pointScatterInBounds</code> computes positions as a function of its bounds, so widening for a halo moves every point and reproduces nothing. 2484 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.13.0 <small>2026-08-09</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>World-anchored sources, and the networks they unblocked. <code>pointScatterInWorld</code> reads its bounds only to pick lattice cells and clip, so a halo is just a wider query — that was the hole in the runtime pillar, and every cross-partition op depended on it. Per-point randomness now keys on point identity rather than array index, so an op behaves the same however the work was split. On top of that, <code>connectPoints</code> emits one 2-vertex <code>polyline</code> primitive per edge over the <b>same points that arrived</b>, and the survey's most useful finding was that this needs no new domain: a 2-vertex polyline over shared points already <em>is</em> an edge, so a junction is genuinely one point shared by every edge meeting there, and no edge payload ever crosses a pin. <code>filterPrimitivesByBounds</code> is the one filter here that preserves topology, which is what makes a partitioned network cook expressible in a serialized graph rather than only in host TypeScript. Cut on measurement rather than taste: <code>findPath</code> and MST, because both are global — an MST edge belongs iff no lighter path connects its ends, so a chain of N plus a closing edge defeats any finite halo. The replacement is a relative-neighbourhood mode, halo-exact at the same bound, which contains the MST but leaves cycles — a network rather than a tree, which is what a road layout wants. Node types 35 → 38; the corpus gains a fifth pipeline stage: 10 segments over 9 district centres, degrees {1:1, 2:5, 3:3}, one component, two cycles. 2648 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.14.0 <small>2026-08-10</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>A gap v0.13.0 opened, closed. Per-edge values became a headline capability — a road carries a <code>width</code> promoted from its endpoints and a <code>kind</code> from the first — and every node that sampled a primitive down onto points dropped them on the floor, so <b>the lamps placed along a road could not see the width of the road they stood on</b>. <code>splineSample</code>, <code>pathResample</code>, <code>surfaceSample</code> and <code>place/along-curve</code> now carry the source primitive's attributes onto the samples through one shared helper; <code>pathResample</code> also keeps its own output primitives' attributes, which <code>setPolylineTopology</code> had been deleting, so a resampled road stays a road. The carry is automatic rather than opt-in, because the demand is that an author who set <code>roadWidth</code> gets it back without knowing a knob exists — and the cost is stated here rather than rediscovered as a bug later: every upstream primitive attribute becomes part of a sampler's output contract, so an unrelated <code>lengthAttr</code> widens the samples. A collision with a name the node itself owns is refused, naming node, attribute and fix. <code>transferAttribute</code> reads a primitive source in <code>uv</code> and <code>raycast</code> modes; <code>nearest</code> refuses and names the route instead. <code>pcg render --attr</code> reaches the primitive domain, colouring paths from primitive values. 46 of 46 planned phases; 2675 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.15.0 <small>2026-08-11</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>Cooks leave the main thread. A profile of a streamed world found the freeze nobody's budget could slice: <code>budgetMs</code> yields <em>between</em> nodes, and one noise field over a cell's points is a ~100&nbsp;ms atom — so <code>pcg-ts/worker</code> ships a <code>CookWorkerPool</code> that cooks serialized graphs off-thread. The design was already the right shape: a graph crosses once per worker as JSON, each cook sends parameter patches, and outputs return with every typed array on the transfer list — the boundary costs under a millisecond against the cook it relocates. Byte-identity is tested rather than assumed: string tables cross in interning order so <code>u32</code> index columns survive exactly, errors rehydrate into real classes with the node name and the fix intact, and a pooled <code>World</code> matches a no-pool <code>World</code> byte-for-byte along a streaming path with evictions. <code>LevelDef</code> gains <code>bindPatches</code>, the serializable sibling of <code>bind()</code>, applied by one shared implementation on both paths so they cannot drift. Two defects fixed with names: three r0.185 keys renderer state per instanced mesh and frees it only on a material's <code>dispose</code> event, so sharing one material across meshes leaks pipelines unboundedly — per-mesh clones disposed on every release path end it; and esbuild builds cross-chunk edges from <em>used symbols</em>, so a bare side-effect import of the node registry rode on chunk-ordering luck that two new entry points ran out of — an evaluation-order witness makes the edge real, and a twelve-case fresh-process smoke gate on the built package now runs before any publish. 2841 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.16.0 <small>2026-08-17</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>Fields you can read, and a rule for where they go. <b>Which params accept a field</b> had never been written down — it was a whitelist of 20 out of 180 that nobody could state, which is how it drifted. Writing the rule first and sweeping it second took the count to <b>44 across 25 node types</b>, in a day against an estimate of a month, because a stated rule turns a judgement call per param into a lookup. The sweep then corrected the rule twice: one clause read &ldquo;nothing that decides how many elements come out&rdquo; and <code>pathResample.spacing</code> decides exactly that and qualifies anyway, because that node resamples each polyline on its own arc length, so the field resolves per primitive; another called a symmetric relation impossible to field when <code>selfPrune</code> was already doing it on the larger of two radii, which <code>connectPoints</code> now does too. Three of the five clauses are pinned against the live registry, each proven able to fail. A plain value stays byte-identical and the whole corpus golden is unchanged.</p>
+          <p>A field expression is now <b>readable as text</b> — <code>printFieldSpec</code> and <code>parseFieldText</code> are a bidirectional view over the same spec tree, so a 38-line predicate is one line and the tree is still the format every programmatic edit touches. Text is never saved: it parses back, which is what makes the view safe when a knob turn, a World patch or a param patch would re-print it anyway. The correspondence is proven rather than argued — parse(print(s)) equals s for every expression in the corpus, and printing is idempotent. The interactive tool is called the <b>editor</b> now, shows an expression as text or as a read-only boxes-and-wires diagram, and shows no JSON at all; its hosted page moved from <code>/pages/sandbox/</code> to <code>/pages/editor/</code>, the one breaking change here.</p>
+          <p>Also: a saved noise answers the seed box through <code>opts.seed: { from: "node", variant: N }</code>, retiring a hand-written offset idiom that had spread to 39 places; <code>cross</code>, <code>pow</code>, <code>sqrt</code> and <code>step</code> join the grammar, three of their four designs chosen by a device probe rather than by reading the spec; graph-scoped params with <code>targets</code> drive the half of the format an expression cannot reach; and <code>pcg assets</code> reports what a graph <em>requires</em> without cooking it, saying plainly when the answer is a lower bound. 4323 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">next <small>unscheduled</small></div>
+        <div class="rm-body">
+          <span class="chip next">exploring</span>
+          <p>All 46 planned phases are done, and the entry that stood here — a <code>resident</code> descriptor for <code>filterByAttribute</code> — was surveyed and declined. It is feasible, and cheaper than the entry assumed, but it does not compose with the zero-round-trip path: at a spawner terminal the surviving count sizes a retained buffer and there is no readback for it to ride, so a run could never hold both a count-changing member and an instances terminal. And the saving it was to buy turned out to be free — moving <code>setAttribute("scale")</code> ahead of the two filters in the forest recipe (now <code>graphs/examples-forest.json</code>) bought the same readback for no library work. What is left is small, and recorded in PLAN.md with the reasoning: <code>fieldToJson</code> still refuses with a message enumerating all three causes instead of naming the one that applies, and a <code>maxDegree</code> bounded within a radius is halo-exact but unbuilt.</p>
+        </div>
+      </li>
     </ul>
   </section>
 
-  <section id="demos">
-    <p class="eyebrow">Examples</p>
-    <h2>Four demos and an editor, live in your browser</h2>
-    <p>Each one needs a host to exist: streaming worlds, a device-resident renderer, a closed loop that measures its own output and corrects, and the editor the single-cook recipes moved into. Click to run.</p>
-    <p>Behind them sits a corpus of 68 graphs that are data rather than pages: <code>pcg cook graphs/&lt;name&gt;.json</code>. None of them uses <code>dataInput</code>, because its items do not survive serialization and an example an agent cannot run teaches nothing. Most are single-concept; eight are one settlement pipeline — ground and wall, district centres, lots, buildings, roads, plus three edit variants — where each stage is the previous file plus nodes and nothing removed, and the earlier stages cook bit-identically inside the later ones. Every one of them is in the <a href="./gallery.html">corpus gallery</a>, cooked in the editor and shot from the frame it draws into.</p>
-    <div class="examples">
-      <!-- THE WHOLE ROW, and the capture rather than the thumbnail. It
-           is the one thing here you can open every other one inside, and
-           at a quarter of this size the graph it is showing — the point
-           of the picture — is a row of grey smudges. The four demos are a
-           2x2 under it. -->
-      <a class="example full" href="https://c4rl05.github.io/pcg-ts/editor/"><img src="./manual-assets/editor.jpg" width="1454" height="783" loading="lazy" decoding="async" alt="The pcg-ts editor. Across the top, the wordmark on a white plate, a graph glyph beside the word EDITOR, a graph picker reading “compose several primitives into a scatter”, seed 1023, and icon controls for the render and the node canvas; the status line under it reads 61 fps, cook 21.3 ms, 5 of 5 cooked and cached, 523 points and 523 instances. A curated knobs card on the left offers tabs for scatter, mask and size, with points at 6000 and spacing at 2.5 m. Five connected nodes run across the middle — scatter-even, mask-by-noise, random-yaw, random-scale and spawnInstances — floating over the cooked result behind them: a few hundred small green conifers scattered over a dark ground plane."><span class="meta"><b>editor</b><span>open any corpus graph and edit it live — palette, inspector, a curated knobs panel, JSON round-trip, shareable links, and a cook path you can switch between the CPU and two GPU paths</span></span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/demos/infinite-world/"><img src="./thumbs/infinite-world.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A landscape of scattered instances streaming around a moving camera, with a panel showing cooked and evicted cell counts."><span class="meta"><b>infinite world</b><span>hierarchical streaming around a moving camera — with a GPU toggle showing combinator-authored fields reaching the device</span></span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/demos/galaxy/"><img src="./thumbs/galaxy.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A spiral galaxy of tens of thousands of coloured star points around a bright core, with a panel showing streamed star cells."><span class="meta"><b>galaxy</b><span>an infinite deterministic spiral galaxy — streamed star cells, click any star to visit its planets</span></span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/demos/gpu-world/"><img src="./thumbs/gpu-world.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A streamed world of tall teal spires drawn from GPU-composed matrices, beside a panel reading 40 live cells, 16,800 instances drawn, 1.0 MiB of matrices held on device and 0 B uploaded."><span class="meta"><b>gpu world</b><span>a streamed world whose instance matrices are composed in WGSL and drawn straight from that buffer — toggle to the CPU path and watch the readbacks appear</span></span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/demos/racetrack/"><img src="./thumbs/racetrack.jpg" width="640" height="345" loading="lazy" decoding="async" alt="The racetrack demo, shown small: a circuit drawn as a pale ribbon seen from above, its whole lap lined on both verges with hundreds of small green wireframe boxes and spanned overhead in places, with the driven view of the road running away beneath it. A controls-and-readout panel fills the left edge, too small at this size to read."><span class="meta"><b>racetrack</b><span>roadside art placed along a spline the page was handed — six legibility rules measured from a racing game, run as a bounded fixed point, with every repair reporting how much it had to do</span></span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/demos/road/"><img src="./thumbs/road.jpg" width="640" height="345" loading="lazy" decoding="async" alt="The road demo, shown small: the same circuit as the racetrack card, drawn as a pale ribbon from above with the driven view beneath it — but the verges carry one evenly spaced row of identical small boxes per side instead of varied art. A controls-and-readout panel fills the left edge, too small at this size to read."><span class="meta"><b>road</b><span>the same page with none of the placement rules in it — one spline, one sweep, one evenly spaced row per side, shot at the same station so the difference between the two pictures is exactly what the rules add</span></span></a>
-    </div>
-  </section>
-
-  <!-- The release history used to sit here. It was the last section and
-       the longest, and it is the one part of the site that ages by
-       GROWING — every release adds a row to it and nothing to the page it
-       was on. It is a page now. -->
   <section>
-    <p class="eyebrow">Roadmap</p>
-    <h2>What shipped in each release</h2>
-    <p>Fifteen releases from the first foundation to the current one: the
-    attribute data model and PCG32, then fields, the streaming runtime, the
-    WebGPU compiler and device runtime, subgraphs, the worker pool, and the
-    editor that drives all of it through the same public API this page
-    documents.</p>
-    <p><a class="more-link" href="./roadmap.html">What shipped in each release →</a></p>
+    <p class="eyebrow">Next</p>
+    <h2>Where to go from here</h2>
+    <p>The <a href="./manual.html">user manual</a> documents what all of this
+    adds up to. <a href="./architecture.html">Architecture</a> is how it is put
+    together. The <a href="./gallery.html">corpus gallery</a> is every graph in
+    the repository, cooked and shot.</p>
+    <p><a href="./index.html">← back to the landing page</a></p>
   </section>
-
 </main>
 
 <footer>
@@ -882,145 +851,6 @@
   </div>
 </footer>
 
-<script>
-(() => {
-  // Deterministic 32-bit hash chain — the same construction idea the
-  // library uses (seed → hash → per-point decisions). No Math.random.
-  const M = Math.imul;
-  function hash(...xs) {
-    let h = 0x9e3779b9 >>> 0;
-    for (const x of xs) {
-      h ^= (x | 0) + 0x9e3779b9 + ((h << 6) | 0) + (h >>> 2);
-      h = M(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
-      h = M(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
-    }
-    return (h ^ (h >>> 16)) >>> 0;
-  }
-  const f01 = (h) => h / 4294967296;
-  const smooth = (t) => t * t * (3 - 2 * t);
-  function valueNoise(seed, x, y) {
-    const xi = Math.floor(x), yi = Math.floor(y);
-    const tx = smooth(x - xi), ty = smooth(y - yi);
-    const c00 = f01(hash(seed, xi, yi)),     c10 = f01(hash(seed, xi + 1, yi));
-    const c01 = f01(hash(seed, xi, yi + 1)), c11 = f01(hash(seed, xi + 1, yi + 1));
-    return (c00 * (1 - tx) + c10 * tx) * (1 - ty) + (c01 * (1 - tx) + c11 * tx) * ty;
-  }
-  function fbm(seed, x, y) {
-    let v = 0, amp = 0.62, f = 1;
-    for (let o = 0; o < 4; o++) { v += amp * valueNoise(seed + o, x * f, y * f); amp *= 0.5; f *= 2.1; }
-    return v;
-  }
-
-  const canvas = document.getElementById("field");
-  const input = document.getElementById("seed");
-  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-
-  function hexToRgb(hex) {
-    const n = parseInt(hex.replace("#", ""), 16);
-    return [ (n >> 16) & 255, (n >> 8) & 255, n & 255 ];
-  }
-
-  function draw() {
-    const seed = (parseInt(input.value, 10) || 0) >>> 0;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = canvas.clientWidth, h = canvas.clientHeight;
-    canvas.width = Math.round(w * dpr);
-    canvas.height = Math.round(h * dpr);
-    const ctx = canvas.getContext("2d");
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, w, h);
-
-    // The field is greyscale, ramped --faint -> --ink-hi, with a
-    // deterministic 1-in-24 of surviving points taking one of the three
-    // primaries instead. That is what "sparingly" means here: a scatter
-    // of coloured marks over a grey field, never a tint across all of it.
-    const lo = hexToRgb(css("--faint") || "#7a7a7a");
-    const hi = hexToRgb(css("--ink-hi") || "#ffffff");
-    const PRIMARIES = [
-      hexToRgb(css("--r") || "#ff0000"),
-      hexToRgb(css("--g") || "#00ff00"),
-      hexToRgb(css("--b") || "#0000ff"),
-    ];
-
-    // Deterministic scatter: grid cells, one candidate per cell, kept and
-    // sized by an fbm density field — a miniature of the library's model.
-    const cell = 13;
-    const cols = Math.ceil(w / cell), rows = Math.ceil(h / cell);
-    for (let gy = 0; gy < rows; gy++) {
-      for (let gx = 0; gx < cols; gx++) {
-        const hh = hash(seed, gx, gy);
-        const px = gx * cell + f01(hash(hh, 1)) * cell;
-        const py = gy * cell + f01(hash(hh, 2)) * cell;
-        const d = fbm(seed, px * 0.012, py * 0.012);
-        if (f01(hash(hh, 3)) > d * d * 1.35) continue;      // density keep-test
-        const r = 0.7 + d * 2.4 * f01(hash(hh, 4));
-        const edge = Math.min(py / (h * 0.55), 1);          // fade under the title
-        const alpha = (0.10 + 0.55 * d) * (0.35 + 0.65 * edge);
-        const t = f01(hash(hh, 5));
-        // Same hash chain as everything else, so the marks land in the
-        // same places for the same seed — the field stays deterministic.
-        const marked = hash(hh, 6) % 24 === 0;
-        const [cr, cg, cb] = marked
-          ? PRIMARIES[hash(hh, 7) % 3]
-          : [0, 1, 2].map((i) => Math.round(lo[i] + (hi[i] - lo[i]) * t));
-        // A mark has to survive the density fade or the colour reads as
-        // dirt on the grey rather than as a deliberate accent.
-        const a = marked ? Math.min(1, alpha * 2.4 + 0.25) : alpha;
-        ctx.fillStyle = `rgba(${cr},${cg},${cb},${a.toFixed(3)})`;
-        ctx.beginPath();
-        ctx.arc(px, py, marked ? r * 1.3 : r, 0, 6.2832);
-        ctx.fill();
-      }
-    }
-  }
-
-  // The corner link carries whatever seed is in the box, as a knob patch
-  // the editor already understands (`?p=` — see Editor.svelte). Rebuilt on
-  // every edit rather than read on click, so a middle-click or a copied
-  // link gets the same seed a plain click would.
-  const openLink = document.querySelector(".hero-open");
-  const GRAPH = "basics-filter-by-density";
-  function syncOpenLink() {
-    const seed = (parseInt(input.value, 10) || 0) >>> 0;
-    const patch = encodeURIComponent(JSON.stringify({ "scatter.seed": seed }));
-    openLink.href = `./editor/?graph=${GRAPH}&p=${patch}`;
-  }
-
-  input.addEventListener("input", () => { draw(); syncOpenLink(); });
-
-  // The stepper's two buttons. `stepUp`/`stepDown` are the browser's own
-  // arithmetic, and dispatching `input` leaves the listener above as the
-  // only thing that knows how to redraw. Press and hold runs.
-  for (const button of document.querySelectorAll(".seed-ctl .steps button")) {
-    const direction = Number(button.dataset.step);
-    let hold, run;
-    const nudge = () => {
-      if (direction > 0) input.stepUp(); else input.stepDown();
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    };
-    const stop = () => { clearTimeout(hold); clearInterval(run); };
-    button.addEventListener("pointerdown", (e) => {
-      e.preventDefault();          // the caret stays where it is
-      nudge();
-      hold = setTimeout(() => { run = setInterval(nudge, 60); }, 400);
-    });
-    for (const done of ["pointerup", "pointerleave", "pointercancel"]) {
-      button.addEventListener(done, stop);
-    }
-  }
-  window.addEventListener("resize", draw);
-  // The theme-change redraws that used to live here are gone with the
-  // themes: the palette no longer varies, so there is nothing to react to.
-  syncOpenLink();
-  draw();
-})();
-</script>
-<script type="module" src="./logo/logo.js"></script>
-<!-- The mermaid import that used to sit here went with the two figures
-     it was for (docs/architecture.html). It is a CDN module and this page
-     no longer draws a diagram, so keeping it would be a network request
-     for nothing on the first page anyone loads. -->
-<!-- Development only: hidden until `.show-grid` is set on <html>, which
      the script below does for `?grid` or the `g` key. -->
 <div class="grid-guide" aria-hidden="true"><div class="wrap"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div></div>
 

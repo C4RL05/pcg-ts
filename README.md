@@ -7,6 +7,14 @@
   <img alt="pcg-ts" src="./docs/logo-light.svg" width="420">
 </picture>
 
+<!-- THE LEDE, AND THE LANDING PAGE'S TOO. `npm run docs:site` converts
+     what is between these markers to HTML and stamps it into
+     docs/index.html; `src/docs/site.test.ts` fails if the two drift. Write
+     it here, run the docs chain, and the page follows. Bold, italic and
+     paragraph breaks are the only markdown the converter implements —
+     anything else is a named error rather than a literal asterisk on the
+     published page. -->
+<!--pcg:lede-->
 **Build worlds out of rules instead of files.** You write the recipe —
 scatter points over this ground, thin them out with noise, turn each
 survivor a random amount, put a tree on every one — and pcg-ts runs it.
@@ -17,6 +25,7 @@ machine, forever.
 pcg-ts is built for real-time use — cooking is budgeted and cancellable so
 it can run inside a frame, and the field grammar compiles to WGSL to run
 on a GPU device when one is there.
+<!--/pcg:lede-->
 
 <img alt="The pcg-ts editor showing a five-node graph laid out left to right across the bottom of the frame, floating over the scene it just produced: a few hundred small conifers standing on a dark ground grid, thinned into soft clumps rather than spread evenly. The nodes read fill/scatter-even (count 6000, minDistance 2.5), filter/mask-by-noise (threshold 0.45, frequency 0.03), write/random-yaw (axis +z), write/random-scale (min 0.8, max 1.6) and spawnInstances. A panel down the left titled compose several primitives into a scatter offers tabs for scatter, mask and size with sliders for points, spacing and seed, and a copy link button. The status line along the top reads 60 fps, cook 17.8 ms, 5 of 5 cooked and cached, 2 out, 523 points, 523 instances, drawn as instances and points." src="./docs/manual-assets/editor.jpg" width="100%">
 

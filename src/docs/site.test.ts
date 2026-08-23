@@ -34,7 +34,11 @@ import {
   SITE_PAGES,
   extractFieldFnList,
   findStatedCounts,
+  extractLede,
+  LEDE_SOURCE,
+  ledeToHtml,
   listRoadmapEntries,
+  renderSiteLede,
   renderSiteVersion,
   scanStamps,
   withoutRoadmap,
@@ -136,8 +140,12 @@ describe("site version stamps", () => {
    * report success.
    */
   it("stamping a different version leaves every historical version untouched", () => {
-    const committed = page("index.html");
-    const bumped = renderSiteVersion(committed, "9.9.9", "docs/index.html").html;
+    // ON THE ROADMAP PAGE, because that is where the history lives now.
+    // A version of this test still reading index.html would find no
+    // entries to protect and pass, which is the exact failure mode the
+    // whole marker scheme exists against.
+    const committed = page("roadmap.html");
+    const bumped = renderSiteVersion(committed, "9.9.9", "docs/roadmap.html").html;
 
     const before = listRoadmapEntries(committed);
     const after = listRoadmapEntries(bumped);
@@ -148,10 +156,30 @@ describe("site version stamps", () => {
     // same stamp value and they must be byte-identical. Any difference
     // outside a stamp site — one historical version rewritten, one digit
     // of prose touched — survives normalization and fails here.
-    const norm = (html: string) => renderSiteVersion(html, "0.0.0", "docs/index.html").html;
+    const norm = (html: string) => renderSiteVersion(html, "0.0.0", "docs/roadmap.html").html;
     expect(norm(bumped)).toBe(norm(committed));
 
     // And the only lines that moved are the marked stamp lines.
+    const a = committed.split("\n");
+    const b = bumped.split("\n");
+    expect(b.length).toBe(a.length);
+    const moved = a.map((line, i) => [i + 1, line, b[i]] as const).filter(([, x, y]) => x !== y);
+    expect(moved.length, "expected the roadmap page's footer stamp to move").toBe(1);
+    for (const [line, , changedTo] of moved) {
+      expect(changedTo, `docs/roadmap.html:${line} changed but carries no stamp marker`).toContain(
+        "<!--pcg:version",
+      );
+    }
+  });
+
+  /**
+   * The landing page has no roadmap left, so it needs its own form of
+   * the claim: it still carries two stamps, and prose around them that a
+   * bump must leave alone.
+   */
+  it("stamping index.html moves its two stamp lines and nothing else", () => {
+    const committed = page("index.html");
+    const bumped = renderSiteVersion(committed, "9.9.9", "docs/index.html").html;
     const a = committed.split("\n");
     const b = bumped.split("\n");
     expect(b.length).toBe(a.length);
@@ -174,7 +202,7 @@ describe("site stated counts", () => {
       // The roadmap is history — "node types go 25 → 32", "429 tests" —
       // and must never be read as a claim about the current release.
       const text = readRepoFile(claim.page);
-      const searched = claim.page === "docs/index.html" ? withoutRoadmap(text) : text;
+      const searched = claim.page === "docs/roadmap.html" ? withoutRoadmap(text) : text;
       const found = findStatedCounts(searched, claim.pattern);
 
       if (found.length === 0) {
@@ -243,10 +271,10 @@ describe("site stated counts", () => {
 });
 
 describe("site roadmap", () => {
-  const entries = listRoadmapEntries(page("index.html"));
+  const entries = listRoadmapEntries(page("roadmap.html"));
 
   it("parses the roadmap", () => {
-    expect(entries.length, "docs/index.html: no <ul class=\"roadmap\"> entries found").toBeGreaterThan(5);
+    expect(entries.length, 'docs/roadmap.html: no <ul class="roadmap"> entries found').toBeGreaterThan(5);
   });
 
   /**
@@ -261,7 +289,7 @@ describe("site roadmap", () => {
     if (!shipped.includes(want)) {
       throw new Error(
         [
-          `docs/index.html: the roadmap has no entry for ${want}, the version in package.json.`,
+          `docs/roadmap.html: the roadmap has no entry for ${want}, the version in package.json.`,
           `  last entry with a version: ${shipped.filter((v) => /^v\d/.test(v)).at(-1) ?? "(none)"}`,
           "",
           "Fix: add a roadmap <li> for this release, following the shape of the one",
@@ -302,7 +330,7 @@ describe("site roadmap", () => {
     const inStats = /<b>([\d,]+)<\/b><span>tests, all green<\/span>/.exec(page("index.html"));
     if (inEntry === null) {
       throw new Error(
-        `docs/index.html:${entry.line}: the v${PKG.version} roadmap entry does not end with "<n> tests." Add it — the stat row is checked against it.`,
+        `docs/roadmap.html:${entry.line}: the v${PKG.version} roadmap entry does not end with "<n> tests." Add it — the landing page's stat row is checked against it.`,
       );
     }
     if (inStats === null) {
@@ -315,9 +343,9 @@ describe("site roadmap", () => {
     if (fromEntry !== fromStats) {
       throw new Error(
         [
-          "docs/index.html disagrees with itself about the test count.",
-          `  stat row says ${fromStats}`,
-          `  the v${PKG.version} roadmap entry (line ${entry.line}) says ${fromEntry}`,
+          "the site disagrees with itself about the test count.",
+          `  docs/index.html stat row says ${fromStats}`,
+          `  docs/roadmap.html:${entry.line}, the v${PKG.version} entry, says ${fromEntry}`,
           "",
           "The stat row states the total as of the released version, like the `v` stamp",
           "beside it, so both numbers move together and only at a release: put what",
@@ -345,3 +373,57 @@ function stampDiff(committed: string, generated: string): string[] {
   }
   return lines.length > 0 ? lines : ["  (pages differ only in trailing bytes)"];
 }
+
+describe("the borrowed lede", () => {
+  const markdown = readRepoFile(LEDE_SOURCE);
+  const ledeHtml = ledeToHtml(extractLede(markdown, LEDE_SOURCE), LEDE_SOURCE);
+
+  /**
+   * THE DRIFT THIS EXISTS TO CATCH. Two copies of a paragraph is two
+   * paragraphs: edit one and the other is quietly wrong, with nothing to
+   * say so. The page carries a hole and the README carries the words, so
+   * re-rendering has to be a no-op.
+   */
+  it("docs/index.html carries exactly what README.md says", () => {
+    const committed = page("index.html");
+    const { html } = renderSiteLede(committed, ledeHtml, "docs/index.html");
+    if (html !== committed) {
+      throw new Error(
+        [
+          `docs/index.html's lede is not ${LEDE_SOURCE}'s. It is generated, so the page is what is stale.`,
+          "Run:",
+          "",
+          "  npm run build && npm run docs:site",
+          "",
+          "If the words should change, change them in " + LEDE_SOURCE + " — editing the page",
+          "edits a build artifact and the next docs run puts it back.",
+        ].join("\n"),
+      );
+    }
+  });
+
+  it("renders the markdown the lede actually uses", () => {
+    const html = ledeToHtml("**bold** and *italic*" + "\n\n" + "a second paragraph", "test");
+    expect(html).toContain("<strong>bold</strong>");
+    expect(html).toContain("<em>italic</em>");
+    expect(html.match(/<p>/g)?.length).toBe(2);
+  });
+
+  it("escapes markup rather than passing it through", () => {
+    expect(ledeToHtml("a < b & c > d", "test")).toContain("a &lt; b &amp; c &gt; d");
+  });
+
+  /**
+   * The failure mode worth a test of its own: an unimplemented construct
+   * that reached the page would publish its own syntax, and nobody reads
+   * their own landing page closely enough to notice a stray bracket.
+   */
+  it.each([
+    ["a link", "see [the manual](./manual.html)"],
+    ["a code span", "call `cook()`"],
+    ["a list", "- one\n- two"],
+    ["a heading", "# Title"],
+  ])("refuses %s rather than emitting it literally", (_what, md) => {
+    expect(() => ledeToHtml(md, "test")).toThrow(/does not implement/);
+  });
+});

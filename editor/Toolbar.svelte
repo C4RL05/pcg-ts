@@ -12,6 +12,7 @@
   import { WORDMARK_PATHS, WORDMARK_VIEWBOX } from "../shared/wordmark.js";
   import type { GpuState } from "./main.js";
   import type { CookStatus } from "./controller.js";
+  import NumberBox from "../shared/NumberBox.svelte";
 
   let {
     seed,
@@ -219,8 +220,8 @@
         : "probing for a WebGPU adapter…",
   );
 
-  function commitSeed(e: Event): void {
-    const v = Math.floor((e.currentTarget as HTMLInputElement).valueAsNumber);
+  function commitSeed(raw: number): void {
+    const v = Math.floor(raw);
     if (Number.isFinite(v)) onSeed(v >>> 0);
   }
 
@@ -256,12 +257,19 @@
        which the demos draw from too; see that file for why it is inline
        rather than a `src`, and for the two standalone SVGs it has to stay
        in agreement with. -->
-    <svg
-      class="mark"
-      viewBox={WORDMARK_VIEWBOX}
-      aria-hidden="true"
-      focusable="false">{@html WORDMARK_PATHS}</svg
-    >Editor<span class="chevron" class:flip={collapsed}>▾</span></span>
+    <span class="markbox"
+      ><svg
+        class="mark"
+        viewBox={WORDMARK_VIEWBOX}
+        aria-hidden="true"
+        focusable="false">{@html WORDMARK_PATHS}</svg
+      ></span
+    ><!-- The same mark the landing page's corner link wears, for the same
+         reason: this is the graph editor, and the glyph says which of the
+         product's pages you are on before the word is read. -->
+    {@render icon(TOOLBAR_ICONS.graph)}Editor<span
+      class="chevron"
+      class:flip={collapsed}>▾</span></span>
 
   <!-- Grouped by LAYER, with a hairline between groups. The two middle
        groups are the two things on screen — the render and the node
@@ -290,7 +298,9 @@
     </label>
     <label>
       seed
-      <input type="number" step="1" min="0" value={seed} onchange={commitSeed} />
+      <span class="seedbox">
+        <NumberBox step={1} min={0} value={seed} ariaLabel="seed" onCommit={commitSeed} />
+      </span>
     </label>
     <!-- Icons from here on, and the WORD IS NOT GONE: every one of these
          keeps its name in `title` for the pointer and in `aria-label` for
@@ -537,13 +547,46 @@
   /* A WORDMARK, so height is the only dimension set and the 8.24:1 box
      decides the rest — pinning a width would letterbox or stretch it.
      11px rather than the title's own size: it reads as the product name
-     the page belongs to, with `editor` as the louder word for which page
-     that is, so the mark sits one step down rather than competing. */
+     the page belongs to, with `editor` naming which page that is, so the
+     mark sits one step down rather than competing. The word carries that
+     on its case now rather than on its weight — see `.title`. */
+  /* A WHITE PLATE, the height of the icon buttons beside it. The mark
+     ships as `fill="currentColor"`, so the plate sets `color` and the
+     glyph follows it to black — no second copy of the artwork, and the
+     one in `shared/wordmark.ts` stays the only one.
+
+     25px is STATED, not stretched: it is the icon buttons' own box — a
+     15px glyph, 4px of padding twice, 1px of border twice — and
+     `align-self: stretch` would take the tallest thing on the line
+     instead, which is the 26px select. If those buttons are ever
+     re-padded, this is the number that has to follow them. */
+  /* The glyph before the word. It sits inside `.title`, whose 12px gap
+     is the distance between the LOGOTYPE and the label — too far for a
+     mark and the word it belongs to, which read as one thing. */
+  .title > .ic {
+    margin-right: -6px;
+  }
+  .markbox {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    height: 25px;
+    padding: 0 9px;
+    background: #ffffff;
+    color: #000000;
+  }
   .mark {
     height: 11px;
     width: auto;
     flex: 0 0 auto;
   }
+  /* UPPERCASE AT REGULAR WEIGHT, in white. The word is a label for which
+     page of the product this is, not a heading competing with the mark
+     beside it — and caps carry that on their shape rather than by being
+     heavier than everything else on the bar. Tracked, because every other
+     uppercase run in this chrome is (the panel's section headings, the
+     gallery's eyebrows): caps set at a lowercase word's tracking close up
+     into a block. */
   .title {
     display: flex;
     align-items: center;
@@ -552,8 +595,10 @@
        and set at a sibling's distance they read as one run of letters
        rather than a product followed by which page of it you are on. */
     gap: 12px;
-    font-weight: 600;
-    color: var(--ed-ink-hi);
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #ffffff;
     white-space: nowrap;
   }
   label {
@@ -563,14 +608,15 @@
     color: var(--ed-ink-mid);
     font-size: var(--ed-t-body);
   }
-  input[type="number"] {
-    width: 78px;
-    padding: 3px 6px;
-    background: var(--ed-well);
-    color: var(--ed-ink);
-    border: 1px solid var(--ed-edge);
-    border-radius: var(--ed-radius);
-    font: var(--ed-t-body) var(--ed-mono);
+  /* The field itself is NumberBox's; this only says how wide. The
+     component fills the slot it is given and reaches for nothing. */
+  .seedbox {
+    display: flex;
+    /* 96, not the 78 this field had: the stepper overlays the right end
+       of the value on hover, and at 78 a seed you were stepping had
+       about five characters left to be read in. The bar has slack for
+       it — see the measurement above. */
+    width: 96px;
   }
   select {
     max-width: 260px;

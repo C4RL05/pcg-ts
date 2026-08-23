@@ -4,10 +4,28 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="color-scheme" content="light dark" />
-<title>pcg-ts — real-time PCG for TypeScript</title>
+<title>pcg-ts — architecture</title>
 <link rel="icon" href="./icon.svg" type="image/svg+xml" />
 </head>
 <body>
+<!--
+  THE TWO DIAGRAM SECTIONS, off the landing page.
+
+  They are the longest things on it and the slowest to read — two mermaid
+  figures, a module list and a worked example — and a landing page is
+  read in the order it is written, so anyone who wanted the next section
+  scrolled past both. Moved rather than cut: this is the material a
+  reader goes looking for once the page has convinced them, and it is
+  worth a URL of its own.
+
+  THE STYLE BLOCK IS INDEX'S, COPIED. Every page in `docs/` carries its
+  own — the manual and the gallery do too — because none of them has a
+  build step to share one through. Copied whole rather than trimmed to
+  what these two sections use, so the two pages cannot drift apart in the
+  parts they do share, and so moving a section back is a cut and a paste
+  rather than a hunt for the rules it needs. If this grows to a fifth
+  page, extract `docs/site.css` instead of making a fifth copy.
+-->
 <style>
   /* Self-hosted rather than linked from a font CDN: no third-party
      request, nothing to block, and the page keeps its typography
@@ -667,206 +685,143 @@
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 
-<header>
-  <!-- The logo stands on plain black. The field is a different statement —
-       "this header is cooked from that seed" — and running it behind the
-       lockup made both harder to read: the animation is already a moving
-       figure, and a moving ground under it is two things competing for the
-       same glance. It belongs behind the sentence that claims it. -->
-  <div class="hero-logo">
-    <div class="wrap">
-      <h1 class="hero-title"><span class="vh">pcg-ts</span><span class="lockup" data-logo hidden aria-hidden="true"></span><svg class="wordmark" data-logo-static viewBox="0 0 1055 128" aria-hidden="true" focusable="false"><g fill-rule="nonzero" transform="translate(-9.14,127.96)"><path d="M147.76,-95.97L147.76,-127.96L9.14,-127.96L9.14,-95.97L147.76,-95.97ZM147.762,-95.97L147.762,-63.98L41.13,-63.98L9.14,-31.99L9.14,0L41.13,0L41.13,-31.99L147.762,-31.99L179.752,-63.98L179.752,-95.97L147.762,-95.97Z"/><path d="M368.768,-95.97L368.768,-127.96L230.145,-127.96L198.155,-95.97L198.155,-31.99L230.139,-31.99L230.139,0L368.768,0L368.768,-31.99L230.145,-31.99L230.145,-95.97L368.768,-95.97Z"/><path d="M557.783,-95.97L557.783,-127.96L419.16,-127.96L387.17,-95.97L387.17,-31.99L419.16,-31.99L419.16,-95.97L557.783,-95.97ZM478.925,0L510.917,-31.99L525.793,-31.99L525.793,0L557.783,0L557.783,-63.98L497.696,-63.98L465.706,-31.99L419.16,-31.99L419.16,0L478.925,0Z"/><rect x="576.186" y="-63.98" width="127.96" height="31.99"/><g transform="translate(-18.4628,0)"><path d="M823.908,0L823.908,-95.97L791.918,-95.97L791.918,0L823.908,0ZM893.218,-95.97L893.218,-127.96L823.911,-127.96L823.911,-95.97L893.218,-95.97ZM791.912,-95.97L791.912,-127.96L722.608,-127.96L722.608,-95.97L791.912,-95.97Z"/></g><g transform="translate(884.017944,0)"><path d="M41.13,-95.97L147.762,-95.97L147.762,-127.96L41.13,-127.96L9.14,-95.97L9.14,-63.98L179.752,0L179.752,-34.149L41.13,-86.156L41.13,-95.97ZM41.13,0L41.13,-31.99L9.14,-31.99L9.14,0L41.13,0ZM179.755,-63.986L179.755,-95.97L147.765,-95.97L147.765,-63.986L179.755,-63.986Z"/></g></g></svg></h1>
-    </div>
-  </div>
-  <div class="hero">
-    <canvas id="field" aria-hidden="true"></canvas>
-    <!-- TOP RIGHT OF THIS BAND, not of the header: the link is about the
-         dots, and the dots are what this band is. Outside the content
-         column on purpose — it belongs to the strip rather than to a line
-         of it.
-
-         It says "in the editor" and not "the graph behind this", which
-         would not be true: the field here is drawn straight onto a canvas
-         by the script at the foot of this page — the same construction the
-         library uses, in forty lines, so the landing page ships no bundle.
-         What this opens is the corpus graph that builds the same picture
-         with the library: a scatter, a noise field written to `density`,
-         and a thinning pass. The seed travels with it, so whatever is in
-         the box below arrives in the editor as the scatter's own seed. -->
-    <a
-      class="hero-open"
-      href="./editor/?graph=basics-filter-by-density"
-      title="Open the editor on a graph that builds this kind of field with the library — a scatter thinned by a noise field — starting from the seed you set here."><svg class="ic" viewBox="0 0 256 256" aria-hidden="true" focusable="false"><path d="M200,152a35.77,35.77,0,0,0-16.46,4l-21.39-16.64A35.49,35.49,0,0,0,164,128.65l10.35-3.44A36,36,0,1,0,164,100c0,1.11.06,2.21.16,3.3l-7.78,2.59A36,36,0,0,0,128,92c-1,0-1.88,0-2.81.12l-4.45-10A36,36,0,1,0,96,92c1,0,1.88,0,2.81-.12l4.45,10a35.91,35.91,0,0,0-8.59,39.7L73.39,160.49a36,36,0,1,0,15.94,17.93l21.28-18.91a35.91,35.91,0,0,0,36.8-1.21L167,173.56A36,36,0,1,0,200,152Zm0-64a12,12,0,1,1-12,12A12,12,0,0,1,200,88ZM84,56A12,12,0,1,1,96,68,12,12,0,0,1,84,56ZM56,204a12,12,0,1,1,12-12A12,12,0,0,1,56,204Zm60-76a12,12,0,1,1,12,12A12,12,0,0,1,116,128Zm84,72a12,12,0,1,1,12-12A12,12,0,0,1,200,200Z"/></svg>Editor →</a>
-    <div class="hero-overlay">
-      <div class="wrap">
-        <p class="hero-sub">Real-time procedural content generation for TypeScript — deterministic by construction, WebGPU accelerated, in the browser and Node, with optional three.js interop.</p>
-        <!-- ON the band, not under it. The sentence beside this box says
-             the dots come from this number, and the dots it means are the
-             ones this line now stands on: the control, the claim and the
-             evidence are in one place. -->
-        <span class="seed-ctl">
-      <label for="seed">seed</label>
-      <span class="numbox">
-        <input id="seed" type="number" value="42" step="1" />
-        <span class="steps">
-          <button type="button" tabindex="-1" data-step="-1" aria-label="decrease">&minus;</button>
-          <button type="button" tabindex="-1" data-step="1" aria-label="increase">+</button>
-        </span>
-      </span>
-      <!-- PLAIN WORDS, because this is the first control a stranger meets
-           and the old sentence explained it in three terms they have no
-           reason to know yet: "cooked" is what this library calls running
-           a graph, "header" is this band, and a "field" is a value that
-           varies over space. All three are in the manual and none of them
-           belong on a line whose whole job is to make someone touch the
-           box beside it. What is left is the one thing a reader needs in
-           order to try it: what the number is connected to. What happens
-           when you change it, and what happens when you set it back, the
-           box will show them in less time than a sentence takes to read
-           — and shown beats told for both. -->
-      <span class="seed-note">← every dot here comes from this number.</span>
-        </span>
-      </div>
-    </div>
-  </div>
-  <!-- After the band, because this is what you read once you are done with
-       the header. The two off-site links carry an outward arrow rather than
-       the forward one, which is the only thing distinguishing "another page
-       here" from "you are leaving". -->
-  <div class="wrap hero-bar">
-    <div class="hero-actions">
-      <span class="install">npm install pcg-ts</span>
-      <a href="./manual.html" class="manual-link">Read the manual →</a>
-      <a href="./editor/" class="editor-link">Open the editor →</a>
-      <a href="https://github.com/C4RL05/pcg-ts" class="out-link">GitHub ↗</a>
-      <a href="https://www.npmjs.com/package/pcg-ts" class="out-link">npm ↗</a>
-    </div>
-  </div>
-</header>
-
 <main class="wrap">
+  <p class="eyebrow"><a href="./index.html">pcg-ts</a> · architecture</p>
+  <h1 class="page-title">How it is built, and how a world gets made</h1>
+  <p class="lead">The module layers and the streaming cook path, in two
+  figures. Everything here is the same library the <a href="./index.html">landing
+  page</a> introduces; this is the level below it.</p>
 
-  <section>
-    <p class="eyebrow">What it is</p>
-    <h2>A node-graph PCG library, deterministic by construction</h2>
-    <!-- BORROWED FROM THE README, and generated into place: everything
-         between these markers is written in README.md and stamped here by
-         `npm run docs:site`. Editing it here is editing a build artifact —
-         the next docs run puts it back, and `src/docs/site.test.ts` fails
-         in the meantime. See LEDE_SOURCE in src/docs/site.ts.
-
-         The sentence that stood here listed six kinds of output in
-         forty-five words before saying how you build one. The README's
-         opening shows the recipe instead, and names the vocabulary as it
-         goes — which is what a first paragraph is for. -->
-    <!--pcg:lede-->
-      <p><strong>Build worlds out of rules instead of files.</strong> You write the recipe — scatter points over this ground, thin them out with noise, turn each survivor a random amount, put a tree on every one — and pcg-ts runs it. The recipe is a small graph of nodes; running it is called a <em>cook</em>. Feed it the same seed and you get the same world back, byte for byte, on any machine, forever.</p>
-      <p>pcg-ts is built for real-time use — cooking is budgeted and cancellable so it can run inside a frame, and the field grammar compiles to WGSL to run on a GPU device when one is there.</p>
-    <!--/pcg:lede-->
-    <p>Any parameter can vary across space instead of being a constant: a value can be a function of where it lands, resolved per point.</p>
-    <p>Every random decision flows from a seed through one hash chain, so the same graph and seed produce <strong>byte-identical output</strong> across runs, platforms, cook orders, and streaming paths. Cooking on a GPU device is the one documented exception, and <a href="./architecture.html">architecture</a> states its tolerances.</p>
-    <p>The heavy work moves to the GPU: field expressions compile to WGSL, and instance matrices are composed there and handed straight to three.js — without ever touching the CPU.</p>
-    <p>It is built to be driven by AI agents as much as by humans: nodes carry machine-readable schemas, graphs serialize to stable JSON, and every error names the node, pin, or param at fault and states the fix.</p>
-
-    <div class="stats">
-      <div class="stat"><b>4,323</b><span>tests, all green</span></div>
-      <div class="stat"><b>48</b><span>registered node types</span></div>
-      <div class="stat"><b>37</b><span>named primitives</span></div>
-      <div class="stat"><b>57</b><span>field-grammar functions</span></div>
-      <div class="stat"><b>0</b><span>required dependencies</span></div>
-      <div class="stat"><b><!--pcg:version-minor-->v0.16<!--/pcg:version-minor--></b><span>MIT · ESM · strict TS</span></div>
-    </div>
-  </section>
-
-  <section>
-    <p class="eyebrow">Foundations</p>
-    <h2>Four concepts the rest is built on</h2>
-    <div class="cards">
-      <div class="card">
-        <h3>Attribute data model</h3>
-        <p>Attributes live on four domains — point, vertex, primitive, detail — as SoA typed-array columns, with promote and transfer between them. The standard point carries transform, density, bounds, color, and its own seed. A 2-vertex polyline over shared points is an edge, so a network needs no fifth domain.</p>
-      </div>
-      <div class="card">
-        <h3>Deferred fields — <code>Field&lt;T&gt;</code></h3>
-        <p>A value can be a function of evaluation context, resolved only when it lands on a domain. Node params accept <code>T | Field&lt;T&gt;</code>; noise, trig, and combinators compose into expression trees that also serialize to JSON.</p>
-      </div>
-      <div class="card">
-        <h3>Graph runtime</h3>
-        <p>A pull-based executor with revision-keyed memoization, time-budgeted and cancellable cooking, per-output partial cooks, and serializable subgraphs. Recook an unchanged graph and every node is a cache hit.</p>
-      </div>
-      <div class="card">
-        <h3>Streaming world</h3>
-        <p>Hierarchical grid levels — 2D or 3D cells, plus an unbounded level — cook cells around a viewpoint with hysteresis and LRU eviction. Cell content is provably independent of cook order, path, and evictions.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- The two diagram sections used to sit here. They are the longest
-       things on the page and the slowest to read, and a landing page is
-       read in the order it is written — so everything after them was
-       behind two mermaid figures, a module list and a worked example.
-       They are a page now, and this is the door to it. -->
   <section>
     <p class="eyebrow">Architecture</p>
     <h2>Layered core, optional adapters</h2>
-    <p>A core that imports nothing outside itself, and adapters that depend on
-    it one way only: three.js interop, the WebGPU compiler and device runtime,
-    the worker pool, the CLI. Above that, a streaming runtime that cooks a
-    world around a moving camera in budgeted, cancellable slices — and returns
-    the same result whatever order it cooked in.</p>
-    <p><a class="more-link" href="./architecture.html">The module layers and the cook path, in two figures →</a></p>
-  </section>
+    <p>The core has zero dependencies and never imports three.js or WebGPU — guard tests enforce that only the adapters may. Each layer depends only on the ones before it.</p>
 
-  <section>
-    <p class="eyebrow">Built for agents</p>
-    <h2>Runtime introspection and stable serialization</h2>
-    <ul class="features">
-      <li><b>Self-describing registry</b> — every node type exposes pins, param schemas, defaults, and prose descriptions at runtime; the node reference is generated from it, never hand-written.</li>
-      <li><b>A command line that closes the loop</b> — <code>pcg nodes</code>, <code>fields</code>, <code>validate</code>, <code>cook</code>, <code>inspect</code>, <code>render</code>. <code>--json</code> picks a rendering of the same result rather than a separate code path, exit codes are 0 / 1 (failure) / 2 (misuse), and <code>render</code> writes a deterministic top-down SVG that diffs in git.</li>
-      <li><b>A vocabulary to reference, not rebuild</b> — 37 named primitives ship as <code>pcg-ts/primitives</code>, cited from JSON as <code>ref: { name, hash? }</code>. A name-only ref upgrades freely; a pinned one hard-errors on mismatch. No mode warns, and no mode cooks a near-miss.</li>
-      <li><b>Stable JSON everywhere</b> — graphs, subgraphs, and field expressions serialize to a versioned format that round-trips to byte-identical cooks; serialized form is stable across cooks.</li>
-      <li><b>Errors that state the fix</b> — validation names the offending node, pin, or param and lists the valid alternatives. Error messages are part of the API surface.</li>
-      <li><b>Introspectable execution</b> — cook stats report what cooked, what was cached, and how long it took; determinism makes every run reproducible.</li>
-      <li><b>Agent entry points</b> — <code>llms.txt</code> capability map, generated <code>docs/nodes.md</code> / <code>primitives.md</code> / <code>graphs.md</code> with their <code>.json</code> twins, three skills that cite every enumerable thing by path rather than inlining it, an authoring guide with recipes, and the <a href="./manual.html">user manual</a>, whose second half is written for an agent driving the library programmatically.</li>
-      <li><b>Independently audited</b> — each phase was reviewed by a separate agent before it landed, and the defects it found were fixed with regression tests before release.</li>
+    <div class="plate">
+      <pre class="mermaid">
+%%{init: {"theme": "neutral", "flowchart": {"htmlLabels": false, "curve": "basis", "subGraphTitleMargin": {"top": 12, "bottom": 6}}}}%%
+flowchart TB
+  subgraph L1["foundation"]
+    direction LR
+    RANDOM["src/random — PCG32 · hashing"]
+    DATA["src/data — SoA attributes · domains"]
+  end
+  subgraph L2["values"]
+    direction LR
+    FIELDS["src/fields — deferred values · combinators"]
+    NOISE["src/noise — 5 noise types as fields"]
+  end
+  subgraph L3["execution"]
+    direction LR
+    GRAPH["src/graph — executor · memo cache · subgraphs"]
+    NODES["src/nodes — 48 types · registry · JSON"]
+    SPATIAL["src/spatial — uniform grid · adjacency CSR"]
+  end
+  subgraph L4["orchestration"]
+    direction LR
+    RUNTIME["src/runtime — World · streaming"]
+    SPAWN["src/spawn — InstanceBatch protocol"]
+  end
+  subgraph L5["authoring"]
+    direction LR
+    PRIMS["src/primitives — 37 named recipes"]
+    CLI["src/cli — pcg: validate · cook · inspect · render"]
+  end
+  THREE["src/three — optional adapter, the only module importing three"]
+  GPU["src/gpu — optional WGSL compiler + WebGPU device runtime"]
+  L1 --> L2 --> L3 --> L4 --> L5
+  L4 -. render-agnostic boundary .-> THREE
+  L2 -. structural resolver boundary .-> GPU
+      </pre>
+      <p class="caption"><b>Fig. 1</b> — module layers; arrows are the only allowed dependency direction.</p>
+    </div>
+
+    <ul class="modules">
+      <li><code>src/data</code><span>typed-array attribute storage, geometry, promote/transfer</span></li>
+      <li><code>src/random</code><span>PCG32 RNG and seed hashing — no Math.random anywhere</span></li>
+      <li><code>src/fields</code><span>deferred values, evaluation contexts, memoization</span></li>
+      <li><code>src/noise</code><span>five noise fields with published raw ranges + normalized mode</span></li>
+      <li><code>src/graph</code><span>nodes, pins, scheduler, caching, subgraph composition</span></li>
+      <li><code>src/nodes</code><span>standard library, self-describing registry, JSON round-trips</span></li>
+      <li><code>src/spatial</code><span>uniform grid and adjacency CSR the spatial nodes share</span></li>
+      <li><code>src/runtime</code><span>hierarchical World, partitioned cooking, invalidation</span></li>
+      <li><code>src/spawn</code><span>render-agnostic instancing terminal</span></li>
+      <li><code>src/primitives</code><span>named subgraph recipes referenced from JSON by name</span></li>
+      <li><code>src/cli</code><span>the <code>pcg</code> binary — validate, cook, inspect, render</span></li>
+      <li><code>src/gpu</code><span>field-expression → WGSL compiler, WebGPU evaluator, device-resident runs, parity-budgeted</span></li>
+      <li><code>src/three</code><span>BufferGeometry/Curve converters, InstancedMesh, scene binding</span></li>
     </ul>
   </section>
 
-  <section id="demos">
-    <p class="eyebrow">Examples</p>
-    <h2>Four demos and an editor, live in your browser</h2>
-    <p>Each one needs a host to exist: streaming worlds, a device-resident renderer, a closed loop that measures its own output and corrects, and the editor the single-cook recipes moved into. Click to run.</p>
-    <p>Behind them sits a corpus of 68 graphs that are data rather than pages: <code>pcg cook graphs/&lt;name&gt;.json</code>. None of them uses <code>dataInput</code>, because its items do not survive serialization and an example an agent cannot run teaches nothing. Most are single-concept; eight are one settlement pipeline — ground and wall, district centres, lots, buildings, roads, plus three edit variants — where each stage is the previous file plus nodes and nothing removed, and the earlier stages cook bit-identically inside the later ones. Every one of them is in the <a href="./gallery.html">corpus gallery</a>, cooked in the editor and shot from the frame it draws into.</p>
-    <div class="examples">
-      <!-- THE WHOLE ROW, and the capture rather than the thumbnail. It
-           is the one thing here you can open every other one inside, and
-           at a quarter of this size the graph it is showing — the point
-           of the picture — is a row of grey smudges. The four demos are a
-           2x2 under it. -->
-      <a class="example full" href="https://c4rl05.github.io/pcg-ts/editor/"><img src="./manual-assets/editor.jpg" width="1454" height="783" loading="lazy" decoding="async" alt="The pcg-ts editor. Across the top, the wordmark on a white plate, a graph glyph beside the word EDITOR, a graph picker reading “compose several primitives into a scatter”, seed 1023, and icon controls for the render and the node canvas; the status line under it reads 61 fps, cook 21.3 ms, 5 of 5 cooked and cached, 523 points and 523 instances. A curated knobs card on the left offers tabs for scatter, mask and size, with points at 6000 and spacing at 2.5 m. Five connected nodes run across the middle — scatter-even, mask-by-noise, random-yaw, random-scale and spawnInstances — floating over the cooked result behind them: a few hundred small green conifers scattered over a dark ground plane."><span class="meta"><b>editor</b><span>open any corpus graph and edit it live — palette, inspector, a curated knobs panel, JSON round-trip, shareable links, and a cook path you can switch between the CPU and two GPU paths</span></span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/demos/infinite-world/"><img src="./thumbs/infinite-world.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A landscape of scattered instances streaming around a moving camera, with a panel showing cooked and evicted cell counts."><span class="meta"><b>infinite world</b><span>hierarchical streaming around a moving camera — with a GPU toggle showing combinator-authored fields reaching the device</span></span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/demos/galaxy/"><img src="./thumbs/galaxy.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A spiral galaxy of tens of thousands of coloured star points around a bright core, with a panel showing streamed star cells."><span class="meta"><b>galaxy</b><span>an infinite deterministic spiral galaxy — streamed star cells, click any star to visit its planets</span></span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/demos/gpu-world/"><img src="./thumbs/gpu-world.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A streamed world of tall teal spires drawn from GPU-composed matrices, beside a panel reading 40 live cells, 16,800 instances drawn, 1.0 MiB of matrices held on device and 0 B uploaded."><span class="meta"><b>gpu world</b><span>a streamed world whose instance matrices are composed in WGSL and drawn straight from that buffer — toggle to the CPU path and watch the readbacks appear</span></span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/demos/racetrack/"><img src="./thumbs/racetrack.jpg" width="640" height="345" loading="lazy" decoding="async" alt="The racetrack demo, shown small: a circuit drawn as a pale ribbon seen from above, its whole lap lined on both verges with hundreds of small green wireframe boxes and spanned overhead in places, with the driven view of the road running away beneath it. A controls-and-readout panel fills the left edge, too small at this size to read."><span class="meta"><b>racetrack</b><span>roadside art placed along a spline the page was handed — six legibility rules measured from a racing game, run as a bounded fixed point, with every repair reporting how much it had to do</span></span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/demos/road/"><img src="./thumbs/road.jpg" width="640" height="345" loading="lazy" decoding="async" alt="The road demo, shown small: the same circuit as the racetrack card, drawn as a pale ribbon from above with the driven view beneath it — but the verges carry one evenly spaced row of identical small boxes per side instead of varied art. A controls-and-readout panel fills the left edge, too small at this size to read."><span class="meta"><b>road</b><span>the same page with none of the placement rules in it — one spline, one sweep, one evenly spaced row per side, shot at the same station so the difference between the two pictures is exactly what the rules add</span></span></a>
-    </div>
-  </section>
-
-  <!-- The release history used to sit here. It was the last section and
-       the longest, and it is the one part of the site that ages by
-       GROWING — every release adds a row to it and nothing to the page it
-       was on. It is a page now. -->
   <section>
-    <p class="eyebrow">Roadmap</p>
-    <h2>What shipped in each release</h2>
-    <p>Fifteen releases from the first foundation to the current one: the
-    attribute data model and PCG32, then fields, the streaming runtime, the
-    WebGPU compiler and device runtime, subgraphs, the worker pool, and the
-    editor that drives all of it through the same public API this page
-    documents.</p>
-    <p><a class="more-link" href="./roadmap.html">What shipped in each release →</a></p>
+    <p class="eyebrow">How a world gets made</p>
+    <h2>From a seed to instances on screen</h2>
+
+    <div class="plate">
+      <pre class="mermaid">
+%%{init: {"theme": "neutral", "flowchart": {"htmlLabels": false, "curve": "basis"}}}%%
+flowchart TB
+  SEED(["seed + viewpoint"]) --> WORLD["World: coarse to fine levels"]
+  WORLD --> CELLS["wanted cells: hysteresis · LRU"]
+  CELLS --> COOK["cook per cell, seeded by coords"]
+  COOK <--> CACHE[("memo cache")]
+  COOK --> ITEMS["DataItems: geometry · instances"]
+  ITEMS --> BATCH["InstanceBatch: assetId · transforms"]
+  BATCH --> ADAPTER["three adapter"]
+  ADAPTER --> MESH(["InstancedMesh in the scene"])
+      </pre>
+      <p class="caption"><b>Fig. 2</b> — the streaming cook path. Budgeted, cancellable, resumable; identical results in any cook order.</p>
+    </div>
+
+    <div class="codeblock"><pre><span class="c">// Scatter points in a box, displace them with a noise field.</span>
+<span class="k">import</span> { Graph, cook, firstGeometry, pointScatterInBounds,
+         jitterPoints, fbm, perlinNoise, remap } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
+
+<span class="k">const</span> graph = <span class="k">new</span> <span class="n">Graph</span>(<span class="s">42</span>);  <span class="c">// every node seed derives from this</span>
+
+<span class="k">const</span> scatter = graph.<span class="n">add</span>(pointScatterInBounds, {
+  count: <span class="s">500</span>, boundsMin: [<span class="s">0</span>, <span class="s">0</span>, <span class="s">0</span>], boundsMax: [<span class="s">50</span>, <span class="s">0</span>, <span class="s">50</span>],
+});
+
+<span class="c">// `amount` is field-capable: scalar noise, evaluated per point.</span>
+<span class="k">const</span> jitter = graph.<span class="n">add</span>(jitterPoints, {
+  amount: <span class="n">remap</span>(<span class="n">fbm</span>(perlinNoise, { seed: <span class="s">7</span>, frequency: <span class="s">0.05</span> }), -<span class="s">1</span>, <span class="s">1</span>, <span class="s">0</span>, <span class="s">1</span>),
+});
+
+graph.<span class="n">connect</span>(scatter, <span class="s">"out"</span>, jitter, <span class="s">"in"</span>);
+graph.<span class="n">output</span>(jitter, <span class="s">"out"</span>, <span class="s">"points"</span>);
+
+<span class="k">const</span> result = <span class="k">await</span> <span class="n">cook</span>(graph);
+<span class="k">const</span> geo = <span class="n">firstGeometry</span>(result.outputs.points);
+console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 2, cached: 0, elapsedMs: … }</span></pre></div>
+    <p class="caption">Cook again: both nodes are cache hits. Change one param: only its dependents recook.</p>
   </section>
 
+  <section>
+    <p class="eyebrow">Determinism</p>
+    <h2>What byte-identical means, and where it stops</h2>
+    <p>Every random decision flows from a seed through one hash chain, so the same
+    graph and seed produce byte-identical output across runs, platforms, cook orders
+    and streaming paths. That is a promise about one path re-run — same seed, any cook
+    order, any budget, any machine.</p>
+    <p><strong>Cooking on a GPU device is the one documented exception</strong>, and it
+    is an exception with a published size rather than a disclaimer: elementwise
+    arithmetic is bit-exact, and the noise interiors round in f32 within the per-family
+    tolerances the parity table in <code>docs/authoring.md</code> states. The CPU is the
+    reference and the device is a documented approximation of it; whatever cannot run
+    on the device falls back to the CPU with a machine-readable reason rather than
+    silently doing something else.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Next</p>
+    <h2>Where to go from here</h2>
+    <p>The <a href="./manual.html">user manual</a> is the long form of all of
+    this, chapter by chapter. The <a href="./gallery.html">corpus gallery</a> is
+    every graph in the repository, cooked and shot. The
+    <a href="./editor/">editor</a> opens any of them and lets you change it.</p>
+    <p><a href="./index.html">← back to the landing page</a></p>
+  </section>
 </main>
 
 <footer>
@@ -882,145 +837,33 @@
   </div>
 </footer>
 
-<script>
-(() => {
-  // Deterministic 32-bit hash chain — the same construction idea the
-  // library uses (seed → hash → per-point decisions). No Math.random.
-  const M = Math.imul;
-  function hash(...xs) {
-    let h = 0x9e3779b9 >>> 0;
-    for (const x of xs) {
-      h ^= (x | 0) + 0x9e3779b9 + ((h << 6) | 0) + (h >>> 2);
-      h = M(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
-      h = M(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
-    }
-    return (h ^ (h >>> 16)) >>> 0;
-  }
-  const f01 = (h) => h / 4294967296;
-  const smooth = (t) => t * t * (3 - 2 * t);
-  function valueNoise(seed, x, y) {
-    const xi = Math.floor(x), yi = Math.floor(y);
-    const tx = smooth(x - xi), ty = smooth(y - yi);
-    const c00 = f01(hash(seed, xi, yi)),     c10 = f01(hash(seed, xi + 1, yi));
-    const c01 = f01(hash(seed, xi, yi + 1)), c11 = f01(hash(seed, xi + 1, yi + 1));
-    return (c00 * (1 - tx) + c10 * tx) * (1 - ty) + (c01 * (1 - tx) + c11 * tx) * ty;
-  }
-  function fbm(seed, x, y) {
-    let v = 0, amp = 0.62, f = 1;
-    for (let o = 0; o < 4; o++) { v += amp * valueNoise(seed + o, x * f, y * f); amp *= 0.5; f *= 2.1; }
-    return v;
-  }
-
-  const canvas = document.getElementById("field");
-  const input = document.getElementById("seed");
-  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-
-  function hexToRgb(hex) {
-    const n = parseInt(hex.replace("#", ""), 16);
-    return [ (n >> 16) & 255, (n >> 8) & 255, n & 255 ];
-  }
-
-  function draw() {
-    const seed = (parseInt(input.value, 10) || 0) >>> 0;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = canvas.clientWidth, h = canvas.clientHeight;
-    canvas.width = Math.round(w * dpr);
-    canvas.height = Math.round(h * dpr);
-    const ctx = canvas.getContext("2d");
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, w, h);
-
-    // The field is greyscale, ramped --faint -> --ink-hi, with a
-    // deterministic 1-in-24 of surviving points taking one of the three
-    // primaries instead. That is what "sparingly" means here: a scatter
-    // of coloured marks over a grey field, never a tint across all of it.
-    const lo = hexToRgb(css("--faint") || "#7a7a7a");
-    const hi = hexToRgb(css("--ink-hi") || "#ffffff");
-    const PRIMARIES = [
-      hexToRgb(css("--r") || "#ff0000"),
-      hexToRgb(css("--g") || "#00ff00"),
-      hexToRgb(css("--b") || "#0000ff"),
-    ];
-
-    // Deterministic scatter: grid cells, one candidate per cell, kept and
-    // sized by an fbm density field — a miniature of the library's model.
-    const cell = 13;
-    const cols = Math.ceil(w / cell), rows = Math.ceil(h / cell);
-    for (let gy = 0; gy < rows; gy++) {
-      for (let gx = 0; gx < cols; gx++) {
-        const hh = hash(seed, gx, gy);
-        const px = gx * cell + f01(hash(hh, 1)) * cell;
-        const py = gy * cell + f01(hash(hh, 2)) * cell;
-        const d = fbm(seed, px * 0.012, py * 0.012);
-        if (f01(hash(hh, 3)) > d * d * 1.35) continue;      // density keep-test
-        const r = 0.7 + d * 2.4 * f01(hash(hh, 4));
-        const edge = Math.min(py / (h * 0.55), 1);          // fade under the title
-        const alpha = (0.10 + 0.55 * d) * (0.35 + 0.65 * edge);
-        const t = f01(hash(hh, 5));
-        // Same hash chain as everything else, so the marks land in the
-        // same places for the same seed — the field stays deterministic.
-        const marked = hash(hh, 6) % 24 === 0;
-        const [cr, cg, cb] = marked
-          ? PRIMARIES[hash(hh, 7) % 3]
-          : [0, 1, 2].map((i) => Math.round(lo[i] + (hi[i] - lo[i]) * t));
-        // A mark has to survive the density fade or the colour reads as
-        // dirt on the grey rather than as a deliberate accent.
-        const a = marked ? Math.min(1, alpha * 2.4 + 0.25) : alpha;
-        ctx.fillStyle = `rgba(${cr},${cg},${cb},${a.toFixed(3)})`;
-        ctx.beginPath();
-        ctx.arc(px, py, marked ? r * 1.3 : r, 0, 6.2832);
-        ctx.fill();
-      }
-    }
-  }
-
-  // The corner link carries whatever seed is in the box, as a knob patch
-  // the editor already understands (`?p=` — see Editor.svelte). Rebuilt on
-  // every edit rather than read on click, so a middle-click or a copied
-  // link gets the same seed a plain click would.
-  const openLink = document.querySelector(".hero-open");
-  const GRAPH = "basics-filter-by-density";
-  function syncOpenLink() {
-    const seed = (parseInt(input.value, 10) || 0) >>> 0;
-    const patch = encodeURIComponent(JSON.stringify({ "scatter.seed": seed }));
-    openLink.href = `./editor/?graph=${GRAPH}&p=${patch}`;
-  }
-
-  input.addEventListener("input", () => { draw(); syncOpenLink(); });
-
-  // The stepper's two buttons. `stepUp`/`stepDown` are the browser's own
-  // arithmetic, and dispatching `input` leaves the listener above as the
-  // only thing that knows how to redraw. Press and hold runs.
-  for (const button of document.querySelectorAll(".seed-ctl .steps button")) {
-    const direction = Number(button.dataset.step);
-    let hold, run;
-    const nudge = () => {
-      if (direction > 0) input.stepUp(); else input.stepDown();
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    };
-    const stop = () => { clearTimeout(hold); clearInterval(run); };
-    button.addEventListener("pointerdown", (e) => {
-      e.preventDefault();          // the caret stays where it is
-      nudge();
-      hold = setTimeout(() => { run = setInterval(nudge, 60); }, 400);
-    });
-    for (const done of ["pointerup", "pointerleave", "pointercancel"]) {
-      button.addEventListener(done, stop);
-    }
-  }
-  window.addEventListener("resize", draw);
-  // The theme-change redraws that used to live here are gone with the
-  // themes: the palette no longer varies, so there is nothing to react to.
-  syncOpenLink();
-  draw();
-})();
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+// Mermaid ships a light theme by default, which would drop a white slab
+// onto a black page. Driven off the same greyscale ramp as the CSS.
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    darkMode: true,
+    background: "#000000",
+    mainBkg: "#0d0d0d",
+    primaryColor: "#0d0d0d",
+    primaryTextColor: "#ededed",
+    primaryBorderColor: "#3a3a3a",
+    secondaryColor: "#0a0a0a",
+    tertiaryColor: "#0a0a0a",
+    nodeBorder: "#3a3a3a",
+    clusterBkg: "#0a0a0a",
+    clusterBorder: "#262626",
+    lineColor: "#7a7a7a",
+    textColor: "#ededed",
+    edgeLabelBackground: "#000000",
+    fontFamily: '"JetBrains Mono", "Cascadia Code", Consolas, monospace',
+  },
+});
 </script>
-<script type="module" src="./logo/logo.js"></script>
-<!-- The mermaid import that used to sit here went with the two figures
-     it was for (docs/architecture.html). It is a CDN module and this page
-     no longer draws a diagram, so keeping it would be a network request
-     for nothing on the first page anyone loads. -->
-<!-- Development only: hidden until `.show-grid` is set on <html>, which
+
      the script below does for `?grid` or the `g` key. -->
 <div class="grid-guide" aria-hidden="true"><div class="wrap"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div></div>
 
