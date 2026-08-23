@@ -264,7 +264,12 @@
         aria-hidden="true"
         focusable="false">{@html WORDMARK_PATHS}</svg
       ></span
-    >Editor<span class="chevron" class:flip={collapsed}>▾</span></span>
+    ><!-- The same mark the landing page's corner link wears, for the same
+         reason: this is the graph editor, and the glyph says which of the
+         product's pages you are on before the word is read. -->
+    {@render icon(TOOLBAR_ICONS.graph)}Editor<span
+      class="chevron"
+      class:flip={collapsed}>▾</span></span>
 
   <!-- Grouped by LAYER, with a hairline between groups. The two middle
        groups are the two things on screen — the render and the node
@@ -555,6 +560,12 @@
      `align-self: stretch` would take the tallest thing on the line
      instead, which is the 26px select. If those buttons are ever
      re-padded, this is the number that has to follow them. */
+  /* The glyph before the word. It sits inside `.title`, whose 12px gap
+     is the distance between the LOGOTYPE and the label — too far for a
+     mark and the word it belongs to, which read as one thing. */
+  .title > .ic {
+    margin-right: -6px;
+  }
   .markbox {
     display: inline-flex;
     align-items: center;
