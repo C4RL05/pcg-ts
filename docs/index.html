@@ -120,6 +120,16 @@
        and now it is a column count rather than a coincidence. */
     --measure: calc(var(--track) * 9 + var(--gutter) * 8);
   }
+  /**
+   * NO ROUNDED BOX ON THIS SITE, and the exception is drawn where it
+   * belongs: the NODES in the diagrams keep their corners, because a node
+   * is a thing in a graph rather than a panel of the page, and mermaid
+   * draws those itself. Everything the stylesheet owns — buttons, cards,
+   * plates, code blocks, the seed field, the tiles, the release chips —
+   * is square. The page is ruled in straight lines: hairlines between
+   * bands, a twelve-track grid, a field of square dots. A 6px corner on
+   * a button was the one curve in it.
+   */
   .wrap { max-width: var(--page); margin: 0 auto; padding: 0 var(--gutter); }
 
   h1, h2, h3 { font-family: var(--mono); letter-spacing: -0.01em; text-wrap: balance; color: var(--ink-hi); }
@@ -139,7 +149,7 @@
      copy, so colour marks the interaction rather than the text. */
   a { color: var(--accent-ink); text-decoration: none; border-bottom: 1px solid var(--line-hi); }
   a:hover, a:focus-visible { border-bottom-color: var(--accent); }
-  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 0; }
 
   .eyebrow {
     font-family: var(--mono);
@@ -176,7 +186,7 @@
     gap: 8px;
     padding: 6px 12px;
     border: 1px solid var(--line);
-    border-radius: 6px;
+    border-radius: 0;
     color: var(--muted);
     font-family: var(--mono);
     font-size: 13px;
@@ -318,7 +328,7 @@
   .hero-bar .install {
     background: var(--card);
     border: 1px solid var(--line);
-    border-radius: 6px;
+    border-radius: 0;
     padding: 6px 12px;
     color: var(--ink);
   }
@@ -326,7 +336,7 @@
   .hero-bar .manual-link {
     background: color-mix(in srgb, var(--accent) 13%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
-    border-radius: 6px;
+    border-radius: 0;
     padding: 6px 12px;
     color: var(--g);
     font-weight: 600;
@@ -343,7 +353,7 @@
   .hero-bar .editor-link,
   .hero-bar .out-link {
     border: 1px solid var(--line-hi);
-    border-radius: 6px;
+    border-radius: 0;
     padding: 6px 12px;
     color: var(--ink);
     pointer-events: auto;
@@ -368,7 +378,7 @@
        the value you were setting had nowhere to be read. */
     width: 112px; padding: 5px 8px;
     color: var(--ink); background: var(--bg);
-    border: 1px solid var(--line); border-radius: 6px;
+    border: 1px solid var(--line); border-radius: 0;
   }
   /* The stepper: minus and plus, square, the full height of the field,
      at its right edge, shown on hover. The platform's spinner is two
@@ -383,9 +393,7 @@
   .seed-ctl .steps {
     position: absolute; top: 1px; right: 1px; bottom: 1px;
     display: flex; opacity: 0; pointer-events: none;
-    /* One less than the field's 6px, because the pair sits inside its
-       1px border — so the outer corner follows the frame exactly. */
-    border-radius: 0 5px 5px 0; overflow: hidden;
+    overflow: hidden;
     transition: opacity .08s;
   }
   .seed-ctl .numbox:hover .steps,
@@ -411,7 +419,7 @@
     gap: 1px;
     background: var(--line);
     border: 1px solid var(--line);
-    border-radius: 10px;
+    border-radius: 0;
     overflow: hidden;
     margin: 26px 0 6px;
   }
@@ -440,7 +448,7 @@
   .card {
     background: var(--card);
     border: 1px solid var(--line);
-    border-radius: 10px;
+    border-radius: 0;
     padding: 18px 18px 14px;
   }
   .card h3 { color: var(--ink); }
@@ -451,7 +459,7 @@
   .plate {
     background: var(--plate);
     border: 1px solid var(--line);
-    border-radius: 10px;
+    border-radius: 0;
     padding: 18px 14px 8px;
     margin: 18px 0 10px;
     overflow-x: auto;
@@ -517,7 +525,7 @@
   .codeblock {
     background: var(--code-bg);
     color: var(--code-ink);
-    border-radius: 10px;
+    border-radius: 0;
     padding: 18px 20px;
     overflow-x: auto;
     margin: 16px 0 10px;
@@ -551,9 +559,9 @@
   .example.full { grid-column: 1 / -1; }
   a.example {
     display: block;
-    border: 1px solid var(--line); border-radius: 10px;
+    border: 1px solid var(--line); border-radius: 0;
     background: var(--bg);
-    overflow: hidden; /* clip the thumbnail to the card's rounded corners */
+    overflow: hidden; /* the thumbnail stops at the card's edge */
     transition: border-color 0.15s ease;
   }
   a.example:hover, a.example:focus-visible { border-color: var(--accent); }
@@ -589,7 +597,7 @@
   .chip {
     display: inline-block; font-family: var(--mono); font-size: 11px; font-weight: 600;
     letter-spacing: 0.08em; text-transform: uppercase;
-    padding: 2px 9px; border-radius: 99px; vertical-align: 2px;
+    padding: 2px 9px; border-radius: 0; vertical-align: 2px;
   }
   .chip.shipped { color: var(--accent-ink); background: color-mix(in srgb, var(--accent) 14%, transparent); }
   .chip.next { color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }
