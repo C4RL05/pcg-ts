@@ -120,7 +120,11 @@
   .lead strong { color: var(--ink); font-weight: 600; }
 
   /* ---------- hero ---------- */
-  header { border-bottom: 1px solid var(--line); }
+  /* No rule of its own: the one under the buttons is drawn at the TEXT's
+     width rather than the viewport's (see `.hero-actions`), and a
+     full-width one here would sit a few pixels under it saying the same
+     thing twice. */
+  header { }
   /* TWO BANDS, and the field is only behind the second one. The lockup
      gets plain ground and room around it; the sentence under it gets the
      field, because that sentence is what the field is evidence for.
@@ -220,13 +224,24 @@
   /* A column: the seed reads with the field above it, and the row of
      places to go next reads on its own. Side by side they were one long
      line in which the only control on the page was just another item. */
+  /* The horizontal padding is `.wrap`'s own 24px, restated because this
+     shorthand would otherwise drop it — which is what had the buttons
+     starting a gutter's width left of the sentence above them, and would
+     now put the rule under them out of line with the text too. */
   .hero-bar {
-    display: flex; flex-direction: column; align-items: flex-start; gap: 16px;
-    padding: 18px 0 22px;
+    display: flex; flex-direction: column; align-items: flex-start;
+    padding: 18px 24px 0;
     font-family: var(--mono); font-size: 13px;
   }
+  /* `align-self: stretch` so the row fills the wrap's CONTENT box, which
+     is what puts the rule under it at the width of the text rather than
+     of the viewport — the buttons themselves are narrower than that and a
+     rule ending with them would read as an underline on the last one. */
   .hero-actions {
+    align-self: stretch;
     display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: center;
+    padding-bottom: 22px;
+    border-bottom: 1px solid var(--line);
   }
   .hero-bar .install {
     background: var(--card);
@@ -270,6 +285,9 @@
      they sit a step behind the two that do not. */
   .hero-bar .out-link { color: var(--muted); border-color: var(--line); }
   .seed-ctl { display: inline-flex; align-items: center; gap: 8px; pointer-events: auto; }
+  /* Set off from the sentence above rather than run on from it: they are
+     a claim and the control that backs it, not one paragraph. */
+  .hero-overlay .seed-ctl { margin-top: 22px; font-family: var(--mono); font-size: 13px; }
   .seed-ctl label { color: var(--muted); }
   .seed-ctl input {
     font-family: var(--mono); font-size: 13px;
@@ -528,11 +546,11 @@
     <div class="hero-overlay">
       <div class="wrap">
         <p class="hero-sub">Real-time procedural content generation for TypeScript — deterministic by construction, WebGPU accelerated, in the browser and Node, with optional three.js interop.</p>
-      </div>
-    </div>
-  </div>
-  <div class="wrap hero-bar">
-    <span class="seed-ctl">
+        <!-- ON the field, not under it. The sentence beside this box says
+             "this header is cooked from it", and the header it means is the
+             one this line now stands on: the control, the claim and the
+             evidence are one band. -->
+        <span class="seed-ctl">
       <label for="seed">seed</label>
       <span class="numbox">
         <input id="seed" type="number" value="42" step="1" />
@@ -542,12 +560,15 @@
         </span>
       </span>
       <span class="seed-note">← this header is cooked from it. Same seed, same field — always.</span>
-    </span>
-    <!-- Under the seed, not above it: the seed belongs to the field
-         directly above, and the row of places to go next is what you read
-         after you are done with the header. The two off-site links carry
-         an outward arrow rather than the forward one, which is the only
-         thing distinguishing "another page here" from "you are leaving". -->
+        </span>
+      </div>
+    </div>
+  </div>
+  <!-- After the band, because this is what you read once you are done with
+       the header. The two off-site links carry an outward arrow rather than
+       the forward one, which is the only thing distinguishing "another page
+       here" from "you are leaving". -->
+  <div class="wrap hero-bar">
     <div class="hero-actions">
       <span class="install">npm install pcg-ts</span>
       <a href="./manual.html" class="manual-link">Read the manual →</a>
