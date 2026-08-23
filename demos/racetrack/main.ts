@@ -720,10 +720,10 @@ void loadReference()
  */
 declare global {
   interface Window {
-    pcgRoad?: { seek(station: number): void; pause(on: boolean): void };
+    pcgRacetrack?: { seek(station: number): void; pause(on: boolean): void };
   }
 }
-window.pcgRoad = {
+window.pcgRacetrack = {
   seek(station: number): void {
     state.station = station;
   },

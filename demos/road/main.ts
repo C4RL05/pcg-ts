@@ -490,10 +490,10 @@ void recook().then(() => {
  */
 declare global {
   interface Window {
-    pcgSimpleRoad?: { seek(station: number): void; pause(on: boolean): void };
+    pcgRoad?: { seek(station: number): void; pause(on: boolean): void };
   }
 }
-window.pcgSimpleRoad = {
+window.pcgRoad = {
   seek(station: number): void {
     state.station = station;
   },

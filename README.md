@@ -81,12 +81,14 @@ And five demos, each one something a single graph cannot be on its own:
 <td width="20%"><a href="https://c4rl05.github.io/pcg-ts/demos/galaxy/"><img alt="The galaxy demo, shown small: tens of thousands of coloured stars wrapped in loose spiral arms around a soft glowing bulge, on black. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/galaxy.jpg" width="100%"></a></td>
 <td width="20%"><a href="https://c4rl05.github.io/pcg-ts/demos/gpu-world/"><img alt="The gpu-world demo, shown small: a dense field of tall teal blades tipped with small pale seed heads, receding to the horizon on a dark ground. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/gpu-world.jpg" width="100%"></a></td>
 <td width="20%"><a href="https://c4rl05.github.io/pcg-ts/demos/racetrack/"><img alt="The racetrack demo, shown small: a circuit drawn as a pale ribbon seen from above, its whole lap lined on both verges with hundreds of small green wireframe boxes and spanned overhead in places, with the driven view of the road running away beneath it. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/racetrack.jpg" width="100%"></a></td>
+<td width="20%"><a href="https://c4rl05.github.io/pcg-ts/demos/road/"><img alt="The road demo, shown small: the same circuit as the racetrack thumbnail, but with one evenly spaced row of identical small boxes along each verge instead of varied art. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/road.jpg" width="100%"></a></td>
 </tr>
 <tr>
 <td><b><a href="https://c4rl05.github.io/pcg-ts/demos/infinite-world/">infinite world</a></b><br>A world streamed around a flying camera, coarse to fine. Drag the cell size and watch the rocks not move.</td>
 <td><b><a href="https://c4rl05.github.io/pcg-ts/demos/galaxy/">galaxy</a></b><br>An unbounded spiral galaxy that is a pure function of its seed. Click a star to visit its planets.</td>
 <td><b><a href="https://c4rl05.github.io/pcg-ts/demos/gpu-world/">gpu world</a></b><br>The same streaming, with every instance matrix composed on the GPU and drawn without ever being read back.</td>
 <td><b><a href="https://c4rl05.github.io/pcg-ts/demos/racetrack/">racetrack</a></b><br>Roadside art placed along a spline the page was handed, to six legibility rules measured from a racing game. Every repair says how much it had to do.</td>
+<td><b><a href="https://c4rl05.github.io/pcg-ts/demos/road/">road</a></b><br>The same page with the rules taken out — one evenly spaced row per side. Shot at the same station, so the diff is what the rules added.</td>
 </tr>
 </table>
 

@@ -126,6 +126,7 @@ const SIZES = {
   galaxy: { css: [1454, 783], out: [1454, 783] },
   "gpu-world": { css: [1079, 791], out: [1079, 791] },
   racetrack: { css: [1454, 783], out: [1454, 783] },
+  road: { css: [1454, 783], out: [1454, 783] },
 };
 
 /**
@@ -330,21 +331,34 @@ const DEMOS = [
   },
   {
     id: "racetrack",
-    // Same pinning problem the retired racetrack demo had, and the same
-    // answer: the lap
-    // travels forever, so the shot is fixed by naming a STATION rather
-    // than by pausing, which would stop it wherever this machine happened
-    // to have got to. Station 250 W is the same one that demo shot
-    // uses, so the two demos frame the same part of a lap and the
-    // difference between the pictures is the difference between the
-    // demos rather than between two viewpoints.
+    // The lap travels forever, so the shot is fixed by naming a STATION
+    // rather than by pausing, which would stop it wherever this machine
+    // happened to have got to. Station 250 W is the same one `road` below
+    // uses, so the pair frames the same part of a lap and the difference
+    // between the two pictures is the difference between the DEMOS rather
+    // than between two viewpoints. That is the whole reason both are
+    // shot: `road` is this page with the placement rules taken out.
     path: "demos/racetrack/",
+    settleWait: () => !!window.pcgRacetrack,
+    settle: () => {
+      window.pcgRacetrack.seek(250);
+      window.pcgRacetrack.pause(true);
+    },
+    ready: (s, has) => has(s["dressing"]) && has(s["enclosure"]) && has(s["corner language"]),
+  },
+  {
+    id: "road",
+    // The control, and it earns a card of its own: side by side with
+    // `racetrack` at the same station, the pictures differ by exactly what
+    // the rules added. Fewer readouts to wait on because there are fewer
+    // rules — `dressing` here counts an evenly spaced row per side.
+    path: "demos/road/",
     settleWait: () => !!window.pcgRoad,
     settle: () => {
       window.pcgRoad.seek(250);
       window.pcgRoad.pause(true);
     },
-    ready: (s, has) => has(s["dressing"]) && has(s["enclosure"]) && has(s["corner language"]),
+    ready: (s, has) => has(s["dressing"]) && has(s["lap length"]),
   },
   {
     id: "gpu-world",
