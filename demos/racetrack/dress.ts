@@ -254,7 +254,17 @@ function kitIndex(kit: Kit): KitIndex {
   return index;
 }
 
-function buildBoxes(
+/**
+ * EXPORTED FOR THE GRAPH COMPARISON, and for nothing else in the demo.
+ *
+ * `tests/racetrackDressGraph.test.ts` checks `dressGraph.ts`'s box build
+ * against this one, and since L-1's cull now runs inside that graph the
+ * reference has to be built from the list the cull LEFT rather than from
+ * the one `dressLap` happened to finish with. Taking `dressing.boxes`
+ * instead would compare boxes built from two different placement lists
+ * and read the difference as a box-building defect.
+ */
+export function buildBoxes(
   kit: Kit,
   lap: Lap,
   placements: readonly StationedPlacement[],

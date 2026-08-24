@@ -37,26 +37,45 @@
  *      arc lengths added in frame order here and grouped into runs there.
  *
  * WHAT IS NOT ALLOWED TO DIFFER AT ALL: the number of boxes, the order
- * they come out in, which Z-1 branch fired, and the covered mask frame by
- * frame. Those are decisions rather than values, and a decision that
+ * they come out in, which Z-1 branch fired, which placements L-1 kept,
+ * which of them it pushed rather than dropped, and the covered mask frame
+ * by frame. Those are decisions rather than values, and a decision that
  * disagrees is a defect however small the number behind it was.
+ *
+ * L-1 IS COMPARED AGAINST THE SAME EYES, WHICH IS THE ONLY WAY THE
+ * COMPARISON MEANS ANYTHING. `occlusionCull` takes its eyes from the
+ * points of the sight path, and the graph hands it the lap's 900 frames;
+ * `cullSightlines` takes an eye list as an argument and `dressLap` gives
+ * it one every 2W. Comparing those two directly would measure the
+ * SAMPLING and report it as a cull defect, so every reference cull here is
+ * given the frames' own stations. That the two sampling rates disagree is
+ * a finding in its own right and gets its own test rather than being
+ * folded into a tolerance.
  */
 import { describe, expect, it } from "vitest";
 import { Quaternion, Vector3 } from "three";
-import { cook, firstGeometry, type Geometry } from "pcg-ts";
+import { Graph, cook, firstGeometry, type Geometry } from "pcg-ts";
 import {
   DRESS_OUTPUTS,
   COVER,
   buildDressGraph,
   dressLapByGraph,
+  type GraphDressing,
 } from "../demos/racetrack/dressGraph.js";
-import { dressLap } from "../demos/racetrack/dress.js";
+import { buildBoxes, dressLap, frameLookup } from "../demos/racetrack/dress.js";
 import { readLap, type Lap } from "../demos/racetrack/lap.js";
 import { buildRoadGraph, OUTPUTS } from "../demos/racetrack/graph.js";
 import { makeTrackSpline } from "../demos/racetrack/spline.js";
 import { shippedVocabulary } from "../demos/racetrack/vocabulary.js";
 import { ENCLOSURE, enclosureMask, measureEnclosure } from "../demos/racetrack/enclosure.js";
 import { resolveCorridor } from "../demos/racetrack/zones.js";
+import {
+  SIGHTLINE,
+  cullSightlines,
+  defaultEyeStations,
+  type CullResult,
+  type Occluder,
+} from "../demos/racetrack/sightline.js";
 import { SAME_PLACE_W } from "../demos/racetrack/tolerance.js";
 import { bucketOf, placeAsset, type PlaceableAsset } from "../demos/racetrack/assets.js";
 import { radiusAtW } from "../demos/racetrack/corners.js";
@@ -246,6 +265,172 @@ function corridorReference(p: StationedPlacement): { t: number; h: number } {
   return { t: fixed.t, h: fixed.baseH + p.asset.size.tall / 2 };
 }
 
+/**
+ * Every frame's own station, in W — the eye set the graph's cull uses.
+ *
+ * NOT `defaultEyeStations`, and the difference is the subject of its own
+ * test below. `occlusionCull` cannot be told to use one spacing for its
+ * eyes and another for its targets, so handing it the lap frames fixes
+ * both at the frame resolution; a reference cull that wants to check the
+ * NODE rather than the sampling has to stand in the same places.
+ */
+function frameStationsOf(lap: Lap): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < lap.count; i++) out.push(lap.s[i] / lap.halfWidth);
+  return out;
+}
+
+/**
+ * An occluder carrying where it came from, so a verdict can be traced.
+ *
+ * `id` IS THE INDEX IN THE LIST THE GRAPH WAS HANDED, matching the
+ * `placementId` column the cloud carries — which is the only thing the two
+ * sides can be compared by once the cull has removed something. Neither
+ * the station nor the asset is unique enough: two placements can share an
+ * asset, and after a push two can share very nearly a lateral.
+ */
+type Traced = Occluder & { readonly id: number; readonly src: StationedPlacement };
+
+const traced = (p: StationedPlacement, id: number): Traced => ({
+  station: p.station,
+  t: p.t,
+  h: p.h,
+  across: p.asset.size.across,
+  along: p.asset.size.along,
+  tall: p.asset.size.tall,
+  id,
+  src: p,
+});
+
+/**
+ * The list the graph handed L-1: the input placements at Z-1's laterals.
+ *
+ * THE REFERENCE CULL STARTS FROM THE GRAPH'S OWN Z-1 ANSWER, so that a
+ * cull comparison measures the cull. Rebuilding the input through
+ * `resolveCorridor` instead would fold Z-1's f32 difference — up to
+ * `SAME_PLACE_W` of lateral — into a BOOLEAN occlusion verdict, where it
+ * can flip a grazing case and be reported as a cull disagreement. The
+ * corridor test is what says that answer is right; this is entitled to
+ * start from it.
+ */
+function readPlacements(
+  cloud: Geometry,
+  src: readonly StationedPlacement[],
+): StationedPlacement[] {
+  expect(cloud.pointCount, "the pre-cull cloud lost a placement").toBe(src.length);
+  const t = cloud.attrs.point.require("trackT");
+  const h = cloud.attrs.point.require("trackH");
+  const id = cloud.attrs.point.require("placementId");
+  return src.map((p, i) => {
+    expect(id.get(i), "the pre-cull cloud reordered the list").toBe(i);
+    return { ...p, t: t.get(i), h: h.get(i) };
+  });
+}
+
+/**
+ * L-3's ruler element, which L-1 must drop rather than shove out of line.
+ *
+ * DERIVED THE WAY `dressLap` DERIVES IT rather than read off the dressing:
+ * `reserveMarkers` is a pure function of the asset list and the seed, so
+ * calling it again returns the same three assets, and `beforeCorridor`
+ * already relies on exactly that to rebuild the pool.
+ */
+function brakeOf(seed: number): Set<number> {
+  const kit = shippedVocabulary();
+  const all = (kit.assets as unknown as PlaceableAsset[]).filter((a) => a.where);
+  const id = reserveMarkers(all, seed).markers?.brake.id;
+  return id === undefined ? new Set() : new Set([id]);
+}
+
+/** `cullSightlines` over the graph's eye set — the reference for every L-1 claim here. */
+function cullReference(
+  lap: Lap,
+  placements: readonly StationedPlacement[],
+  immovable: ReadonlySet<number>,
+): CullResult<Traced> {
+  return cullSightlines(
+    placements.map(traced),
+    lap.lengthW,
+    frameLookup(lap),
+    lap.halfWidth,
+    frameStationsOf(lap),
+    (o) => immovable.has(o.src.asset.id),
+  );
+}
+
+/**
+ * How far apart the two laterals may be — PER PLACEMENT, not once.
+ *
+ * NOT A BUDGET FOR THE PUSH. The two searches walk the SAME ladder of
+ * twelve half-W rungs, so a placement that cleared at rung three on one
+ * side cleared at rung three on the other, and the laterals are the same
+ * number rather than two numbers within a tolerance of a rung. Every bound
+ * below is four orders under 0.5W, so nothing here could absorb a search
+ * that disagreed about where a placement settled.
+ *
+ * THE DOMINANT TERM IS NOT THE LATERAL, WHICH IS WHY THIS IS NOT A
+ * CONSTANT. `occlusionCull` computes the pushed position in f64 and stores
+ * it in the f32 `P` column, so each component carries up to half a spacing
+ * AT THE LAP'S WORLD SCALE — this circuit reaches 574 units from the
+ * origin, where f32 is worth 6.8e-5 — and `pushW` recovers the distance by
+ * projecting that position onto a unit `across`, which can gather all
+ * three components. Dividing back into half-widths is the only thing that
+ * shrinks it. So the bound scales with how far the TRACK is from the
+ * origin over the half-width, and has nothing to do with how large a
+ * lateral is.
+ *
+ * THIS WAS A CONSTANT, DERIVED FROM THE LATERAL'S OWN MAGNITUDE, AND THE
+ * MEASUREMENT IT WAS MEANT TO EXPLAIN FALSIFIED IT. Two f32 writes of a
+ * lateral at 7W allow 4.8e-7 between them; the suite reported 1.8e-6, near
+ * four times that, so the account was wrong even where it passed. A
+ * constant sized on this circuit would also have gone red on a larger one
+ * with the two culls agreeing perfectly — and its own reasoning said that
+ * was impossible, so it would have been read as a cull defect.
+ *
+ * The second term IS the lateral: `trackT` is written by the lift and
+ * again by the push.
+ *
+ * Both terms take the FULL spacing where the error is at most half of one,
+ * and sum three components where a unit projection reaches at most √3 of
+ * them — about 3.5x of deliberate headroom on a bound that must never be
+ * tightened to fit a measurement. The margin actually used is printed.
+ */
+const lateralBound = (lap: Lap, px: number, py: number, pz: number, t: number): number =>
+  (ulp(px) + ulp(py) + ulp(pz)) / lap.halfWidth + 4 * ulp(t);
+
+/**
+ * `buildBoxes` over the list L-1 left — the reference geometry for every
+ * comparison that is about boxes rather than about the cull.
+ *
+ * TWO CALLERS AND ONE LIST, DELIBERATELY. The box test and the enclosure
+ * test both need "what the TypeScript would have built from what the graph
+ * decided", and building it twice from two slightly different lists is how
+ * one of them ends up measuring the other's disagreement. It is still the
+ * TYPESCRIPT'S boxes on both sides — `enclosureMask` must not be handed
+ * the graph's geometry, or the box comparison folds into the coverage one
+ * and neither says which half was wrong.
+ *
+ * The cull runs over `readPlacements(got.placed, ...)` rather than over the
+ * caller's own list, for the reason that function gives: an f32 lateral
+ * and an f64 one reaching the same boolean occlusion verdict is luck, not
+ * a property.
+ */
+function referenceBoxes(
+  lap: Lap,
+  got: GraphDressing,
+  placements: readonly StationedPlacement[],
+  immovable: ReadonlySet<number>,
+  seed: number,
+): PlacedBox[] {
+  const cull = cullReference(lap, readPlacements(got.placed, placements), immovable);
+  return buildBoxes(
+    shippedVocabulary(),
+    lap,
+    cull.kept.map((o) => ({ ...o.src, t: o.t })),
+    seed,
+  );
+}
+
 describe("racetrack dressing, as a graph", () => {
   it("restates L-6's measurement without changing it", () => {
     // Two independent statements of one measurement, pinned equal. The
@@ -286,12 +471,14 @@ describe("racetrack dressing, as a graph", () => {
         dressing.stats.converged,
         `seed ${seed}: dressLap did not converge, so its placements are not a Z-1 fixed point`,
       ).toBe(true);
+      const immovable = brakeOf(seed);
       const got = await dressLapByGraph({
         kit: shippedVocabulary(),
         lap,
         frames,
         placements: dressing.placements,
         seed,
+        immovable,
       });
 
       cookMs += got.cookMs;
@@ -305,7 +492,31 @@ describe("racetrack dressing, as a graph", () => {
       // is worth a node change.
       copies += got.stamped;
 
-      const want: readonly PlacedBox[] = dressing.boxes;
+      // THE REFERENCE IS BUILT FROM THE LIST L-1 LEFT, NOT FROM THE ONE
+      // `dressLap` FINISHED WITH, and the cull is what forced that. Taking
+      // `dressing.boxes` would compare boxes built from two different
+      // placement lists and read the difference — a placement the graph
+      // pushed at least half a W clear of the cone, against a derived
+      // centre bound of 0.03 world units at the longest arm — as a
+      // box-building defect of two orders. The two lists differ by a
+      // handful of laterals per lap, which is precisely the finding the
+      // sampling test below states.
+      //
+      // AND IT STARTS FROM THE GRAPH'S OWN Z-1 ANSWER, for the reason
+      // `readPlacements` gives: `dressing.placements` carries f64 laterals
+      // where the graph's cull sees f32 ones, and the corridor test
+      // measures that gap at 5e-7W. Feeding the two culls different
+      // laterals folds an f32 difference into a BOOLEAN occlusion verdict,
+      // where a grazing placement can flip on one side only — and the
+      // symptom would be a box COUNT mismatch reported as a box-building
+      // defect, which is the exact misattribution this paragraph is about.
+      const want: readonly PlacedBox[] = referenceBoxes(
+        lap,
+        got,
+        dressing.placements,
+        immovable,
+        seed,
+      );
       expect(want.length).toBeGreaterThan(100);
       // THE COUNT AND THE ORDER FIRST. `copyToPoints` lays its copies out
       // in per-target blocks and the filter preserves order, so the
@@ -411,12 +622,24 @@ describe("racetrack dressing, as a graph", () => {
         frames,
         placements,
         seed,
+        // Nothing is locked here: this test reads only the pre-cull cloud,
+        // which L-1 has not touched. Stated rather than omitted, which is
+        // what the param being required is for.
+        immovable: new Set(),
       });
-      // Only the placement output: the box build and the coverage cast
-      // are the other two tests' business, and cooking them here would
-      // pay for a million-point broadcast to read two columns.
-      const out = (await cook(g, { outputs: [DRESS_OUTPUTS.placements] })).outputs;
-      const cloud = firstGeometry(out[DRESS_OUTPUTS.placements] ?? []);
+      // THE PRE-CULL CLOUD, WHICH IS THE ONLY ONE THAT CAN ANSWER THIS.
+      // Z-1's verdict is "what did the corridor rule do to the list it was
+      // given", and L-1 overwrites `trackT` for every placement it pushes
+      // — after which a piece Z-1 left alone and the cull shoved half a W
+      // outward is indistinguishable from one Z-1 stood off, and the
+      // branch assertion below would read the cull's work as a corridor
+      // fix. It is exactly why the graph publishes both clouds.
+      //
+      // Only this output: the box build and the coverage cast are the
+      // other two tests' business, and cooking them here would pay for a
+      // million-point broadcast to read two columns.
+      const out = (await cook(g, { outputs: [DRESS_OUTPUTS.placed] })).outputs;
+      const cloud = firstGeometry(out[DRESS_OUTPUTS.placed] ?? []);
       if (!cloud) throw new Error("the dress graph produced no placements");
       expect(cloud.pointCount).toBe(placements.length);
 
@@ -477,6 +700,377 @@ describe("racetrack dressing, as a graph", () => {
     );
   });
 
+  it("culls the cone the way cullSightlines does", async () => {
+    let seeds = 0;
+    let placements = 0;
+    let blocking = 0;
+    let pushed = 0;
+    let dropped = 0;
+    let worstT = 0;
+    let worstPush = 0;
+    let worstMargin = 0;
+    let graphMs = 0;
+    let refMs = 0;
+
+    for (const seed of SEEDS) {
+      const { lap, frames } = await cookLap(seed);
+      // THE POPULATION Z-1 HAS SETTLED AND L-1 HAS NEVER SEEN, for the
+      // same reason `beforeCorridor` exists at all: `dressLap`'s own
+      // output has already been culled, so running the cull over it is a
+      // check that nothing moves — necessary, and vacuous on its own.
+      // This one has forty to sixty blockers in it, which is what makes
+      // the comparison worth making.
+      const src = beforeCorridor(lap, seed);
+      const immovable = brakeOf(seed);
+      const g = buildDressGraph({
+        kit: shippedVocabulary(),
+        lap,
+        frames,
+        placements: src,
+        seed,
+        immovable,
+      });
+      const t0 = performance.now();
+      const out = (await cook(g, { outputs: [DRESS_OUTPUTS.placed, DRESS_OUTPUTS.placements] }))
+        .outputs;
+      graphMs += performance.now() - t0;
+      const before = firstGeometry(out[DRESS_OUTPUTS.placed] ?? []);
+      const after = firstGeometry(out[DRESS_OUTPUTS.placements] ?? []);
+      if (!before || !after) throw new Error("the dress graph produced no placements");
+
+      const zoned = readPlacements(before, src);
+      const t1 = performance.now();
+      const ref = cullReference(lap, zoned, immovable);
+      refMs += performance.now() - t1;
+
+      seeds++;
+      placements += zoned.length;
+      blocking += ref.blocking;
+      pushed += ref.moved;
+      dropped += ref.dropped;
+      // A RULE THAT NEVER FIRED IS NOT A RULE THAT PASSED.
+      expect(ref.blocking, `seed ${seed}: nothing blocked the cone`).toBeGreaterThan(0);
+
+      const survivors = new Map<number, { t: number; push: number }>();
+      const kId = after.attrs.point.require("placementId");
+      const kT = after.attrs.point.require("trackT");
+      const kPush = after.attrs.point.require("conePushW");
+      for (let i = 0; i < after.pointCount; i++) {
+        survivors.set(kId.get(i), { t: kT.get(i), push: kPush.get(i) });
+      }
+
+      // WHO SURVIVED, MEMBER BY MEMBER. Not a count: two culls that
+      // dropped the same NUMBER of different placements would pass one.
+      expect(survivors.size, `seed ${seed}: survivor count`).toBe(ref.kept.length);
+      for (const o of ref.kept) {
+        expect(
+          survivors.has(o.id),
+          `seed ${seed}: placement ${o.id} kept by the rule, not by the graph`,
+        ).toBe(true);
+      }
+      const keptByRule = new Set(ref.kept.map((o) => o.id));
+      for (const id of survivors.keys()) {
+        expect(
+          keptByRule.has(id),
+          `seed ${seed}: placement ${id} kept by the graph, not by the rule`,
+        ).toBe(true);
+      }
+
+      // AND WHERE IT LEFT THEM, plus the column that says so. A demo that
+      // reported a push it had not made, or made one it did not report,
+      // would have two accounts of the same move and no way to tell which
+      // one anything downstream had read.
+      const bP = before.attrs.point.require("P");
+      for (const o of ref.kept) {
+        const got = survivors.get(o.id);
+        if (!got) continue;
+        // The bound is read off the placement's OWN world position, which
+        // is where the f32 rounding that reaches the lateral happens.
+        const allowed = lateralBound(
+          lap,
+          bP.get(o.id, 0),
+          bP.get(o.id, 1),
+          bP.get(o.id, 2),
+          o.t,
+        );
+        const d = Math.abs(got.t - o.t);
+        worstT = Math.max(worstT, d);
+        worstMargin = Math.max(worstMargin, d / allowed);
+        expect(d, `seed ${seed}: placement ${o.id} lateral`).toBeLessThan(allowed);
+        const dp = Math.abs(got.push - (o.t - o.src.t));
+        worstPush = Math.max(worstPush, dp);
+        worstMargin = Math.max(worstMargin, dp / allowed);
+        expect(dp, `seed ${seed}: placement ${o.id} push distance`).toBeLessThan(allowed);
+      }
+    }
+
+    console.log(
+      `dress graph cull: ${placements} placements over ${seeds} seeds — ` +
+        `${blocking} blocked the cone, ${pushed} pushed clear, ${dropped} dropped; ` +
+        `worst lateral ${worstT.toExponential(2)}W, worst push ${worstPush.toExponential(2)}W, ` +
+        `using ${(worstMargin * 100).toFixed(1)}% of the derived bound; ` +
+        `${graphMs.toFixed(0)}ms of cook against ${refMs.toFixed(0)}ms of cullSightlines`,
+    );
+    // Both exits of the repair, over the four laps rather than per lap:
+    // dropping only happens where six W of push still cannot clear the
+    // cone, and that is two laps in four.
+    expect(pushed).toBeGreaterThan(0);
+    expect(dropped).toBeGreaterThan(0);
+  });
+
+  it("walks the full push ladder at a half-width f32 cannot hold", async () => {
+    // THE DEFAULT HALF-WIDTH HIDES THIS ENTIRELY, WHICH IS WHY IT IS ITS
+    // OWN TEST WITH ITS OWN TRACK.
+    //
+    // `occlusionCull` walks `floor(pushMax / pushStep)` rungs. `pushMax`
+    // has to be a FIELD here, because L-3's exception is per placement,
+    // and a field is resolved onto an f32 column — so the allowance is
+    // `fround(k * halfWidth)` while the step stays f64. At the default
+    // half-width of 9 the rule's own 6W comes to 54, which f32 holds
+    // exactly, and every ladder in every other test is twelve rungs by
+    // luck. At 7.3 it is 43.799999237 against a step of 3.65: the ratio
+    // falls a hundred-millionth short of 12 and the graph walks ELEVEN
+    // rungs, so a placement that only clears at the full 6W is dropped by
+    // the graph and kept by the rule.
+    //
+    // The fix is in `writeSightlineCull`: state the allowance half a rung
+    // above the rule's maximum, where no rounding of either number can
+    // move the floor. This is the test that would have caught it, and it
+    // fails on the previous spelling — which is the only reason to believe
+    // it is testing anything.
+    const RUNGS = SIGHTLINE.maxPushW / SIGHTLINE.pushStepW;
+    const rungsAt = (allowanceW: number, halfWidth: number): number =>
+      // `Math.fround` IS the field column: `scalarPerElement` resolves a
+      // field onto f32 and the node then divides by an f64 step, which is
+      // the whole of the arithmetic being pinned.
+      Math.floor(Math.fround(allowanceW * halfWidth) / (SIGHTLINE.pushStepW * halfWidth));
+
+    // THE ARITHMETIC FIRST, SWEPT, AND PAIRED WITH THE BOUND MOVED ASIDE.
+    // Asserting that the shipped spelling gives twelve rungs is only
+    // evidence if the spelling it replaced does not — otherwise every
+    // half-width in the sweep could be one where f32 happens to be exact
+    // and the test would pass on the defect. So the naive spelling is
+    // counted as it goes and required to have failed somewhere.
+    let naiveShort = 0;
+    const shortAt: number[] = [];
+    for (let hundredths = 100; hundredths <= 2000; hundredths++) {
+      const w = hundredths / 100;
+      if (rungsAt(SIGHTLINE.maxPushW, w) < RUNGS) {
+        naiveShort++;
+        if (shortAt.length < 5) shortAt.push(w);
+      }
+      expect(
+        rungsAt(SIGHTLINE.maxPushW + SIGHTLINE.pushStepW / 2, w),
+        `half-width ${w}: the shipped allowance does not give ${RUNGS} rungs`,
+      ).toBe(RUNGS);
+    }
+    console.log(
+      `L-1 push ladder: over 1901 half-widths from 1 to 20, the rule's own ` +
+        `${SIGHTLINE.maxPushW}W allowance loses a rung on ${naiveShort} of them ` +
+        `(${shortAt.join(", ")}, ...); the half-rung spelling loses one on none`,
+    );
+    expect(
+      naiveShort,
+      "no half-width in the sweep exercised the rounding, so the pairing proves nothing",
+    ).toBeGreaterThan(0);
+
+    // AND THEN END TO END ON ONE OF THEM, because the sweep above pins the
+    // arithmetic and not the wiring: a `pushMax` that reached the node as
+    // something else entirely would satisfy every line of it.
+    const seed = 1;
+    for (const halfWidth of [7.3]) {
+      expect(rungsAt(SIGHTLINE.maxPushW, halfWidth), "this lap does not exercise it").toBeLessThan(
+        RUNGS,
+      );
+      const spline = makeTrackSpline({ seed, halfWidth });
+      const out0 = (await cook(buildRoadGraph({ spline, seed }))).outputs;
+      const frames = firstGeometry(out0[OUTPUTS.frames] ?? []);
+      if (!frames) throw new Error("the road graph produced no frames");
+      const lap = readLap(frames);
+      expect(lap.halfWidth, `half-width ${halfWidth} did not reach the lap`).toBeCloseTo(
+        halfWidth,
+        6,
+      );
+
+      const src = beforeCorridor(lap, seed);
+      const immovable = brakeOf(seed);
+      const g = buildDressGraph({
+        kit: shippedVocabulary(),
+        lap,
+        frames,
+        placements: src,
+        seed,
+        immovable,
+      });
+      const out = (await cook(g, { outputs: [DRESS_OUTPUTS.placed, DRESS_OUTPUTS.placements] }))
+        .outputs;
+      const before = firstGeometry(out[DRESS_OUTPUTS.placed] ?? []);
+      const after = firstGeometry(out[DRESS_OUTPUTS.placements] ?? []);
+      if (!before || !after) throw new Error("the dress graph produced no placements");
+
+      const ref = cullReference(lap, readPlacements(before, src), immovable);
+      // WHAT THIS HALF OF THE TEST DOES NOT COVER, SAID OUT LOUD. Eleven
+      // rungs and twelve agree on every placement that cleared before rung
+      // twelve, and the deepest push this lap needs is printed below —
+      // well short of it. So this is a wiring check, and the sweep above
+      // is what actually pins the ladder's length. A lap that reached the
+      // last rung would be better and none of the seeds produces one.
+      const deepest = ref.kept.reduce((m, o) => Math.max(m, Math.abs(o.t - o.src.t)), 0);
+      console.log(
+        `L-1 push ladder: at half-width ${halfWidth} the graph and the rule agree on ` +
+          `${ref.kept.length} survivors; deepest push ${deepest.toFixed(1)}W of ` +
+          `${SIGHTLINE.maxPushW}W, so rung ${RUNGS} is not reached by this population`,
+      );
+
+      const survivors = new Set<number>();
+      const kId = after.attrs.point.require("placementId");
+      for (let i = 0; i < after.pointCount; i++) survivors.add(kId.get(i));
+      expect(after.pointCount, `half-width ${halfWidth}: survivor count`).toBe(ref.kept.length);
+      for (const o of ref.kept) {
+        expect(
+          survivors.has(o.id),
+          `half-width ${halfWidth}: placement ${o.id} kept by the rule, not by the graph`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("drops a locked asset rather than pushing it", async () => {
+    // THE BRANCH REAL DATA DOES NOT REACH, CONSTRUCTED RATHER THAN LEFT
+    // GREEN. L-3's ruler element is the asset L-1 must remove rather than
+    // shove out of line, and on these four laps the braking marks never
+    // block the cone: every drop in the test above is an ordinary
+    // placement that six W of push could not clear. So the exception is
+    // exercised by locking an asset that IS among the blockers and
+    // checking the verdict flips from pushed to dropped. It is the whole
+    // reason `occlusionCull` takes `pushMax` as a field.
+    const seed = 1;
+    const { lap, frames } = await cookLap(seed);
+    const src = beforeCorridor(lap, seed);
+    const build = (immovable: ReadonlySet<number>): Graph =>
+      buildDressGraph({ kit: shippedVocabulary(), lap, frames, placements: src, seed, immovable });
+
+    const open0 = (await cook(build(new Set()), { outputs: [DRESS_OUTPUTS.placed] })).outputs;
+    const before = firstGeometry(open0[DRESS_OUTPUTS.placed] ?? []);
+    if (!before) throw new Error("the dress graph produced no placements");
+    const zoned = readPlacements(before, src);
+
+    const open = cullReference(lap, zoned, new Set());
+    const movedBy = open.kept.filter((o) => Math.abs(o.t - o.src.t) > SAME_PLACE_W);
+    expect(movedBy.length, "nothing was pushed, so there is no asset to lock").toBeGreaterThan(0);
+    // AN ASSET WITH ONE PLACEMENT THAT BLOCKS AND ONE THAT DOES NOT, so
+    // that the second claim below has something to be about: a lock is not
+    // a ban on the asset, it is a rule about what happens to the copies of
+    // it that BLOCK. An asset every copy of which blocks would satisfy
+    // "the locked one was dropped" while being indistinguishable from a
+    // lock that removed the asset outright.
+    const clear = new Set(
+      open.kept.filter((o) => Math.abs(o.t - o.src.t) <= SAME_PLACE_W).map((o) => o.src.asset.id),
+    );
+    const pick = movedBy.find((o) => clear.has(o.src.asset.id));
+    expect(pick, "no asset has both a blocking and a clear placement").toBeDefined();
+    if (!pick) throw new Error("unreachable");
+    const locked = new Set([pick.src.asset.id]);
+    const shut = cullReference(lap, zoned, locked);
+
+    // THE BOUND PAIRED WITH THE BOUND MOVED ASIDE, which is the only way
+    // an assertion about a lock is evidence the lock did anything: a cull
+    // that dropped every blocker would satisfy "the locked one was
+    // dropped" while never having pushed at all.
+    expect(shut.dropped, "locking a blocker dropped nothing extra").toBeGreaterThan(open.dropped);
+    expect(shut.moved, "locking a blocker left the push count alone").toBeLessThan(open.moved);
+
+    const out = (await cook(build(locked), { outputs: [DRESS_OUTPUTS.placements] })).outputs;
+    const after = firstGeometry(out[DRESS_OUTPUTS.placements] ?? []);
+    if (!after) throw new Error("the dress graph produced no placements");
+    const kId = after.attrs.point.require("placementId");
+    const survivors = new Set<number>();
+    for (let i = 0; i < after.pointCount; i++) survivors.add(kId.get(i));
+
+    expect(after.pointCount, "the graph and the rule kept different numbers").toBe(
+      shut.kept.length,
+    );
+    for (const o of shut.kept) {
+      expect(survivors.has(o.id), `placement ${o.id} kept by the rule, not by the graph`).toBe(true);
+    }
+    const droppedLocked = zoned
+      .map((p, i) => i)
+      .filter((i) => locked.has(zoned[i].asset.id) && !survivors.has(i));
+    expect(droppedLocked.length, "the graph dropped no locked placement").toBeGreaterThan(0);
+    // AND THE LOCK IS NOT A BLANKET REMOVAL. A placement of the same asset
+    // that never blocked is untouched, which is what makes this an
+    // exception to the REPAIR rather than a filter on the vocabulary.
+    const lockedTotal = zoned.filter((p) => locked.has(p.asset.id)).length;
+    expect(droppedLocked.length, "the lock removed every copy of the asset").toBeLessThan(
+      lockedTotal,
+    );
+  });
+
+  it("finds cone blockers that the rule's own 2W eye spacing steps over", async () => {
+    // THE FINDING THIS STAGE PRODUCED, PINNED SO THAT IT FAILS IF IT GROWS.
+    //
+    // L-1 says the next 12W of centreline must be visible FROM ANY
+    // STATION. `defaultEyeStations` checks every 2W, which its own comment
+    // labels a sampling compromise, and `dressLap` runs its repair loop
+    // until that check reports nothing — so its output is a fixed point of
+    // the SAMPLING rather than of the rule. `occlusionCull` takes its eyes
+    // from the points of the sight path, and the lap's frames are 0.385W
+    // apart, so the graph asks the same question five times as often and
+    // finds placements standing in the cone on every lap `dressLap`
+    // declared clear. Those are real violations rather than a stricter
+    // reading: a driver at one of those stations cannot see the road.
+    //
+    // IT IS NOT FIXED HERE. Raising `dress.ts`'s eye density moves the
+    // output of every rule downstream of the cull — the coverage gaps, the
+    // band mix, the enclosure share — and that is a retune of the demo
+    // rather than part of stating its rules as nodes. Reported, measured,
+    // and left where the decision belongs.
+    let stepped = 0;
+    const perSeed: string[] = [];
+
+    for (const seed of SEEDS) {
+      const { lap, dressing } = await cookLap(seed);
+      expect(
+        dressing.stats.converged,
+        `seed ${seed}: dressLap did not converge, so its own cull had not finished either`,
+      ).toBe(true);
+      const occ = dressing.placements.map(traced);
+      const frameAt = frameLookup(lap);
+      const at = (eyes: readonly number[]): CullResult<Traced> =>
+        cullSightlines(occ, lap.lengthW, frameAt, lap.halfWidth, eyes, () => false);
+
+      // THE PREMISE, ASSERTED: `dressLap` really did finish, by its own
+      // measure. Without this the comparison could be reporting a lap that
+      // ran out of repair rounds, where both eye sets would find blockers
+      // and the finer one would find more for a reason that says nothing
+      // about the sampling.
+      const coarse = at(defaultEyeStations(lap.lengthW));
+      expect(coarse.blocking, `seed ${seed}: the 2W cull was not at a fixed point`).toBe(0);
+
+      const fine = at(frameStationsOf(lap));
+      stepped += fine.blocking;
+      perSeed.push(`${seed}:${fine.blocking}`);
+      expect(fine.blocking, `seed ${seed}: the finer eye set found nothing`).toBeGreaterThan(0);
+      // AND EVERY ONE OF THEM CLEARS BY A PUSH, which is the difference
+      // between "the finer sampling finds violations the demo can repair"
+      // and "the finer sampling would cost the lap twenty-five placements".
+      // Reading only `blocking` leaves that unsaid, and the second reading
+      // is the one that would make raising the eye density expensive.
+      expect(fine.dropped, `seed ${seed}: the finer eye set had to drop something`).toBe(0);
+    }
+
+    console.log(
+      `L-1 eye sampling: over ${SEEDS.length} converged laps the 2W spacing reported 0 blockers ` +
+        `of a ${SIGHTLINE.aheadW}W look-ahead, and the frame spacing (~0.385W) found ${stepped} ` +
+        `(${perSeed.join(", ")})`,
+    );
+    // A CEILING, NOT AN EQUALITY. What the number must not do is grow:
+    // these are violations the shipped demo leaves on the track, and a
+    // change that doubled them would otherwise pass silently. Measured at
+    // 25 over the four laps.
+    expect(stepped).toBeLessThanOrEqual(40);
+  });
+
   it("gives the same bytes whatever was asked for and in what order", async () => {
     // DETERMINISM IS THE LIBRARY'S HARD INVARIANT AND THIS IS THE ONE
     // THING THE OTHER THREE TESTS CANNOT SEE. They compare one cook
@@ -490,7 +1084,14 @@ describe("racetrack dressing, as a graph", () => {
     // something outside its own inputs and seed, the two would part.
     const seed = 2;
     const { lap, frames, dressing } = await cookLap(seed);
-    const input = { kit: shippedVocabulary(), lap, frames, placements: dressing.placements, seed };
+    const input = {
+      kit: shippedVocabulary(),
+      lap,
+      frames,
+      placements: dressing.placements,
+      seed,
+      immovable: brakeOf(seed),
+    };
 
     const alone = (await cook(buildDressGraph(input), { outputs: [DRESS_OUTPUTS.boxes] })).outputs;
     const together = await dressLapByGraph(input);
@@ -525,19 +1126,29 @@ describe("racetrack dressing, as a graph", () => {
     for (const seed of SEEDS) {
       const cookedLap = await cookLap(seed);
       const { lap, dressing } = cookedLap;
+      const immovable = brakeOf(seed);
       const got = await dressLapByGraph({
         kit: shippedVocabulary(),
         lap,
         frames: cookedLap.frames,
         placements: dressing.placements,
         seed,
+        immovable,
       });
 
       // The reference runs over the TypeScript's OWN boxes, not the
       // graph's: two measurements of one set of geometry is the question,
       // and feeding the reference the graph's boxes would fold the box
       // comparison into this one and hide which half disagreed.
-      const want = enclosureMask(lap, dressing.boxes);
+      //
+      // BUILT FROM THE LIST L-1 LEFT, THOUGH, WHICH IS NOT `dressing.boxes`.
+      // The graph culls before it builds, so its coverage is cast against
+      // a lap where a handful of placements per seed have been pushed
+      // clear of the cone; measuring `dressing.boxes` instead would be two
+      // measurements of two different laps, and the masks agreeing would
+      // be luck about whether a pushed piece happened to still cover the
+      // frame it used to.
+      const want = enclosureMask(lap, referenceBoxes(lap, got, dressing.placements, immovable, seed));
       expect(got.covered.length).toBe(want.length);
 
       // THE LAP HAS TO BE COVERED SOMEWHERE, OR THIS PROVES NOTHING.

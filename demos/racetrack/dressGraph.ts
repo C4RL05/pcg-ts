@@ -10,17 +10,59 @@
  * cook, cache, partition and lower like everything else in this library
  * rather than being a synchronous pass a page runs once.
  *
- * THREE STAGES AND NO MORE, DELIBERATELY. Box building, Z-1, and the
- * enclosure measurement are PURE functions of the placement list: none of
- * them moves a placement in response to another, so each is a chain of
- * nodes and the three compose by wiring. Everything after them in
- * `dressLap` — the sightline cull, the false-edge detector, the cover
- * tiler, the band mix — is a FIXED POINT over the whole population, where
- * each repair invalidates the measurement the next one reads. A fixed
- * point is expressible as a graph too, and it is not expressible as THIS
- * graph; putting one stage of it here would produce something that looked
- * finished and answered a different question. `dress.ts` keeps running
- * exactly as it did and nothing calls this but its test.
+ * FOUR STAGES, AND ONE TEST FOR ADMISSION. Z-1, the box build, L-1's
+ * sightline cull and the enclosure measurement are each a PURE function of
+ * the placement list and the lap: every one of them answers from the list
+ * it was handed and from nothing another repair wrote, so each is a chain
+ * of nodes and the four compose by wiring.
+ *
+ * L-1 PASSES THAT TEST DESPITE LIVING INSIDE `dressLap`'s REPAIR LOOP, and
+ * telling those two things apart is the whole reason a fourth stage was
+ * admissible. The cull is in the loop because the OTHER repairs push
+ * placements back into the cone — the coverage fill moves a piece into the
+ * gap the cull just opened, the mix redraws a placement with a larger
+ * asset — not because the cull reads anything they produced. Given a list,
+ * it answers; run it twice on its own output and the second run moves
+ * nothing. That is what makes it a node rather than a phase.
+ *
+ * WHAT IS STILL MISSING IS THE LOOP, NOT THE STAGES IN IT. The false-edge
+ * detector, the cover tiler and the band mix each read a measurement the
+ * previous repair invalidated, and `dressLap` runs them together until
+ * nothing moves. A fixed point is expressible as a graph too, and it is
+ * not expressible as THIS graph; adding one of those stages here would
+ * produce something that looked finished and answered a different
+ * question. `dress.ts` keeps running exactly as it did and nothing calls
+ * this but its test.
+ *
+ * AND THE CULL HERE IS STRICTER THAN THE ONE IN `dress.ts`, IN TWO WAYS
+ * THAT ARE WORTH TELLING APART.
+ *
+ * THE FIRST IS SAMPLING, AND IT IS A FINDING. L-1 requires the next 12W of
+ * centreline to be visible FROM ANY STATION. `defaultEyeStations` checks
+ * every 2W, which its own comment labels a compromise. `occlusionCull`
+ * takes its eyes from the points of the path it is handed, and the path
+ * handed to it here is the lap's own frames — 900 of them, about 0.385W
+ * apart. On a dressing `dressLap` has already run to CONVERGENCE, that
+ * finer eye set still finds 3 to 9 placements per lap standing in the
+ * cone, every one of them clearable by a push. Those are real violations
+ * the 2W sampling stepped over, and `tests/racetrackDressGraph.test.ts`
+ * pins the count so that it fails if it grows rather than passing quietly
+ * if it shrinks.
+ *
+ * THE SECOND IS THE SHAPE OF THE EYE WINDOW, AND IT HAS NOT FIRED YET.
+ * `cullSightlines` narrows the eyes it tests by ARC LENGTH — a placement is
+ * only checked against eyes within 12W of it along the centreline, wrapped.
+ * `occlusionCull` narrows by a EUCLIDEAN radius around the box, which on
+ * this lap is about 220 world units, so an eye on a DIFFERENT stretch of
+ * circuit that happens to pass close by contributes its whole fan. That is
+ * the right answer — the cone is a chord through space and a track that
+ * folds back on itself really can be blocked from across the fold, which
+ * is the same argument `enclosure.ts` makes when it withdraws a published
+ * figure for projecting bounds onto a folded centreline. But it is a
+ * superset the reference cull cannot reproduce, so the exact agreement the
+ * test measures is evidence that no such case AROSE on these four laps and
+ * not that the two windows are equivalent. A circuit that brought two
+ * stretches within ~200 units would separate them.
  *
  * THE ENTRY POINT IS SPLIT IN TWO, AND THE SPLIT IS THE ANSWER TO THE
  * STRUCTURAL PROBLEM. The rules `dress.ts` states are synchronous
@@ -63,6 +105,7 @@ import {
   createPointCloud,
   dataInput,
   div,
+  dot,
   eq,
   filterByExpression,
   firstGeometry,
@@ -72,6 +115,7 @@ import {
   makeGeometryItem,
   max,
   mul,
+  occlusionCull,
   orientAlongVector,
   pathCoverage,
   select,
@@ -85,6 +129,7 @@ import { TRACK_FRAME } from "./graph.js";
 import type { Kit } from "./kit.js";
 import type { Lap } from "./lap.js";
 import type { StationedPlacement } from "./legibility.js";
+import { SIGHTLINE } from "./sightline.js";
 import { SAME_PLACE_W } from "./tolerance.js";
 import { CORRIDOR } from "./zones.js";
 
@@ -92,7 +137,23 @@ import { CORRIDOR } from "./zones.js";
 export const DRESS_OUTPUTS = {
   /** One point per placed box: P the world centre, rot the track frame, scale the world extents. */
   boxes: "boxes",
-  /** One point per placement, after Z-1 and lifted into the world. */
+  /**
+   * One point per placement, after Z-1 and lifted into the world, before
+   * L-1 has removed or moved anything.
+   *
+   * PUBLISHED SEPARATELY FROM {@link DRESS_OUTPUTS.placements} BECAUSE THE
+   * TWO ANSWER DIFFERENT QUESTIONS, and one output could only answer the
+   * second. Z-1's verdict is "what did the corridor rule do to the list it
+   * was given", and it stops being readable off the final cloud the moment
+   * the cull moves a lateral: a placement Z-1 left alone and L-1 shoved
+   * half a W outward is indistinguishable, in `trackT` alone, from one
+   * Z-1 stood off. This is also what the cull is MEASURED against — the
+   * count
+   * it removed and the distance it pushed are both differences between
+   * these two clouds.
+   */
+  placed: "placed",
+  /** One point per SURVIVING placement, after Z-1 and L-1. */
   placements: "placements",
   /** The lap's frames, one column wider: `covered` and `coverHits`. */
   coverage: "coverage",
@@ -159,6 +220,7 @@ const PLACEMENT = {
   h: "trackH",
   /** The asset's own extents, in W — what Z-1 resolves the corridor BY. */
   sizeAcross: "sizeAcross",
+  sizeAlong: "sizeAlong",
   sizeTall: "sizeTall",
   /** 1 on an L-6 cover piece, which Z-1 must not touch. */
   cover: "cover",
@@ -177,6 +239,48 @@ const PLACEMENT = {
    * a placement.
    */
   station: "stationW",
+  /**
+   * Where this placement sat in the list the graph was handed.
+   *
+   * THE CULL IS THE FIRST STAGE THAT REMOVES ANYTHING, and a survivor with
+   * no name is a survivor nobody can match to what went in. `copyToPoints`
+   * writes a `placementIndex` downstream, but that indexes the SURVIVOR
+   * cloud, which is a different list the moment one placement is dropped —
+   * so the two columns are not two spellings of one fact and neither can
+   * be derived from the other.
+   */
+  id: "placementId",
+  /**
+   * 1 on a placement L-1 must DROP rather than push aside.
+   *
+   * L-3's braking ruler is the case: a row of marks with one shoved out of
+   * line reads as a mistake, where the same row two marks shorter still
+   * reads as a row. `occlusionCull` spells it as a per-point `pushMax` of
+   * zero, which is the same exception `cullSightlines` takes through its
+   * `dropRatherThanMove` predicate.
+   */
+  locked: "placementLocked",
+  /**
+   * The world position the lift produced, kept so the push can be read back.
+   *
+   * `occlusionCull` MOVES `P` and says nothing about how far, which is the
+   * right contract for a node that knows nothing about tracks — but this
+   * demo's lateral is a track coordinate, and a `trackT` left describing a
+   * position the placement no longer occupies is worse than no column at
+   * all. Recovering the lateral from the moved `P` alone would mean
+   * projecting onto `across` and dividing, which picks up `up · across`
+   * times the height: the interpolated frame is mutually orthogonal only
+   * to about 1.9e-4, so a piece 6W up would come back with its lateral
+   * wrong by 1e-3W — ten times `SAME_PLACE_W`, on a column that is
+   * supposed to be exact. The DIFFERENCE of the two positions is purely
+   * along `across`, so projecting THAT drops the shear term entirely; what
+   * it still carries is the f32 rounding of the moved position at the
+   * lap's WORLD scale, which is the term `LATERAL_TOL`'s replacement in
+   * the test is derived from.
+   */
+  placedP: "placedP",
+  /** How far L-1 pushed this placement along `across`, in W. 0 if it did not. */
+  pushW: "conePushW",
 } as const;
 
 /** The columns the pose library carries, one point per box of one pose. */
@@ -206,7 +310,9 @@ const MIN_EXTENT_WORLD = 1e-3;
 export interface GraphDressing {
   /** One point per box, in `buildBoxes`' own order: placement, then pose box. */
   readonly boxes: Geometry;
-  /** The placement cloud after Z-1, lifted into the world. */
+  /** The placement cloud after Z-1 and the lift, before L-1 ran. */
+  readonly placed: Geometry;
+  /** The same cloud after L-1: the survivors, at the laterals it left them. */
   readonly placements: Geometry;
   /** Per lap frame: is it under cover? */
   readonly covered: boolean[];
@@ -214,6 +320,19 @@ export interface GraphDressing {
   readonly hits: Uint32Array;
   /** Covered arc length over lap length. */
   readonly share: number;
+  /**
+   * How many placements L-1 pushed clear of the cone, and how many it
+   * removed because pushing could not clear them.
+   *
+   * THE SUM IS `cullSightlines`' `blocking`, and the node reports neither
+   * on its own — it answers with survivors, and everything about what it
+   * did is a difference between the list that went in and the cloud that
+   * came out. That is why `PLACEMENT.id` and `PLACEMENT.pushW` exist: a
+   * stage whose only visible effect is a shorter list is a stage nobody
+   * can tell from a stage that did nothing.
+   */
+  readonly pushed: number;
+  readonly dropped: number;
   /**
    * How many copies the box build stamped before the filter, which is
    * the pose library times the placement count.
@@ -251,6 +370,22 @@ export interface DressGraphInput {
   readonly placements: readonly StationedPlacement[];
   /** The stream `buildBoxes` draws poses from. Must match, or the boxes do not. */
   readonly seed: number;
+  /**
+   * Asset ids L-1 must DROP rather than push aside.
+   *
+   * `dressLap` passes L-3's braking mark here and nothing else. Left out,
+   * every blocked ruler element is shoved to the verge instead of removed,
+   * which satisfies L-1 and breaks L-3 — the two rules disagree about one
+   * asset and the tie is broken by naming it, not by weakening either.
+   *
+   * REQUIRED, NOT OPTIONAL, EVEN THOUGH AN EMPTY SET IS A PERFECTLY GOOD
+   * ANSWER. An omitted lock does not fail; it quietly produces a different
+   * dressing, and the caller who omitted it has no way to see that it
+   * mattered. Writing `new Set()` says the caller considered the exception
+   * and has none, which is a different statement from not having thought
+   * about it.
+   */
+  readonly immovable: ReadonlySet<number>;
 }
 
 /**
@@ -412,6 +547,7 @@ function placementCloudInTrackFrame(
   placements: readonly StationedPlacement[],
   lib: PoseLibrary,
   seed: number,
+  immovable: ReadonlySet<number>,
 ): Geometry {
   const geo = createPointCloud(placements.length);
   const pts = geo.attrs.point;
@@ -423,10 +559,13 @@ function placementCloudInTrackFrame(
   const t = pts.add(PLACEMENT.t, "f32", 1);
   const h = pts.add(PLACEMENT.h, "f32", 1);
   const sizeAcross = pts.add(PLACEMENT.sizeAcross, "f32", 1);
+  const sizeAlong = pts.add(PLACEMENT.sizeAlong, "f32", 1);
   const sizeTall = pts.add(PLACEMENT.sizeTall, "f32", 1);
   const cover = pts.add(PLACEMENT.cover, "f32", 1);
   const pose = pts.add(PLACEMENT.pose, "f32", 1);
   const station = pts.add(PLACEMENT.station, "f32", 1);
+  const id = pts.add(PLACEMENT.id, "f32", 1);
+  const locked = pts.add(PLACEMENT.locked, "f32", 1);
 
   // The lap's own lookup, not a second one. `frameLookup` is exactly what
   // `buildBoxes` calls, so the frame a box is built in here is the frame
@@ -450,10 +589,17 @@ function placementCloudInTrackFrame(
     t.set(i, p.t);
     h.set(i, p.h);
     sizeAcross.set(i, p.asset.size.across);
+    sizeAlong.set(i, p.asset.size.along);
     sizeTall.set(i, p.asset.size.tall);
     cover.set(i, p.cover === true ? 1 : 0);
     pose.set(i, poseFor(lib, p, seed));
     station.set(i, p.station);
+    // EXACT IN f32 AND ONLY WHILE THE LIST IS SHORT, which is a real
+    // ceiling rather than a formality: every integer below 2^24 is exact,
+    // so this reads back as itself for any list under 16.7 million. A lap
+    // carries a few hundred.
+    id.set(i, i);
+    locked.set(i, immovable.has(p.asset.id) ? 1 : 0);
   }
   return geo;
 }
@@ -660,11 +806,22 @@ function writeCorridor(g: Graph, target: NodeHandle, tag: string): NodeHandle {
  * until the kernel can carry a roll, and the fallback line in the stats
  * is the true reason rather than a mystery.
  *
- * `scale` IS THE TRACK'S SCALE, NOT AN ASSET'S. It is the one place the
- * half-width enters the box build: the pose library is in half-widths, the
- * copy multiplies the source's offset and extents by this, and the boxes
- * come out in world units. It is also why the same library dresses a lap
- * of any width.
+ * `scale` IS THE ASSET'S OWN WORLD BOX — the extents the catalogue
+ * publishes, in W, multiplied out by the half-width. That is what a
+ * placement's `scale` MEANS everywhere the library reads one: it is the
+ * column `spawnInstances` draws with and the column `occlusionCull` tests
+ * against, so the box L-1 culls is the box the renderer would have shown.
+ *
+ * IT IS OVERWRITTEN LATER, AND THAT IS A LIBRARY GAP RATHER THAN A CHOICE.
+ * `copyToPoints` composes `scale = targetScale * sourceScale` and has no
+ * separate scale param, so the one column has to carry the TARGET'S SIZE
+ * for the cull and the COPY'S SCALE for the stamp. {@link writeCopyScale}
+ * swaps it over immediately before `copyToPoints` and nowhere else, which
+ * keeps the window in which `scale` means something other than the
+ * placement's size down to a single node. A `scaleAttr` on that node —
+ * read the copy's scale from a column the author names — would remove the
+ * swap entirely, and is the second thing this stage would ask for after
+ * per-target source selection.
  */
 function writeWorldTransform(
   g: Graph,
@@ -689,12 +846,29 @@ function writeWorldTransform(
   );
   g.connect(target, "out", P, "in");
 
+  // The lifted position, kept under a name nothing else writes. L-1 moves
+  // `P` and reports nothing; this is what the move is measured against.
+  const placed = g.add(
+    setAttribute,
+    { name: PLACEMENT.placedP, tupleSize: 3, value: attribute("P", 3) },
+    `${tag}_placedP`,
+  );
+  g.connect(P, "out", placed, "in");
+
   const scale = g.add(
     setAttribute,
-    { name: "scale", tupleSize: 3, value: vec(halfWidth, halfWidth, halfWidth) },
-    `${tag}_trackScale`,
+    {
+      name: "scale",
+      tupleSize: 3,
+      value: vec(
+        mul(attribute(PLACEMENT.sizeAcross), halfWidth),
+        mul(attribute(PLACEMENT.sizeAlong), halfWidth),
+        mul(attribute(PLACEMENT.sizeTall), halfWidth),
+      ),
+    },
+    `${tag}_assetBox`,
   );
-  g.connect(P, "out", scale, "in");
+  g.connect(placed, "out", scale, "in");
 
   const rot = g.add(
     orientAlongVector,
@@ -707,6 +881,173 @@ function writeWorldTransform(
   );
   g.connect(scale, "out", rot, "in");
   return rot;
+}
+
+/**
+ * L-1, as one node over the placement cloud.
+ *
+ * THE SUBJECT IS THE PLACEMENT, NOT THE BOX, and the choice is the rule's
+ * rather than the graph's. A gantry is seven boxes and one object; culling
+ * per box would clear the cone by deleting a leg and leaving the span
+ * hanging over the road, which satisfies L-1 and produces something nobody
+ * placed. `cullSightlines` tests a placement's aggregate extents for the
+ * same reason, and that is why this stage sits BEFORE the box build even
+ * though the boxes are what a driver would actually see.
+ *
+ * THE SIGHT PATH IS THE LAP'S OWN FRAMES, WHICH FIXES THE EYE SPACING AND
+ * THE TARGET RESOLUTION AT ONCE — and `occlusionCull` gives no way to
+ * separate them. Its eyes ARE the points of the path it is handed, and its
+ * targets are located by arc length along that same polyline, so asking
+ * for "eyes every 2W, targets on the full-resolution centreline" is not
+ * expressible: a coarser sight path moves the targets too, and a 2W chord
+ * cuts `0.5W^2 / R` inside the arc it stands for — 0.016W at this lap's
+ * median radius of 31.5W and 0.076W at its p10 of 6.6W, which is the
+ * tighter end where L-1 actually bites. Those are two to three orders
+ * above the f32 and frame-shear differences the rest of this file is
+ * bounded by (`MAX_FRAME_SKEW`, 5e-4), so a coarse sight path would not
+ * shift the comparison, it would replace it. Handing the node the frames
+ * takes the accurate targets and the fine eye set together. See the file
+ * header for what that cost and what it caught.
+ *
+ * `eyeOffset` IS THE FRAME'S OWN `up`, NOT WORLD UP, for the reason
+ * {@link writeCoverage} gives about its rays: this lap has relief and the
+ * road banks on the surface normal, so a literal [0, 1, 0] puts the
+ * cockpit eye somewhere other than in the cockpit on every banked corner.
+ *
+ * `pushAxis` IS THE PLACEMENT'S OWN `across`, AND THE SIGN IS THE NODE'S.
+ * `cullSightlines` pushes along `Math.sign(t || 1)` — outward from the
+ * centreline, in the direction the piece already lies. The node has no
+ * centreline: it pushes whichever way takes the point further from the
+ * nearest eye it can reach, which is the same direction whenever the
+ * nearest eye is the one abreast of the placement, and is the better
+ * answer where it is not. Whether the two ever disagree is a measurement
+ * in the test rather than a claim here.
+ *
+ * `pushClearance` IS 0, DELIBERATELY, AND IT IS THE ONE PARAM THAT DECIDES
+ * WHETHER THIS STAGE CAN BE PARTITIONED. Above zero the node becomes
+ * greedy — where this point settled depends on where that one did — and
+ * its own description is explicit that no halo width covers that chain, so
+ * a per-cell cook would disagree with a whole-lap one at the seams. At
+ * zero every verdict is a function of the sight path alone, which is what
+ * makes a level-1 cell exact given a window of `lookAhead + pushMax`
+ * around it. `cullSightlines` has no clearance either, so nothing is being
+ * given up to buy that.
+ */
+function writeSightlineCull(
+  g: Graph,
+  placements: NodeHandle,
+  frames: NodeHandle,
+  halfWidth: number,
+  tag: string,
+): NodeHandle {
+  const cull = g.add(
+    occlusionCull,
+    {
+      lookAhead: SIGHTLINE.aheadW * halfWidth,
+      samples: SIGHTLINE.samples,
+      eyeOffset: mul(attribute(TRACK_FRAME.up, 3), SIGHTLINE.eyeW * halfWidth),
+      pushAxis: attribute(PLACEMENT.across, 3),
+      // Zero for L-3's ruler elements, which is how this node spells "drop
+      // rather than move". Everything else gets the rule's own allowance —
+      // plus HALF A RUNG, and that half rung is a correctness fix rather
+      // than a margin.
+      //
+      // `occlusionCull` walks `floor(pushMax / pushStep)` rungs, and the
+      // search only ever lands on multiples of `pushStep`, so any allowance
+      // in [12 rungs, 13 rungs) means exactly the twelve `cullSightlines`
+      // walks. Naming the boundary instead — 6W, which IS twelve rungs —
+      // asks f32 to hold `6 * halfWidth` exactly, and this param CANNOT be
+      // a plain number: the L-3 exception makes it a field, and a field is
+      // resolved onto an f32 column (see `scalarPerElement`, whose own doc
+      // warns about exactly this). At the default half-width of 9 the
+      // product is 54 and f32 holds it, which is why the suite was green;
+      // at 7.3 it is 43.799999237 against a step of 3.65, the ratio comes
+      // to 11.9999998, and the graph walks ELEVEN rungs where the rule
+      // walks twelve. A placement that only clears at the full 6W is then
+      // dropped by the graph and kept by the rule. Stating the allowance
+      // half a rung clear puts the ratio at 12.5, where no f32 rounding of
+      // either number can move the floor.
+      pushMax: select(
+        attribute(PLACEMENT.locked),
+        0,
+        (SIGHTLINE.maxPushW + SIGHTLINE.pushStepW / 2) * halfWidth,
+      ),
+      // The ladder `cullSightlines` walks, in world units. A plain number,
+      // so it keeps the f64 the multiplication produced.
+      pushStep: SIGHTLINE.pushStepW * halfWidth,
+      pushClearance: 0,
+    },
+    `${tag}_cone`,
+  );
+  g.connect(placements, "out", cull, "in");
+  g.connect(frames, "out", cull, "sight");
+
+  // HOW FAR IT MOVED, RECOVERED FROM THE TWO POSITIONS RATHER THAN FROM THE
+  // MOVED ONE. See `PLACEMENT.placedP`: the difference is purely along
+  // `across`, so this projection is exact, where projecting the position
+  // itself would carry `up . across` times the height.
+  const push = g.add(
+    setAttribute,
+    {
+      name: PLACEMENT.pushW,
+      tupleSize: 1,
+      value: div(
+        dot(
+          sub(attribute("P", 3), attribute(PLACEMENT.placedP, 3)),
+          attribute(PLACEMENT.across, 3),
+        ),
+        halfWidth,
+      ),
+    },
+    `${tag}_conePush`,
+  );
+  g.connect(cull, "out", push, "in");
+
+  // AND THE LATERAL FOLLOWS THE POSITION, because a `trackT` describing
+  // where a placement used to be is worse than none: `bandOfPlacement`
+  // reads it, Z-3 counts what that returns, and a pushed piece still
+  // claiming its old band is counted into the wrong one for the whole lap.
+  const lateral = g.add(
+    setAttribute,
+    {
+      name: PLACEMENT.t,
+      tupleSize: 1,
+      value: add(attribute(PLACEMENT.t), attribute(PLACEMENT.pushW)),
+    },
+    `${tag}_coneT`,
+  );
+  g.connect(push, "out", lateral, "in");
+  return lateral;
+}
+
+/**
+ * The track's scale, written over the asset's box for `copyToPoints`.
+ *
+ * ONE NODE, IMMEDIATELY BEFORE THE STAMP, and {@link writeWorldTransform}
+ * argues why it exists at all: `copyToPoints` reads the copy's scale from
+ * the target's `scale` column and offers no param for it, so the column has
+ * to mean two things at two points in the chain. Keeping the swap to a
+ * single node keeps the window in which `scale` is not the placement's own
+ * size down to one wire.
+ *
+ * It is also the one place the half-width enters the box build: the pose
+ * library is in half-widths, the copy multiplies the source's offset and
+ * extents by this, and the boxes come out in world units. That is why the
+ * same library dresses a lap of any width.
+ */
+function writeCopyScale(
+  g: Graph,
+  target: NodeHandle,
+  halfWidth: number,
+  tag: string,
+): NodeHandle {
+  const scale = g.add(
+    setAttribute,
+    { name: "scale", tupleSize: 3, value: vec(halfWidth, halfWidth, halfWidth) },
+    `${tag}_trackScale`,
+  );
+  g.connect(target, "out", scale, "in");
+  return scale;
 }
 
 /**
@@ -874,7 +1215,7 @@ export function buildDressGraph(input: DressGraphInput): Graph {
  * measures — so the hidden one comes out.
  */
 function assemble(input: DressGraphInput): { graph: Graph; libraryBoxes: number } {
-  const { kit, lap, frames, placements, seed } = input;
+  const { kit, lap, frames, placements, seed, immovable } = input;
   const g = new Graph(seed);
 
   const lib = poseLibrary(kit);
@@ -885,7 +1226,7 @@ function assemble(input: DressGraphInput): { graph: Graph; libraryBoxes: number 
 
   const placementsIn = g.add(dataInput, {}, "placements");
   g.setParam(placementsIn, "items", [
-    makeGeometryItem(placementCloudInTrackFrame(lap, placements, lib, seed)),
+    makeGeometryItem(placementCloudInTrackFrame(lap, placements, lib, seed, immovable)),
   ]);
 
   const framesIn = g.add(dataInput, {}, "lap");
@@ -897,11 +1238,24 @@ function assemble(input: DressGraphInput): { graph: Graph; libraryBoxes: number 
   // which on a lap that folds back on itself has no single answer.
   const resolved = writeCorridor(g, placementsIn, "z1");
   const oriented = writeWorldTransform(g, resolved, lap.halfWidth, "z1");
-  const boxes = writeBoxes(g, posesIn, oriented, "dress");
+  // L-1 AFTER Z-1 AND BEFORE THE BOXES, WHICH IS `dressLap`'s OWN ORDER
+  // AND IS ARGUED THERE AT LENGTH. Z-1 stands a large piece off to the
+  // corridor EDGE and no further, by rule, so half its width still
+  // overhangs and the cone can still be blocked; running the corridor
+  // after the cull put the two in a loop, with the cull pushing a piece
+  // clear and Z-1 pulling it back to the edge. Section 9 gives L-1 the
+  // last word, so L-1 goes last.
+  const seen = writeSightlineCull(g, oriented, framesIn, lap.halfWidth, "l1");
+  const boxes = writeBoxes(g, posesIn, writeCopyScale(g, seen, lap.halfWidth, "dress"), "dress");
   const coverage = writeCoverage(g, framesIn, boxes, lap.halfWidth, "l6");
 
   g.output(boxes, "out", DRESS_OUTPUTS.boxes);
-  g.output(oriented, "out", DRESS_OUTPUTS.placements);
+  g.output(oriented, "out", DRESS_OUTPUTS.placed);
+  // THE POST-CULL CLOUD, WHOSE `scale` IS STILL THE ASSET'S OWN BOX. The
+  // copy scale is written on a branch of its own so that what this output
+  // publishes is a placement — position, orientation, size — rather than
+  // an argument to `copyToPoints`.
+  g.output(seen, "out", DRESS_OUTPUTS.placements);
   g.output(coverage, "out", DRESS_OUTPUTS.coverage);
   return { graph: g, libraryBoxes: library.pointCount };
 }
@@ -913,6 +1267,7 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
   const out = (await cook(graph)).outputs;
 
   const boxes = requireGeo(out[DRESS_OUTPUTS.boxes], DRESS_OUTPUTS.boxes);
+  const placed = requireGeo(out[DRESS_OUTPUTS.placed], DRESS_OUTPUTS.placed);
   const placements = requireGeo(out[DRESS_OUTPUTS.placements], DRESS_OUTPUTS.placements);
   const coverage = requireGeo(out[DRESS_OUTPUTS.coverage], DRESS_OUTPUTS.coverage);
 
@@ -941,12 +1296,27 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
     if (covered[i]) arcW += (lap.s[i + 1] - lap.s[i]) / lap.halfWidth;
   }
 
+  // WHAT L-1 DID, AS A DIFFERENCE BETWEEN TWO LISTS. `occlusionCull`
+  // answers with survivors and reports nothing about the ones it removed,
+  // which is the right contract for a node that knows nothing about what
+  // it is culling — so the accounting happens here, off `PLACEMENT.id`
+  // (who survived) and `PLACEMENT.pushW` (who moved). Their sum is
+  // `cullSightlines`' `blocking`.
+  const pushCol = placements.attrs.point.require(PLACEMENT.pushW);
+  let pushed = 0;
+  for (let i = 0; i < placements.pointCount; i++) {
+    if (pushCol.get(i) !== 0) pushed++;
+  }
+
   return {
     boxes,
+    placed,
     placements,
     covered,
     hits,
     share: arcW / lap.lengthW,
+    pushed,
+    dropped: input.placements.length - placements.pointCount,
     stamped: libraryBoxes * placements.pointCount,
     graph,
     cookMs: performance.now() - t0,
