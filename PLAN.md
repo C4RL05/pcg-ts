@@ -35,7 +35,7 @@ existed, so the discipline is to let the consumer specify the mechanism
 rather than guess at it. Each entry carries the analysis, because
 re-deriving it is the expensive part.
 
-### Z-3's band mix does not terminate on the enclosed kit, 2026-08-24
+### ~~Z-3's band mix does not terminate on the enclosed kit~~ — FIXED 2026-08-24
 
 Measured while surveying `dressLap`'s repair loop for the `repeatUntil`
 port. On `DEFAULT_KIT` every seed settles in two or three rounds. On
@@ -65,6 +65,24 @@ point does not acquire one by being iterated more carefully.
 The fix is a mechanism question, not a threshold one: either select the
 donor by the lateral it will actually be given, or accept the draw and
 re-test rather than assuming the median stands for it.
+**FIXED, and it took all three.** Checking that the draw landed stopped the
+spin and left the bands broken — converged by giving up, `over` at 25%
+against a 10-21% rule and `verge` at 0.6% against 4-12%. Pooling by the
+asset's measured lateral RANGE rather than its median widened the eligible
+set to assets whose instances are actually observed in the band. And the
+band now supplies the lateral, within that asset's own reach, which is what
+the `over` branch had always done with the height.
+
+Enclosed kit: twelve rounds and `converged: false` becomes three to seven
+rounds with every band inside its rule. Vegetation kit:
+character-for-character identical — which is why this hid, since the
+vocabulary the demo ships IS that kit's measurements. Guarded now by three
+tests on the enclosed kit, each verified to fail against the old code.
+
+WHAT TO TAKE FROM IT: the first fix satisfied the property that was being
+complained about and broke the one nobody had stated. "It converges" and
+"it works" are different claims, and a repair can be made to pass the
+first at the cost of the second without anything going red.
 
 ### Probing a registered recipe assumes it is a `subgraph`, 2026-08-24
 
