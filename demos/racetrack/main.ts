@@ -26,8 +26,26 @@
  * output of this technique is a COMPOSITION — what is where, at what size,
  * facing which way. Solid boxes with a light on them would read as bad
  * art; a wireframe reads as what it is, which is the measurement.
+ *
+ * THE DRESSING ARRIVES IN SECTORS. The rules still settle the WHOLE lap at
+ * once — they have to, because a corner's marker is a statement about the
+ * circuit rather than about the stretch of it a car can see — and only the
+ * settled list is cut into arc sectors, which cook as the car reaches them
+ * and are dropped behind it. `levels.ts` argues where that cut falls and
+ * why the union of the sectors is the whole lap box for box.
+ *
+ * WHICH COSTS THE MAP THE QUESTION IT WAS FOR, and the page says so rather
+ * than pretending otherwise. "Is the whole lap dressed" cannot be read off
+ * a view that only ever holds five sectors of it; what the map shows now
+ * is the resident window sliding round the circuit. The `sectors` readout
+ * is the honest replacement — how much of the lap is live against how much
+ * of it there is — and the union claim itself is a test
+ * (`tests/racetrackLevels.test.ts`), which is where a claim about every
+ * sector belongs anyway.
  */
 import {
+  CookCancelledError,
+  World,
   buildInstanceBatches,
   cook,
   firstGeometry,
@@ -35,11 +53,18 @@ import {
   type Geometry,
   type Graph,
 } from "pcg-ts";
-import { toBufferGeometry, toInstancedMeshes, toLineGeometry } from "pcg-ts/three";
+import {
+  WorldThreeBinding,
+  toBufferGeometry,
+  toInstancedMeshes,
+  toLineGeometry,
+  type AssetMap,
+} from "pcg-ts/three";
 import {
   ConeGeometry,
   Euler,
   Fog,
+  Group,
   InstancedMesh,
   LineBasicMaterial,
   LineSegments,
@@ -59,18 +84,28 @@ import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/pane
 import { attachWordmark } from "../../shared/wordmark.js";
 import { BACKGROUND } from "../../shared/scene.js";
 import { OUTPUTS, buildRoadGraph } from "./graph.js";
-import { type DressStats, dressLap } from "./dress.js";
+import { type DressStats, type Dressing, dressLap } from "./dress.js";
 import { DENSITY } from "./stations.js";
 import { type Kit, type PlacedBox, loadKit, placeKit } from "./kit.js";
 import { shippedVocabulary } from "./vocabulary.js";
 import { type Lap, placeAt, poseAt, readLap } from "./lap.js";
 import { type Spline, makeTrackSpline, splineBounds } from "./spline.js";
 import { ASSET_ATTR, DEFAULT_ASSET, boxCloud } from "./spawn.js";
+import { poseLibrary } from "./dressGraph.js";
+import {
+  AHEAD_SECTORS,
+  BEHIND_SECTORS,
+  LEVELS,
+  buildRacetrackLevels,
+} from "./levels.js";
 import {
   type Population,
   disposeAssetMap,
+  disposePoseAssetMap,
   makeAssetMap,
   makeMapMaterials,
+  makePoseAssetMap,
+  makeStreamedMapMaterial,
 } from "./assets3d.js";
 
 // ------------------------------------------------------------------ //
@@ -143,15 +178,21 @@ const scene = new Scene();
 const CHASE_FOG = new Fog(BACKGROUND, 60, 420);
 
 /**
- * One drawable, and the two looks it has.
+ * One drawable this page owns, and the two looks it has.
  *
- * The pair is kept because the two instanced layers need DIFFERENT
+ * The pair is kept because the reference layer needs DIFFERENT
  * transparency in the two passes; the other three layers hold the same
  * colour in both and are a pair only for uniformity. (This comment used
  * to claim the passes differ in hue — true of `demos/road`, which
  * it was copied from, and not of this file since the palette settled.)
  * A pair of materials rather than one re-coloured per pass, because the
  * swap then costs a pointer rather than a uniform upload twice a frame.
+ *
+ * WHAT IS NOT IN THIS LIST any more is the generated dressing. Its meshes
+ * are minted and freed by the world binding as sectors stream in and out,
+ * so a list this page appends to would hold a mesh the binding has already
+ * disposed within one frame of the car passing it. {@link paintStreamed}
+ * reaches them the only way there is: by walking the live cell groups.
  */
 interface Layer {
   readonly obj: Object3D;
@@ -178,7 +219,53 @@ function setPass(pass: "chase" | "map"): void {
   for (const l of layers) {
     (l.obj as Mesh).material = pass === "chase" ? l.chase : l.map;
   }
+  paintStreamed(pass);
   car.scale.setScalar(pass === "map" ? mapMarkerScale : 1);
+}
+
+/**
+ * Each streamed mesh's own chase material, remembered the first time the
+ * map pass borrows it.
+ *
+ * IT HAS TO BE REMEMBERED BECAUSE THE BINDING OWNS IT. `toInstancedMeshes`
+ * clones the asset map's template per mesh, and that clone's `dispose()`
+ * is the one signal three accepts to release the mesh's cached render
+ * state — so handing the mesh back the TEMPLATE instead would leave the
+ * clone unreachable and disposed by nobody. Weak, because the mesh's own
+ * lifetime is the right lifetime for the entry: the binding frees it when
+ * its sector goes and nothing here should keep either alive.
+ */
+const chaseOf = new WeakMap<Object3D, Material>();
+
+/**
+ * The streamed dressing's half of the pass swap.
+ *
+ * ONE BORROWED MATERIAL FOR THE WHOLE POPULATION, and the borrow lasts
+ * exactly from here to the end of the map render. That window is the
+ * invariant the rest of this file depends on: a mesh caught holding the
+ * shared material by an evict or a teardown would have it disposed as if
+ * it were the mesh's own, killing it for every other sector at once. The
+ * window contains no `world.update` and no `await`, so nothing that
+ * disposes a mesh can run inside it — which is why the restore is a plain
+ * statement after the render rather than a guard on the dispose path.
+ */
+function paintStreamed(pass: "chase" | "map"): void {
+  const rig = streamed;
+  if (!rig) return;
+  for (const cell of rig.group.children) {
+    for (const mesh of cell.children) {
+      if (pass === "map") {
+        // Recorded once, on first sight, when the material is guaranteed
+        // to still be the mesh's own: a second record would overwrite the
+        // clone with the shared material and lose it.
+        if (!chaseOf.has(mesh)) chaseOf.set(mesh, (mesh as Mesh).material as Material);
+        (mesh as Mesh).material = rig.mapMaterial;
+        continue;
+      }
+      const own = chaseOf.get(mesh);
+      if (own) (mesh as Mesh).material = own;
+    }
+  }
 }
 
 /**
@@ -330,21 +417,6 @@ function buildReference(circuit: Circuit): SpawnedLayer | undefined {
   return spawnBoxes(boxes, "reference");
 }
 
-/**
- * THE GENERATED DRESSING — the thing this page is about.
- *
- * Placed by the rules from the kit's own measurements, drawn with the
- * SAME renderer as the reference so the two can be compared fairly. A
- * different material would be a different picture, and the whole question
- * is whether the generated one reads like the measured one.
- */
-function buildDressing(circuit: Circuit): { layer: SpawnedLayer; stats: DressStats } {
-  const d = dressLap(dressingKit(), circuit.lap, state.seed, {
-    density: state.density,
-  });
-  return { layer: spawnBoxes(d.boxes, "generated"), stats: d.stats };
-}
-
 /** One population's meshes, and the map-pass material each of them swaps to. */
 interface SpawnedLayer {
   readonly meshes: readonly InstancedMesh[];
@@ -452,18 +524,10 @@ function buildCircuit(circuit: Circuit): void {
     map: new MeshBasicMaterial({ color: 0x333333, wireframe: true }),
   });
 
-  // THE GENERATED DRESSING. Placed by the rules from the kit's own
-  // measurements, wearing that kit's box decomposition — which is what
-  // makes this a picture of the technique rather than of a placeholder.
-  //
-  // THE RULES ALWAYS RUN. There was a fallback here to the graph's even
-  // verge rows, for a viewer with no measured kit — and once the demo
-  // began shipping its own vocabulary there is no such viewer, so the
-  // branch became unreachable and the placeholder it drew became dead
-  // weight in the node graph the panel puts on screen.
-  const dressed = buildDressing(circuit);
-  addSpawned(dressed.layer);
-  lastStats = dressed.stats;
+  // THE GENERATED DRESSING IS NOT BUILT HERE. It is the one population on
+  // this page that streams, so its meshes come and go with the sectors
+  // rather than with the cook — see {@link buildStreamedDressing}, which
+  // this function's caller runs immediately after it.
 
   const reference = buildReference(circuit);
   if (reference) {
@@ -488,6 +552,254 @@ let referenceMeshes: readonly InstancedMesh[] = [];
 
 /** What the last dressing pass had to repair, for the readouts. */
 let lastStats: DressStats | undefined;
+
+// ------------------------------------------------------------------ //
+// The streamed dressing.
+// ------------------------------------------------------------------ //
+
+/**
+ * Per-update cook budget, and a hard cap on cells per update.
+ *
+ * Small on purpose. A sector is a filter, a scale and a spawn over a few
+ * hundred placements, so the cap is about smoothing a burst — the moment
+ * the lap level lands and the whole window of five sectors becomes
+ * cookable at once — rather than about the cost of any one of them. The
+ * FIRST update gets more because nothing is on screen yet and a frame's
+ * worth of jank buys the opening picture.
+ */
+const BUDGET_MS = 7;
+const FIRST_BUDGET_MS = 12;
+const MAX_COOKS_PER_UPDATE = 8;
+
+/**
+ * One World and everything that dies with it.
+ *
+ * A RIG RATHER THAN LOOSE MODULE STATE, because a rebuild starts the next
+ * world while the outgoing one's update may still be settling: every
+ * callback and every `.then` has to be able to ask whether the world IT
+ * belongs to is still the live one, and a set of module variables that
+ * have already been reassigned cannot answer that.
+ */
+interface StreamedDressing {
+  /**
+   * Assigned a line after the rig is built, because the World's own
+   * callbacks close over the rig: one of the two has to exist first, and
+   * a rig with a hole in it for one statement is cheaper to read than a
+   * pair of callbacks reaching through a module-level variable.
+   */
+  world: World;
+  readonly group: Group;
+  readonly binding: WorldThreeBinding;
+  /** Pose meshes AND their geometry; freed only after the binding is. */
+  readonly assets: AssetMap;
+  /** The one flat colour the whole population wears on the map. */
+  readonly mapMaterial: MeshBasicMaterial;
+  /** Cancels this world's in-flight update when it is torn down. */
+  readonly abort: AbortController;
+  /**
+   * The lap's half-width, carried so the anchor cannot be computed
+   * against a different lap than the sectors were cut from.
+   */
+  readonly halfWidth: number;
+  readonly sectorCount: number;
+  /**
+   * The sector length the World actually cut, which is not the one that
+   * was asked for. `cellSize` is rounded to a whole number of sectors, so
+   * a 20 W request on a 286 W lap cuts 20.4 W -- and a readout naming the
+   * request would be the one place in the page repeating a number the
+   * runtime had already rounded away.
+   */
+  readonly sectorW: number;
+  /** Which sectors are resident, for the readout. */
+  readonly live: Set<number>;
+  disposed: boolean;
+}
+
+let streamed: StreamedDressing | undefined;
+/**
+ * Wanted cells the last update could not get to.
+ *
+ * UNDEFINED UNTIL AN UPDATE HAS ANSWERED, which is not the same number as
+ * zero. The lap level's own cell is a wanted cell and it takes the longest
+ * cook on the page, so a readout that printed 0 from the start would claim
+ * a settled world during precisely the seconds it is furthest from one.
+ */
+let lastPending: number | undefined;
+
+/**
+ * Tear the current world down, in the one order that is correct.
+ *
+ * MARK, ABORT, UNBIND, UNPARENT, AND ONLY THEN FREE THE ASSETS. The pose
+ * map owns the GEOMETRY every streamed mesh draws — `toInstancedMeshes`
+ * shares it by reference and never clones it — so freeing it before the
+ * binding has disposed those meshes would pull the buffers out from under
+ * live draw calls. That is the opposite of the box map's rule, where the
+ * shared cube belongs to nobody and the map is freed the instant the
+ * meshes exist; `assets3d.ts` states both.
+ *
+ * The shared map material is safe to free here for the reason
+ * {@link paintStreamed} gives: outside the map render no mesh is holding
+ * it, and nothing can run inside that window.
+ *
+ * AND THE LAST THREE STEPS ARE NOT SKIPPABLE. `WorldThreeBinding.dispose`
+ * is entitled to throw: it tears every cell down and only then rethrows
+ * the first failure it hit — its `attempt` helper exists for precisely
+ * that — so by the time it throws, its meshes are already gone and this
+ * map's geometry is already unreachable from anything but here. Letting
+ * the throw escape past these three would strand a group in the scene and
+ * a whole vocabulary of merged geometry that nothing in the process could
+ * ever free. A recook is what calls this, so it is not a rare path.
+ */
+function disposeStreamedDressing(): void {
+  const rig = streamed;
+  if (!rig) return;
+  streamed = undefined;
+  rig.disposed = true;
+  rig.abort.abort();
+  try {
+    rig.binding.dispose();
+  } finally {
+    scene.remove(rig.group);
+    disposePoseAssetMap(rig.assets);
+    rig.mapMaterial.dispose();
+  }
+}
+
+/**
+ * THE GENERATED DRESSING — the thing this page is about, now streamed.
+ *
+ * Placed by the rules from the kit's own measurements and drawn with the
+ * same renderer as the reference, so the two can still be compared fairly.
+ * What changed is WHEN: `dressLap` settles the list for the whole lap in
+ * the prelude, `buildRacetrackLevels` cuts it into arc sectors, and a
+ * sector becomes geometry when the car is near enough to want it.
+ *
+ * ONE INSTANCE PER PLACEMENT rather than per box, which is why the asset
+ * map is keyed by POSE. The reference layer beside it still draws a box
+ * each — the two are different pictures of the same numbers, and
+ * `assets3d.ts` argues why both are wanted.
+ */
+function buildStreamedDressing(circuit: Circuit, dressed: Dressing): {
+  lapGraph: Graph;
+  dressingGraph: Graph;
+} {
+  disposeStreamedDressing();
+  const kit = dressingKit();
+  const built = buildRacetrackLevels({
+    kit,
+    lap: circuit.lap,
+    frames: circuit.frames,
+    placements: dressed.placements,
+    seed: state.seed,
+    // L-3's braking mark, and nothing else. `dressLap` locks exactly this
+    // one against L-1's push-aside and hands back the marker kit it
+    // reserved, so taking the id from there is the two paths agreeing by
+    // construction rather than by both reserving markers the same way.
+    immovable: new Set(dressed.markers ? [dressed.markers.brake.id] : []),
+  });
+
+  const group = new Group();
+  scene.add(group);
+  const assets = makePoseAssetMap(poseLibrary(kit), circuit.lap.halfWidth, "generated");
+  const binding = new WorldThreeBinding({ group, assets });
+  const rig: StreamedDressing = {
+    world: undefined as unknown as World,
+    group,
+    binding,
+    assets,
+    mapMaterial: makeStreamedMapMaterial("generated"),
+    abort: new AbortController(),
+    halfWidth: circuit.lap.halfWidth,
+    sectorCount: built.sectorCount,
+    sectorW: circuit.lap.lengthW / built.sectorCount,
+    live: new Set<number>(),
+    disposed: false,
+  };
+  rig.world = new World({
+    seed: state.seed,
+    levels: built.levels,
+    // CLEAR OF THE SECTOR COUNT, for the reason `RacetrackLevels` gives:
+    // a closed lap wants every sector once per circuit, so a cap below
+    // that evicts the sector the car is about to reach again and the
+    // whole lap re-cooks every lap.
+    maxCellsPerLevel: built.sectorCount + 8,
+    onCellReady(level, coord, outputs) {
+      if (rig.disposed) return;
+      binding.cellReady(level, coord, outputs);
+      if (level === LEVELS.dressing) rig.live.add(coord[0]);
+    },
+    onCellEvicted(level, coord) {
+      if (rig.disposed) return;
+      binding.cellEvicted(level, coord);
+      if (level === LEVELS.dressing) rig.live.delete(coord[0]);
+    },
+  });
+  streamed = rig;
+  lastPending = undefined;
+  // Kick the first update before the first frame, so the lap level is
+  // already cooking rather than waiting a frame to be asked.
+  runUpdate(rig, FIRST_BUDGET_MS);
+  return { lapGraph: built.lapGraph, dressingGraph: built.dressingGraph };
+}
+
+/** Where the car is, as the World wants it. */
+function viewpoint(): [number, number, number] {
+  return [car.position.x, car.position.y, car.position.z];
+}
+
+/**
+ * The anchor the dressing level is streamed round, IN HALF-WIDTHS.
+ *
+ * `state.station` is in world units and the path table is in W, because
+ * `stationW` is the column a sector's filter tests and every rule in this
+ * demo is stated in W (`levels.ts` argues that at length). The divide is
+ * the whole conversion between the two and it is load-bearing: pass the
+ * world-unit station and the anchor lands `halfWidth` times too far round
+ * a table that wraps, which is not an error anywhere — it silently streams
+ * the wrong part of the lap.
+ */
+function dressingAnchor(rig: StreamedDressing): number {
+  return state.station / rig.halfWidth;
+}
+
+/** Generation counter, so only the newest update may clear `updating`. */
+let updateToken = 0;
+let updating = false;
+
+/**
+ * One budgeted update.
+ *
+ * TOKENED SO FRAMES CANNOT PILE UP. A rebuild mid-update (a seed typed, a
+ * density dragged) starts a second update while the first is still
+ * settling; without the token the older one's `finally` would open the
+ * gate and the next frame would start a third against a world that is
+ * already two behind.
+ */
+function runUpdate(rig: StreamedDressing, budgetMs: number): void {
+  const token = ++updateToken;
+  updating = true;
+  rig.world
+    .update(viewpoint(), {
+      anchors: { [LEVELS.dressing]: dressingAnchor(rig) },
+      budgetMs,
+      maxCooksPerUpdate: MAX_COOKS_PER_UPDATE,
+      signal: rig.abort.signal,
+    })
+    .then((stats) => {
+      if (!rig.disposed) lastPending = stats.pending;
+    })
+    .catch((err: unknown) => {
+      // A torn-down world rejects with CookCancelledError because we
+      // aborted it, which is not news. Anything else is a real cook
+      // failure and is logged even for a dead rig — swallowing those
+      // would hide a genuine error that happened to race a recook.
+      if (err instanceof CookCancelledError) return;
+      console.error(err);
+    })
+    .finally(() => {
+      if (token === updateToken) updating = false;
+    });
+}
 
 /**
  * Frame the whole circuit in the map camera.
@@ -526,8 +838,10 @@ const overlay = createOverlay({
   title: "racetrack",
   info:
     "A centreline this page did not make, handed to pcg-ts: it sweeps the road and dresses the verges. " +
-    "The map is the whole lap from above; the chase view is the only viewpoint the result is ever " +
-    "consumed from. Both are wireframe, drawn over each other, and the car is one object in both.",
+    "The rules settle the whole lap at once; the dressing then streams in arc sectors as the car " +
+    "reaches them. The map frames the whole circuit from above; the chase view is the only viewpoint " +
+    "the result is ever consumed from. Both are wireframe, drawn over each other, and the car is one " +
+    "object in both.",
 });
 
 const state = {
@@ -593,6 +907,11 @@ overlay.addCheckbox("pause", state.paused, (on) => {
 const statFps = overlay.addStat("fps");
 const statStation = overlay.addStat("station");
 const statLap = overlay.addStat("lap length");
+// WHAT IS RESIDENT AGAINST WHAT THERE IS. Streaming is invisible while it
+// works, and the map — which used to answer "is the whole lap dressed" —
+// now shows only the window. This is the readout that says how big the
+// window is and how much of the circuit it is a window onto.
+const statSectors = overlay.addStat("sectors");
 const statProps = overlay.addStat("dressing");
 const statReference = overlay.addStat("reference");
 const statCover = overlay.addStat("enclosure");
@@ -624,7 +943,18 @@ async function cookAndBuild(): Promise<void> {
   {
     const next = await cookCircuit(state.seed);
     circuit = next;
+    // THE PRELUDE, AND IT CANNOT GO YET. The lap level's graph is BUILT
+    // from a settled placement list, and settling one needs a cooked lap
+    // and a frame lookup that are still TypeScript rather than nodes — so
+    // the page pays the whole rule pass here and streams only the geometry
+    // that follows from it. `levels.ts`' header says what would have to
+    // become a node for this to move.
+    const dressed = dressLap(dressingKit(), next.lap, state.seed, {
+      density: state.density,
+    });
+    lastStats = dressed.stats;
     buildCircuit(next);
+    const graphs = buildStreamedDressing(next, dressed);
     frameMap(next, state.mapZoom);
     statLap(`${next.lap.lengthW.toFixed(1)} W (${next.lap.length.toFixed(0)} u)`);
     if (lastStats) {
@@ -680,11 +1010,21 @@ async function cookAndBuild(): Promise<void> {
       );
     }
     statCook(`${next.cookMs.toFixed(0)} ms`);
-    // Called only when the graph CHANGED — it re-serializes and re-lays
+    // Called only when the graphs CHANGED — it re-serializes and re-lays
     // out, which is not free and is wasted every frame.
-    const graphs = [{ name: "road", graph: next.graph }];
-    if (graphPanel) graphPanel.set(graphs);
-    else graphPanel = attachGraphPanel(graphs, { into: graphSlot, title: "graph" });
+    //
+    // ALL THREE, because all three are cooked. The road sweeps the
+    // surface, the lap settles the placement list once for the whole
+    // circuit, and the dressing is what a single sector runs — the last
+    // is four nodes beside the lap's few hundred, which is itself the
+    // clearest statement of where the cut falls.
+    const entries = [
+      { name: "road", graph: next.graph },
+      { name: "lap", graph: graphs.lapGraph },
+      { name: "dressing", graph: graphs.dressingGraph },
+    ];
+    if (graphPanel) graphPanel.set(entries);
+    else graphPanel = attachGraphPanel(entries, { into: graphSlot, title: "graph" });
   }
 }
 
@@ -732,6 +1072,21 @@ function frame(): void {
   chaseCamera.up.set(here.up[0], here.up[1], here.up[2]);
   chaseCamera.lookAt(ahead.p[0], ahead.p[1] + 1.5, ahead.p[2]);
 
+  // The car has moved, so ask for the sectors around where it is now —
+  // BEFORE the passes, so a sector that lands this frame is drawn this
+  // frame rather than one late. Pausing does not stop this: a paused lap
+  // that has not finished streaming would otherwise stay half dressed
+  // forever, which is the state a capture must never photograph.
+  const rig = streamed;
+  if (rig && !updating) runUpdate(rig, BUDGET_MS);
+  if (rig) {
+    statSectors(
+      `${rig.live.size} of ${rig.sectorCount} live ` +
+        `(+${AHEAD_SECTORS}/-${BEHIND_SECTORS} at ${rig.sectorW.toFixed(1)} W) · ` +
+        `${lastPending === undefined ? "cooking the lap" : `${lastPending} pending`}`,
+    );
+  }
+
   statStation(
     `${(state.station / circuit.lap.halfWidth).toFixed(1)} / ${circuit.lap.lengthW.toFixed(1)} W`,
   );
@@ -750,7 +1105,21 @@ function frame(): void {
     setPass("map");
     scene.fog = null;
     renderer.clearDepth();
-    renderer.render(scene, mapCamera);
+    try {
+      renderer.render(scene, mapCamera);
+    } finally {
+      // AND STRAIGHT BACK, in a `finally` rather than the next statement.
+      // The streamed meshes are borrowing one shared material; leaving it
+      // on them past this point would let an evict or a teardown dispose
+      // it as though it were a mesh's own, and take every other sector's
+      // map colour with it. A plain statement here would be skipped by a
+      // throwing render -- which then unwinds this frame, lets the
+      // pending update's continuation run, and evicts a mesh still
+      // holding the shared material. `finally` is what makes the window
+      // end on every path rather than on the happy one.
+      // See {@link paintStreamed}.
+      setPass("chase");
+    }
   }
 }
 
@@ -770,15 +1139,71 @@ void loadReference()
  * moment, and pausing it from the outside stops the lap wherever it had
  * got to — which is a function of how fast the machine booted. Setting the
  * station directly is the same picture on every machine.
+ *
+ * AND A STATION IS NO LONGER ENOUGH, now the dressing streams. A seek
+ * jumps the anchor to a part of the lap that has never been cooked, so the
+ * frame immediately after it is a bare road: the same station on two
+ * machines would photograph two different amounts of dressing, which is
+ * exactly the non-determinism this probe exists to remove. So the seek
+ * PUMPS — it drives updates itself until the World reports nothing left
+ * pending, and only then is the shot the whole window.
  */
 declare global {
   interface Window {
-    pcgRacetrack?: { seek(station: number): void; pause(on: boolean): void };
+    pcgRacetrack?: { seek(station: number): Promise<void>; pause(on: boolean): void };
   }
 }
+
+/**
+ * How many pumped updates a seek will spend before giving up.
+ *
+ * An unbudgeted update cooks every wanted cell, so one round settles a
+ * window and the second confirms it; the ceiling is here because a page
+ * that can HANG in a capture is worse than one that photographs a
+ * half-dressed lap and leaves the evidence in the `sectors` readout.
+ */
+const SEEK_ROUNDS = 32;
+
+async function seekAndSettle(station: number): Promise<void> {
+  state.station = station;
+  const rig = streamed;
+  if (!rig) return;
+  for (let i = 0; i < SEEK_ROUNDS; i++) {
+    try {
+      // No budget and no cap: the point of this path is to finish, not to
+      // stay inside a frame. `viewpoint()` may be a frame stale — the car
+      // is moved by the loop — and that costs nothing here, because only
+      // the anchor decides which sectors a path level wants.
+      const stats = await rig.world.update(viewpoint(), {
+        anchors: { [LEVELS.dressing]: dressingAnchor(rig) },
+        signal: rig.abort.signal,
+      });
+      // Only while this rig is still the live one: a torn-down world's
+      // pending count reaching the readout is the same class of bug the
+      // `rig.disposed` guards elsewhere exist to stop.
+      if (!rig.disposed) lastPending = stats.pending;
+      if (stats.pending === 0) return;
+    } catch (err) {
+      // A recook mid-pump aborts this world, and that is not a failed
+      // seek — the world replacing it streams the same station. It must
+      // not escape either: an unhandled rejection is a page error, and
+      // the capture script fails a shot that reports one.
+      if (err instanceof CookCancelledError) return;
+      // REPORTED, NOT RETHROWN. `capture-demos.mjs` does not await this
+      // promise, so a rethrow here is an unhandled rejection rather than
+      // a caught error -- and the capture script fails a shot that
+      // reports one, turning a cook problem into an unrelated-looking
+      // page error. `runUpdate` logs for the same reason.
+      console.error("racetrack: seek failed to settle", err);
+      return;
+    }
+    if (rig.disposed) return;
+  }
+}
+
 window.pcgRacetrack = {
-  seek(station: number): void {
-    state.station = station;
+  seek(station: number): Promise<void> {
+    return seekAndSettle(station);
   },
   pause(on: boolean): void {
     state.paused = on;

@@ -141,6 +141,28 @@ export function makeMapMaterials(
   return out;
 }
 
+/**
+ * ONE map-pass material for a whole STREAMED population.
+ *
+ * THE COUNTERPART TO {@link makeMapMaterials}, and the difference is how
+ * many names the population has. That function mints one material per
+ * asset id because a lap uses a handful of the twelve box ids and each
+ * ends up owned by exactly one mesh. A pose library has hundreds of ids,
+ * they arrive and leave with the sectors rather than with the cook, and
+ * the map pass is a flat overhead view that wants one flat colour — so a
+ * per-id table there would be hundreds of materials, all the same colour,
+ * minted and freed on a schedule nothing needs to track.
+ *
+ * ONE MATERIAL IS SAFE HERE FOR THE REASON THE PER-ID TABLE IS NOT: it is
+ * BORROWED rather than owned. The streamed meshes belong to the world
+ * binding, which disposes each mesh's own material with it; this one is
+ * lent to them for the length of the map pass and handed back, and the
+ * page disposes it with the world that built it.
+ */
+export function makeStreamedMapMaterial(population: Population): MeshBasicMaterial {
+  return new MeshBasicMaterial({ color: PALETTE[population].color, wireframe: true });
+}
+
 // ------------------------------------------------------------------ //
 // One instance per PLACEMENT: a pose drawn as a single merged mesh.
 // ------------------------------------------------------------------ //

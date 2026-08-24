@@ -58,6 +58,7 @@ import {
   dataInput,
   filterByExpression,
   ge,
+  le,
   lt,
   mul,
   setAttribute,
@@ -124,13 +125,25 @@ export interface RacetrackLevelsInput extends DressGraphInput {
  * where the World already puts it. `sMax` is exclusive so a placement
  * landing exactly on a boundary is claimed once rather than twice.
  *
- * THE BOUNDS ARE ROUNDED TO f32 BEFORE THEY ARE COMPARED. `stationW` is
- * an f32 column and `ctx.sMin`/`sMax` are f64, so a bound that is not
- * representable in f32 is a bound the comparison never sees: the field
- * resolves into an f32 column and the two sides land on different numbers.
- * `Math.fround` here makes the two sectors either side of a boundary
- * agree about it exactly, which is what "exactly one owner" needs to be
- * true rather than nearly true.
+ * EXCEPT AT THE END OF THE TABLE, WHERE THE LAST BOUND IS INCLUSIVE, and
+ * that one exception is what makes the partition TOTAL rather than merely
+ * disjoint. `stationW` is an f32 column while the station process works in
+ * f64, and rounding to f32 can round UP: a station strictly below
+ * `lengthW` in f64 can land exactly on `lengthW` as an f32. Half-open
+ * everywhere would leave it owned by nobody -- it fails `lt` in the last
+ * sector and `ge` in every other -- and it would be a silent loss of one
+ * placement, on a band about half an f32 ulp wide. The World's own closed
+ * table wraps `s = length` round to sector 0, but a filter over a column
+ * cannot wrap, so the last sector takes it instead.
+ *
+ * THE BOUNDS ARE COMPARED AS THE f64 THEY ARE. An earlier version rounded
+ * them to f32 first, on the theory that two sectors either side of a seam
+ * would otherwise disagree about it. They cannot: the runtime derives one
+ * sector's `sMax` and the next one's `sMin` from a single computation, so
+ * they are the same double, and `attribute()` widens the f32 column back
+ * to f64 to compare. The rounding changed which sector owned a station in
+ * a sub-ulp band and never changed HOW MANY owned it, so it bought
+ * nothing and explained itself wrongly.
  */
 export function buildDressingGraph(opts: {
   readonly seed: number;
@@ -180,13 +193,27 @@ export function buildDressingGraph(opts: {
     // the same settled cloud the lap level cooked once; `dataInput`
     // aliases the bound array rather than copying it, so this is a
     // pointer per cell.
-    bg.setParam(placementsIn, "items", ctx.parent?.outputs[DRESS_OUTPUTS.placements] ?? []);
-    const sMin = Math.fround(ctx.sMin);
-    const sMax = Math.fround(ctx.sMax);
+    const list = ctx.parent?.outputs[DRESS_OUTPUTS.placements];
+    if (list === undefined) {
+      // An empty list would cook a valid, empty sector and lose the lap
+      // quietly. The parent publishing nothing is a wiring fault, and the
+      // repo's rule is that an error names the offender and the fix.
+      throw new Error(
+        `racetrack dressing level: the parent level "${LEVELS.lap}" published no ` +
+          `"${DRESS_OUTPUTS.placements}" output, so this sector has nothing to place. ` +
+          `Check that the lap level's graph still declares that output.`,
+      );
+    }
+    bg.setParam(placementsIn, "items", list);
+    const station = attribute(PLACEMENT.station);
+    const lastSector = ctx.sMax >= ctx.pathLength;
     bg.setParam(
       mine,
       "predicate",
-      mul(ge(attribute(PLACEMENT.station), sMin), lt(attribute(PLACEMENT.station), sMax)),
+      mul(
+        ge(station, ctx.sMin),
+        lastSector ? le(station, ctx.sMax) : lt(station, ctx.sMax),
+      ),
     );
   };
 
@@ -210,7 +237,10 @@ export function buildRacetrackLevels(input: RacetrackLevelsInput): RacetrackLeve
   // What the World will actually cut, computed the way the runtime
   // computes it, so that anything sized off this number agrees with the
   // sectors that exist rather than with the ones that were asked for.
-  const sectorCount = Math.round(lap.lengthW / sectorW);
+  // `Math.max(1, ...)`, matching the runtime: a lap shorter than half a
+  // sector rounds to zero sectors, and the World floors it at one rather
+  // than cutting a closed table into nothing.
+  const sectorCount = Math.max(1, Math.round(lap.lengthW / sectorW));
 
   const levels: LevelDef[] = [
     {

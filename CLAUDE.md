@@ -116,7 +116,13 @@ a parent — these are three different kinds of thing and the old single
   2026-08-23 — a scored, host-corrected circuit, retired and archived; see
   PLAN.md for what it established.) Each also shows the
   graph behind it, read-only, as a thumbnail in its own control panel that
-  opens full-screen (`shared/graph/`, mounted through `Overlay.addSlot`)
+  opens full-screen (`shared/graph/`, mounted through `Overlay.addSlot`).
+  `racetrack` is also the only consumer of `cellMode: "path"`: it runs two
+  levels, an unbounded `lap` that settles the whole placement list and a
+  `dressing` of 20W arc sectors that turns the settled placements into
+  instances as the car reaches them. The split is exact rather than
+  approximate -- a sector reads no neighbour, so no halo is involved and
+  the union of the sectors is the whole lap bit for bit
 - `graphs/` — the graph corpus: test fixtures, documentation source and
   teaching material at once. `graphs/panels/` carries the optional
   presentation spec the editor reads for a graph

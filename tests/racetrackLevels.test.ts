@@ -279,6 +279,65 @@ describe("racetrack levels: a placement exactly on a seam", () => {
       expect(seamCount).toBeGreaterThan(0);
 
       const { bySector } = await driveLap(seed, { placements: moved });
+
+      // PER-SECTOR IDENTITY, NOT A TOTAL. Counting everything and
+      // comparing to the placement count says the sectors partition the
+      // lap; it does not say WHICH sector took a seam, and an owner rule
+      // of `(sMin, sMax]` keeps every total intact while moving every
+      // seam placement one sector back. So the expectation is computed
+      // per sector here, from the same half-open rule with the same last
+      // bound inclusive, and compared sector by sector.
+      const stations: number[] = [];
+      for (let i = 0; i < settled.pointCount; i++) stations.push(station.get(i));
+      const edge = [...bounds, lap.lengthW];
+      for (let k = 0; k < sectorCount; k++) {
+        const lo = edge[k];
+        const hi = edge[k + 1];
+        const want = stations.filter((v) =>
+          k === sectorCount - 1 ? v >= lo && v <= hi : v >= lo && v < hi,
+        ).length;
+        expect({ sector: k, count: (bySector.get(k) ?? []).length }).toEqual({
+          sector: k,
+          count: want,
+        });
+      }
+    },
+    LAP_MS,
+  );
+});
+
+describe("racetrack levels: the end of the table is owned", () => {
+  it(
+    "a station that rounds up onto the lap length still has a sector",
+    async () => {
+      const seed = SEEDS[0];
+      const { lap, dressing } = await dressedLapFor(seed);
+
+      // THE INPUT CLASS HALF-OPEN-EVERYWHERE LOSES. `stationW` is an f32
+      // column and the station process works in f64, so a station
+      // strictly below `lengthW` can round UP to exactly `lengthW` on the
+      // way into the column. It then fails `lt` in the last sector and
+      // `ge` in every other, and one placement vanishes with nothing
+      // going red. The band is about half an f32 ulp, which is why no
+      // generated lap has ever landed in it -- and why the case has to be
+      // built rather than waited for.
+      const atEnd = Math.fround(lap.lengthW);
+      const nudged = Math.fround(lap.lengthW - 1e-6);
+      const moved = dressing.placements.map((p, i) =>
+        i === 0 ? { ...p, station: nudged } : i === 1 ? { ...p, station: atEnd } : p,
+      );
+
+      const { settled } = await settledFor(seed, moved);
+      const station = settled.attrs.point.require(PLACEMENT.station);
+      let atLength = 0;
+      for (let i = 0; i < settled.pointCount; i++) {
+        if (station.get(i) >= atEnd) atLength++;
+      }
+      // Again the premise first: if f32 stopped rounding these up, the
+      // test would be exercising an ordinary interior station.
+      expect(atLength).toBeGreaterThan(0);
+
+      const { bySector } = await driveLap(seed, { placements: moved });
       const total = [...bySector.values()].reduce((n, v) => n + v.length, 0);
       expect(total).toBe(settled.pointCount);
     },

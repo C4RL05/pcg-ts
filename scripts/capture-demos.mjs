@@ -333,11 +333,19 @@ const DEMOS = [
     id: "racetrack",
     // The lap travels forever, so the shot is fixed by naming a STATION
     // rather than by pausing, which would stop it wherever this machine
-    // happened to have got to. Station 250 W is the same one `road` below
-    // uses, so the pair frames the same part of a lap and the difference
-    // between the two pictures is the difference between the DEMOS rather
-    // than between two viewpoints. That is the whole reason both are
-    // shot: `road` is this page with the placement rules taken out.
+    // happened to have got to. 250 is in WORLD UNITS, which is what
+    // `seek` writes -- about 27.8 W on a 9-unit half-width, and the
+    // readout shows it in W. `road` below seeks to the same number, so
+    // the pair frames the same part of a lap and the difference between
+    // the two pictures is the difference between the DEMOS rather than
+    // between two viewpoints. That is the whole reason both are shot:
+    // `road` is this page with the placement rules taken out.
+    //
+    // `seek` now returns a promise (it pumps the World until no sector is
+    // pending, so a shot is never half-dressed). It is deliberately not
+    // awaited here: the frame loop keeps streaming while paused and
+    // `settleAt` waits for pixel stability regardless, so awaiting would
+    // add a second readiness rule saying the same thing.
     path: "demos/racetrack/",
     settleWait: () => !!window.pcgRacetrack,
     settle: () => {
