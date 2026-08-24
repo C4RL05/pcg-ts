@@ -454,6 +454,7 @@ describe("category metadata", () => {
       dataInput: "io",
       subgraph: "composite",
       forEach: "composite",
+      repeatUntil: "composite",
     };
     for (const [type, category] of Object.entries(expected)) {
       expect(getNodeType(type).info.category, type).toBe(category);

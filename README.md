@@ -300,7 +300,12 @@ and pin named.
   to one or more inner params, with schemas derived from those params
   rather than hand-written. `registerSubgraph(name, recipe)` publishes one
   under a name, so a serialized graph can reference it instead of
-  embedding a copy — and cook byte-identically either way.
+  embedding a copy — and cook byte-identically either way. Two siblings
+  wrap the same body with a loop: `forEachNode` cooks it once per element
+  of a designated pin, and `repeatUntilNode` cooks it round after round,
+  feeding each round's output back into its own input until the body
+  publishes a zero on the detail domain to say nothing changed — the
+  bounded fixed point a DAG cannot wire.
 - **Live editing.** `removeNode` cascades: every connection touching the
   node and every output declared on it go with it, in a single version
   bump — downstream nodes recook on the next cook, untouched branches

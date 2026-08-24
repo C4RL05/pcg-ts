@@ -4,7 +4,7 @@ Generated from the graphs in [`graphs`](../graphs) by `node scripts/gen-graphs.m
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-72 examples, alphabetical by file:
+73 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -45,6 +45,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-promote-attribute.json](#basics-promote-attributejson) — move an attribute between domains
 - [basics-props-along-a-path.json](#basics-props-along-a-pathjson) — space props evenly along a curve
 - [basics-radial-on-curve.json](#basics-radial-on-curvejson) — aim things radially around a curve
+- [basics-repeat-until-settled.json](#basics-repeat-until-settledjson) — run a body until it settles
 - [basics-report-to-the-host.json](#basics-report-to-the-hostjson) — what a graph hands back that is not geometry
 - [basics-reseed-a-noise.json](#basics-reseed-a-noisejson) — make a saved noise re-roll with the graph seed
 - [basics-runs-along-a-path.json](#basics-runs-along-a-pathjson) — measure distance since the last gate, and to the next one, around a closed lap
@@ -796,6 +797,24 @@ Cook it: `pcg cook graphs/basics-props-along-a-path.json --stats`
 **Outputs:** `instances` (from `spawn`.`instances`), `points` (from `fan`.`out`)
 
 Cook it: `pcg cook graphs/basics-radial-on-curve.json --stats`
+
+## basics-repeat-until-settled.json
+
+**run a body until it settles**
+
+`repeatUntil` cooks its inner graph again and again, feeding each round's `carry` output back into its own `carry` input, and stops when the body says nothing changed. This is the loop a DAG cannot wire — a wire from an output back to an input is a cycle, which `connect` refuses — so the feedback is an assignment between cooks instead. The body here is a damped descent: every round halves each point's height, then writes 1 for every point still further than 0.01 from the ground and reduces that to the DETAIL attribute `moves`. When `moves` reaches zero the cloud has settled and the loop stops; the scatter starts up to 8 high, so halving takes about ten rounds and the `rounds` output says exactly how many. Two things are worth reading off this graph. The settle signal rides the DETAIL domain because a wrapper has no non-geometry output pin — `attributeReduce` is what normally writes it, and an ABSENT `moves` is refused by name rather than read as zero, so a typo cannot report convergence on round one. And the body's seed is NOT rotated per round: a fixed point exists only if the body is the same function every time, so a body seeded on the round number can never converge, however many rounds it is given. Every real use has this skeleton — push overlapping props apart, snap dangling edges, repair a placement against a rule — and differs only in what one round does.
+
+**Tags:** `basics`, `repeatuntil`, `relaxation`, `composite`
+
+**Seed:** 2026
+
+**Node types:** `attributeReduce`, `pointScatterInBounds`, `repeatUntil`, `setAttribute`, `transformPoints`
+
+**Primitives:** *(none)*
+
+**Outputs:** `points` (from `settle`.`carry`), `rounds` (from `settle`.`rounds`), `converged` (from `settle`.`converged`)
+
+Cook it: `pcg cook graphs/basics-repeat-until-settled.json --stats`
 
 ## basics-report-to-the-host.json
 

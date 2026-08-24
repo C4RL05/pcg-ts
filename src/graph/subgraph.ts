@@ -105,14 +105,16 @@ export interface PortalParams {
 }
 
 /**
- * The two node types built on the inner-graph machinery below.
+ * The three node types built on the inner-graph machinery below.
  *
  * `subgraph` cooks its body once, forwarding each pin's whole collection.
  * `forEach` cooks it once per element of one designated pin, broadcasting
- * the rest. They share everything except that loop, which is why they share
- * a spec, a payload shape and a construction path.
+ * the rest. `repeatUntil` cooks it repeatedly, feeding one designated pin's
+ * OUTPUT back into its own input until a detail-domain scalar says the body
+ * has stopped changing things. All three share everything except that loop,
+ * which is why they share a spec, a payload shape and a construction path.
  */
-export type WrapperKind = "subgraph" | "forEach";
+export type WrapperKind = "subgraph" | "forEach" | "repeatUntil";
 
 /**
  * Exposed-input names reserved for the iterated pin of a `forEach`.
@@ -128,6 +130,24 @@ export type WrapperKind = "subgraph" | "forEach";
 export const ITERATED_PIN_NAMES: ReadonlySet<string> = new Set(["each", "eachPoint"]);
 
 /**
+ * Exposed-pin names reserved for the fed-back pin of a `repeatUntil`.
+ *
+ * The sibling of {@link ITERATED_PIN_NAMES}, reserved globally for exactly
+ * the same reason and against exactly the same accident: a recipe records a
+ * body and its exposed pins and says nothing about which wrapper cooks
+ * them, so a body written to be relaxed to a fixed point could otherwise be
+ * referenced from a `subgraph` node and cook ONCE — one relaxation pass
+ * where the author meant "until it settles", which validates, saves and
+ * cooks, and is wrong.
+ *
+ * Reserved on BOTH sides, unlike the iterated names, because the feedback
+ * needs the name at both ends: `repeatUntil` matches its carried output to
+ * its carried input by name, so an output called `carry` on any other
+ * wrapper is a body that was written for this loop.
+ */
+export const CARRIED_PIN_NAMES: ReadonlySet<string> = new Set(["carry"]);
+
+/**
  * The recorded composition of a def created by {@link subgraphNode}: the
  * wrapped inner graph and the exposed pin mappings, exactly as passed in
  * (detached copies). Serialization reads this to emit the nested payload;
@@ -139,7 +159,7 @@ export interface SubgraphSpec {
   /**
    * Which factory built the def, and therefore what the node MEANS.
    *
-   * Load-bearing for serialization, not decoration. Both wrappers record a
+   * Load-bearing for serialization, not decoration. Every wrapper records a
    * spec here and the writer dispatches on the spec's presence, so without
    * this a `forEach` would be written out as a plain `subgraph` node: it
    * would round-trip, validate and cook — one pass over the concatenated
@@ -888,7 +908,7 @@ export function prepareWrapper(
 /**
  * @internal Record what a wrapper def is made of, so it serializes.
  *
- * Both wrappers land here, and `wrapper` is the field that keeps them
+ * All three wrappers land here, and `wrapper` is the field that keeps them
  * apart at the emit site — see {@link SubgraphSpec.wrapper}. Registering
  * here is also what puts a def in front of `checkNoWrapCycle`: a wrapper
  * missing from this map is a wrapper whose self-nesting is not refused at

@@ -59,7 +59,12 @@ const ROOT_SURFACE = [
   "pathPointAt", "pathResample", "pathRuns", "pathScan", "pathSegments", "perlinNoise", "pointGrid", "pointLine", "pointNeighborhood",
   "pointScatterInBounds", "pointScatterInWorld", "pointsToPath", "position", "pow",
   "primitiveTypeCounts", "printFieldSpec", "projectToPlane", "promote", "promoteAttribute", "ramp",
-  "randomField", "registerSubgraph", "remap", "removeAttribute", "resolveExposedParam",
+  "randomField", "registerSubgraph", "remap", "removeAttribute",
+  // Wraps an inner graph and re-cooks it, feeding its "carry" output back
+  // into its own input, until a detail-domain scalar reads zero — the
+  // bounded fixed point a DAG cannot wire as a cycle.
+  "repeatUntilNode",
+  "resolveExposedParam",
   "resolveField", "sampleNearestPoint", "select", "selfPrune", "serializeGraph",
   "setAttribute", "setBounds", "setPolylineTopology", "sign",
   "simplexNoise", "sin",

@@ -2237,6 +2237,64 @@
         ]
       }
     },
+    "basics-repeat-until-settled.json": {
+      "outputs": {
+        "converged": [
+          {
+            "kind": "value",
+            "tags": [],
+            "value": 1
+          }
+        ],
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 600,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "moving:f32"
+              ],
+              "detail": [
+                "moves:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -19.9951,
+                -0.0078,
+                -19.7325
+              ],
+              "max": [
+                19.9785,
+                0.0078,
+                19.9897
+              ]
+            }
+          }
+        ],
+        "rounds": [
+          {
+            "kind": "value",
+            "tags": [],
+            "value": 10
+          }
+        ]
+      }
+    },
     "basics-report-to-the-host.json": {
       "outputs": {
         "points": [

@@ -508,6 +508,7 @@ function opaqueReason(
         `walk cannot read a template's attributes, so it cannot say which${tail}`
       );
     case "forEach":
+    case "repeatUntil":
     case "subgraph":
       return (
         `"${path}" (${type}) stands between this spawner and any writer, and this walk does not follow ` +

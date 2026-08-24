@@ -2,10 +2,13 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { Graph, cook, getSubgraphSpec, type NodeHandle } from "../graph/index.js";
 import {
   GraphSerializationError,
+  attributeReduce,
   deserializeGraph,
+  forEachNode,
   jitterPoints,
   pointScatterInBounds,
   registerSubgraph,
+  repeatUntilNode,
   resolveExposedParam,
   serializeGraph,
   subgraphContentHash,
@@ -705,7 +708,7 @@ describe("named subgraph registry", () => {
       ).toThrow(
         new RegExp(
           `node "p": type "pointScatterInBounds" wraps no inner graph, so it cannot carry "${key}"; ` +
-            `only "subgraph" and "forEach" nodes wrap one`,
+            `only "subgraph", "forEach" and "repeatUntil" nodes wrap one`,
         ),
       );
     }
@@ -1069,6 +1072,99 @@ describe("named subgraph registry", () => {
     expect(() => serializeGraph(g)).toThrow(
       /cannot serialize node "sub": it was loaded from the registered subgraph "test\/jitter", which is no longer registered/,
     );
+  });
+});
+
+/**
+ * A recipe is wrapper-agnostic, but registration has to MATERIALIZE it to
+ * canonicalize it, and materializing needs a node type. That type is
+ * inferred from the reserved pin names, and the inference is the whole
+ * subject here: get it wrong and a body written for a loop is probed as a
+ * plain `subgraph`, which the loader refuses — the reserved names exist to
+ * refuse exactly that combination — and the body becomes unregisterable
+ * while every other test in this file stays green.
+ */
+describe("a loop body is registerable", () => {
+  beforeEach(() => __resetSubgraphRegistry());
+
+  /**
+   * A `repeatUntil` whose body is shipped nodes only, so it survives a
+   * round trip: step along +x, then count the points into the detail
+   * attribute the loop reads. The count never reaches zero, so the loop
+   * always runs its budget out — which is what makes `rounds` and
+   * `converged` say something a default could not fake.
+   */
+  function buildRepeat(): SerializedGraph {
+    const inner = new Graph(5);
+    const t = inner.add(transformPoints, { translate: [1, 0, 0] }, "t");
+    const r = inner.add(
+      attributeReduce,
+      { name: "", domain: "point", mode: "count", outName: "moves" },
+      "r",
+    );
+    inner.connect(t, "out", r, "in");
+    const def = repeatUntilNode(
+      inner,
+      [{ name: "carry", node: t, pin: "in" }],
+      [{ name: "carry", node: r, pin: "out" }],
+    );
+    const g = new Graph(9);
+    const scatter = g.add(pointScatterInBounds, { count: 8, seed: 5 }, "scatter");
+    const loop = g.add(def, { maxRounds: 3, settleAttr: "moves" }, "loop");
+    g.connect(scatter, "out", loop, "carry");
+    g.output(loop, "carry", "result");
+    g.output(loop, "rounds", "rounds");
+    g.output(loop, "converged", "converged");
+    return serializeGraph(g);
+  }
+
+  it("registers a body exposing the carried pins, and cooks it as the loop", async () => {
+    const embedded = buildRepeat();
+    // The registration itself is the assertion: probed as a "subgraph" this
+    // throws on the reserved name, before anything below runs.
+    registerSubgraph("test/relax", recipeOf(embedded, "loop"));
+    const byRef = refForm(embedded, "test/relax", undefined, "loop");
+
+    const gr = deserializeGraph(byRef);
+    // Resolved to the LOOP, not to a subgraph that happens to hold the
+    // same body — the difference between three rounds and one, and the
+    // reason the wrapper kind cannot be left to a default.
+    expect(getSubgraphSpec(gr.require("loop").def)?.wrapper).toBe("repeatUntil");
+
+    const re = await cook(deserializeGraph(embedded));
+    const rr = await cook(gr);
+    expect(bytes(snapshotGeometry(firstGeo(rr.outputs.result)))).toBe(
+      bytes(snapshotGeometry(firstGeo(re.outputs.result))),
+    );
+    // The loop's OWN params ride on the referencing node, not in the
+    // recipe, so a reference that dropped them would run the default
+    // ceiling instead and report a different number here.
+    expect(rr.outputs.rounds[0]).toMatchObject({ kind: "value", value: 3 });
+    expect(rr.outputs.converged[0]).toMatchObject({ kind: "value", value: 0 });
+    // And the reference is a fixed point of the writer, params included.
+    expect(serializeGraph(gr)).toEqual(byRef);
+  });
+
+  it("registers a body exposing the iterated pin", () => {
+    // The other half of the inference, so the carried branch above cannot
+    // be satisfied by a rule that simply stopped probing as "subgraph".
+    const inner = new Graph(5);
+    const xf = inner.add(transformPoints, { translate: [1, 0, 0] }, "xf");
+    const def = forEachNode(
+      inner,
+      [{ name: "each", node: xf, pin: "in" }],
+      [{ name: "out", node: xf, pin: "out" }],
+    );
+    const g = new Graph(9);
+    const scatter = g.add(pointScatterInBounds, { count: 4, seed: 5 }, "scatter");
+    const fe = g.add(def, {}, "fe");
+    g.connect(scatter, "out", fe, "each");
+    g.output(fe, "out", "result");
+    const embedded = serializeGraph(g);
+
+    registerSubgraph("test/per-item", recipeOf(embedded, "fe"));
+    const gr = deserializeGraph(refForm(embedded, "test/per-item", undefined, "fe"));
+    expect(getSubgraphSpec(gr.require("fe").def)?.wrapper).toBe("forEach");
   });
 });
 

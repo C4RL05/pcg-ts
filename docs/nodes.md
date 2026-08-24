@@ -2,7 +2,7 @@
 
 Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/gen-node-reference.mjs` — do not edit by hand. The same metadata, machine-readable, is in [nodes.json](./nodes.json). For the graph JSON format and field-expression grammar see [authoring.md](./authoring.md).
 
-52 node types, grouped by `category` (node sections below are alphabetical):
+53 node types, grouped by `category` (node sections below are alphabetical):
 
 **attribute**
 
@@ -25,6 +25,7 @@ Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/g
 **composite**
 
 - [forEach](#foreach) — Composite node that cooks an inner graph ONCE PER ELEMENT instead of once.
+- [repeatUntil](#repeatuntil) — Composite node that cooks an inner graph REPEATEDLY, feeding each round's output back into its own input until the body stops changing anything — a bounded fixed point, in a graph where a cycle cannot be wired.
 - [subgraph](#subgraph) — Composite node wrapping an inner graph as a single node.
 
 **filter**
@@ -773,6 +774,23 @@ Deletes named attributes from one domain. Every idiom that carries a value betwe
 | `names` | stringList | `[]` |  |  |  | Attribute names to delete, in any order. An empty list removes nothing (and is not an error, so a graph can leave the node in place with nothing to clean). |
 | `domain` | enum | `"point"` |  | `point`, `vertex`, `primitive`, `detail` |  | Domain to delete from: point, vertex, primitive, or detail. |
 | `strict` | bool | `true` |  |  |  | Error when a listed name does not exist on the domain, naming the available attributes. False makes removal best-effort and skips missing names. |
+
+## repeatUntil
+
+Composite node that cooks an inner graph REPEATEDLY, feeding each round's output back into its own input until the body stops changing anything — a bounded fixed point, in a graph where a cycle cannot be wired. Exactly one exposed input AND exactly one exposed output must be named "carry": round 1 gets the outer "carry" input, round k+1 gets round k's "carry" output, and every other exposed input is broadcast whole to every round. This is the loop that relaxation needs and that "forEach" cannot express, because the number of rounds is not known before the first one runs: push overlapping props apart and a new pair now overlaps; snap a dangling edge and the snap creates another dangler. TERMINATION is a scalar the body publishes on the DETAIL domain of the carried geometry, named by "settleAttr" — attributeReduce is what normally writes it. All zero means settled: the loop stops and that round counts. Absent is REFUSED by name rather than read as zero, because reading it as zero turns a typo into "converged on round one". Two synthetic outputs the body never declared report what happened: "rounds" (how many cooks) and "converged" (did the settle signal reach zero, or did it hit maxRounds), both value items. THE SEED IS NOT ROTATED PER ROUND, and that is the design: a fixed point exists only if the body is the SAME function every round, so a body whose seed varies with the round number is a different function each time and has no fixed point to converge to — it re-rolls whatever the last round settled, runs the full budget every time, and reports converged false forever, with no error to say why. Pass a constant seed and let the DATA change between rounds. The payoff is the mirror of forEach's cost: a constant inner seed means inner nodes whose inputs did not change between rounds serve their caches, so a broadcast branch is computed once for the whole loop. Pins are per-instance exactly as for "subgraph" and the serialized form is the same payload plus this node's own two params: create instances with repeatUntilNode(innerGraph, exposedInputs, exposedOutputs, exposedParams), or deserialize a graph containing one.
+
+**Category:** composite
+
+**Inputs:** *(none)*
+
+**Outputs:** *(none)*
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `maxRounds` | u32 | `12` | 1..1024 |  |  | Hard ceiling on how many times the body cooks. Reaching it WITHOUT the settle signal going to zero is not an error and is not silent: the loop stops, "rounds" reports this number and "converged" reports false, so a host or a downstream branch can tell a settled result from a truncated one. This is a budget, not a target — a body with a fixed point normally reaches it in a handful of rounds, and a body that reliably needs the whole ceiling is telling you it has no fixed point (the usual cause being a seed that varies per round, which this node deliberately does not do; see the node description). Raising it is the wrong first response to a false `converged`: find out whether the body is converging slowly or not at all, because those need opposite fixes. Minimum 1 — one round means cook the body exactly once and report whether that one round settled, which is a legitimate way to ASK the question without paying for the loop. |
+| `settleAttr` | string | `"moves"` |  |  |  | Name of the DETAIL-domain attribute the body writes to say whether anything still changed. Read after every round from every geometry item on the carry output: all zero means settled (stop, and that round counts), anything else means loop. The detail domain is used because it is the one domain that holds exactly one value per geometry, and because a subgraph wrapper has no non-geometry output pin a scalar could ride out on — attributeReduce is what normally writes it (mode 'count' over a filtered cloud, or 'sum' of a per-point moved flag). The attribute MUST exist on the carry geometry every round: an absent one is refused by name rather than treated as zero, because treating it as zero turns a typo here, or a body that never wired the reduction, into 'converged on round one' — a wrong answer that cooks cleanly and saves cleanly. A tuple attribute settles only when every component is zero, and NaN never settles (so unmeasurable data runs the budget out and reports converged false, instead of stopping on garbage). |
 
 ## runFit
 

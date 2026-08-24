@@ -165,7 +165,7 @@ describe("forEach serialization", () => {
     const src = broken.nodes.find((n) => n.id === "src")!;
     src.ref = { name: "whatever" };
     expect(() => deserializeGraph(broken)).toThrow(
-      /"dataInput" wraps no inner graph.*only "subgraph" and "forEach"/s,
+      /"dataInput" wraps no inner graph.*only "subgraph", "forEach" and "repeatUntil"/s,
     );
   });
 

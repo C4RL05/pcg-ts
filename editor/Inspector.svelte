@@ -15,6 +15,7 @@
   import NumberBox from "../shared/NumberBox.svelte";
   import { clampToSchema } from "./controller.js";
   import type { EditorController, ParamView } from "./controller.js";
+  import { WRAPPER_TYPES } from "./model.js";
   import type { NodeView } from "./model.js";
 
   let {
@@ -104,10 +105,11 @@
       <button class="danger" onclick={() => onDelete(node.id)}>delete</button>
     </div>
     <p class="desc">{info.description}</p>
-    {#if node.type === "subgraph"}
+    {#if WRAPPER_TYPES.has(node.type)}
       <p class="note">
-        composite: its inner graph is not editable here, but the params it exposes are — each one
-        writes into the inner nodes it was declared over
+        composite: its inner graph is not editable here, but its params are — an exposed one writes
+        into the inner nodes it was declared over, and a wrapper's own (a loop's rounds, its settle
+        attribute) drives the wrapping instead of the body
       </p>
     {/if}
     {#each views as view (view.key)}

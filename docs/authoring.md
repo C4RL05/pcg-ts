@@ -145,7 +145,8 @@ semantics keep the cooked output identical).
 
 ### Subgraph and dataInput serialization
 
-Serialization is complete — two node types have special shapes:
+Serialization is complete — the wrappers and `dataInput` have special
+shapes:
 
 - A `subgraph` node (built with `subgraphNode`) serializes with a
   `subgraph: { graph, inputs, outputs, params }` payload: the inner graph
@@ -166,6 +167,15 @@ Serialization is complete — two node types have special shapes:
   byte-identically. A subgraph node may instead carry
   `ref: { name, hash? }` — see [Named subgraphs](#named-subgraphs) — and
   the two are mutually exclusive.
+- A `forEach` node and a `repeatUntil` node carry the SAME payload under
+  their own `type`: which wrapper cooks a body lives in `type` and nowhere
+  else, which is why the pin names a loop reserves (`each`/`eachPoint`
+  for `forEach`, `carry` for `repeatUntil`) are refused on any other type
+  — a body written for a loop and retyped by hand would otherwise cook
+  once, validate, save, and be wrong. A `repeatUntil` node's `params` hold
+  its own `maxRounds` and `settleAttr` beside the exposed values: they are
+  the loop's, not the body's, so every instance has them however few
+  params it exposes.
 - A `dataInput` node serializes with `items: []`: live `DataItems` are
   runtime-injected (via `graph.setParam` or a `World` bind), never
   embedded in JSON. After deserializing, re-bind the items before
@@ -805,9 +815,10 @@ problem it solves — a literal buried in a spec that a caller cannot reach
 — is a JSON problem.
 
 **Where the value comes from: an enclosing wrapper's exposed param.**
-Every exposed param on a `subgraph` node, and on `forEach`, binds its
-name into its body's field scope, so a spec anywhere inside that body
-reads it by name and the wrapper's knob supplies it. See
+Every exposed param on a `subgraph` node, and on `forEach` and
+`repeatUntil`, binds its name into its body's field scope, so a spec
+anywhere inside that body reads it by name and the wrapper's knob supplies
+it. See
 [Subgraph composition](#3-subgraph-composition-code) for the declaration;
 a param that exists only to feed an expression declares `targets: []`.
 
@@ -1663,6 +1674,46 @@ that `id` gives K single-point items, each with its own identity. Inside
 the body, a `setAttribute` on the `detail` domain reading `randomField` is
 a per-iteration constant (detail always holds exactly one element), which
 `promoteAttribute` can then push onto the points.
+
+### repeatUntil: cook until it settles
+
+`repeatUntil` is the other loop, and it exists because a `forEach` cannot
+express the one where the work creates more work: push overlapping props
+apart and a new pair now overlaps; snap a dangling edge and the snap
+creates another dangler. The number of passes is not known before the
+first one runs, and a graph is a DAG, so the cycle that would express it
+cannot be wired.
+
+It is built like `subgraph` with one rule on BOTH sides: exactly one
+exposed input and exactly one exposed output must be named **`carry`**.
+Round 1 gets the outer `carry` input, round k+1 gets round k's `carry`
+output, and every other exposed input is broadcast whole to every round,
+as in a `forEach`.
+
+Termination is the body's to declare. It publishes a scalar on the
+**detail** domain of the carried geometry — the domain is the one that
+holds exactly one value per geometry, and a wrapper has no non-geometry
+output pin a scalar could ride out on — named by `settleAttr` (default
+`moves`, and `attributeReduce` is what normally writes it). All zero
+means settled: the loop stops, and that round counts. An **absent**
+attribute is refused by name rather than read as zero, because reading it
+as zero turns a typo, or a body that never wired the reduction, into
+"converged on round one" — a wrong answer that cooks and saves cleanly.
+
+`maxRounds` is a hard ceiling, and reaching it is neither an error nor
+silent: two synthetic outputs the body never declared, `rounds` and
+`converged`, report how many times the body cooked and whether the signal
+reached zero, so a host can tell a settled result from a truncated one.
+
+**The seed is not rotated per round**, which is the opposite of what
+`forEach` does and is the design. A fixed point exists only if the body is
+the same function every round; a body whose seed varies with the round
+number is a different function each time, re-rolls whatever the last round
+settled, runs the full budget every time and reports `converged` false
+forever, with no error to say why. Pass a constant seed and let the DATA
+change between rounds. The payoff is the mirror of `forEach`'s cost: a
+constant inner seed means inner nodes whose inputs did not change serve
+their caches, so a broadcast branch is computed once for the whole loop.
 
 ## Transfer mappings
 

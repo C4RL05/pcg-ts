@@ -46,6 +46,7 @@ import {
   type NodeDef,
 } from "../graph/index.js";
 import {
+  attributeReduce,
   extrudePolygon,
   getNodeType,
   jitterPoints,
@@ -60,6 +61,7 @@ import {
   volumeSample,
 } from "../nodes/index.js";
 import { forEachNode } from "../nodes/forEach.js";
+import { repeatUntilNode } from "../nodes/repeatUntil.js";
 import { resolveOnMaybeGpu } from "../nodes/util.js";
 import { fieldFromJson } from "../fields/fieldJson.js";
 import { dataInput } from "../runtime/index.js";
@@ -684,12 +686,14 @@ function alwaysAdopterSources(): string[] {
 /**
  * The composite adopters under test: a wrapper around one adopter.
  *
- * Both wrappers, because both forward the outer resolver into a nested cook
- * they cannot see inside, and so both salt on the resolver's mere presence.
- * `forEach` runs its body once per item and is fed exactly one, so the two
- * fixtures differ in the loop and in nothing else that matters here.
+ * All three wrappers, because each forwards the outer resolver into a
+ * nested cook it cannot see inside, and so each salts on the resolver's
+ * mere presence. `forEach` runs its body once per item and is fed exactly
+ * one; `repeatUntil` runs its body until a detail scalar reads zero and is
+ * given a body that settles on its first round. The fixtures differ in the
+ * loop and in nothing else that matters here.
  */
-const ALWAYS_WRAPPERS = ["subgraph", "forEach"] as const;
+const ALWAYS_WRAPPERS = ["subgraph", "forEach", "repeatUntil"] as const;
 
 // Defaults to `subgraph` because the literal-key pin further down calls
 // this through a one-argument builder signature, and those literals are the
@@ -709,14 +713,38 @@ function alwaysFixture(
     g.output(n, "out", "out");
     return { g, id: n.id };
   }
-  const def = forEachNode(inner, [{ name: "each", node: sa, pin: "in" }], [
-    { name: "out", node: sa, pin: "out" },
+  if (wrapper === "forEach") {
+    const def = forEachNode(inner, [{ name: "each", node: sa, pin: "in" }], [
+      { name: "out", node: sa, pin: "out" },
+    ]);
+    const g = new Graph(11);
+    const din = cloudInput(g, 20);
+    const n = g.add(def);
+    g.connect(din, "out", n, "each");
+    g.output(n, "out", "out");
+    return { g, id: n.id };
+  }
+  // `repeatUntil` needs a settle signal or it refuses to guess. A constant
+  // zero on the points reduced to the detail domain is one, and it settles
+  // on the first round — the loop is not what this file is testing, the
+  // resolver forwarding through it is.
+  const zero = inner.add(setAttribute, { name: "settled", value: 0 });
+  const reduce = inner.add(attributeReduce, {
+    name: "settled",
+    domain: "point",
+    mode: "sum",
+    outName: "moves",
+  });
+  inner.connect(sa, "out", zero, "in");
+  inner.connect(zero, "out", reduce, "in");
+  const def = repeatUntilNode(inner, [{ name: "carry", node: sa, pin: "in" }], [
+    { name: "carry", node: reduce, pin: "out" },
   ]);
   const g = new Graph(11);
   const din = cloudInput(g, 20);
   const n = g.add(def);
-  g.connect(din, "out", n, "each");
-  g.output(n, "out", "out");
+  g.connect(din, "out", n, "carry");
+  g.output(n, "carry", "out");
   return { g, id: n.id };
 }
 
@@ -729,9 +757,13 @@ describe('the gpu:"always" class is covered too', () => {
       .map((info) => info.type)
       .filter((type) => getNodeType(type).def.gpu === "always");
     expect(registered, 'no registered node type declares gpu:"always"').toEqual([]);
-    // One entry per wrapper. A THIRD arriving here means a new composite
+    // One entry per wrapper. A FOURTH arriving here means a new composite
     // that forwards a resolver into a cook this file does not exercise.
-    expect(alwaysAdopterSources()).toEqual(["graph/subgraph.ts", "nodes/forEach.ts"]);
+    expect(alwaysAdopterSources()).toEqual([
+      "graph/subgraph.ts",
+      "nodes/forEach.ts",
+      "nodes/repeatUntil.ts",
+    ]);
   });
 
   for (const wrapper of ALWAYS_WRAPPERS)

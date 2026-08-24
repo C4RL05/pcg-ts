@@ -27,7 +27,7 @@ import {
 // the graph layer's own, not package API, and the reader needs the same one
 // the live setter uses so a value refused by one is refused by both.
 import { graphParamError } from "../graph/params.js";
-import { ITERATED_PIN_NAMES, type WrapperKind } from "../graph/subgraph.js";
+import { CARRIED_PIN_NAMES, ITERATED_PIN_NAMES, type WrapperKind } from "../graph/subgraph.js";
 import {
   type FieldSpec,
   fieldFromJson,
@@ -35,6 +35,7 @@ import {
   inlineParamValuesOf,
 } from "../fields/fieldJson.js";
 import { forEachNode } from "./forEach.js";
+import { REPEAT_UNTIL_PARAM_SCHEMAS, repeatUntilNode } from "./repeatUntil.js";
 import { getNodeType, hasNodeType, listNodeTypes, standardNode } from "./registry.js";
 import { type ExposedParamDecl, resolveExposedParam } from "./subgraphParams.js";
 // Import cycle, deliberate and safe: the registry stores serialized
@@ -377,6 +378,51 @@ standardNode<Record<string, never>>({
     );
   },
 });
+
+/**
+ * Registry entry for the repeat-until composite. Metadata-only for the same
+ * reason as the two above, and carrying the same payload — a repeatUntil IS
+ * a subgraph plus a feedback loop, and the loop is named by a reserved
+ * exposed-pin name inside that payload rather than by a field of its own.
+ *
+ * Unlike the other two it DOES declare params here, because these two are
+ * not the body's: `maxRounds` and `settleAttr` belong to the loop itself,
+ * exist on every instance regardless of what the body exposes, and are the
+ * two knobs an agent reading the catalog has to know about to drive one.
+ * They round-trip through the node's own `params` object beside the exposed
+ * ones; see {@link REPEAT_UNTIL_PARAM_SCHEMAS}, which is the single
+ * definition both the factory and this entry read.
+ */
+standardNode<{ maxRounds: number; settleAttr: string }>({
+  type: "repeatUntil",
+  category: "composite",
+  description:
+    'Composite node that cooks an inner graph REPEATEDLY, feeding each round\'s output back into its own input until the body stops changing anything — a bounded fixed point, in a graph where a cycle cannot be wired. Exactly one exposed input AND exactly one exposed output must be named "carry": round 1 gets the outer "carry" input, round k+1 gets round k\'s "carry" output, and every other exposed input is broadcast whole to every round. This is the loop that relaxation needs and that "forEach" cannot express, because the number of rounds is not known before the first one runs: push overlapping props apart and a new pair now overlaps; snap a dangling edge and the snap creates another dangler. TERMINATION is a scalar the body publishes on the DETAIL domain of the carried geometry, named by "settleAttr" — attributeReduce is what normally writes it. All zero means settled: the loop stops and that round counts. Absent is REFUSED by name rather than read as zero, because reading it as zero turns a typo into "converged on round one". Two synthetic outputs the body never declared report what happened: "rounds" (how many cooks) and "converged" (did the settle signal reach zero, or did it hit maxRounds), both value items. THE SEED IS NOT ROTATED PER ROUND, and that is the design: a fixed point exists only if the body is the SAME function every round, so a body whose seed varies with the round number is a different function each time and has no fixed point to converge to — it re-rolls whatever the last round settled, runs the full budget every time, and reports converged false forever, with no error to say why. Pass a constant seed and let the DATA change between rounds. The payoff is the mirror of forEach\'s cost: a constant inner seed means inner nodes whose inputs did not change between rounds serve their caches, so a broadcast branch is computed once for the whole loop. Pins are per-instance exactly as for "subgraph" and the serialized form is the same payload plus this node\'s own two params: create instances with repeatUntilNode(innerGraph, exposedInputs, exposedOutputs, exposedParams), or deserialize a graph containing one.',
+  inputs: [],
+  outputs: [],
+  params: {
+    maxRounds: REPEAT_UNTIL_PARAM_SCHEMAS.maxRounds,
+    settleAttr: REPEAT_UNTIL_PARAM_SCHEMAS.settleAttr,
+  },
+  execute() {
+    throw new Error(
+      'the registered "repeatUntil" definition is metadata-only and cannot cook; create repeatUntil nodes with repeatUntilNode(innerGraph, exposedInputs, exposedOutputs), or deserialize a graph containing one',
+    );
+  },
+});
+
+/**
+ * The factory that builds each wrapper kind, for the writer's refusal when
+ * a def of a wrapper type carries no recorded spec. A map rather than a
+ * chain of ternaries so a fourth wrapper is a compile error here (the
+ * record is total over {@link WrapperKind}) instead of silently being
+ * described as a subgraph.
+ */
+const WRAPPER_FACTORIES: Readonly<Record<WrapperKind, string>> = {
+  subgraph: "subgraphNode(...)",
+  forEach: "forEachNode(...)",
+  repeatUntil: "repeatUntilNode(...)",
+};
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -893,7 +939,17 @@ function buildEmbeddedSubgraphNode(
   // not expose is an error, not a silent drop — the reader rejects the
   // same data, and a writer that quietly discards what the reader refuses
   // is how a tuned graph loses its tuning between save and load.
-  const declared = new Map(spec.params.map((p) => [p.name, p]));
+  const declared = new Map<string, ParamSchema>(spec.params.map((p) => [p.name, p.schema]));
+  // A `repeatUntil` also carries two params of its OWN — the loop's, not
+  // the body's — so they sit in the same `params` object beside the exposed
+  // ones and round-trip through the same code path. Read from the single
+  // schema definition the factory uses, so a saved graph can never load
+  // under a different bound than it was authored with.
+  if (spec.wrapper === "repeatUntil") {
+    for (const [name, schema] of Object.entries(REPEAT_UNTIL_PARAM_SCHEMAS)) {
+      declared.set(name, schema);
+    }
+  }
   for (const key of Object.keys(nodeParams)) {
     if (!declared.has(key)) {
       fail(
@@ -902,9 +958,9 @@ function buildEmbeddedSubgraphNode(
     }
   }
   const params: Record<string, unknown> = {};
-  for (const [name, exposed] of declared) {
+  for (const [name, schema] of declared) {
     params[name] = serializeParamValue(
-      exposed.schema,
+      schema,
       name,
       nodeParams[name],
       `node "${id}" param "${name}"`,
@@ -1076,10 +1132,10 @@ function serializeGraphRec(graph: Graph, seen: Set<Graph>): SerializedGraph {
         continue;
       }
       const type = state.def.type;
-      if (type === "subgraph" || type === "forEach") {
+      if (type === "subgraph" || type === "forEach" || type === "repeatUntil") {
         fail(
           `cannot serialize node "${state.id}": its definition was not created by ${
-            type === "forEach" ? "forEachNode(...)" : "subgraphNode(...)"
+            WRAPPER_FACTORIES[type]
           }; build ${type} nodes with that factory (or deserializeGraph) so their inner graph can be serialized`,
         );
       }
@@ -1464,18 +1520,42 @@ function buildSubgraphNode(
   // REGISTER — the registry canonicalizes every recipe through a probe
   // typed "subgraph", so refusing at construction would make such a body
   // unregisterable. What is refused is the confusion, not the body.
-  if (wrapper === "subgraph") {
+  const recipeNote =
+    ref === undefined ? "" : ` (the recipe "${ref.name}" itself is fine — the type is the mistake)`;
+  if (wrapper !== "forEach") {
     const iterated = inputs.filter((e) => ITERATED_PIN_NAMES.has(e.name));
     if (iterated.length > 0) {
       fail(
-        `node "${id}": a "subgraph" node cannot expose ${iterated
+        `node "${id}": a "${wrapper}" node cannot expose ${iterated
           .map((e) => `"${e.name}"`)
           .join(" or ")} — those names are reserved for the pin a "forEach" iterates, and this body is ` +
-          `written to be looped over. As a "subgraph" it would cook ONCE over the whole collection and ` +
-          `emit one result where K were meant. Change this node's "type" to "forEach"${
-            ref === undefined ? "" : ` (the recipe "${ref.name}" itself is fine — the type is the mistake)`
-          }, or rename the exposed input if a single cook is what you want.`,
+          `written to be looped over. As a "${wrapper}" it would cook over the whole collection and ` +
+          `emit one result where K were meant. Change this node's "type" to "forEach"${recipeNote}, or ` +
+          "rename the exposed input if that is not what the body means.",
       );
+    }
+  }
+  // The same refusal for the other loop's reserved name, on BOTH sides —
+  // `repeatUntil` matches its carried output to its carried input by name,
+  // so a body written for it says so at both ends. A `subgraph` carrying
+  // one would cook exactly ONE relaxation pass where the author wrote
+  // "until it settles": well-formed, saves cleanly, and wrong.
+  if (wrapper !== "repeatUntil") {
+    for (const [side, pins] of [
+      ["input", inputs],
+      ["output", outputs],
+    ] as const) {
+      const carried = pins.filter((e) => CARRIED_PIN_NAMES.has(e.name));
+      if (carried.length > 0) {
+        fail(
+          `node "${id}": a "${wrapper}" node cannot expose ${side} ${carried
+            .map((e) => `"${e.name}"`)
+            .join(" or ")} — that name is reserved for the pin a "repeatUntil" feeds back into itself, and ` +
+            `this body is written to be relaxed to a fixed point. As a "${wrapper}" it would cook ONE pass ` +
+            `where "until it settles" was meant. Change this node's "type" to "repeatUntil"${recipeNote}, ` +
+            `or rename the exposed ${side} if a single pass is what you want.`,
+        );
+      }
     }
   }
   const decls = readExposedParams(payload.params, inner, `node "${id}" subgraph params`);
@@ -1490,13 +1570,24 @@ function buildSubgraphNode(
     def =
       wrapper === "forEach"
         ? forEachNode(inner, inputs, outputs, exposed)
-        : subgraphNode(inner, inputs, outputs, exposed);
+        : wrapper === "repeatUntil"
+          ? repeatUntilNode(inner, inputs, outputs, exposed)
+          : subgraphNode(inner, inputs, outputs, exposed);
   } catch (err) {
     fail(`node "${id}": ${err instanceof Error ? err.message : String(err)}`);
   }
   // Values, validated against the schemas just derived — exactly the
   // treatment a standard node's params get, including field capability.
   const declared = new Map(exposed.map((p) => [p.name, p.schema]));
+  // The loop's own two params, for a `repeatUntil`. Not exposed from the
+  // body and so absent from `exposed`, but present on every instance and
+  // written by the writer, so the reader has to know them or a saved
+  // `maxRounds` would come back as "unknown param".
+  if (wrapper === "repeatUntil") {
+    for (const [name, schema] of Object.entries(REPEAT_UNTIL_PARAM_SCHEMAS)) {
+      declared.set(name, schema);
+    }
+  }
   const params: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(paramsJson)) {
     const schema = declared.get(key);
@@ -1627,7 +1718,7 @@ function deserializeGraphRec(json: unknown, ctx: ReadContext): Graph {
       fail(`node "${id}": params must be an object, got ${JSON.stringify(nodeJson.params)}`);
     }
     authoredParamKeys.set(id, new Set(Object.keys(paramsJson)));
-    if (type === "subgraph" || type === "forEach") {
+    if (type === "subgraph" || type === "forEach" || type === "repeatUntil") {
       handles.set(
         id,
         addSubgraphNode(graph, id, nodeJson, paramsJson, ctx, type, bindings, declaredParams),
@@ -1640,7 +1731,7 @@ function deserializeGraphRec(json: unknown, ctx: ReadContext): Graph {
     for (const key of ["subgraph", "ref"] as const) {
       if (nodeJson[key] !== undefined) {
         fail(
-          `node "${id}": type "${type}" wraps no inner graph, so it cannot carry "${key}"; only "subgraph" and "forEach" nodes wrap one (inline under "subgraph", or by name under "ref")`,
+          `node "${id}": type "${type}" wraps no inner graph, so it cannot carry "${key}"; only "subgraph", "forEach" and "repeatUntil" nodes wrap one (inline under "subgraph", or by name under "ref")`,
         );
       }
     }

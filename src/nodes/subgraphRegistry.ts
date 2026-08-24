@@ -24,7 +24,7 @@
  * `import "pcg-ts"` costing nothing.
  */
 import { Graph, type GraphMeta, type NodeHandle } from "../graph/index.js";
-import { ITERATED_PIN_NAMES } from "../graph/subgraph.js";
+import { CARRIED_PIN_NAMES, ITERATED_PIN_NAMES, type WrapperKind } from "../graph/subgraph.js";
 import { hashCombine, hashString } from "../random/index.js";
 import {
   deserializeGraph,
@@ -315,11 +315,25 @@ function canonicalize(name: string, raw: SerializedSubgraph): SerializedSubgraph
   // PAYLOAD, so this never reaches the recipe or its content hash. It has
   // to be right anyway: a recipe is wrapper-agnostic, but the wrapper it
   // will be used with is the one whose rules it must satisfy, and a body
-  // exposing the reserved iterated-pin name is written to be looped over.
-  // Probing it as a "subgraph" would refuse it at registration (the loader
-  // rejects that combination as the one way to reach a silent one-pass
-  // cook), making a forEach body unregisterable.
-  const wrapper = raw.inputs.some((p) => ITERATED_PIN_NAMES.has(p.name)) ? "forEach" : "subgraph";
+  // exposing one of the reserved pin names is written to be cooked by the
+  // wrapper that owns the name. Probing such a body as a "subgraph" would
+  // refuse it at registration (the loader rejects those combinations as the
+  // one way to reach a silent one-pass cook), making a forEach or
+  // repeatUntil body unregisterable — which is why the type is INFERRED
+  // here from the pins instead of being fixed at "subgraph".
+  //
+  // The carried name is checked on both sides and takes precedence, because
+  // it is reserved on both sides: a body carrying `carry` AND `each` is
+  // neither loop, and the repeatUntil probe is the one that says so by
+  // name. Every other refusal the two wrappers make is the author's to fix
+  // and reaches them with the offending inner node named.
+  const wrapper: WrapperKind = [...raw.inputs, ...raw.outputs].some((p) =>
+    CARRIED_PIN_NAMES.has(p.name),
+  )
+    ? "repeatUntil"
+    : raw.inputs.some((p) => ITERATED_PIN_NAMES.has(p.name))
+      ? "forEach"
+      : "subgraph";
   const probe: SerializedGraph = {
     formatVersion: 1,
     seed: 0,
