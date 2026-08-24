@@ -274,9 +274,11 @@ export function planEnclosure(
         break;
       }
     }
-      // One more column than the span strictly needs, for the same reason:
-    // pieces laid edge to edge across the corridor leave seams that the
-    // rays find.
+    // ONE MORE COLUMN THAN THE SPAN STRICTLY NEEDS, and only for a piece
+    // narrower than the corridor. Pieces laid edge to edge across it leave
+    // seams the rays find — the same failure `coverPlacements` rounds its
+    // step count up to avoid, one axis over. A piece already at least as
+    // wide as the corridor spans it alone and gets no extra.
     const columns =
       Math.max(1, Math.ceil((2 * ENCLOSE.coverW) / Math.max(0.2, asset.size.across))) +
       (asset.size.across < 2 * ENCLOSE.coverW ? 1 : 0);

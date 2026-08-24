@@ -69,6 +69,7 @@ import { makeTrackSpline } from "../demos/racetrack/spline.js";
 import { shippedVocabulary } from "../demos/racetrack/vocabulary.js";
 import { ENCLOSURE, enclosureMask, measureEnclosure } from "../demos/racetrack/enclosure.js";
 import { resolveCorridor } from "../demos/racetrack/zones.js";
+import { FALSE_EDGE, falseEdges, repairFalseEdges } from "../demos/racetrack/falseEdges.js";
 import {
   SIGHTLINE,
   cullSightlines,
@@ -303,6 +304,28 @@ const traced = (p: StationedPlacement, id: number): Traced => ({
 });
 
 /**
+ * The list the graph handed L-5: the survivors, at the laterals L-1 left.
+ *
+ * The twin of {@link readPlacements} one stage down, and it cannot be the
+ * same function: L-1 REMOVES points, so the cloud is shorter than the
+ * source and `placementId` is the only thing that still says which
+ * placement each survivor was.
+ */
+function readCulled(
+  cloud: Geometry,
+  src: readonly StationedPlacement[],
+): StationedPlacement[] {
+  const t = cloud.attrs.point.require("trackT");
+  const h = cloud.attrs.point.require("trackH");
+  const id = cloud.attrs.point.require("placementId");
+  const out: StationedPlacement[] = [];
+  for (let i = 0; i < cloud.pointCount; i++) {
+    out.push({ ...src[id.get(i)], t: t.get(i), h: h.get(i) });
+  }
+  return out;
+}
+
+/**
  * The list the graph handed L-1: the input placements at Z-1's laterals.
  *
  * THE REFERENCE CULL STARTS FROM THE GRAPH'S OWN Z-1 ANSWER, so that a
@@ -423,12 +446,12 @@ function referenceBoxes(
   seed: number,
 ): PlacedBox[] {
   const cull = cullReference(lap, readPlacements(got.placed, placements), immovable);
-  return buildBoxes(
-    shippedVocabulary(),
-    lap,
-    cull.kept.map((o) => ({ ...o.src, t: o.t })),
-    seed,
-  );
+  // ONE PASS OF L-5, matching the graph. `repairFalseEdges` defaults to
+  // eight and the graph states one, so the reference has to say which.
+  // How much that costs is measured by the L-5 test rather than guessed
+  // at here.
+  const edged = repairFalseEdges(cull.kept.map((o) => ({ ...o.src, t: o.t })), lap.lengthW, 1);
+  return buildBoxes(shippedVocabulary(), lap, edged.placements, seed);
 }
 
 describe("racetrack dressing, as a graph", () => {
@@ -816,6 +839,259 @@ describe("racetrack dressing, as a graph", () => {
     // cone, and that is two laps in four.
     expect(pushed).toBeGreaterThan(0);
     expect(dropped).toBeGreaterThan(0);
+  });
+
+  it("breaks false edges the way repairFalseEdges does, one pass", async () => {
+    let seeds = 0;
+    let runsFound = 0;
+    let lowered = 0;
+    let residual = 0;
+    let extraPasses = 0;
+    let thinnestSide = Number.POSITIVE_INFINITY;
+    const perSeed: string[] = [];
+
+    for (const seed of SEEDS) {
+      const { lap, frames } = await cookLap(seed);
+      const src = beforeCorridor(lap, seed);
+      const immovable = brakeOf(seed);
+      const g = buildDressGraph({
+        kit: shippedVocabulary(),
+        lap,
+        frames,
+        placements: src,
+        seed,
+        immovable,
+      });
+      const out = (
+        await cook(g, {
+          outputs: [DRESS_OUTPUTS.placed, DRESS_OUTPUTS.culled, DRESS_OUTPUTS.placements],
+        })
+      ).outputs;
+      const placed = firstGeometry(out[DRESS_OUTPUTS.placed] ?? []);
+      const culled = firstGeometry(out[DRESS_OUTPUTS.culled] ?? []);
+      const after = firstGeometry(out[DRESS_OUTPUTS.placements] ?? []);
+      if (!placed || !culled || !after) throw new Error("the dress graph produced no placements");
+
+      // The list L-5 was handed: what L-1 left. Same discipline as every
+      // other stage here — the reference starts from the graph's own
+      // answer for the stage before, so this test measures L-5 alone.
+      const cull = cullReference(lap, readPlacements(placed, src), immovable);
+      const input = cull.kept.map((o) => ({ ...o.src, t: o.t }));
+      const ref = repairFalseEdges(input, lap.lengthW, 1);
+
+      seeds++;
+      const runs = falseEdges(input, lap.lengthW);
+      runsFound += runs.length;
+      lowered += ref.moves;
+      perSeed.push(`${seed}:${runs.length}`);
+
+      // WHAT ONE PASS LEAVES BEHIND, MEASURED RATHER THAN ASSERTED TO BE
+      // SMALL. The graph states one pass because nothing in the library
+      // re-cooks a subgraph until an output settles; `repairFalseEdges`
+      // runs up to eight because lowering the middle of an eight-member
+      // run can leave two fours that each still qualify. This is the size
+      // of that gap, and it is the number that says whether the missing
+      // loop matters — printed every run, and gated below so that a
+      // change which made it worse could not pass quietly.
+      const full = repairFalseEdges(input, lap.lengthW, 8);
+      residual += ref.after;
+      extraPasses += full.moves - ref.moves;
+      // A rule that never fired is not a rule that passed, and this one
+      // fires on every lap once L-1 has had its turn — the cull pushes
+      // pieces INTO the edge band, so the population L-5 sees is not the
+      // one it would have seen first.
+      expect(runs.length, `seed ${seed}: nothing to break on this lap`).toBeGreaterThan(0);
+
+      // THE PREMISE THE STAGE RESTS ON, MEASURED RATHER THAN ASSUMED.
+      // `runFit` takes its wrap from the topology, so `pointsToPath` has
+      // to close each side, and a closed path needs three points. A side
+      // with fewer band members than that would fail the cook — not
+      // report no runs — so the thinnest side is checked and printed.
+      const bandOf = (sign: number): number =>
+        input.filter((p) => {
+          const a = Math.abs(p.t);
+          return (
+            a >= FALSE_EDGE.lateralW[0] &&
+            a <= FALSE_EDGE.lateralW[1] &&
+            p.h >= FALSE_EDGE.heightW[0] &&
+            p.h <= FALSE_EDGE.heightW[1] &&
+            (p.t < 0 ? -1 : 1) === sign
+          );
+        }).length;
+      const thin = Math.min(bandOf(-1), bandOf(1));
+      thinnestSide = Math.min(thinnestSide, thin);
+      expect(thin, `seed ${seed}: a side carries too few band members to close`).toBeGreaterThan(2);
+
+      // WHICH PLACEMENTS THE GRAPH LOWERED, member by member against the
+      // rule's own log. `repairFalseEdges` records the index it moved in
+      // `log`, and those indices are into the list handed in — which is
+      // the list `placementId` names, because L-1 preserved the column.
+      const ids = new Map<number, number>();
+      const cId = culled.attrs.point.require("placementId");
+      for (let i = 0; i < culled.pointCount; i++) ids.set(cId.get(i), i);
+
+      const wantLowered = new Set(ref.log.map((e) => input[e.index].station));
+      const gotLowered = new Set<number>();
+      const kDrop = after.attrs.point.require("edgeDrop");
+      const kH = after.attrs.point.require("trackH");
+      const kStation = after.attrs.point.require("stationW");
+      for (let i = 0; i < after.pointCount; i++) {
+        if (kDrop.get(i) !== 0) gotLowered.add(kStation.get(i));
+      }
+      expect(gotLowered.size, `seed ${seed}: how many L-5 lowered`).toBe(wantLowered.size);
+      for (const st of wantLowered) {
+        expect(
+          [...gotLowered].some((g2) => Math.abs(g2 - st) <= SAME_PLACE_W),
+          `seed ${seed}: the rule lowered the placement at station ${st.toFixed(3)}, the graph did not`,
+        ).toBe(true);
+      }
+
+      // AND EVERY HEIGHT, not only the ones that moved: a stage that
+      // lowered the right placement and perturbed another would pass the
+      // comparison above.
+      expect(after.pointCount, `seed ${seed}: L-5 changed the population size`).toBe(
+        ref.placements.length,
+      );
+      for (let i = 0; i < after.pointCount; i++) {
+        expect(
+          Math.abs(kH.get(i) - ref.placements[i].h),
+          `seed ${seed}: placement ${i} height`,
+        ).toBeLessThan(4 * ulp(ref.placements[i].h));
+      }
+    }
+
+    console.log(
+      `dress graph L-5: over ${seeds} seeds the detector found ${runsFound} false edges ` +
+        `(${perSeed.join(", ")}) and one pass lowered ${lowered}, leaving ${residual} ` +
+        `still qualifying; the full eight-pass repair would have lowered ${extraPasses} more; ` +
+        `thinnest edge-band side ${thinnestSide} members`,
+    );
+    expect(lowered).toBeGreaterThan(0);
+    // THE COST OF THE MISSING LOOP, MEASURED — AND IT IS NOT ZERO.
+    //
+    // I expected it to be, and wrote `toBe(0)` here on the reasoning that
+    // no run on these laps is long enough for breaking its middle to leave
+    // two halves that each still qualify. The run says otherwise: of six
+    // false edges across four seeds, one survives its own repair and the
+    // full eight-pass loop lowers one more placement than the graph does.
+    // So the graph's single pass really is losing work, on one lap in
+    // four, and the file's claim that it does is a measurement rather than
+    // a hedge.
+    //
+    // A CEILING, NOT AN EQUALITY, and not a floor either. It must not GROW
+    // — that would mean the gap between the graph and the rule is
+    // widening. It is free to shrink to zero, which is what building the
+    // fixed point as a subgraph would do, and a test that forbade that
+    // would have to be deleted by whoever finally closed the gap.
+    expect(
+      extraPasses,
+      "one pass of L-5 is losing more than it did; the missing repair loop now costs more",
+    ).toBeLessThanOrEqual(3);
+  });
+
+  it("agrees with runFit about a false edge built to order", async () => {
+    // THE RULE IS THIN ON REAL DATA — two runs on one lap, none on
+    // another — so the population cannot exercise the four measurements
+    // that make a run qualify. This builds one: eight pieces in the verge,
+    // 3W apart, drifting outward at 0.05 W per W, which clears the span,
+    // the straightness and both ends of the divergence band. Then each
+    // threshold is moved just past its edge and the run must STOP
+    // qualifying, which is the half that says the gate is a gate.
+    const seed = 1;
+    const { lap, frames } = await cookLap(seed);
+    const kit = shippedVocabulary();
+
+    // A PIECE TOO SMALL TO BLOCK THE CONE, and that is the fixture's whole
+    // difficulty rather than a detail of it. L-1 runs before L-5 and is
+    // exactly the rule that moves a line of objects standing in the verge
+    // — the first version of this test built the run out of a real asset,
+    // and the cull pushed most of it clear of the edge band before the
+    // detector ever saw it. Two hundredths of a half-width is 18cm on this
+    // track: it sits in the band, it fits the line, and no chord from any
+    // eye finds it. Its id is not the vocabulary's, so `poseFor` gives it
+    // no boxes, which costs nothing here — L-5 is a rule about placements.
+    const asset = {
+      id: -1,
+      size: { across: 0.02, along: 0.02, tall: 0.02 },
+    } as unknown as PlaceableAsset;
+
+    const at = (t: number, h: number, station: number): StationedPlacement =>
+      ({ asset, t, h, station }) as unknown as StationedPlacement;
+
+    // FILLER OUTSIDE THE BAND, ON EVERY CASE, and it is not padding. The
+    // stage sorts the cloud into three paths — left of the racing line,
+    // right of it, and everything not in the band — so a fixture made
+    // only of band members leaves the third path empty and exercises an
+    // arrangement no lap produces. It also matters for the short-group
+    // case: skip a two-member side and a band-only fixture has no paths
+    // at all, which is a different degenerate case from the one under
+    // test. Height 1.0 is above the band's 0.6 ceiling.
+    const filler = [at(1.4, 1.0, 200), at(1.5, 1.0, 210), at(1.6, 1.0, 220)];
+
+    const line = (n: number, gapW: number, slope: number, h: number): StationedPlacement[] => [
+      ...Array.from({ length: n }, (_, i) => at(1.2 + slope * (i * gapW), h, 20 + i * gapW)),
+      ...filler,
+    ];
+
+    const cases: { name: string; list: StationedPlacement[]; want: number }[] = [
+      { name: "qualifying", list: line(8, 3 - 0.1, 0.05, 0.4), want: 1 },
+      // Each of the four gates, moved just past its edge.
+      { name: "too few members", list: line(2, 3 - 0.1, 0.05, 0.4), want: 0 },
+      { name: "too short a span", list: line(3, 1.2, 0.05, 0.4), want: 0 },
+      { name: "too flat", list: line(8, 3 - 0.1, 0.005, 0.4), want: 0 },
+      // STEEP AND STILL IN THE BAND, which the obvious spelling is not.
+      // Eight pieces 2.9W apart at a slope of 0.4 leave the lateral window
+      // at the third one — `1.2 + 0.4 * 5.8` is 3.52 against a ceiling of
+      // 2.5 — so the run has two members and is refused for its COUNT.
+      // That fixture passed while testing nothing: deleting the upper
+      // divergence term from the gate left every case green. A slope of
+      // 0.35 over three pieces 2.1W apart reaches 2.67 at the last, which
+      // is out, so it is 1.20 / 1.94 / 2.67 -> two in band. Tighter
+      // still: 0.35 over 1.4W steps holds 1.20 / 1.69 / 2.18 / 2.67,
+      // three in band spanning 4.2W, slope 0.35, which is inside every
+      // gate except the one under test.
+      { name: "too steep", list: line(4, 1.4, 0.35, 0.4), want: 0 },
+      { name: "above the band", list: line(8, 3 - 0.1, 0.05, 0.9), want: 0 },
+      // The gap rule, from the other side: 3W apart is one run, 3.5W apart
+      // is eight runs of one. Paired with the qualifying case above, which
+      // differs from it only in the spacing.
+      { name: "too widely spaced", list: line(8, 3.5, 0.05, 0.4), want: 0 },
+    ];
+
+    for (const c of cases) {
+
+      const g = buildDressGraph({
+        kit,
+        lap,
+        frames,
+        placements: c.list,
+        seed,
+        immovable: new Set(),
+      });
+      const out = (
+        await cook(g, { outputs: [DRESS_OUTPUTS.culled, DRESS_OUTPUTS.placements] })
+      ).outputs;
+      const culled = firstGeometry(out[DRESS_OUTPUTS.culled] ?? []);
+      const after = firstGeometry(out[DRESS_OUTPUTS.placements] ?? []);
+      if (!culled || !after) throw new Error("the dress graph produced no placements");
+
+      // THE REFERENCE RUNS OVER WHAT L-1 LEFT, NOT OVER THE FIXTURE, and
+      // that is not bookkeeping — the cull genuinely rewrites this
+      // fixture. Eight pieces at knee height a metre off the racing line
+      // are exactly what L-1 exists to move, and it pushes most of them
+      // clear of the edge band before L-5 ever sees them. Comparing the
+      // graph's L-5 against `falseEdges` of the ORIGINAL list measures the
+      // cull and reports it as an L-5 defect, which is what the first
+      // version of this test did.
+      const seen = readCulled(culled, c.list);
+      const want = falseEdges(seen, lap.lengthW).length;
+      expect(want, `the fixture "${c.name}" does not survive the cull as stated`).toBe(c.want);
+
+      const drop = after.attrs.point.require("edgeDrop");
+      let fired = 0;
+      for (let i = 0; i < after.pointCount; i++) if (drop.get(i) !== 0) fired++;
+      expect(fired, `the graph disagreed about "${c.name}"`).toBe(c.want);
+    }
   });
 
   it("walks the full push ladder at a half-width f32 cannot hold", async () => {

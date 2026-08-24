@@ -1,5 +1,5 @@
 /**
- * Level 1's first three stages, as a graph.
+ * Level 1's rules, as a graph.
  *
  * WHAT LEVEL 1 IS, AND WHY IT HAS TO BECOME NODES. Level 0 decides the
  * placement LIST once per track — a station, an asset, a lateral, a
@@ -10,11 +10,12 @@
  * cook, cache, partition and lower like everything else in this library
  * rather than being a synchronous pass a page runs once.
  *
- * FOUR STAGES, AND ONE TEST FOR ADMISSION. Z-1, the box build, L-1's
- * sightline cull and the enclosure measurement are each a PURE function of
- * the placement list and the lap: every one of them answers from the list
- * it was handed and from nothing another repair wrote, so each is a chain
- * of nodes and the four compose by wiring.
+ * FIVE STAGES, AND ONE TEST FOR ADMISSION. Z-1, the box build, L-1's
+ * sightline cull, L-5's false-edge detector and L-6's enclosure
+ * measurement are each a PURE function of the placement list and the lap:
+ * every one of them answers from the list it was handed and from nothing
+ * another repair wrote, so each is a chain of nodes and the five compose
+ * by wiring.
  *
  * L-1 PASSES THAT TEST DESPITE LIVING INSIDE `dressLap`'s REPAIR LOOP, and
  * telling those two things apart is the whole reason a fourth stage was
@@ -25,14 +26,36 @@
  * it answers; run it twice on its own output and the second run moves
  * nothing. That is what makes it a node rather than a phase.
  *
- * WHAT IS STILL MISSING IS THE LOOP, NOT THE STAGES IN IT. The false-edge
- * detector, the cover tiler and the band mix each read a measurement the
- * previous repair invalidated, and `dressLap` runs them together until
- * nothing moves. A fixed point is expressible as a graph too, and it is
- * not expressible as THIS graph; adding one of those stages here would
- * produce something that looked finished and answered a different
- * question. `dress.ts` keeps running exactly as it did and nothing calls
- * this but its test.
+ * WHAT IS STILL MISSING IS THE LOOP, AND THE STAGES OUTSIDE IT ARE OUT FOR
+ * DIFFERENT REASONS. This paragraph used to say they all read a
+ * measurement the previous repair invalidated. That is true of the cover
+ * tiler and it is FALSE of the rest, which is worth correcting rather than
+ * softening, because it is the admission test itself:
+ *
+ *   - L-6's COVER TILER genuinely reads one. `dress.ts` measures
+ *     `buildBoxes` over the list every other repair has already rewritten
+ *     this round, and its own comment insists on the placement ("34.2%
+ *     before the cull, 24.8% after"). It also draws from `seed + rounds`,
+ *     so a second run over its own output places different tunnels from
+ *     the same budget. Both halves fail.
+ *   - L-5's FALSE-EDGE DETECTOR reads nothing of the kind — only `t`, `h`,
+ *     `station` and the lap length — so it is IN, and {@link writeFalseEdges}
+ *     is it. It sits in `dressLap`'s loop for L-1's reason: the other
+ *     repairs move placements into and out of the edge band. The cull is
+ *     the clearest case, and it moves them IN — on these four laps the
+ *     detector finds more false edges after L-1 has run than before it,
+ *     because pushing a piece off the racing line is exactly how it ends
+ *     up in the verge at edge height.
+ *   - Z-3's BAND MIX and L-4's LANDMARKS are list arithmetic over the
+ *     whole lap, and the plan puts them on the UNBOUNDED level rather than
+ *     here — not because they are impure but because a cell cannot see the
+ *     lap they are stated over.
+ *
+ * What is left is the loop, which is a real gap and not a stage: a
+ * fixed point is expressible as a graph and it is not expressible as THIS
+ * graph, because nothing re-cooks a subgraph until an output settles.
+ * `dress.ts` keeps running exactly as it did and nothing calls this but
+ * its test.
  *
  * AND THE CULL HERE IS STRICTER THAN THE ONE IN `dress.ts`, IN TWO WAYS
  * THAT ARE WORTH TELLING APART.
@@ -109,8 +132,10 @@ import {
   eq,
   filterByExpression,
   firstGeometry,
+  floor,
   ge,
   gt,
+  le,
   lt,
   makeGeometryItem,
   max,
@@ -118,6 +143,8 @@ import {
   occlusionCull,
   orientAlongVector,
   pathCoverage,
+  pointsToPath,
+  runFit,
   select,
   setAttribute,
   sub,
@@ -129,6 +156,7 @@ import { TRACK_FRAME } from "./graph.js";
 import type { Kit } from "./kit.js";
 import type { Lap } from "./lap.js";
 import type { StationedPlacement } from "./legibility.js";
+import { FALSE_EDGE } from "./falseEdges.js";
 import { SIGHTLINE } from "./sightline.js";
 import { SAME_PLACE_W } from "./tolerance.js";
 import { CORRIDOR } from "./zones.js";
@@ -153,7 +181,19 @@ export const DRESS_OUTPUTS = {
    * these two clouds.
    */
   placed: "placed",
-  /** One point per SURVIVING placement, after Z-1 and L-1. */
+  /** One point per surviving placement, after Z-1 and L-1, before L-5. */
+  culled: "culled",
+  /**
+   * One point per surviving placement, after Z-1, L-1 and L-5.
+   *
+   * AND IT CARRIES POLYLINE TOPOLOGY, which the other two do not: L-5
+   * builds two or three paths over this cloud to scan its runs, and
+   * nothing downstream of it removes a point, so the primitives survive to
+   * the output. Harmless where it goes — `copyToPoints` documents that a
+   * target's own topology is never read — and worth naming, because a
+   * consumer that treated this as a bare cloud would be right about the
+   * points and wrong about the geometry.
+   */
   placements: "placements",
   /** The lap's frames, one column wider: `covered` and `coverHits`. */
   coverage: "coverage",
@@ -281,6 +321,48 @@ const PLACEMENT = {
   placedP: "placedP",
   /** How far L-1 pushed this placement along `across`, in W. 0 if it did not. */
   pushW: "conePushW",
+  /**
+   * `|t|`, which is what L-5 fits its line through rather than `t`.
+   *
+   * A SIGNED LATERAL WOULD MAKE THE TWO SIDES CANCEL. `falseEdges.ts`
+   * fits the magnitude for the same reason it groups by side: a run is a
+   * line of objects drifting away from the road, and the left side drifts
+   * negative while the right drifts positive. Fitting `t` would give a
+   * left-hand barrier a slope of the wrong sign and put it outside the
+   * divergence band, so the rule would only ever fire on the right.
+   */
+  absT: "edgeAbsT",
+  /** 1 while this placement sits in L-5's edge band. See {@link writeFalseEdges}. */
+  band: "edgeBand",
+  /**
+   * Which polyline this placement belongs to for the run scan: -1 left of
+   * the racing line, +1 right of it, 0 for everything not in the band.
+   *
+   * THE THIRD GROUP IS WHAT LETS THIS STAGE AVOID A FILTER, and that
+   * matters more than it looks. `runFit` reads polylines, so the band
+   * members have to be gathered into paths — and the obvious way, a
+   * `filterByExpression` into a band branch and a rest branch, would have
+   * to put the two back together with `mergePoints`, which CONCATENATES.
+   * The placement cloud would come out band-first, `copyToPoints` would
+   * lay its boxes out in that order, and `buildBoxes`' order would be gone
+   * — with nothing in the library to restore it, since `transferAttribute`
+   * maps clouds by proximity and no node sorts a cloud by an attribute.
+   *
+   * `pointsToPath` builds primitives over the SAME points and permutes
+   * nothing, so parking the non-members in a path of their own keeps every
+   * placement where it was. Their runs are computed and never read, which
+   * costs one least-squares fit over the majority of the cloud and buys
+   * the whole ordering problem.
+   */
+  group: "edgeGroup",
+  /** `runFit`'s output columns, read by the drop gate and by the test. */
+  slope: "edgeSlope",
+  residual: "edgeResidual",
+  span: "edgeSpan",
+  runIndex: "edgeIndex",
+  runCount: "edgeCount",
+  /** 1 on the one placement per qualifying run that L-5 lowers. */
+  drop: "edgeDrop",
 } as const;
 
 /** The columns the pose library carries, one point per box of one pose. */
@@ -313,6 +395,8 @@ export interface GraphDressing {
   /** The placement cloud after Z-1 and the lift, before L-1 ran. */
   readonly placed: Geometry;
   /** The same cloud after L-1: the survivors, at the laterals it left them. */
+  readonly culled: Geometry;
+  /** And after L-5: the same survivors, at the heights it left them. */
   readonly placements: Geometry;
   /** Per lap frame: is it under cover? */
   readonly covered: boolean[];
@@ -333,6 +417,15 @@ export interface GraphDressing {
    */
   readonly pushed: number;
   readonly dropped: number;
+  /**
+   * How many placements L-5 dropped below the edge band — ONE PASS of it.
+   *
+   * `repairFalseEdges` runs the detector up to eight times because
+   * breaking a run can leave two runs; this graph runs it once, so this is
+   * that pass's move count and not the rule's total. The test compares it
+   * against `repairFalseEdges(..., 1)` for exactly that reason.
+   */
+  readonly lowered: number;
   /**
    * How many copies the box build stamped before the filter, which is
    * the pose library times the placement count.
@@ -823,12 +916,7 @@ function writeCorridor(g: Graph, target: NodeHandle, tag: string): NodeHandle {
  * swap entirely, and is the second thing this stage would ask for after
  * per-target source selection.
  */
-function writeWorldTransform(
-  g: Graph,
-  target: NodeHandle,
-  halfWidth: number,
-  tag: string,
-): NodeHandle {
+function writeLift(g: Graph, target: NodeHandle, halfWidth: number, tag: string): NodeHandle {
   const P = g.add(
     setAttribute,
     {
@@ -845,6 +933,16 @@ function writeWorldTransform(
     `${tag}_lift`,
   );
   g.connect(target, "out", P, "in");
+  return P;
+}
+
+function writeWorldTransform(
+  g: Graph,
+  target: NodeHandle,
+  halfWidth: number,
+  tag: string,
+): NodeHandle {
+  const P = writeLift(g, target, halfWidth, tag);
 
   // The lifted position, kept under a name nothing else writes. L-1 moves
   // `P` and reports nothing; this is what the move is measured against.
@@ -1018,6 +1116,231 @@ function writeSightlineCull(
   );
   g.connect(push, "out", lateral, "in");
   return lateral;
+}
+
+/**
+ * L-5, as a run scan over the placement cloud.
+ *
+ * THE RULE IS A SHAPE, NOT A COUNT. A line of objects in the verge, evenly
+ * spaced and drifting slowly away from the road, reads to a driver as the
+ * track's edge — so it has to be broken, and `falseEdges.ts` breaks it by
+ * dropping ONE member below the band rather than by moving the run away.
+ * A run qualifies on four measurements at once: at least three members, a
+ * span of at least 4W, every member within 0.3W of the common line, and a
+ * divergence between 0.02 and 0.3 W of lateral per W of lap. `runFit`
+ * computes three of those four directly and the fourth from its own member
+ * count, which is what makes this stage a gate rather than an algorithm.
+ *
+ * AND THE RULE IS INVENTED, WHICH THIS FILE MUST NOT LAUNDER. `falseEdges.ts`
+ * says so at length: the divergence band in particular survived a test that
+ * REFUTED its other half — 5 of 17 measured runs diverge, at p = 0.264 —
+ * so `[0.02, 0.3]` is a choice about what a driver misreads and not a fact
+ * about the source. Stating it as nodes makes it cook; it does not make it
+ * measured.
+ *
+ * THE SEAM IS A RING, WHICH IS WHY `wrap` IS ON AND `period` IS STATED.
+ * `edgeRuns` scans each side as one closed ring — a run that straddles the
+ * start line is one run — and `runFit` reproduces that exactly, down to the
+ * rotation onto the first real gap. It REFUSES a wrapping path whose arc
+ * comes from an attribute without a period, which is the right refusal:
+ * the default period is the path's measured length in WORLD units, and
+ * `stationW` is in half-widths, so the seam gap would be inflated ninefold
+ * and a run crossing the line would quietly become two.
+ *
+ * WHAT THIS STAGE IS NOT IS THE REPAIR LOOP. `repairFalseEdges` runs the
+ * detector up to eight times, because lowering the middle member of an
+ * eight-member run splits it into two fours that can each still qualify.
+ * This is ONE pass, and on these four laps a second pass finds something
+ * on one of them — so the test compares against `repairFalseEdges(..., 1)`
+ * and says which. A subgraph that re-cooks until an output settles is the
+ * missing capability, and it is the same one L-6 and the whole tail need.
+ */
+function writeFalseEdges(g: Graph, target: NodeHandle, lapW: number, tag: string): NodeHandle {
+  const t = attribute(PLACEMENT.t);
+  const h = attribute(PLACEMENT.h);
+
+  const absT = g.add(
+    setAttribute,
+    { name: PLACEMENT.absT, tupleSize: 1, value: abs(t) },
+    `${tag}_absT`,
+  );
+  g.connect(target, "out", absT, "in");
+
+  // EVERY RUNG SLACKED OUTWARD BY `SAME_PLACE_W`, and here that is not a
+  // precaution but a repair of a collision this demo builds by hand. Z-1
+  // stands large art off at exactly `1 + across/2`, which lands on the
+  // band's lower bound for a piece of no width and on its upper bound for
+  // one exactly 3W wide; Z-3's bands take their heights from the table, so
+  // an `h` of exactly 0.2 or 0.6 is constructed rather than stumbled on.
+  // `writeCorridor` measures its own `h` round trip at about 1e-7 in f32,
+  // which is two to seven times the spacing at those heights — so an
+  // untoleranced membership test would put the same placement in the band
+  // on one path and out of it on the other, and the disagreement would
+  // surface as a whole run appearing or vanishing.
+  const inBand = mul(
+    mul(
+      ge(attribute(PLACEMENT.absT), FALSE_EDGE.lateralW[0] - SAME_PLACE_W),
+      le(attribute(PLACEMENT.absT), FALSE_EDGE.lateralW[1] + SAME_PLACE_W),
+    ),
+    mul(
+      ge(h, FALSE_EDGE.heightW[0] - SAME_PLACE_W),
+      le(h, FALSE_EDGE.heightW[1] + SAME_PLACE_W),
+    ),
+  );
+  const band = g.add(
+    setAttribute,
+    { name: PLACEMENT.band, tupleSize: 1, value: inBand },
+    `${tag}_band`,
+  );
+  g.connect(absT, "out", band, "in");
+
+  // `1 - 2*lt(t, 0)` rather than `sign(t)`, the idiom `writeCorridor`
+  // argues for: `Math.sign(0)` is 0 and the rule reads `Math.sign(t || 1)`,
+  // so a placement dead on the centreline belongs to the right-hand side
+  // rather than to a third one. i32 because a group key is an identity and
+  // `pointsToPath` refuses a fractional one.
+  const side = sub(1, mul(2, lt(t, 0)));
+  const group = g.add(
+    setAttribute,
+    {
+      name: PLACEMENT.group,
+      tupleSize: 1,
+      type: "i32",
+      value: mul(attribute(PLACEMENT.band), side),
+    },
+    `${tag}_group`,
+  );
+  g.connect(band, "out", group, "in");
+
+  // CLOSED, BECAUSE `runFit` TAKES ITS WRAP FROM THE TOPOLOGY, AND
+  // `shortGroups: "skip"` BECAUSE A SIDE MAY NOT HAVE ENOUGH TO CLOSE.
+  //
+  // `wrap: true` only reaches a path that is structurally closed, and a
+  // closed path needs three points. How many band members a side carries
+  // is DATA — fifteen at the thinnest over these four laps, and nothing
+  // says a sparser seed, a lower density or a streamed cell could not
+  // hand this stage two. Without the skip that is a failed cook rather
+  // than a lap with no false edges on one side, which is the correct
+  // answer and the one nothing else in this graph would refuse to give.
+  // The node used to have no way to say so; it does now, and this stage
+  // is why.
+  //
+  // Skipping leaves those points in the cloud carrying no primitive, and
+  // `runFit` states what that means rather than leaving it to be found
+  // out: a point in no polyline keeps the column defaults, which are -1
+  // for the id and the index and 0 everywhere else. So a skipped side
+  // reads `runCount` 0 and fails `ge(runCount, 3)`, and reads `runIndex`
+  // -1 which cannot equal any midpoint. Both terms of the gate refuse it
+  // independently, and neither was added for this case — the count term
+  // is there because a two-member run fits a line exactly.
+  const paths = g.add(
+    pointsToPath,
+    {
+      closed: true,
+      groupAttr: PLACEMENT.group,
+      orderAttr: PLACEMENT.station,
+      shortGroups: "skip",
+    },
+    `${tag}_sides`,
+  );
+  g.connect(group, "out", paths, "in");
+
+  const runs = g.add(
+    runFit,
+    {
+      arcAttr: PLACEMENT.station,
+      valueAttr: PLACEMENT.absT,
+      gap: FALSE_EDGE.gapW,
+      // In half-widths, matching `arcAttr`. See the header note.
+      period: lapW,
+      wrap: true,
+      slopeAttr: PLACEMENT.slope,
+      residualAttr: PLACEMENT.residual,
+      spanAttr: PLACEMENT.span,
+      indexAttr: PLACEMENT.runIndex,
+      countAttr: PLACEMENT.runCount,
+    },
+    `${tag}_runs`,
+  );
+  g.connect(paths, "out", runs, "in");
+
+  // THE MEMBER COUNT IS REDUNDANT HERE, AND IT IS KEPT ANYWAY — stated,
+  // because a term nobody can justify is a term somebody deletes.
+  //
+  // A two-member run fits a line through two points, so its residual is 0
+  // (or the rounding noise left of one, which `runFit` puts at ~1e-16 of
+  // the values' own size) and its slope is whatever the pair makes. That
+  // sounds like the reason for this term and it is not: every consecutive
+  // gap in a run is below `gapW`, so a k-member run spans less than
+  // 3(k-1), and a PAIR spans less than 3 — already refused by
+  // `ge(span, 4)`. There is no population on which this term changes the
+  // answer, short of a member whose `|t|` is not finite (see the midpoint
+  // note below).
+  //
+  // It stays because `minMembers` is one of the four things the rule SAYS,
+  // and a graph that satisfies a rule by arithmetic coincidence is a graph
+  // that stops satisfying it the moment `gapW` or `minSpanW` is retuned.
+  const slope = abs(attribute(PLACEMENT.slope));
+  const qualifies = mul(
+    mul(
+      mul(
+        ge(attribute(PLACEMENT.runCount), FALSE_EDGE.minMembers),
+        ge(attribute(PLACEMENT.span), FALSE_EDGE.minSpanW),
+      ),
+      le(attribute(PLACEMENT.residual), FALSE_EDGE.straightW),
+    ),
+    mul(ge(slope, FALSE_EDGE.divergence[0]), le(slope, FALSE_EDGE.divergence[1])),
+  );
+  // THE MIDDLE MEMBER, AND IT HAS TO BE THE SAME MIDDLE. `repairFalseEdges`
+  // takes `members[floor(n/2)]` of a run whose members are in walk order
+  // from the rotation point — and `runFit`'s `indexAttr` counts from that
+  // same rotation, which is the whole reason the node reports an index at
+  // all rather than leaving the caller to derive one from the station.
+  //
+  // AND THE TWO COLUMNS COUNT DIFFERENT POPULATIONS, WHICH IS A
+  // PRECONDITION THIS STAGE MEETS RATHER THAN CHECKS. `indexAttr` numbers
+  // every member of the run; `countAttr` reports how many were FITTED,
+  // which excludes any whose `valueAttr` is NaN — a member with no value
+  // keeps its place along the arc but contributes nothing to the line. The
+  // TypeScript has one array for both, so on a run holding a NaN the two
+  // spellings would pick different middles, or the graph would pick none.
+  // It cannot arise here: `edgeAbsT` is `abs(trackT)`, `trackT` is a lift
+  // of finite catalogue values, and a NaN would already have taken Z-1's
+  // leave-it-alone branch and the cull's. Stated so that a future stage
+  // writing a computed lateral knows what it has to keep true.
+  const isMiddle = eq(
+    attribute(PLACEMENT.runIndex),
+    floor(div(attribute(PLACEMENT.runCount), 2)),
+  );
+  const drop = g.add(
+    setAttribute,
+    {
+      name: PLACEMENT.drop,
+      tupleSize: 1,
+      // The band term is what keeps the non-member path out: its points
+      // carry runs too, computed and never meant to be read.
+      value: mul(mul(attribute(PLACEMENT.band), qualifies), isMiddle),
+    },
+    `${tag}_drop`,
+  );
+  g.connect(runs, "out", drop, "in");
+
+  // BELOW THE BAND, NOT OUTSIDE IT. The rule lowers the member to
+  // `heightW[0] - 0.05` rather than pushing it past 2.5W, because moving
+  // it laterally would take it out of the verge entirely — the run breaks
+  // because one of its members is no longer at edge height, which is the
+  // cheapest thing that stops a driver reading a line.
+  const lower = g.add(
+    setAttribute,
+    {
+      name: PLACEMENT.h,
+      tupleSize: 1,
+      value: select(attribute(PLACEMENT.drop), FALSE_EDGE.heightW[0] - 0.05, h),
+    },
+    `${tag}_lower`,
+  );
+  g.connect(drop, "out", lower, "in");
+  return lower;
 }
 
 /**
@@ -1246,16 +1569,36 @@ function assemble(input: DressGraphInput): { graph: Graph; libraryBoxes: number 
   // clear and Z-1 pulling it back to the edge. Section 9 gives L-1 the
   // last word, so L-1 goes last.
   const seen = writeSightlineCull(g, oriented, framesIn, lap.halfWidth, "l1");
-  const boxes = writeBoxes(g, posesIn, writeCopyScale(g, seen, lap.halfWidth, "dress"), "dress");
+  // L-5 AFTER L-1, WHICH IS `dressLap`'s ORDER AND MATTERS FOR THE SAME
+  // REASON Z-1's DOES. The cull moves placements laterally, which is
+  // exactly what decides edge-band membership — so a run found before it
+  // is a run measured over laterals that are about to change. `dress.ts`
+  // runs the detector last in the round for that reason.
+  //
+  // AND IT WORKS IN TRACK COORDINATES, SO THE WORLD POSITION IS REBUILT
+  // AFTER IT. L-5 lowers a height in W; `P` was lifted before the cull and
+  // knows nothing about it. Re-running the lift is three multiplies on a
+  // few hundred points and is the only honest option — leaving `P` stale
+  // would put the boxes of every lowered placement back at edge height
+  // while `trackH` said otherwise, which is the two-accounts-of-one-move
+  // failure `writeSightlineCull` avoids on the other side.
+  const edged = writeFalseEdges(g, seen, lap.lengthW, "l5");
+  const settled = writeLift(g, edged, lap.halfWidth, "l5");
+  const boxes = writeBoxes(g, posesIn, writeCopyScale(g, settled, lap.halfWidth, "dress"), "dress");
   const coverage = writeCoverage(g, framesIn, boxes, lap.halfWidth, "l6");
 
   g.output(boxes, "out", DRESS_OUTPUTS.boxes);
   g.output(oriented, "out", DRESS_OUTPUTS.placed);
-  // THE POST-CULL CLOUD, WHOSE `scale` IS STILL THE ASSET'S OWN BOX. The
-  // copy scale is written on a branch of its own so that what this output
-  // publishes is a placement — position, orientation, size — rather than
-  // an argument to `copyToPoints`.
-  g.output(seen, "out", DRESS_OUTPUTS.placements);
+  // THE FULLY REPAIRED CLOUD, WHOSE `scale` IS STILL THE ASSET'S OWN BOX.
+  // The copy scale is written on a branch of its own so that what this
+  // output publishes is a placement — position, orientation, size —
+  // rather than an argument to `copyToPoints`.
+  g.output(settled, "out", DRESS_OUTPUTS.placements);
+  // AND THE CLOUD L-1 LEFT, BEFORE L-5 TOUCHED IT. Same argument as
+  // `placed` one stage up: a height L-5 lowered is indistinguishable, in
+  // `trackH` alone, from one Z-3 placed low, so a test that wants either
+  // rule's verdict on its own needs the cloud from before the next one ran.
+  g.output(seen, "out", DRESS_OUTPUTS.culled);
   g.output(coverage, "out", DRESS_OUTPUTS.coverage);
   return { graph: g, libraryBoxes: library.pointCount };
 }
@@ -1268,6 +1611,7 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
 
   const boxes = requireGeo(out[DRESS_OUTPUTS.boxes], DRESS_OUTPUTS.boxes);
   const placed = requireGeo(out[DRESS_OUTPUTS.placed], DRESS_OUTPUTS.placed);
+  const culled = requireGeo(out[DRESS_OUTPUTS.culled], DRESS_OUTPUTS.culled);
   const placements = requireGeo(out[DRESS_OUTPUTS.placements], DRESS_OUTPUTS.placements);
   const coverage = requireGeo(out[DRESS_OUTPUTS.coverage], DRESS_OUTPUTS.coverage);
 
@@ -1308,15 +1652,23 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
     if (pushCol.get(i) !== 0) pushed++;
   }
 
+  const dropCol = placements.attrs.point.require(PLACEMENT.drop);
+  let lowered = 0;
+  for (let i = 0; i < placements.pointCount; i++) {
+    if (dropCol.get(i) !== 0) lowered++;
+  }
+
   return {
     boxes,
     placed,
+    culled,
     placements,
     covered,
     hits,
     share: arcW / lap.lengthW,
     pushed,
     dropped: input.placements.length - placements.pointCount,
+    lowered,
     stamped: libraryBoxes * placements.pointCount,
     graph,
     cookMs: performance.now() - t0,
