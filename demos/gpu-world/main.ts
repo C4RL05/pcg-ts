@@ -243,8 +243,12 @@ const CELL_RADIUS =
 
 function cellBounds(levelName: string, coord: CellCoord): DeviceCellBounds | undefined {
   if (levelName !== "spires") return undefined;
+  // `?? 0` because a CellCoord may be a 1-tuple — a `"path"` level's
+  // sector index, which has no z. Both of this page's levels are `"xz"`,
+  // so the fallback is unreachable here; it keeps the narrowing at the
+  // one place that needs it instead of asserting the coord's arity.
   return {
-    center: [(coord[0] + 0.5) * FINE_CELL, CELL_HEIGHT / 2, (coord[1] + 0.5) * FINE_CELL],
+    center: [(coord[0] + 0.5) * FINE_CELL, CELL_HEIGHT / 2, ((coord[1] ?? 0) + 0.5) * FINE_CELL],
     radius: CELL_RADIUS,
   };
 }

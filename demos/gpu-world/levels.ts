@@ -32,6 +32,7 @@ import {
   setAttribute,
   spawnInstances,
   type FieldSpec,
+  xzCell,
   type LevelDef,
 } from "pcg-ts";
 
@@ -147,8 +148,9 @@ export function makeSpireLevel(
     generationRadius,
     graph,
     bind(g, ctx) {
-      g.setParam(scatter, "boundsMin", [ctx.min[0], 0, ctx.min[1]]);
-      g.setParam(scatter, "boundsMax", [ctx.max[0], 0, ctx.max[1]]);
+      const { min, max } = xzCell(ctx);
+      g.setParam(scatter, "boundsMin", [min[0], 0, min[1]]);
+      g.setParam(scatter, "boundsMax", [max[0], 0, max[1]]);
       g.setParam(scatter, "seed", ctx.seed);
       g.setSeed(hashCombine(ctx.seed, 3));
     },

@@ -11,6 +11,8 @@ import type {
   BindPatches,
   CellContext,
   CellCoord,
+  CellCoord1,
+  CellCoord2,
   CellCoord3,
   CellMode,
   CellOutputs,
@@ -106,6 +108,24 @@ export interface UpdateOptions {
    * `WorldOptions.gpu` when both are set. See that option for semantics.
    */
   gpu?: GpuFieldResolver;
+  /**
+   * Arc anchor of each `"path"` level, in the units of that level's
+   * `path.length`, keyed by LEVEL NAME.
+   *
+   * Keyed by name rather than shared, because two `"path"` levels may
+   * ride different centrelines at different `cellSize`s and be at
+   * different arc positions. A mixed World therefore streams in one
+   * call: the world point drives the `"xz"` and `"xyz"` levels, each
+   * entry here drives its own `"path"` level.
+   *
+   * Every `"path"` level must have a finite entry — the anchor is the
+   * only way such a level gets a position — and a non-finite value, an
+   * unknown level name, or a name that is not a `"path"` level throws
+   * `WorldValidationError`, exactly like a non-finite viewpoint. On a
+   * closed table the anchor wraps, so any real number is in range;
+   * on an open one it is used as given.
+   */
+  readonly anchors?: Readonly<Record<string, number>>;
 }
 
 /** One cell identified by its level name and coordinate. */
@@ -164,6 +184,14 @@ interface LevelState {
   readonly genRadius: number;
   /** Resolved retain radius (Infinity for an unbounded level). */
   readonly retainRadius: number;
+  /** "path" levels: the table's total arc length (0 for other modes). */
+  readonly pathLength: number;
+  /** "path" levels: whether the table closes on itself. */
+  readonly pathClosed: boolean;
+  /** "path" levels: `round(length / cellSize)` sectors, at least 1. */
+  readonly sectorCount: number;
+  /** "path" levels: arc length of one sector (`pathLength / sectorCount`). */
+  readonly sectorSize: number;
   /** Stored cells in insertion order, keyed by the joined coordinate. */
   readonly cells: Map<string, CellRecord>;
   /**
@@ -206,6 +234,62 @@ function coordCompare(a: CellCoord, b: CellCoord): number {
   return 0;
 }
 
+/**
+ * Sector count of a `"path"` level: `round(length / cellSize)` equal
+ * sectors, so the seam falls exactly at `s = 0` rather than leaving a
+ * short remainder sector before it. At least one — a table shorter than
+ * half a cell is still one cell, not zero.
+ */
+function sectorCountOf(length: number, cellSize: number): number {
+  return Math.max(1, Math.round(length / cellSize));
+}
+
+/**
+ * Arc length at sector boundary `i` (0..n). The last boundary is the
+ * table length itself rather than `n * sectorSize`, so on a closed table
+ * the final sector meets sector 0 exactly at the seam.
+ */
+function sectorBound(i: number, n: number, sectorSize: number, length: number): number {
+  return i >= n ? length : i * sectorSize;
+}
+
+/**
+ * Arc distance from `a` to sector `sec`'s half-open range `[sMin, sMax)`
+ * — zero when `a` is inside it, otherwise the gap to its nearest bound.
+ *
+ * WRAPPING follows `pathRuns`: the seam at `s = 0` is not a boundary on a
+ * CLOSED table, where sector `n-1` is adjacent to sector 0 and the
+ * distance is cyclic; on an OPEN table the seam is a hard boundary and
+ * the two ends of the table are as far apart as their arc lengths say.
+ * `a` is expected already wrapped into `[0, length)` on a closed table.
+ */
+function sectorArcDist(
+  a: number,
+  sec: number,
+  n: number,
+  sectorSize: number,
+  length: number,
+  closed: boolean,
+): number {
+  const sMin = sectorBound(sec, n, sectorSize, length);
+  const sMax = sectorBound(sec + 1, n, sectorSize, length);
+  const direct = Math.max(sMin - a, a - sMax, 0);
+  if (!closed) return direct;
+  // The same sector one lap behind and one lap ahead: on a closed table
+  // whichever copy is nearest is the true distance.
+  return Math.min(
+    direct,
+    Math.max(sMin - length - a, a - (sMax - length), 0),
+    Math.max(sMin + length - a, a - (sMax + length), 0),
+  );
+}
+
+/** Wrap an arc position into `[0, length)`. */
+function wrapArc(s: number, length: number): number {
+  const m = s % length;
+  return m < 0 ? m + length : m;
+}
+
 /** Component-wise coordinate equality across either arity. */
 function coordsEqual(a: CellCoord, b: CellCoord): boolean {
   const aa = a as readonly number[];
@@ -237,12 +321,16 @@ function settleQuietly(dispatched: readonly { result: Promise<unknown> }[]): voi
  * Viewpoint-driven hierarchical cell streamer.
  *
  * Each level partitions the XZ plane into square cells (default), space
- * into cube cells (`cellMode: "xyz"`), or is a single unbounded cell.
+ * into cube cells (`cellMode: "xyz"`), ARC LENGTH along a curve into
+ * sectors (`cellMode: "path"`), or is a single unbounded cell.
  * `update(viewpoint)` cooks, per level from coarse to fine, every
  * missing or stale cell whose center lies within the level's
  * `generationRadius` of the viewpoint — nearest first — then evicts cells
  * whose center left `retainRadius` and LRU-trims each level to
- * `maxCellsPerLevel` (the unbounded cell never evicts).
+ * `maxCellsPerLevel` (the unbounded cell never evicts). A `"path"` level
+ * measures both radii as arc distance from its own anchor
+ * (`UpdateOptions.anchors`) instead, so "nearest first" reads as nearest
+ * along the track.
  *
  * Determinism: cell content depends only on (world seed, level index,
  * cell coord, level graph structure+params, parent cell content) — see
@@ -286,7 +374,10 @@ export class World {
     }
     const levels = opts.levels;
     const seen = new Set<string>();
-    let prevBounded: { name: string; size: number } | undefined;
+    // Coarse-to-fine is checked per MODE FAMILY: "path" cellSizes are arc
+    // lengths and "xz"/"xyz" cellSizes are world lengths, so comparing one
+    // against the other would compare two different quantities.
+    const prevBounded = new Map<"world" | "path", { name: string; size: number }>();
     levels.forEach((def, i) => {
       const label = `level ${i} ("${def.name}")`;
       if (typeof def.name !== "string" || def.name === "") {
@@ -296,9 +387,14 @@ export class World {
         throw new WorldValidationError(`duplicate level name "${def.name}"; level names must be unique`);
       }
       seen.add(def.name);
-      if (def.cellMode !== undefined && def.cellMode !== "xz" && def.cellMode !== "xyz") {
+      if (
+        def.cellMode !== undefined &&
+        def.cellMode !== "xz" &&
+        def.cellMode !== "xyz" &&
+        def.cellMode !== "path"
+      ) {
         throw new WorldValidationError(
-          `${label}: cellMode must be "xz" or "xyz", got ${String(def.cellMode)}`,
+          `${label}: cellMode must be "xz", "xyz" or "path", got ${String(def.cellMode)}`,
         );
       }
       if (def.cellSize === "unbounded") {
@@ -314,6 +410,30 @@ export class World {
       if (typeof def.cellSize !== "number" || !Number.isFinite(def.cellSize) || def.cellSize <= 0) {
         throw new WorldValidationError(
           `${label}: cellSize must be a positive finite number or "unbounded", got ${String(def.cellSize)}`,
+        );
+      }
+      // The arc table: required by "path", meaningless (and so refused)
+      // anywhere else, because a square cell has no arc length to split.
+      const mode = def.cellMode ?? "xz";
+      if (mode === "path") {
+        if (def.path === undefined) {
+          throw new WorldValidationError(
+            `${label}: cellMode "path" requires a path table; add path: { length: <total arc length of the centreline>, closed: true | false } to the level — length and closed are all the World needs to cut sectors, and it must be static configuration rather than something a parent level produces`,
+          );
+        }
+        if (!Number.isFinite(def.path.length) || def.path.length <= 0) {
+          throw new WorldValidationError(
+            `${label}: path.length must be a positive finite number (the centreline's total arc length), got ${String(def.path.length)}`,
+          );
+        }
+        if (typeof def.path.closed !== "boolean") {
+          throw new WorldValidationError(
+            `${label}: path.closed must be a boolean — true when the centreline joins its own start, so the last sector is adjacent to sector 0 across the s = 0 seam; got ${String(def.path.closed)}`,
+          );
+        }
+      } else if (def.path !== undefined) {
+        throw new WorldValidationError(
+          `${label}: has a path table but cellMode is "${mode}", which partitions space rather than arc length; set cellMode: "path" to stream sectors along the centreline, or remove the path field`,
         );
       }
       if (def.generationRadius === undefined) {
@@ -334,23 +454,54 @@ export class World {
           `${label}: retainRadius (${String(def.retainRadius)}) must be a finite number >= generationRadius (${def.generationRadius})`,
         );
       }
-      if (prevBounded !== undefined && def.cellSize >= prevBounded.size) {
+      const family = mode === "path" ? "path" : "world";
+      const prev = prevBounded.get(family);
+      if (prev !== undefined && def.cellSize >= prev.size) {
         throw new WorldValidationError(
-          `levels must be ordered coarse to fine: ${label} cellSize ${def.cellSize} must be strictly smaller than "${prevBounded.name}" cellSize ${prevBounded.size}`,
+          family === "path"
+            ? `levels must be ordered coarse to fine: ${label} cellSize ${def.cellSize} (arc length) must be strictly smaller than "path" level "${prev.name}" cellSize ${prev.size}`
+            : `levels must be ordered coarse to fine: ${label} cellSize ${def.cellSize} must be strictly smaller than "${prev.name}" cellSize ${prev.size}`,
         );
       }
-      prevBounded = { name: def.name, size: def.cellSize };
+      prevBounded.set(family, { name: def.name, size: def.cellSize });
     });
     // Nesting across cell modes: a 2D ("xz") level cannot sit under a 3D
     // ("xyz") bounded parent — a 2D column crosses every Y layer of the
     // parent, so no single parent cell contains it (see LevelDef.cellMode).
+    // The same containment argument rejects mixing "path" with either
+    // world-space mode in both directions: an arc sector is a tube along a
+    // curve, so no square cell contains it and it contains no square cell.
     for (let i = 1; i < levels.length; i++) {
       const parentDef = levels[i - 1];
       const childDef = levels[i];
       if (parentDef.cellSize === "unbounded") continue;
-      if ((parentDef.cellMode ?? "xz") === "xyz" && (childDef.cellMode ?? "xz") === "xz") {
+      const parentMode = parentDef.cellMode ?? "xz";
+      const childMode = childDef.cellMode ?? "xz";
+      if (parentMode === "xyz" && childMode === "xz") {
         throw new WorldValidationError(
           `level ${i} ("${childDef.name}") uses 2D "xz" cells under the 3D "xyz" parent "${parentDef.name}": a 2D column spans every Y layer of the parent, so no single parent cell contains it; set the parent's cellMode to "xz" or this level's to "xyz"`,
+        );
+      }
+      if (childMode === "path" && parentMode !== "path") {
+        throw new WorldValidationError(
+          `level ${i} ("${childDef.name}") uses "path" cells under the "${parentMode}" parent "${parentDef.name}": an arc sector is a tube along a curve, so no single square parent cell contains it; make the parent "path" with the same centreline, or make this level "${parentMode}"`,
+        );
+      }
+      if (parentMode === "path" && childMode !== "path") {
+        throw new WorldValidationError(
+          `level ${i} ("${childDef.name}") uses "${childMode}" cells under the "path" parent "${parentDef.name}": an arc sector is a tube along a curve, so it contains no whole square cell; make this level "path" with the same centreline, or make the parent "${childMode}"`,
+        );
+      }
+      if (
+        childMode === "path" &&
+        parentMode === "path" &&
+        childDef.path !== undefined &&
+        parentDef.path !== undefined &&
+        (childDef.path.length !== parentDef.path.length ||
+          childDef.path.closed !== parentDef.path.closed)
+      ) {
+        throw new WorldValidationError(
+          `level ${i} ("${childDef.name}") declares path { length: ${childDef.path.length}, closed: ${childDef.path.closed} } but its "path" parent "${parentDef.name}" declares { length: ${parentDef.path.length}, closed: ${parentDef.path.closed} }: nested "path" levels ride ONE table, and the parent sector of a sector is found by arc length alone; give both levels the same path table (they may still differ in cellSize)`,
         );
       }
     }
@@ -413,24 +564,39 @@ export class World {
     this.onCellEvicted = opts.onCellEvicted;
     this.gpu = opts.gpu;
     this.pool = opts.pool;
-    this.levels = levels.map((def, index) => ({
-      def,
-      index,
-      mode: def.cellSize === "unbounded" ? "xz" : def.cellMode ?? "xz",
-      genRadius: def.generationRadius ?? Infinity,
-      retainRadius:
-        def.cellSize === "unbounded"
-          ? Infinity
-          : def.retainRadius ?? (def.generationRadius ?? 0) * 1.25,
-      cells: new Map<string, CellRecord>(),
-      baselineVersion: undefined,
-    }));
+    this.levels = levels.map((def, index) => {
+      const mode: CellMode = def.cellSize === "unbounded" ? "xz" : def.cellMode ?? "xz";
+      // Sectors are derived once: a "path" level's cellSize is a TARGET
+      // arc length, rounded to a whole number of equal sectors so the
+      // seam lands exactly at s = 0.
+      const pathLength = mode === "path" ? (def.path?.length ?? 0) : 0;
+      const sectorCount =
+        mode === "path" ? sectorCountOf(pathLength, def.cellSize as number) : 0;
+      return {
+        def,
+        index,
+        mode,
+        genRadius: def.generationRadius ?? Infinity,
+        retainRadius:
+          def.cellSize === "unbounded"
+            ? Infinity
+            : def.retainRadius ?? (def.generationRadius ?? 0) * 1.25,
+        pathLength,
+        pathClosed: mode === "path" && def.path?.closed === true,
+        sectorCount,
+        sectorSize: sectorCount > 0 ? pathLength / sectorCount : 0,
+        cells: new Map<string, CellRecord>(),
+        baselineVersion: undefined,
+      };
+    });
   }
 
   /**
    * Stream cells around `viewpoint` (`[x, y, z]`; `"xz"` levels use only
-   * X and Z, `"xyz"` levels use all three axes). Levels are processed
-   * coarse to fine,
+   * X and Z, `"xyz"` levels use all three axes). A `"path"` level ignores
+   * the viewpoint entirely and streams around its arc anchor from
+   * `opts.anchors` instead, so a mixed World updates in one call.
+   * Levels are processed coarse to fine,
    * so a cell's parent cooks earlier in the same update; a wanted cell
    * whose parent cell is not yet cooked (or is stale awaiting a recook)
    * stays pending instead of cooking with missing or outdated parent
@@ -468,6 +634,9 @@ export class World {
         );
       }
     }
+    // The anchors are the viewpoint of every "path" level, so they are
+    // validated with the same strictness and before any cell cooks.
+    const anchors = this.resolveAnchors(opts.anchors);
     if (budgetMs !== undefined && (!Number.isFinite(budgetMs) || budgetMs < 0)) {
       throw new WorldValidationError(
         `budgetMs must be a finite number >= 0, got ${String(budgetMs)}`,
@@ -502,7 +671,7 @@ export class World {
       // Wanted set, LRU touch, and the cook queue (missing or stale cells),
       // nearest first with a deterministic component-wise coord tie-break.
       const queue: WantedCell[] = [];
-      for (const w of this.wantedCells(level, vx, vy, vz)) {
+      for (const w of this.wantedCells(level, vx, vy, vz, anchors[level.index])) {
         const rec = level.cells.get(cellKey(w.coord));
         if (rec !== undefined) rec.lastUsed = ++this.useCounter;
         if (rec === undefined || rec.stale) queue.push(w);
@@ -541,7 +710,7 @@ export class World {
       if (level.def.cellSize !== "unbounded") {
         const rr2 = level.retainRadius * level.retainRadius;
         for (const rec of [...level.cells.values()]) {
-          if (this.centerDistSq(level, rec.coord, vx, vy, vz) > rr2) {
+          if (this.centerDistSq(level, rec.coord, vx, vy, vz, anchors[level.index]) > rr2) {
             this.evict(level, rec, evicted);
           }
         }
@@ -606,9 +775,62 @@ export class World {
     };
   }
 
-  /** Cells whose center is within the level's generation radius (inclusive). */
-  private wantedCells(level: LevelState, vx: number, vy: number, vz: number): WantedCell[] {
+  /**
+   * Per-level arc anchor for this update, indexed by level index: the
+   * validated `UpdateOptions.anchors` entry of each `"path"` level
+   * (wrapped into `[0, length)` on a closed table), and 0 — never read —
+   * for every other level.
+   *
+   * Every anchor is checked before any cell cooks, so a typo cannot
+   * half-stream a World.
+   */
+  private resolveAnchors(anchors: Readonly<Record<string, number>> | undefined): number[] {
+    if (anchors !== undefined) {
+      for (const name of Object.keys(anchors)) {
+        const level = this.levels.find((l) => l.def.name === name);
+        if (level === undefined) {
+          throw new WorldValidationError(
+            `anchors names unknown level "${name}"; levels: ${this.levels.map((l) => l.def.name).join(", ")}`,
+          );
+        }
+        if (level.mode !== "path") {
+          throw new WorldValidationError(
+            `anchors names level "${name}", which uses "${level.mode}" cells and follows the viewpoint; an arc anchor only positions a level with cellMode: "path", so drop this entry or give that level cellMode: "path"`,
+          );
+        }
+      }
+    }
+    return this.levels.map((level) => {
+      if (level.mode !== "path") return 0;
+      const raw = anchors?.[level.def.name];
+      if (raw === undefined) {
+        throw new WorldValidationError(
+          `level ${level.index} ("${level.def.name}") uses "path" cells and has no arc anchor: pass update(viewpoint, { anchors: { "${level.def.name}": s } }) with s the arc length along its centreline`,
+        );
+      }
+      if (typeof raw !== "number" || !Number.isFinite(raw)) {
+        throw new WorldValidationError(
+          `anchors["${level.def.name}"] must be a finite number (an arc length along the level's centreline), got ${String(raw)}`,
+        );
+      }
+      return level.pathClosed ? wrapArc(raw, level.pathLength) : raw;
+    });
+  }
+
+  /**
+   * Cells whose center is within the level's generation radius
+   * (inclusive) — or, for a `"path"` level, whose arc range comes within
+   * that many arc units of the level's anchor.
+   */
+  private wantedCells(
+    level: LevelState,
+    vx: number,
+    vy: number,
+    vz: number,
+    anchor: number,
+  ): WantedCell[] {
     if (level.def.cellSize === "unbounded") return [{ coord: [0, 0], distSq: 0 }];
+    if (level.mode === "path") return this.wantedPathCells(level, anchor);
     const s = level.def.cellSize;
     const r = level.genRadius;
     const r2 = r * r;
@@ -645,9 +867,52 @@ export class World {
   }
 
   /**
+   * Sectors of a `"path"` level within `generationRadius` ARC units of
+   * the anchor — "the next N metres" rather than a disc.
+   *
+   * Candidates come from the sector indices the window `[a - r, a + r]`
+   * spans; on a closed table those indices are taken modulo the sector
+   * count, so a window straddling the `s = 0` seam wraps onto the far end
+   * of the table, and a window at least a full lap wide collapses to
+   * every sector exactly once.
+   */
+  private wantedPathCells(level: LevelState, anchor: number): WantedCell[] {
+    const n = level.sectorCount;
+    const ss = level.sectorSize;
+    const len = level.pathLength;
+    const r = level.genRadius;
+    const closed = level.pathClosed;
+    const out: WantedCell[] = [];
+    let iMin = Math.floor((anchor - r) / ss);
+    let iMax = Math.floor((anchor + r) / ss);
+    if (closed) {
+      if (iMax - iMin + 1 >= n) {
+        iMin = 0;
+        iMax = n - 1;
+      }
+    } else {
+      // The seam is a hard boundary on an open table: nothing exists
+      // before sector 0 or after the last one.
+      iMin = Math.max(0, iMin);
+      iMax = Math.min(n - 1, iMax);
+    }
+    const seen = new Set<number>();
+    for (let i = iMin; i <= iMax; i++) {
+      const sec = closed ? ((i % n) + n) % n : i;
+      if (seen.has(sec)) continue;
+      seen.add(sec);
+      const d = sectorArcDist(anchor, sec, n, ss, len, closed);
+      if (d <= r) out.push({ coord: [sec], distSq: d * d });
+    }
+    return out;
+  }
+
+  /**
    * Squared distance from the viewpoint to a bounded cell's center, in
-   * the level's own metric: XZ for `"xz"` levels, XYZ for `"xyz"` — the
-   * same metric `wantedCells` applies, so generation and retention agree.
+   * the level's own metric: XZ for `"xz"` levels, XYZ for `"xyz"`, and
+   * squared ARC distance from the anchor to the sector's nearest bound
+   * for `"path"` — the same metric `wantedCells` applies in each case, so
+   * generation and retention agree.
    */
   private centerDistSq(
     level: LevelState,
@@ -655,7 +920,19 @@ export class World {
     vx: number,
     vy: number,
     vz: number,
+    anchor: number,
   ): number {
+    if (level.mode === "path") {
+      const d = sectorArcDist(
+        anchor,
+        coord[0],
+        level.sectorCount,
+        level.sectorSize,
+        level.pathLength,
+        level.pathClosed,
+      );
+      return d * d;
+    }
     const size = level.def.cellSize as number;
     const dx = (coord[0] + 0.5) * size - vx;
     if (level.mode === "xyz") {
@@ -664,7 +941,8 @@ export class World {
       const dz = (c[2] + 0.5) * size - vz;
       return dx * dx + dy * dy + dz * dz;
     }
-    const dz = (coord[1] + 0.5) * size - vz;
+    const c = coord as CellCoord2;
+    const dz = (c[1] + 0.5) * size - vz;
     return dx * dx + dz * dz;
   }
 
@@ -672,13 +950,29 @@ export class World {
    * Coordinate of the parent-level cell containing this cell's center.
    * Modes map as documented on {@link LevelDef.cellMode}: like under
    * like contains the center; a 3D child under a 2D parent maps to the
-   * XZ column cell; 2D under 3D was rejected at construction.
+   * XZ column cell; a `"path"` child maps to the parent SECTOR containing
+   * its arc midpoint (both levels ride one table, enforced at
+   * construction); 2D under 3D, and any mix of `"path"` with a
+   * world-space mode, were rejected at construction.
    */
   private parentCoordOf(level: LevelState, coord: CellCoord): CellCoord {
     const parent = this.levels[level.index - 1];
     if (parent.def.cellSize === "unbounded") return [0, 0];
     const size = level.def.cellSize as number;
     const psize = parent.def.cellSize;
+    if (level.mode === "path") {
+      const n = level.sectorCount;
+      const sMid =
+        (sectorBound(coord[0], n, level.sectorSize, level.pathLength) +
+          sectorBound(coord[0] + 1, n, level.sectorSize, level.pathLength)) /
+        2;
+      // Against the PARENT's sector size, not its cellSize: cellSize is a
+      // target that round() turned into whole sectors, so only the
+      // parent's own sector size addresses its cells. The clamp catches
+      // the last sector, whose midpoint can land on the table length.
+      const pi = Math.floor(sMid / parent.sectorSize);
+      return [Math.min(Math.max(pi, 0), parent.sectorCount - 1)];
+    }
     if (level.mode === "xyz") {
       const c = coord as CellCoord3;
       const px = nz(Math.floor(((c[0] + 0.5) * size) / psize));
@@ -687,20 +981,25 @@ export class World {
         ? [px, nz(Math.floor(((c[1] + 0.5) * size) / psize)), pz]
         : [px, pz];
     }
+    const c2 = coord as CellCoord2;
     return [
-      nz(Math.floor(((coord[0] + 0.5) * size) / psize)),
-      nz(Math.floor(((coord[1] + 0.5) * size) / psize)),
+      nz(Math.floor(((c2[0] + 0.5) * size) / psize)),
+      nz(Math.floor(((c2[1] + 0.5) * size) / psize)),
     ];
   }
 
   /** Reject a coordinate whose arity does not match the level's mode. */
   private checkCoordArity(level: LevelState, coord: CellCoord): void {
-    const expected = level.mode === "xyz" ? 3 : 2;
+    const expected = level.mode === "xyz" ? 3 : level.mode === "path" ? 1 : 2;
     if (coord.length !== expected) {
-      throw new WorldValidationError(
+      const shape =
         level.mode === "xyz"
-          ? `level "${level.def.name}" uses 3D "xyz" cells addressed [cx, cy, cz]; got a ${coord.length}-component coordinate`
-          : `level "${level.def.name}" uses 2D "xz" cells addressed [cx, cz]; got a ${coord.length}-component coordinate`,
+          ? `3D "xyz" cells addressed [cx, cy, cz]`
+          : level.mode === "path"
+            ? `"path" cells addressed [cs] (one sector index)`
+            : `2D "xz" cells addressed [cx, cz]`;
+      throw new WorldValidationError(
+        `level "${level.def.name}" uses ${shape}; got a ${coord.length}-component coordinate`,
       );
     }
   }
@@ -750,6 +1049,23 @@ export class World {
         seed: levelSeed,
         ...(parent !== undefined ? { parent } : {}),
       };
+    } else if (level.mode === "path") {
+      const c = coord as CellCoord1;
+      const n = level.sectorCount;
+      ctx = {
+        levelIndex: idx,
+        levelName: def.name,
+        cellMode: "path",
+        coord: c,
+        sMin: sectorBound(c[0], n, level.sectorSize, level.pathLength),
+        sMax: sectorBound(c[0] + 1, n, level.sectorSize, level.pathLength),
+        pathLength: level.pathLength,
+        closed: level.pathClosed,
+        worldSeed,
+        levelSeed,
+        seed: hashCombine(worldSeed, idx, c[0]),
+        ...(parent !== undefined ? { parent } : {}),
+      };
     } else if (level.mode === "xyz") {
       const s = def.cellSize;
       const c = coord as CellCoord3;
@@ -767,16 +1083,17 @@ export class World {
       };
     } else {
       const s = def.cellSize;
+      const c = coord as CellCoord2;
       ctx = {
         levelIndex: idx,
         levelName: def.name,
         cellMode: "xz",
-        coord: [coord[0], coord[1]],
-        min: [coord[0] * s, coord[1] * s],
-        max: [(coord[0] + 1) * s, (coord[1] + 1) * s],
+        coord: [c[0], c[1]],
+        min: [c[0] * s, c[1] * s],
+        max: [(c[0] + 1) * s, (c[1] + 1) * s],
         worldSeed,
         levelSeed,
-        seed: hashCombine(worldSeed, idx, coord[0], coord[1]),
+        seed: hashCombine(worldSeed, idx, c[0], c[1]),
         ...(parent !== undefined ? { parent } : {}),
       };
     }

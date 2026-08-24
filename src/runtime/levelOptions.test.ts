@@ -10,7 +10,13 @@ import { Graph, firstGeometry } from "../graph/index.js";
 import { jitterPoints } from "../nodes/pointOps.js";
 import { pointScatterInBounds } from "../nodes/sources.js";
 import { hashCombine } from "../random/index.js";
-import { childEchoLevel, geometryDiff, outputsDiff, scatterLevel } from "./runtime.testsupport.js";
+import {
+  childEchoLevel,
+  geometryDiff,
+  outputsDiff,
+  scatterLevel,
+  xzCell,
+} from "./runtime.testsupport.js";
 import type { LevelDef } from "./types.js";
 import { World, WorldValidationError } from "./world.js";
 
@@ -81,8 +87,9 @@ describe("LevelDef.cookOutputs", () => {
       cookOutputs,
       graph,
       bind(g, ctx) {
-        g.setParam(scatter, "boundsMin", [ctx.min[0], 0, ctx.min[1]]);
-        g.setParam(scatter, "boundsMax", [ctx.max[0], 0, ctx.max[1]]);
+        const cell = xzCell(ctx);
+        g.setParam(scatter, "boundsMin", [cell.min[0], 0, cell.min[1]]);
+        g.setParam(scatter, "boundsMax", [cell.max[0], 0, cell.max[1]]);
         g.setParam(scatter, "seed", ctx.seed);
         g.setParam(jitter, "seed", hashCombine(ctx.seed, 1));
       },

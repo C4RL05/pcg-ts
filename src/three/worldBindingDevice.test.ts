@@ -193,8 +193,14 @@ describe("device batches: first cook (world.ts cookCell, new record)", () => {
 
   it("passes the cell's out-of-band bounds through to the adapter", () => {
     const adapter = makeAdapter();
+    // `?? 0` because a CellCoord may now be a 1-tuple (a `"path"` level's
+    // sector index). Every cell in this suite is an `"xz"` cell, so the
+    // fallback is unreachable — it is here to keep the narrowing local
+    // rather than to handle a case these tests exercise.
     const { binding } = makeBinding(adapter, (level, coord) =>
-      level === "rocks" ? { center: [coord[0] * 10, 0, coord[1] * 10], radius: 9 } : undefined,
+      level === "rocks"
+        ? { center: [coord[0] * 10, 0, (coord[1] ?? 0) * 10], radius: 9 }
+        : undefined,
     );
     binding.cellReady("rocks", [2, 3], deviceOutputs(makeBatch("x", 2)));
     binding.cellReady("landmarks", [0, 0], deviceOutputs(makeBatch("y", 2)));
@@ -1275,7 +1281,7 @@ describe("device batches: N per cell (a multi-asset resident spawn)", () => {
     const calls: string[] = [];
     const { binding } = makeBinding(adapter, (levelName, coord, assetId) => {
       calls.push(`${levelName}|${coord.join(",")}/${assetId}`);
-      return { center: [coord[0], 0, coord[1]], radius: radii[assetId] ?? -1 };
+      return { center: [coord[0], 0, coord[1] ?? 0], radius: radii[assetId] ?? -1 };
     });
     binding.cellReady(
       "rocks",
@@ -1298,7 +1304,7 @@ describe("device batches: N per cell (a multi-asset resident spawn)", () => {
     // constant radius here would score that as a pass.
     const { binding } = makeBinding(adapter, (_level, coord) => {
       calls++;
-      return { center: [coord[0], 0, coord[1]], radius: 40 + calls };
+      return { center: [coord[0], 0, coord[1] ?? 0], radius: 40 + calls };
     });
     binding.cellReady(
       "rocks",

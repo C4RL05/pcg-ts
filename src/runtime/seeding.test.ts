@@ -12,7 +12,7 @@ import { Graph } from "../graph/index.js";
 import { setAttribute } from "../nodes/attributes.js";
 import { pointScatterInBounds } from "../nodes/sources.js";
 import { hashCombine } from "../random/index.js";
-import { geometryDiff, outputsDiff } from "./runtime.testsupport.js";
+import { geometryDiff, outputsDiff, xzCell } from "./runtime.testsupport.js";
 import type { CellOutputs, LevelDef } from "./types.js";
 import { World } from "./world.js";
 
@@ -47,8 +47,9 @@ function speciesLevel(opts: {
     retainRadius: opts.retainRadius,
     graph,
     bind(g, ctx) {
-      g.setParam(scatter, "boundsMin", [ctx.min[0], 0, ctx.min[1]]);
-      g.setParam(scatter, "boundsMax", [ctx.max[0], 0, ctx.max[1]]);
+      const cell = xzCell(ctx);
+      g.setParam(scatter, "boundsMin", [cell.min[0], 0, cell.min[1]]);
+      g.setParam(scatter, "boundsMax", [cell.max[0], 0, cell.max[1]]);
       if (opts.mode === "setSeed") {
         g.setSeed(hashCombine(ctx.seed, 7));
       } else {

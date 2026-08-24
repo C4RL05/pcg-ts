@@ -55,7 +55,14 @@ const ROOT_SURFACE = [
   "subgraphNode", "surfaceSample", "sweepProfile", "tan", "transferAttribute", "transferNearest",
   "transferRaycast", "transferUv", "transformPoints", "validateGraphMeta", "valueConstant",
   "valueNoise", "vec", "volumeSample", "withInlineParamValue", "worleyNoise", "writeCurveFrame",
-  "writeTangents",
+  // Narrows a CellContext to its "xz" form. Public because every `bind`
+  // on a square-cell level wants the cell rectangle and only a
+  // world-space context has one — `cellMode: "path"` carries an arc range
+  // and no min/max, deliberately, so a 2D bind handed one fails to
+  // compile. That leaves every such bind needing the same narrowing; the
+  // three shipped demo levels and the runtime's own test support all
+  // wrote it before this existed.
+  "writeTangents", "xzCell",
 ] as const;
 
 describe("public surface: pcg-ts", () => {

@@ -8,7 +8,21 @@ import { jitterPoints, type JitterPointsParams } from "../nodes/pointOps.js";
 import { pointScatterInBounds, type PointScatterInBoundsParams } from "../nodes/sources.js";
 import { hashCombine } from "../random/index.js";
 import { dataInput, type DataInputParams } from "./dataInput.js";
-import type { CellCoord, CellMode, CellOutputs, LevelDef } from "./types.js";
+import type {
+  CellContext,
+  CellContextXZ,
+  CellCoord,
+  CellMode,
+  CellOutputs,
+  LevelDef,
+} from "./types.js";
+
+// The narrowing the 2D binds across this suite need is `xzCell`, and it
+// is PUBLIC (`./types.js`) rather than a copy here: the demos' levels
+// want the identical line, so a private version would have been the same
+// helper written twice with two different error messages. Re-exported so
+// this module stays the one import a scenario builder needs.
+export { xzCell } from "./types.js";
 
 /** A scatter level plus handles for edit/invalidation tests. */
 export interface ScatterLevel {
@@ -23,11 +37,16 @@ export interface ScatterLevel {
  * fixed 100x100 area for an unbounded level), optionally jittered.
  * Declares one output, "points". Bind wires ctx bounds and ctx.seed into
  * the stochastic nodes — the documented determinism pattern.
+ *
+ * A `"path"` level has no world box, so its bind scatters into the strip
+ * `[sMin, sMax) x [0, 10]`: arc length stands in for X, which keeps each
+ * sector's content distinct and hand-checkable without inventing a curve.
  */
 export function scatterLevel(opts: {
   name: string;
   cellSize: number | "unbounded";
   cellMode?: CellMode;
+  path?: { length: number; closed: boolean };
   generationRadius?: number;
   retainRadius?: number;
   count?: number;
@@ -48,6 +67,7 @@ export function scatterLevel(opts: {
     name: opts.name,
     cellSize: opts.cellSize,
     cellMode: opts.cellMode,
+    path: opts.path,
     generationRadius: opts.generationRadius,
     retainRadius: opts.retainRadius,
     graph,
@@ -58,6 +78,9 @@ export function scatterLevel(opts: {
       } else if (ctx.cellMode === "xyz") {
         g.setParam(scatter, "boundsMin", [ctx.min[0], ctx.min[1], ctx.min[2]]);
         g.setParam(scatter, "boundsMax", [ctx.max[0], ctx.max[1], ctx.max[2]]);
+      } else if (ctx.cellMode === "path") {
+        g.setParam(scatter, "boundsMin", [ctx.sMin, 0, 0]);
+        g.setParam(scatter, "boundsMax", [ctx.sMax, 0, 10]);
       } else {
         g.setParam(scatter, "boundsMin", [ctx.min[0], 0, ctx.min[1]]);
         g.setParam(scatter, "boundsMax", [ctx.max[0], 0, ctx.max[1]]);
@@ -84,6 +107,7 @@ export function childEchoLevel(opts: {
   name: string;
   cellSize: number;
   cellMode?: CellMode;
+  path?: { length: number; closed: boolean };
   generationRadius: number;
   retainRadius?: number;
 }): EchoLevel {
@@ -94,6 +118,7 @@ export function childEchoLevel(opts: {
     name: opts.name,
     cellSize: opts.cellSize,
     cellMode: opts.cellMode,
+    path: opts.path,
     generationRadius: opts.generationRadius,
     retainRadius: opts.retainRadius,
     graph,

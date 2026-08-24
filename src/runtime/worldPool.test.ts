@@ -6,7 +6,7 @@ import { hashCombine } from "../random/index.js";
 import { CookWorkerPool } from "../worker/pool.js";
 import { bundleWorkerEntry, type BundledEntry } from "../worker/worker.testsupport.js";
 import { dataInput } from "./dataInput.js";
-import { coordKeys, outputsDiff, scatterLevel } from "./runtime.testsupport.js";
+import { coordKeys, outputsDiff, scatterLevel, xzCell } from "./runtime.testsupport.js";
 import type { LevelDef, ParamPatch } from "./types.js";
 import { World, WorldValidationError, type UpdateStats } from "./world.js";
 
@@ -64,9 +64,10 @@ function patchScatterLevel(opts: {
           { node: scatter.id, param: "boundsMax", value: [100, 0, 100] },
         );
       } else {
+        const cell = xzCell(ctx);
         patches.push(
-          { node: scatter.id, param: "boundsMin", value: [ctx.min[0], 0, ctx.min[1]] },
-          { node: scatter.id, param: "boundsMax", value: [ctx.max[0], 0, ctx.max[1]] },
+          { node: scatter.id, param: "boundsMin", value: [cell.min[0], 0, cell.min[1]] },
+          { node: scatter.id, param: "boundsMax", value: [cell.max[0], 0, cell.max[1]] },
         );
       }
       patches.push({ node: scatter.id, param: "seed", value: ctx.seed });
@@ -98,8 +99,9 @@ function bindScatterLevelWithSetSeed(opts: {
     generationRadius: opts.generationRadius,
     graph,
     bind(g, ctx) {
-      g.setParam(scatter, "boundsMin", [ctx.min[0], 0, ctx.min[1]]);
-      g.setParam(scatter, "boundsMax", [ctx.max[0], 0, ctx.max[1]]);
+      const cell = xzCell(ctx);
+      g.setParam(scatter, "boundsMin", [cell.min[0], 0, cell.min[1]]);
+      g.setParam(scatter, "boundsMax", [cell.max[0], 0, cell.max[1]]);
       g.setParam(scatter, "seed", ctx.seed);
       g.setSeed(hashCombine(ctx.seed, opts.graphSeedSalt));
     },
