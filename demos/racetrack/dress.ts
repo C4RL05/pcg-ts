@@ -64,6 +64,7 @@ import { type Frame, cullSightlines, defaultEyeStations } from "./sightline.js";
 import { LONG_QUANTILE, longCoverBudgetW, placeEnclosure, reduceEnclosure } from "./tunnels.js";
 import { measureEnclosure } from "./enclosure.js";
 import { FITTED, makeStationsDetailed, repairPlacementCoverage } from "./stations.js";
+import { SAME_PLACE_W } from "./tolerance.js";
 import { resolveCorridor } from "./zones.js";
 
 /**
@@ -332,9 +333,26 @@ function buildBoxes(
  * conflict between Z-1 and Z-3 — I spent two changes treating it as one.
  * There was no conflict. There was a value that could not survive a
  * round trip through its own datum.
+ *
+ * AND THE 1e-9 THAT FIXED IT WAS AN f64 ANSWER TO AN f64 PROBLEM. The
+ * residue it was sized against is the ~1e-16 an f64 round trip through
+ * `h = base + tall/2` leaves behind. In f32 the same round trip leaves
+ * about 1e-7 — a hundred times that epsilon — so every one of those
+ * phantom fixes comes back the moment these rules are computed in
+ * attribute columns, and this loop stops converging for exactly the
+ * reason it did before, with exactly the misleading stat line.
+ *
+ * `SAME_PLACE_W` IS SIZED FOR THAT, AND IT COSTS NOTHING, because a
+ * REAL Z-1 fix is never small. There are only two of them and both are
+ * jumps: small art rises to the ceiling from wherever under it it was,
+ * and large art goes from inside 1W out to `1 + across/2`, which is at
+ * least half its own width away. Nothing in this rule moves a placement
+ * by a ten-thousandth of a half-width, so nothing this threshold can
+ * swallow is a fix at all — it is the ceiling failing to recognise
+ * itself.
  */
 function moved(fixed: { t: number; baseH: number }, t: number, baseH: number): boolean {
-  return Math.abs(fixed.t - t) > 1e-9 || Math.abs(fixed.baseH - baseH) > 1e-9;
+  return Math.abs(fixed.t - t) > SAME_PLACE_W || Math.abs(fixed.baseH - baseH) > SAME_PLACE_W;
 }
 
 /** How many corners are still correctly marked, and how many rulers hold. */

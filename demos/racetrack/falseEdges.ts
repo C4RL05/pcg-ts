@@ -161,6 +161,30 @@ export interface EdgeRun {
  * signed lateral would give the two sides opposite signs for the same
  * defect and halve the detector's sensitivity on whichever side the
  * threshold was written for.
+ *
+ * AND FITTED ON RUN-LOCAL ARC, NOT ON LAP ARC. `stations` arrive as
+ * distances round the whole lap — 0 to ~360W, and past a lap where the
+ * run crosses the start line — while the run itself spans forty W at the
+ * outside and the |t| it is fitted against is order one. The regression
+ * only ever uses `s - mean(s)`, so every one of those leading digits is
+ * subtracted away again: this is a difference of two nearly equal large
+ * numbers, computed to decide a threshold on a small one.
+ *
+ * In f64 that costs four of seventeen digits and nobody notices. In f32
+ * there are seven digits and the spacing at station 360 is 3e-5, so a
+ * forty-W span is written with about six of them and the deviation from
+ * its mean keeps two — against a divergence band of 0.02 to 0.3 W of
+ * lateral per W of lap, which is where the whole of L-5 lives. The
+ * detector would be reading its own quantisation.
+ *
+ * Subtracting the run's own start first is THE SAME LINE THROUGH THE SAME
+ * POINTS — a least-squares fit is translation-invariant in s, and both
+ * the slope and the residual are unchanged by it — computed where the
+ * numbers are small. It is free in f64 and it is the difference between a
+ * detector and a noise source in f32. It also puts the degenerate-run
+ * guard below back above the floor it was sitting in: `den` is a sum of
+ * squared deviations, and at lap arc those squares were ~1e-9 of pure
+ * cancellation, which is the guard's own threshold.
  */
 function fitRun(
   placements: readonly StationedPlacement[],
@@ -179,7 +203,22 @@ function fitRun(
   // construction and there is one call site — but deriving the length
   // from one array while averaging over the other is how a mismatch
   // becomes a silent misfit rather than an error.
-  const s = stations;
+  //
+  // AND AN EMPTY RUN IS ANSWERED, NOT REBASED. Rebasing reads
+  // `stations[0]`, which is `undefined` on an empty array and turns every
+  // element into NaN — where the un-rebased version this replaced just
+  // produced `n = 0` and fell through to the `den` guard. The one call
+  // site can never send an empty run (it returns early below
+  // `FALSE_EDGE.minMembers`), so this is unreachable today; it is here
+  // because the change made an exported function newly able to answer
+  // NaN, and a guard is cheaper than the argument that nobody will.
+  if (stations.length === 0) return { slope: 0, residualW: 0 };
+
+  // Rebased on the run's own start, per the note above. The run's first
+  // member is the origin, so `s` runs 0 to `spanW` however far round the
+  // lap the run sits, and the slope and residual it produces are the lap
+  // arc's own.
+  const s = stations.map((v) => v - stations[0]);
   const n = s.length;
   const t = members.map((i) => Math.abs(placements[i].t));
   const ms = s.reduce((a, b) => a + b, 0) / n;

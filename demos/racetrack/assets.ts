@@ -24,6 +24,7 @@
  */
 
 import { CORRIDOR, fitsOverhead, resolveCorridor } from "./zones.js";
+import { SAME_PLACE_W, SAME_SHARE } from "./tolerance.js";
 import { rand } from "./rand.js";
 
 /** The per-asset measurements this module places from. */
@@ -204,6 +205,45 @@ export function bandOfPlacement(
 ): Band {
   const a = Math.abs(t);
   const h = datum === "base" ? centreH - tallW / 2 : centreH;
+
+  // A VALUE ON A BOUNDARY BELONGS TO THE OUTER BAND, AND IT HAS TO STAY
+  // THERE THROUGH AN f32 ROUND TRIP.
+  //
+  // These boundaries are not approached, they are LANDED ON. Z-1 stands
+  // large art off at exactly `1 + across/2`, which for a piece exactly
+  // one half-width wide is exactly 1.5 — the verge ceiling — and two of
+  // the four seeds measured here put placements there to the last bit.
+  // The mix raises an `over` replacement to exactly `1.2 + tall/2`, whose
+  // base is meant to be exactly the corridor ceiling.
+  //
+  // AND ON THE HEIGHT AXIS f64 ALREADY LOSES THAT, WHICH IS THE STRONGER
+  // REASON FOR THE TOLERANCE RATHER THAN AN ARGUMENT AGAINST IT. Under
+  // the `base` datum this function recovers the base as `h - tall/2`
+  // after the mix set `h = 1.2 + tall/2`, and that round trip does not
+  // return 1.2: over the vegetation kit's 229 assets it misses for 96 of
+  // them — 41 landing at 1.2000000000000002 and 55 at 1.1999999999999997.
+  // A strict `h > CORRIDOR.ceilingW` therefore called 41 of them `over`
+  // and 55 of them `verge`, splitting ONE logical situation — a piece
+  // whose base is at the ceiling — two ways on nothing but which
+  // direction the last bit rounded. That is not a boundary being read
+  // correctly; it is a coin toss with a stable seed.
+  //
+  // With the tolerance all 96 read the same, and they read `verge`, which
+  // is what the rule says: `over` is material ABOVE the ceiling, and a
+  // base sitting on it is not above it. In f32 the same round trip is
+  // ~1e-7 wide instead of ~1e-16, so without this the toss is between
+  // cooks rather than merely between assets — and Z-3's shares, the
+  // repair that reads them and the count of moves it makes all follow.
+  //
+  // So each edge is pulled IN by `SAME_PLACE_W` and each height test
+  // pushed OUT by it: anything within a ten-thousandth of a half-width of
+  // a boundary is treated as being on it, which is the f64 answer. It
+  // reclassifies genuine values inside that sliver too. Measured across
+  // four seeds of the dressed lap, the nearest placement to any boundary
+  // that was not exactly on one sat 8.9e-4W away — an order of magnitude
+  // clear of it — and on the measured circuits the nearest is 8e-4W.
+  const inside = (limit: number): boolean => a < limit - SAME_PLACE_W;
+
   // ANCHORED INSIDE THE CORRIDOR IS `over`, WHATEVER ITS HEIGHT. Z2's
   // verge is 1.0-1.5W and Z1 holds nothing, so a placement recorded at
   // |t| < 1W is not verge art that strayed — it is something SPANNING the
@@ -215,12 +255,17 @@ export function bandOfPlacement(
   // `over` 3% against a true 10%, `verge` 13% against 6%. It was caught
   // by a second measurement of the same circuit disagreeing, not by
   // anything here.
-  if (a < CORRIDOR.halfWidthW) return "over";
-  if (a < 1.5 && (h > CORRIDOR.ceilingW || h < CORRIDOR.floorW)) return "over";
-  if (a < 1.5) return "verge";
-  if (a < 2.5) return "near";
-  if (a < 5) return "mid";
-  if (a < 13) return "far";
+  if (inside(CORRIDOR.halfWidthW)) return "over";
+  if (
+    inside(1.5) &&
+    (h > CORRIDOR.ceilingW + SAME_PLACE_W || h < CORRIDOR.floorW - SAME_PLACE_W)
+  ) {
+    return "over";
+  }
+  if (inside(1.5)) return "verge";
+  if (inside(2.5)) return "near";
+  if (inside(5)) return "mid";
+  if (inside(13)) return "far";
   return "distant";
 }
 
@@ -304,7 +349,18 @@ export function mixInsideRule<T extends AssetPlacement>(
   for (const b of Object.keys(Z3) as Band[]) {
     const share = c[b] / live.length;
     const [lo, hi] = Z3[b].rule;
-    if (share < lo - 1e-9 || share > hi + 1e-9) return false;
+    // THE SLACK HAS TO BE COARSER THAN THE ARITHMETIC IT FORGIVES. A
+    // share is a ratio of whole numbers and Z-3's bounds are written as
+    // two decimal places, so a band landing EXACTLY on its bound is the
+    // ordinary case (36 of 360 is exactly the `over` floor) and this
+    // epsilon is the only thing that keeps it inside. In f32 the spacing
+    // at 0.1 is 7.5e-9 — the 1e-9 that was here is finer than the
+    // quantity it is comparing, so a share that lands on a bound reads
+    // as outside it, and the repair chases a band that is already right.
+    // `SAME_SHARE` is a third of a thousandth of one placement on a
+    // 360-placement lap: it cannot move the verdict on a ratio that was
+    // not already sitting on the bound.
+    if (share < lo - SAME_SHARE || share > hi + SAME_SHARE) return false;
   }
   return true;
 }

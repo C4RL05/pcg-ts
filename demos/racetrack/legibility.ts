@@ -21,6 +21,7 @@ import {
   rand,
 } from "./assets.js";
 import { type Corner, beforeEntryW } from "./corners.js";
+import { SAME_PLACE_W, SAME_STATION_W } from "./tolerance.js";
 
 /** L-4's numbers. */
 export const LANDMARK = {
@@ -610,7 +611,15 @@ export function countVerticalsInBrakingWindows(
     if (!isVertical(p.asset)) continue;
     for (const c of tight) {
       const d = beforeEntryW(p.station, c.entryW, lapW);
-      if (d >= BRAKING.windowW[0] && d <= BRAKING.windowW[1]) {
+      // THE SAME WINDOW AS `brakingRulersSatisfied`, SO THE SAME
+      // TOLERANCE. This counts the verticals inside the braking windows
+      // and that one checks the marks are still in them, over one
+      // interval whose edges L-3 lands on exactly — `entry - 6W` and
+      // `entry - 15W` are where it puts its marks, not where they happen
+      // to fall. Two readings of one window that disagree about its edges
+      // disagree about the marks sitting ON them, and `verticalsBefore`
+      // and the ruler gate would then count different populations.
+      if (d >= BRAKING.windowW[0] - SAME_STATION_W && d <= BRAKING.windowW[1] + SAME_STATION_W) {
         n++;
         break;
       }
@@ -633,12 +642,21 @@ export function cornerMarkersSatisfied(
     const ok = placements.some((p) => {
       if (p.asset.id !== want) return false;
       const d = beforeEntryW(p.station, c.entryW, lapW);
+      // THE WINDOW IS OPENED BY THE MAGNITUDE OF WHAT IT COMPARES, and
+      // the two halves of this test are not the same magnitude. `d` is
+      // the difference of two lap arcs, each up to ~360W where f32 is
+      // quantised at 3e-5, and it is a difference AFTER a wrap — so the
+      // 1e-6 that was here is finer than the numbers being subtracted,
+      // and a marker placed on the window edge reads as outside it.
+      // `p.h` is a height of one or two W, three hundred times smaller
+      // and quantised three hundred times finer, so it gets the smaller
+      // of the two. See `tolerance.ts`.
       return (
-        d >= MARKER.windowW[0] - 1e-6 &&
-        d <= MARKER.windowW[1] + 1e-6 &&
+        d >= MARKER.windowW[0] - SAME_STATION_W &&
+        d <= MARKER.windowW[1] + SAME_STATION_W &&
         Math.sign(p.t) === c.outside &&
-        p.h >= MARKER.heightW[0] - 1e-6 &&
-        p.h <= MARKER.heightW[1] + 1e-6
+        p.h >= MARKER.heightW[0] - SAME_PLACE_W &&
+        p.h <= MARKER.heightW[1] + SAME_PLACE_W
       );
     });
     if (!ok) missing.push(ci);
@@ -679,8 +697,19 @@ export function brakingRulersSatisfied(
   for (let ti = 0; ti < tight.length; ti++) {
     const c = tight[ti];
     const want = rulerStations(c, lapW);
+    // "AT THE STATION THIS RULER ASKS FOR" IS A COMPARISON OF TWO LAP
+    // ARCS, and lap arcs are the largest numbers in this demo. `st` comes
+    // out of `rulerStations` through a subtraction and two `%`s, `p.station`
+    // through whatever the placer did to it, and both run to ~360W where
+    // f32 quantises at 3e-5. Asking them to agree to 1e-6 asks them to
+    // agree thirty times finer than either can be written down: in f32
+    // every mark on every ruler reports missing, and L-3 fails on a lap
+    // it built correctly. `SAME_STATION_W` is 1e-3W against a mark
+    // spacing of 4.5W — four thousandths of the gap it has to tell apart.
     const found = want.map((st) =>
-      marks.find((p) => apartW(p.station, st, lapW) < 1e-6 && Math.sign(p.t) === c.outside),
+      marks.find(
+        (p) => apartW(p.station, st, lapW) < SAME_STATION_W && Math.sign(p.t) === c.outside,
+      ),
     );
     const missing = found.filter((m) => m === undefined).length;
     if (missing > 0) {
@@ -689,13 +718,23 @@ export function brakingRulersSatisfied(
     }
     const ts = found.map((m) => m!.t);
     const spread = Math.max(...ts) - Math.min(...ts);
-    if (spread > 1e-6) failures.push(`corner ${ti}: marks not on one line (${spread.toFixed(3)}W)`);
+    // ON ONE LINE MEANS ONE LATERAL, and the three marks are given that
+    // lateral once and copied — so this is zero in f64 and a couple of
+    // f32 spacings at |t| ~ 2W once it is not. `SAME_PLACE_W` is well
+    // under the thousandth of a W this failure even reports at, so a
+    // spread that matters is still a spread that fails.
+    if (spread > SAME_PLACE_W) {
+      failures.push(`corner ${ti}: marks not on one line (${spread.toFixed(3)}W)`);
+    }
 
     // Anything else of the ruler's asset inside this corner's window
-    // belongs to a neighbour.
+    // belongs to a neighbour. The window edges are where L-3's own outer
+    // marks sit — exactly `entry - 6W` and `entry - 15W` — so this test
+    // is ON its boundary by construction and needs the arc tolerance for
+    // the same reason the station match above does.
     const inWindow = marks.filter((p) => {
       const d = beforeEntryW(p.station, c.entryW, lapW);
-      return d >= BRAKING.windowW[0] - 1e-6 && d <= BRAKING.windowW[1] + 1e-6;
+      return d >= BRAKING.windowW[0] - SAME_STATION_W && d <= BRAKING.windowW[1] + SAME_STATION_W;
     }).length;
     overlaps += Math.max(0, inWindow - BRAKING.count);
   }

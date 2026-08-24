@@ -20,6 +20,7 @@
  * about the placement.
  */
 import { describe, expect, it } from "vitest";
+import { bandOfPlacement } from "../demos/racetrack/assets.js";
 import {
   BAND_MIX,
   CORRIDOR,
@@ -293,5 +294,47 @@ describe("the corridor", () => {
     expect(lateralFor("mid", 7, 42)).toEqual(lateralFor("mid", 7, 42));
     expect(zoneFor(7, 42)).toBe(zoneFor(7, 42));
     expect(lateralFor("mid", 7, 42)).not.toEqual(lateralFor("mid", 7, 43));
+  });
+});
+
+/**
+ * THE TWO BAND LADDERS ARE ONE RULE AND MUST STAY ONE ANSWER.
+ *
+ * `bandOf` here and `bandOfPlacement` in `assets.ts` are the same ladder
+ * written twice — one takes a base height directly, the other derives it
+ * from a centre and a size — and nothing checked that they agreed. They
+ * did not have to: when the f32 boundary tolerances landed, one was
+ * updated and the other was left, and the pair would have gone on
+ * returning different bands for the same placement with every existing
+ * test still green. An audit caught it; this is what would have.
+ *
+ * Swept rather than sampled, and deliberately dense across the edges,
+ * because a divergence between two ladders lives exactly at their rungs
+ * and nowhere else.
+ */
+describe("the two spellings of the band ladder", () => {
+  it("agree on every lateral, including on and beside every rung", () => {
+    const edges = [0, CORRIDOR.halfWidthW, 1.5, 2.5, 5, 13];
+    const laterals: number[] = [];
+    for (const e of edges) {
+      for (const d of [-1e-3, -1e-4, -1e-5, 0, 1e-5, 1e-4, 1e-3]) laterals.push(e + d);
+    }
+    for (let a = 0; a <= 15; a += 0.01) laterals.push(a);
+
+    const heights = [-0.1, -1e-4, 0, 1e-4, 0.5, 1.1999, 1.2, 1.2001, 2, 6];
+    let checked = 0;
+    for (const t of laterals) {
+      for (const h of heights) {
+        for (const sign of [1, -1]) {
+          // tallW = 0 with the `base` datum makes `bandOfPlacement` read
+          // the height it is handed, which is what `bandOf` takes.
+          expect(bandOfPlacement(sign * t, h, 0, "base"), `t=${sign * t} h=${h}`).toBe(
+            bandOf(sign * t, h),
+          );
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(20_000);
   });
 });

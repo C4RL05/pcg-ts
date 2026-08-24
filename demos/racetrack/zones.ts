@@ -24,6 +24,7 @@
  * edge and no further, keeping the band it was drawn into.
  */
 import { rand } from "./rand.js";
+import { SAME_PLACE_W } from "./tolerance.js";
 
 /** The bands, in |t| and h. Z1 is the corridor and holds nothing. */
 export const ZONES = {
@@ -81,9 +82,21 @@ export const CORRIDOR = { halfWidthW: 1.0, floorW: 0, ceilingW: 1.2 } as const;
  */
 export const OVERHEAD = { ceilingW: 6 } as const;
 
-/** Can this piece hang over the road as furniture, rather than enclose it? */
+/**
+ * Can this piece hang over the road as furniture, rather than enclose it?
+ *
+ * THE CUT DECIDES A VOCABULARY, NOT A POSITION, so a piece within an f32
+ * spacing of it must not change families between cooks. A `tall` of
+ * exactly 4.8W reaches exactly the ceiling and is furniture; computed in
+ * f32 the same sum lands a few parts in ten million above 6 and the piece
+ * becomes a shell, which takes it out of the `over` pool the mix draws
+ * from and changes what the band is filled with. The tolerance keeps the
+ * f64 answer for a piece sitting on the cut. On the three measured kits
+ * the nearest asset to it is 1.5e-2W away, so nothing real is near enough
+ * to be moved by it.
+ */
 export function fitsOverhead(tallW: number): boolean {
-  return CORRIDOR.ceilingW + tallW <= OVERHEAD.ceilingW;
+  return CORRIDOR.ceilingW + tallW <= OVERHEAD.ceilingW + SAME_PLACE_W;
 }
 
 /** Is this position inside the protected volume? */
@@ -385,12 +398,20 @@ export function lateralFor(
  * seven points this cost before it was caught.
  */
 export function bandOf(t: number, h: number): "over" | "verge" | "near" | "mid" | "far" | "distant" {
+  // THE SAME LADDER AS `bandOfPlacement`, AND THAT IS A LIABILITY WORTH
+  // NAMING. This one takes a base height directly where that one derives
+  // it from a centre and a size, which is the only difference between
+  // them — so the two are one rule written twice, and the boundary
+  // tolerances have to move together or they become one rule with two
+  // answers. `racetrackZones` pins that they agree across a sweep; read
+  // `bandOfPlacement` for why each edge is nudged the way it is.
   const a = Math.abs(t);
-  if (a < CORRIDOR.halfWidthW) return "over";
-  if (a < 1.5 && (h > CORRIDOR.ceilingW || h < 0)) return "over";
-  if (a < 1.5) return "verge";
-  if (a < 2.5) return "near";
-  if (a < 5) return "mid";
-  if (a < 13) return "far";
+  const inside = (limit: number): boolean => a < limit - SAME_PLACE_W;
+  if (inside(CORRIDOR.halfWidthW)) return "over";
+  if (inside(1.5) && (h > CORRIDOR.ceilingW + SAME_PLACE_W || h < -SAME_PLACE_W)) return "over";
+  if (inside(1.5)) return "verge";
+  if (inside(2.5)) return "near";
+  if (inside(5)) return "mid";
+  if (inside(13)) return "far";
   return "distant";
 }

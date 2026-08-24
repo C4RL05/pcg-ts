@@ -81,6 +81,15 @@ const dot3 = (a: readonly number[], b: readonly number[]): number =>
   a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
 /**
+ * How little of a segment may lie along a slab axis before the slab is
+ * treated as parallel to it — as a FRACTION of the segment's own length,
+ * because that is the only thing "little" can be measured against here.
+ * Sized for f32, whose relative spacing is 1.2e-7: see the argument in
+ * `segmentHitsBox`.
+ */
+const PARALLEL_FRACTION = 1e-6;
+
+/**
  * Does the segment `from`-`to` pass through the box?
  *
  * The slab method, in the BOX'S OWN FRAME. A placement is axis-aligned in
@@ -100,10 +109,36 @@ export function segmentHitsBox(
   const lo = [dot3(o, axes.across), dot3(o, axes.along), dot3(o, axes.up)];
   const ld = [dot3(d, axes.across), dot3(d, axes.along), dot3(d, axes.up)];
 
+  // PARALLEL IS A RATIO, NOT A LENGTH. The guard below asks whether the
+  // segment has any extent along this axis before it divides by that
+  // extent, and "any" only means anything relative to the segment itself:
+  // the same 1e-9 of projection is a dead-parallel ray on a look-ahead
+  // segment tens of units long and a perfectly ordinary crossing on a
+  // segment that short.
+  //
+  // It was an absolute 1e-12, which is below what f32 can even hold at
+  // world scale — one part in 10^12 of a segment of length 30 is a
+  // hundred thousand times finer than the f32 spacing there, so the
+  // branch would never be taken and a grazing ray would divide by
+  // something indistinguishable from zero. `t1` and `t2` come back at
+  // 1e12 and the slab arithmetic that follows is meaningless.
+  //
+  // A relative threshold of `PARALLEL_FRACTION` is about eight f32
+  // spacings, and it changes nothing in f64: for a near-parallel ray the
+  // two branches already AGREE in the limit — outside the slab, the two
+  // enormous roots share a sign and fail `tMin > tMax`, which is the
+  // parallel branch's `return false`; inside it they straddle and leave
+  // `tMin` and `tMax` alone, which is its `continue`. This just computes
+  // that answer instead of arriving at it through 1e12. `<=` rather than
+  // `<` so that a degenerate zero-length segment — a point — still takes
+  // the parallel branch on all three axes and is tested for containment,
+  // which is what the absolute guard did for it.
+  const parallel = PARALLEL_FRACTION * Math.hypot(d[0], d[1], d[2]);
+
   let tMin = 0;
   let tMax = 1;
   for (let a = 0; a < 3; a++) {
-    if (Math.abs(ld[a]) < 1e-12) {
+    if (Math.abs(ld[a]) <= parallel) {
       // Parallel to this slab: a miss here is a miss overall.
       if (lo[a] < -half[a] || lo[a] > half[a]) return false;
       continue;
