@@ -275,7 +275,7 @@ const SETTLE_ATTR = "moves";
 const MAX_ROUNDS = 12;
 
 /** The columns this graph reads off the placement cloud it is handed. */
-const PLACEMENT = {
+export const PLACEMENT = {
   /** Centreline point at the placement's station, world units. */
   framePos: "framePos",
   /** The three axes there. Named apart from `TRACK_FRAME` on purpose — see below. */
@@ -304,6 +304,21 @@ const PLACEMENT = {
   cover: "cover",
   /** Which entry of the pose library this placement draws its boxes from. */
   pose: "placementPose",
+  /**
+   * The asset id a spawner keys its batches by. See {@link poseAssetId}.
+   *
+   * A STRING, AND THE ONLY ONE ON THIS CLOUD, which is affordable here
+   * and nowhere downstream. `spawnInstances` groups by a string point
+   * attribute and there is no field that produces one, so a per-point id
+   * has to be WRITTEN by whatever builds the cloud in TypeScript -- and
+   * this cloud is built once per lap, a few hundred points. The same
+   * column on the BOXES would be written once per copy of the whole pose
+   * library times the whole placement list, which is the cost
+   * {@link writeBoxes} already refuses for a single f32. That asymmetry
+   * is the reason the streamed level spawns one instance per PLACEMENT
+   * rather than one per box.
+   */
+  asset: "assetId",
   /**
    * Arc length from the start line, in W.
    *
@@ -439,6 +454,12 @@ const BOX = {
  * that the ray test answers containment for rather than crossing, and it
  * draws as nothing — so `buildBoxes` floors it, and this has to floor it
  * at the same value or every sheet in the vocabulary lands somewhere else.
+ *
+ * PRIVATE, AND REACHED ONLY THROUGH {@link poseBoxesW}. Everything that
+ * turns a pose into geometry — the point cloud below, the merged mesh in
+ * `assets3d.ts` — asks that function for boxes rather than asking here for
+ * the number, so there is no second place for the floor to be applied at a
+ * different scale or forgotten.
  */
 const MIN_EXTENT_WORLD = 1e-3;
 
@@ -558,8 +579,14 @@ export interface DressGraphInput {
  * same thing at greater length; this restates it because `kitIndex` is
  * private to `dress.ts` and the two derivations have to agree. That they
  * do is what the box comparison in the test actually proves.
+ *
+ * EXPORTED SO DRAWING CAN BE HANDED THE REAL TABLE. `assets3d.ts` merges a
+ * pose into one mesh and needs the same box sets the cloud below is built
+ * from; it once declared a narrower shape of its own and relied on
+ * structural typing to accept this one, which is a copy that agrees until
+ * a column moves.
  */
-interface PoseLibrary {
+export interface PoseLibrary {
   /** Asset id -> the pose ids recorded for it, in the kit's own order. */
   readonly posesOf: Map<number, number[]>;
   /** Pose id -> its boxes. Index IS the id. */
@@ -575,14 +602,14 @@ interface PoseLibrary {
  * shape that asks for no more than the three components are indexed by
  * keeps one `as` at the seam instead of one per use.
  */
-type LooseBoxes = readonly {
+export type LooseBoxes = readonly {
   readonly min: ArrayLike<number>;
   readonly max: ArrayLike<number>;
   readonly role?: string;
   readonly thickness?: number;
 }[];
 
-function poseLibrary(kit: Kit): PoseLibrary {
+export function poseLibrary(kit: Kit): PoseLibrary {
   const posesOf = new Map<number, number[]>();
   const boxes: LooseBoxes[] = [];
   const push = (asset: number, set: LooseBoxes): void => {
@@ -641,42 +668,103 @@ function poseFor(lib: PoseLibrary, p: StationedPlacement, seed: number): number 
 }
 
 /**
+ * The asset id of one placement, keyed by the pose its boxes come from.
+ *
+ * BY POSE AND NOT BY ASSET, because the pose is what decides the shape.
+ * One kit asset can be recorded in several poses with different box
+ * decompositions, so `kit:42` names a thing that does not have one
+ * geometry and an asset map keyed by it would have to pick. The pose id
+ * already answers exactly the question a mesh is the answer to.
+ *
+ * COVER IS ITS OWN VOCABULARY rather than a flag beside the id, which is
+ * `spawn.ts`'s argument for `boxAssetId` and holds unchanged one
+ * granularity up: a tunnel rib and a verge post can be the same measured
+ * boxes and are not the same thing to look at. The two ids may share a
+ * geometry -- they do today -- but they are separate keys, so a map that
+ * wants to draw structure differently from scenery can, without this
+ * having to change.
+ *
+ * The prefix keeps these out of the namespaces `spawn.ts` owns: its box
+ * ids are bare role names and its placement ids are `kit:<id>`.
+ */
+export function poseAssetId(pose: number, cover: boolean): string {
+  return cover ? `cover:pose:${pose}` : `pose:${pose}`;
+}
+
+/** One box of one pose, as everything downstream of the kit wants it. */
+export interface PoseBoxW {
+  /** The box's midpoint in the kit's track frame, in half-widths. */
+  readonly centre: readonly [number, number, number];
+  /** Its span in the same units, floored — see {@link MIN_EXTENT_WORLD}. */
+  readonly extent: readonly [number, number, number];
+}
+
+/**
+ * A pose library rewritten as centres and extents — the ONE derivation.
+ *
+ * THE KIT STORES CORNERS AND NOTHING DRAWS CORNERS. A point cloud wants a
+ * position and a scale, a merged mesh wants an offset and a scale, and both
+ * want the same floor applied at the same moment; written out twice, the
+ * two agree until one of them is edited, and the failure that follows is a
+ * merged pose whose sheets sit at a different thickness from the same pose
+ * drawn box by box — wrong in a way that reads as noise rather than as a
+ * bug. So the conversion happens exactly here and the two callers differ
+ * only in what they build out of the answer.
+ *
+ * INDEXED BY POSE ID, because that is how `PoseLibrary.boxes` is indexed
+ * and the id is what a placement carries. A pose with no boxes keeps its
+ * empty entry rather than being skipped: a caller keyed by id has to be
+ * able to ask about every id the library admits.
+ *
+ * IN HALF-WIDTHS, which is what makes this a library rather than a fitting:
+ * the track's scale arrives downstream on the instance transform, so one
+ * conversion dresses a lap of any width. The floor is the exception and has
+ * to be divided back out, because `buildBoxes` states it on the WORLD
+ * extent — it clamps AFTER multiplying by W, so dividing here lands on the
+ * same number once W is multiplied back in, to within the f32 spacing of it.
+ */
+export function poseBoxesW(lib: PoseLibrary, halfWidth: number): readonly (readonly PoseBoxW[])[] {
+  const minExtentW = MIN_EXTENT_WORLD / halfWidth;
+  return lib.boxes.map((set) =>
+    set.map((b) => ({
+      centre: [
+        (b.min[0] + b.max[0]) / 2,
+        (b.min[1] + b.max[1]) / 2,
+        (b.min[2] + b.max[2]) / 2,
+      ] as const,
+      extent: [
+        Math.max(b.max[0] - b.min[0], minExtentW),
+        Math.max(b.max[1] - b.min[1], minExtentW),
+        Math.max(b.max[2] - b.min[2], minExtentW),
+      ] as const,
+    })),
+  );
+}
+
+/**
  * The pose library as a point cloud — the SOURCE of the copy.
  *
  * Each point is one box of one pose, positioned at that box's centre and
- * scaled to its extents, both IN HALF-WIDTHS. Keeping the library in the
- * kit's own units is what makes it a library rather than a fitting: the
- * track's scale arrives on the target's `scale`, so the same cloud
- * dresses a lap of any width without being rebuilt.
+ * scaled to its extents. Both numbers come from {@link poseBoxesW} rather
+ * than from the kit corners directly, so the cloud the rules measure and
+ * the mesh a placement draws are the same arithmetic and not two readings
+ * of it.
  */
 function poseCloud(lib: PoseLibrary, halfWidth: number): Geometry {
+  const boxesW = poseBoxesW(lib, halfWidth);
   let n = 0;
-  for (const set of lib.boxes) n += set.length;
+  for (const set of boxesW) n += set.length;
   const geo = createPointCloud(n);
   const pts = geo.attrs.point;
   const P = pts.require("P");
   const scale = pts.require("scale");
   const pose = pts.add(BOX.pose, "f32", 1);
 
-  // The floor is stated on the WORLD extent (`buildBoxes` clamps after
-  // multiplying by W), so it has to be divided back out here — the target
-  // multiplies by W again downstream and lands on the same number to
-  // within the f32 spacing of it.
-  const minExtentW = MIN_EXTENT_WORLD / halfWidth;
-
   let i = 0;
-  for (let id = 0; id < lib.boxes.length; id++) {
-    for (const b of lib.boxes[id]) {
-      P.setTuple(i, [
-        (b.min[0] + b.max[0]) / 2,
-        (b.min[1] + b.max[1]) / 2,
-        (b.min[2] + b.max[2]) / 2,
-      ]);
-      scale.setTuple(i, [
-        Math.max(b.max[0] - b.min[0], minExtentW),
-        Math.max(b.max[1] - b.min[1], minExtentW),
-        Math.max(b.max[2] - b.min[2], minExtentW),
-      ]);
+  for (let id = 0; id < boxesW.length; id++) {
+    for (const b of boxesW[id]) {
+      P.setTuple(i, b.centre);
+      scale.setTuple(i, b.extent);
       pose.set(i, id);
       i++;
     }
@@ -719,6 +807,7 @@ function placementCloudInTrackFrame(
   const station = pts.add(PLACEMENT.station, "f32", 1);
   const id = pts.add(PLACEMENT.id, "f32", 1);
   const locked = pts.add(PLACEMENT.locked, "f32", 1);
+  const asset = pts.add(PLACEMENT.asset, "string", 1);
 
   // The lap's own lookup, not a second one. `frameLookup` is exactly what
   // `buildBoxes` calls, so the frame a box is built in here is the frame
@@ -744,8 +833,14 @@ function placementCloudInTrackFrame(
     sizeAcross.set(i, p.asset.size.across);
     sizeAlong.set(i, p.asset.size.along);
     sizeTall.set(i, p.asset.size.tall);
-    cover.set(i, p.cover === true ? 1 : 0);
-    pose.set(i, poseFor(lib, p, seed));
+    const isCover = p.cover === true;
+    cover.set(i, isCover ? 1 : 0);
+    const posed = poseFor(lib, p, seed);
+    pose.set(i, posed);
+    // Written from the SAME draw the pose column takes, not from a second
+    // call: `poseFor` is seeded, and asking it twice for one placement is
+    // two chances to disagree about which mesh this is.
+    asset.setString(i, poseAssetId(posed, isCover));
     station.set(i, p.station);
     // EXACT IN f32 AND ONLY WHILE THE LIST IS SHORT, which is a real
     // ceiling rather than a formality: every integer below 2^24 is exact,

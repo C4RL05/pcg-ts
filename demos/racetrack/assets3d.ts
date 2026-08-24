@@ -27,7 +27,14 @@
  * make the comparison worthless.
  */
 import type { AssetMap } from "pcg-ts/three";
-import { BoxGeometry, MeshBasicMaterial } from "three";
+import {
+  BoxGeometry,
+  BufferAttribute,
+  BufferGeometry,
+  type Material,
+  MeshBasicMaterial,
+} from "three";
+import { type PoseBoxW, type PoseLibrary, poseAssetId, poseBoxesW } from "./dressGraph.js";
 import { boxAssetIds } from "./spawn.js";
 
 /**
@@ -132,4 +139,226 @@ export function makeMapMaterials(
     out[id] = new MeshBasicMaterial({ color, wireframe: true });
   }
   return out;
+}
+
+// ------------------------------------------------------------------ //
+// One instance per PLACEMENT: a pose drawn as a single merged mesh.
+// ------------------------------------------------------------------ //
+
+/**
+ * NOTHING ABOUT A POSE IS DECIDED HERE, and that is the whole arrangement.
+ *
+ * `dressGraph.ts` owns the pose library, the corners-to-centre-and-extent
+ * conversion ({@link poseBoxesW}) and the id a placement is keyed by
+ * ({@link poseAssetId}), because it is the file the RULES read, and the
+ * page's only claim is that the mesh drawn here is the boxes those rules
+ * measured. Each of those three was written out a second time in this file
+ * once. None of them was wrong; all three were a copy that agrees until
+ * one side is edited, and the failure mode is silent — a lap that is nearly
+ * the lap beside it. Importing them makes the two paths the same arithmetic
+ * rather than two readings of it, and leaves this file with the one job it
+ * should have: turning numbers into vertices.
+ *
+ * It costs an import from a module that never touches three, which is the
+ * direction that was always safe: `dressGraph.ts` is cooked headlessly in
+ * the tests and must not gain a renderer dependency, and this direction
+ * cannot give it one.
+ */
+
+/** {@link UNIT_BOX}'s six faces, read once as plain arrays. */
+interface UnitFaces {
+  /** 3 floats per vertex, the cube's corners at ±0.5. */
+  readonly position: Float32Array;
+  readonly normal: Float32Array;
+  /** Triangle indices into those vertices. */
+  readonly index: Uint16Array;
+  readonly vertexCount: number;
+}
+
+/**
+ * The cube's faces, pulled out of the shared geometry rather than typed in.
+ *
+ * DERIVED, SO THE TWO PATHS DRAW THE SAME CUBE. A merged pose is stamped
+ * from this and a single box is drawn from {@link UNIT_BOX} itself, and
+ * the page's whole claim is that the coarse path draws what the fine one
+ * drew. A hand-written vertex table would be a second cube that agrees
+ * until three changes its own — and it is not only the corners that would
+ * have to agree: `wireframe` derives its edges from the INDEX, so a
+ * different triangulation of the same corners is a visibly different box.
+ *
+ * Read through `getX`/`getY`/`getZ` because that is the accessor both an
+ * interleaved and a plain attribute answer, and the sequential fallback
+ * covers a cube that arrives without an index. Neither costs anything: it
+ * runs once, over 24 vertices, at module load.
+ */
+function readUnitFaces(): UnitFaces {
+  const position = UNIT_BOX.getAttribute("position");
+  const normal = UNIT_BOX.getAttribute("normal");
+  const index = UNIT_BOX.getIndex();
+  const vertexCount = position.count;
+  const pos = new Float32Array(vertexCount * 3);
+  const nrm = new Float32Array(vertexCount * 3);
+  for (let i = 0; i < vertexCount; i++) {
+    pos[i * 3] = position.getX(i);
+    pos[i * 3 + 1] = position.getY(i);
+    pos[i * 3 + 2] = position.getZ(i);
+    nrm[i * 3] = normal.getX(i);
+    nrm[i * 3 + 1] = normal.getY(i);
+    nrm[i * 3 + 2] = normal.getZ(i);
+  }
+  const idx = new Uint16Array(index === null ? vertexCount : index.count);
+  for (let i = 0; i < idx.length; i++) idx[i] = index === null ? i : index.getX(i);
+  return { position: pos, normal: nrm, index: idx, vertexCount };
+}
+
+const UNIT_FACES = readUnitFaces();
+
+/**
+ * One pose's boxes as a single geometry, in the library's own units.
+ *
+ * TAKES CENTRES AND EXTENTS, NOT CORNERS, so the arithmetic that produced
+ * them is `poseBoxesW`'s and the fine path's per-box points are stamped
+ * from the same values. Half-widths throughout: the track's scale arrives
+ * on the INSTANCE transform, so one merged pose dresses a lap of any width.
+ *
+ * Normals are copied unchanged rather than transformed. A box's normals
+ * only ever point down an axis and every extent is floored strictly above
+ * zero, so a positive per-axis scale leaves them axis-aligned and unit —
+ * the inverse-transpose a general mesh would need has nothing to do here.
+ * The wireframe material never reads them; carrying them means giving a
+ * pose a shaded material is an edit to the material and nothing else,
+ * which is the same promise this file's header makes about the cube.
+ */
+function mergePose(boxes: readonly PoseBoxW[]): BufferGeometry {
+  const perBox = UNIT_FACES.vertexCount;
+  const perBoxIndices = UNIT_FACES.index.length;
+  const position = new Float32Array(boxes.length * perBox * 3);
+  const normal = new Float32Array(boxes.length * perBox * 3);
+  // A pose of more than ~2730 boxes overflows a 16-bit index. The shipped
+  // vocabulary is nowhere near that, and picking the width from the count
+  // costs one comparison against a whole class of silently wrapped
+  // geometry on a kit nobody has measured yet.
+  const vertices = boxes.length * perBox;
+  const index =
+    vertices > 65535
+      ? new Uint32Array(boxes.length * perBoxIndices)
+      : new Uint16Array(boxes.length * perBoxIndices);
+
+  let base = 0;
+  let at = 0;
+  for (const b of boxes) {
+    const [cx, cy, cz] = b.centre;
+    const [sx, sy, sz] = b.extent;
+    for (let i = 0; i < perBox; i++) {
+      const from = i * 3;
+      const to = (base + i) * 3;
+      position[to] = UNIT_FACES.position[from] * sx + cx;
+      position[to + 1] = UNIT_FACES.position[from + 1] * sy + cy;
+      position[to + 2] = UNIT_FACES.position[from + 2] * sz + cz;
+      normal[to] = UNIT_FACES.normal[from];
+      normal[to + 1] = UNIT_FACES.normal[from + 1];
+      normal[to + 2] = UNIT_FACES.normal[from + 2];
+    }
+    for (let i = 0; i < perBoxIndices; i++) index[at + i] = base + UNIT_FACES.index[i];
+    base += perBox;
+    at += perBoxIndices;
+  }
+
+  const geo = new BufferGeometry();
+  geo.setAttribute("position", new BufferAttribute(position, 3));
+  geo.setAttribute("normal", new BufferAttribute(normal, 3));
+  geo.setIndex(new BufferAttribute(index, 1));
+  // Frustum culling reads it, and a merged pose is not a unit cube any
+  // more: its radius is the pose's own reach, which is the number the
+  // renderer has no other way to know.
+  geo.computeBoundingSphere();
+  return geo;
+}
+
+/**
+ * An asset map keyed by POSE, for the one-instance-per-placement path.
+ *
+ * THE COARSE PATH, AND IT IS A DIFFERENT PICTURE OF THE SAME NUMBERS. The
+ * box map draws one instance per box and can colour a rib differently from
+ * a post; this draws one per PLACEMENT, so a lap costs instances in the
+ * hundreds rather than the thousands and the smallest thing addressable is
+ * the pose. Both are wanted — the fine one to ask what a box is, the
+ * coarse one to ask what the lap looks like — and neither replaces the
+ * other, which is why this is an addition and not a rewrite.
+ *
+ * ONE GEOMETRY PER POSE, TWO ENTRIES. `cover:pose:17` and `pose:17` draw
+ * the same merged boxes and share the geometry BY REFERENCE, exactly as
+ * the twelve box ids share the cube: the ids exist so the two can be told
+ * apart and given different art later, not because they are different art
+ * today. The materials follow {@link makeAssetMap} — one per id,
+ * templates that `toInstancedMeshes` clones per mesh and that are dead the
+ * moment the meshes exist.
+ *
+ * EVERY POSE IN THE LIBRARY GETS AN ENTRY, including one whose box set is
+ * empty. An empty pose draws nothing, which is what the fine path does
+ * with it too; leaving the id out instead would make the same lap throw
+ * `unknown assetId` out of `toInstancedMeshes` the first time a placement
+ * selected it.
+ */
+export function makePoseAssetMap(
+  lib: PoseLibrary,
+  halfWidth: number,
+  population: Population,
+): AssetMap {
+  const { color, opacity } = PALETTE[population];
+  const posed = poseBoxesW(lib, halfWidth);
+  const map: Record<string, { geometry: BufferGeometry; material: MeshBasicMaterial }> = {};
+  for (let pose = 0; pose < posed.length; pose++) {
+    const geometry = mergePose(posed[pose]);
+    for (const cover of [false, true]) {
+      map[poseAssetId(pose, cover)] = {
+        geometry,
+        material: new MeshBasicMaterial({
+          color,
+          wireframe: true,
+          transparent: true,
+          opacity,
+        }),
+      };
+    }
+  }
+  return map;
+}
+
+/**
+ * Release a pose map's geometry AND its materials.
+ *
+ * THE OPPOSITE OF {@link disposeAssetMap}, and the difference is
+ * ownership rather than taste. That map's entries all point at the one
+ * module-level cube, which outlives every cook and belongs to nobody; the
+ * geometries here were merged for this map alone, so nothing else can free
+ * them and leaving them is a leak that grows by a whole vocabulary per
+ * recook.
+ *
+ * WHICH MEANS THE CALL SITE IS DIFFERENT TOO. `disposeAssetMap` is called
+ * the moment the meshes are built, because by then only the dead template
+ * materials are left. This map's geometry is the geometry those meshes
+ * DRAW — `toInstancedMeshes` shares it by reference and never clones it
+ * (`src/three/instanced.ts` states the rule: dispose geometry with the
+ * map, never per mesh) — so this waits until the meshes are gone.
+ *
+ * A SET BECAUSE THE ENTRIES OVERLAP. Two ids answer with the same merged
+ * geometry, so a loop over the keys would dispose each one twice: the
+ * second call re-fires three's `dispose` event on a buffer that has
+ * already been released, which is the same double-free the box map's
+ * comment records the hand-written renderer carrying a named special case
+ * to avoid. Collecting distinct objects first says it once, and says it
+ * for the materials on the same pass so a later decision to share those
+ * too cannot reintroduce the bug.
+ */
+export function disposePoseAssetMap(map: AssetMap): void {
+  const geometries = new Set<BufferGeometry>();
+  const materials = new Set<Material>();
+  for (const id of Object.keys(map)) {
+    geometries.add(map[id].geometry);
+    const m = map[id].material;
+    for (const one of Array.isArray(m) ? m : [m]) materials.add(one);
+  }
+  for (const geometry of geometries) geometry.dispose();
+  for (const material of materials) material.dispose();
 }

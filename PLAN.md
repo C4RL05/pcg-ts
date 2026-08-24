@@ -35,6 +35,43 @@ existed, so the discipline is to let the consumer specify the mechanism
 rather than guess at it. Each entry carries the analysis, because
 re-deriving it is the expensive part.
 
+### What a windowed per-sector repair would cost, measured 2026-08-24
+
+The racetrack now streams its dressing on `cellMode: "path"` sectors, and
+the cut was placed so that NO sector reads a neighbour: the whole-lap
+repair runs once on the unbounded lap level and a sector only turns
+settled placements into instances. That makes the union of the sectors
+equal to the whole lap bit for bit, and it means the demo needs no halo
+at all.
+
+Moving the LOCAL repairs (Z-1's corridor, L-1's sightline cull) down onto
+the sectors is a real future option, and it needs a halo. This is the
+measurement that sizes one, taken before the design was fixed so nobody
+has to re-derive it. Sixteen seeds, all 900 frames each, all 404,550
+pairs, exact - no downsampling. Distances in half-widths.
+
+- **No seed produces a genuine fold.** On every seed the minimum world
+  distance beyond an arc threshold occurs AT that threshold, so world
+  distance is monotone in arc separation there. Two arc-distant sections
+  running physically adjacent - the case an arc window cannot cover, and
+  the one `enclosure.ts` withdrew a published figure over - does not
+  happen on this spline. That is a fact about the shipped generator, not
+  a guarantee about any centreline.
+- **The binding constraint is hairpin arc compression**, not folding: 20W
+  of arc buys only 10.6W of world displacement round the tightest corner
+  (seed 10).
+- **For a 12W query radius the critical arc window is 24W** (worst case,
+  seed 10; typical 13.8-17.9W). A +/-20W window FAILS - it is short by
+  about 4W on the worst seed.
+- **+/-60W is safe with 2.4x to spare.** The closest arc-distant approach
+  beyond 60W is 28.7W (seed 8). No pair anywhere is within 20W of world
+  distance beyond an arc separation of 38W.
+- **L-6's ~6.2W enclosure ray never needs more than +/-7.4W.**
+
+So: a windowed repair wants `aheadArc`/`behindArc` halos of 60W around a
+20W sector - a window 7x the owned length. That ratio is the actual cost
+of moving the repairs down, and it is why they stayed up.
+
 ### Measured but not taken: five hot-path costs in the new nodes, 2026-08-24
 
 From a cleanup pass over the whole branch. Each was MEASURED on this box,

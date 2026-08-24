@@ -39,6 +39,7 @@ import { deriveGalaxy, makeHaloLevel, makeStarLevel } from "../demos/galaxy/gala
 import { makeSpireLevel } from "../demos/gpu-world/levels.js";
 import { makeLandmarkLevel, makeRockLevel } from "../demos/infinite-world/levels.js";
 import { buildRoadGraph } from "../demos/racetrack/graph.js";
+import { buildDressingGraph } from "../demos/racetrack/levels.js";
 import { makeTrackSpline } from "../demos/racetrack/spline.js";
 // Aliased, not renamed at the source: `road` is a deliberate copy
 // of `road` and its module names are identical on purpose. See the header
@@ -64,6 +65,13 @@ function demoGraphs(): { name: string; graph: Graph }[] {
     {
       name: "racetrack/dressed",
       graph: buildRoadGraph({ spline: makeTrackSpline({ seed: 1 }), seed: 1 }),
+    },
+    {
+      // The streamed level's own graph, which the panel shows beside the
+      // lap's. It needs no cooked lap -- only a half-width and a seed --
+      // so it costs this suite nothing to cover.
+      name: "racetrack/dressing",
+      graph: buildDressingGraph({ seed: 1, halfWidth: 9 }).graph,
     },
     {
       name: "road/verges",
