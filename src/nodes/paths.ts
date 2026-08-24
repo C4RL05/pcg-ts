@@ -133,6 +133,31 @@ export interface PointsToPathParams {
   closed: boolean;
   groupAttr: string;
   orderAttr: string;
+  shortGroups: string;
+}
+
+/**
+ * Returns whether a group with too few points for the requested path is
+ * SKIPPED rather than refused.
+ *
+ * Checked at runtime for the reason `copyToPoints`' topology guard gives:
+ * a param's `enum` is metadata for an editor, not a runtime guard, and a
+ * serialized graph can carry any string into `execute`. An unrecognized
+ * value must not fall through to either behaviour — silently meaning
+ * "error" would leave the author with a cook that failed on a group they
+ * thought they had excused, and silently meaning "skip" would leave them
+ * with paths quietly missing from the output, which is the failure this
+ * param exists to make explicit rather than to invent a new way of.
+ */
+function requireShortGroupsRule(value: string): boolean {
+  if (value !== "error" && value !== "skip") {
+    throw new Error(
+      `pointsToPath: shortGroups must be "error" or "skip", got ${JSON.stringify(value)}; ` +
+        '"error" refuses the cook and names the group that had too few points for the requested path, ' +
+        '"skip" emits no primitive for that group and leaves its points in the cloud, belonging to no path',
+    );
+  }
+  return value === "skip";
 }
 
 /** Build polyline primitives over an existing point cloud. */
@@ -140,7 +165,7 @@ export const pointsToPath = standardNode<PointsToPathParams>({
   type: "pointsToPath",
   category: "point op",
   description:
-    "Turns a point cloud into one or more paths by building `polyline` primitives over the SAME points, so every point attribute survives — this is the only way to produce a path from a serialized graph. Ordering is fixed and deterministic: within a path the points are visited in ascending point index (the order they arrive on this node's input) unless orderAttr names a sort key, and ties in that key always break to the lower point index. With groupAttr set, the cloud splits into one path per distinct group key — a whole-number id or a string name — emitted in ascending key order. `closed` appends a trailing vertex referencing the path's first point — closure is structural, exactly what createPolyline produces and what splineSample detects; no `closed` attribute is written. Any existing topology on the input is replaced, and its vertex and primitive attributes are dropped with it. Downstream: any node that can REMOVE points drops topology — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a path that passes through one stops being a path; put this node after them, not before. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
+    "Turns a point cloud into one or more paths by building `polyline` primitives over the SAME points, so every point attribute survives — this is the only way to produce a path from a serialized graph. Ordering is fixed and deterministic: within a path the points are visited in ascending point index (the order they arrive on this node's input) unless orderAttr names a sort key, and ties in that key always break to the lower point index. With groupAttr set, the cloud splits into one path per distinct group key — a whole-number id or a string name — emitted in ascending key order. A group with too few points for the path being asked for — fewer than 2, or fewer than 3 when `closed` — is an error by default; `shortGroups \"skip\"` emits no primitive for it instead and leaves its points in the cloud belonging to no path, which is what makes a DATA-DEPENDENT grouping (a key computed from a scatter, a cell, a copyToPoints target index) cookable at all, since nobody can know at graph-build time how many points land in each group. It governs the WHOLE INPUT by the same rule: a cloud of fewer than 2 points is an error by default and passes straight through under \"skip\", because one point in one cloud is the same nothing-to-draw as one point in one group and a caller that has excused the second has already excused the first. `closed` appends a trailing vertex referencing the path's first point — closure is structural, exactly what createPolyline produces and what splineSample detects; no `closed` attribute is written. Any existing topology on the input is replaced, and its vertex and primitive attributes are dropped with it. Downstream: any node that can REMOVE points drops topology — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a path that passes through one stops being a path; put this node after them, not before. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -148,7 +173,7 @@ export const pointsToPath = standardNode<PointsToPathParams>({
       type: "bool",
       default: false,
       description:
-        "Close each path by appending a trailing vertex back to its first point (structural closure — no attribute is written). A closed path needs at least 3 points; 2 would fold the path back onto itself and is an error.",
+        "Close each path by appending a trailing vertex back to its first point (structural closure — no attribute is written). A closed path needs at least 3 points; 2 would fold the path back onto itself and is an error by default (`shortGroups \"skip\"` drops such a path instead). This param is therefore what decides which groups count as SHORT: the same 2-point group is a perfectly good open path and an impossible closed one.",
     },
     groupAttr: {
       type: "string",
@@ -162,18 +187,41 @@ export const pointsToPath = standardNode<PointsToPathParams>({
       description:
         "Name of a scalar numeric point attribute to order each path by, ascending; ties break to the lower point index, so the result never depends on sort implementation. Values must be finite. Leave empty to use point index order.",
     },
+    shortGroups: {
+      type: "enum",
+      default: "error",
+      enum: ["error", "skip"],
+      description:
+        "What happens to a group that has too few points for the path being asked for — fewer than 2, or fewer than 3 when `closed` is true, so the SAME 2-point group is short only when it is being closed. 'error' (the default) refuses the cook and names the group, which is the right answer when the groups are AUTHORED: an id you wrote by hand belongs to a population you can predict, so a group of one is a mistake in the graph and a cook that quietly emitted one path fewer would hide it. 'skip' emits NO primitive for that group and leaves its points exactly where they are — same indices, every attribute intact, simply belonging to no path — which is the only workable answer when the groups are DATA: a key computed from a scatter, a grid cell, or a copyToPoints target index has a population nobody can know at graph-build time, so a sparse cell that drops a single point into one lane is not an authoring error and must not fail the whole cook. Nothing else moves under 'skip': the surviving groups are the same paths, over the same point indices, emitted in the same ascending-key order they would have had if the short group had never been in the input, so turning this on can only remove a path that could not be built — it can never change one that could. With `groupAttr` EMPTY the whole cloud is a single implicit group and this param still applies to it, because a group is a group however it was formed and a second rule for the unnamed one would be a trap: the only way to be short there is exactly 2 points with `closed` true, and under 'skip' such a cloud comes back with its points and no polyline instead of failing. What that case does NOT cover is a cloud of fewer than 2 points, which is refused under both settings by a different check — a node handed one point has nothing to do at all, and no grouping question was ever asked. Downstream, points belonging to no path are invisible to every path node (pathResample, splineSample, writeTangents, pathScan and pathSegments all walk primitives, not points), so a skipped group's points still filter, transfer and merge like any other points but never become a path on their own; if that is not what you want, fix the population upstream — scatter more points, widen the cell, or merge the sparse groups — rather than leaving them stranded.",
+    },
   },
   execute({ inputs, params }) {
+    // Params before geometry: a typo in this one reported later as a short
+    // group would send the author to debug their data instead of their
+    // spelling.
+    const skipShort = requireShortGroupsRule(params.shortGroups);
     // cloneGeometry is the only helper that preserves topology, and it is
     // also what keeps this node honest about purity: the input geometry
     // is a cached upstream object and must never be mutated.
     const geo = cloneGeometry(requireGeometry(inputs, "in", "pointsToPath"));
     const np = geo.pointCount;
-    if (np < 2) {
+    // THE WHOLE-INPUT FLOOR OBEYS `shortGroups` TOO, and it took an
+    // argument to see why. A cloud of one point is the same fact as a
+    // group of one point — there is nothing to draw a path through — and
+    // the reason `skip` exists is that a data-dependent grouping cannot be
+    // sized at graph-build time. A cell that drops ONE placement is
+    // strictly sparser than a cell that drops one into a lane, so refusing
+    // the first while excusing the second would fail exactly the case the
+    // param was added for, and fail it further from the author. Under
+    // `skip` an input too small to draw anything through emits the cloud
+    // unchanged with no primitives, which is what a caller asking to skip
+    // short groups has already said it wants.
+    if (np < 2 && !skipShort) {
       throw new Error(
-        `pointsToPath: input has ${np} point${np === 1 ? "" : "s"}; a path needs at least 2 (scatter more points, or loosen the filter feeding this node)`,
+        `pointsToPath: input has ${np} point${np === 1 ? "" : "s"}; a path needs at least 2 (scatter more points, loosen the filter feeding this node, or set shortGroups "skip" to pass the cloud through with no path over it)`,
       );
     }
+    if (np < 2) return { out: [makeGeometryItem(geo)] };
 
     // Group ids, then the paths in ascending id order. Sorting the ids
     // rather than taking them in first-seen order keeps the output
@@ -249,18 +297,26 @@ export const pointsToPath = standardNode<PointsToPathParams>({
     for (const id of ids) {
       const indices = grouped.get(id) as number[];
       const named = typeof id === "string" ? JSON.stringify(id) : String(id);
-      if (indices.length < 2) {
-        // Only a group can be this short: with no groupAttr the single
-        // bucket holds every point, and `np < 2` above already rejected
-        // that case — so there is no "the input" wording to reach here.
+      // The threshold is the one the path being asked for actually needs,
+      // which is why `closed` is read here and not only below: a 2-point
+      // group is a path when open and impossible when closed. Under
+      // `shortGroups "skip"` a group under it emits nothing and its points
+      // are simply left in the cloud — `continue` before anything is pushed,
+      // so the groups that DO build see the same vertex offsets they would
+      // have seen had the short one never arrived.
+      if (indices.length < (closed ? 3 : 2)) {
+        if (skipShort) continue;
+        if (indices.length < 2) {
+          // Only a group can be this short: with no groupAttr the single
+          // bucket holds every point, and `np < 2` above already rejected
+          // that case — so there is no "the input" wording to reach here.
+          throw new Error(
+            `pointsToPath: group ${named} (attribute "${groupName}") has ${indices.length} point; every path needs at least 2 — drop that group upstream, give it another point, or set shortGroups "skip" to leave its points in the cloud with no path over them`,
+          );
+        }
+        const where = groupName === "" ? "the input" : `group ${named} (attribute "${groupName}")`;
         throw new Error(
-          `pointsToPath: group ${named} (attribute "${groupName}") has ${indices.length} point; every path needs at least 2 — drop that group upstream or give it another point`,
-        );
-      }
-      const where = groupName === "" ? "the input" : `group ${named} (attribute "${groupName}")`;
-      if (closed && indices.length < 3) {
-        throw new Error(
-          `pointsToPath: ${where} has 2 points and closed is true, which would fold the path back over itself; set closed false, or give the path at least 3 points`,
+          `pointsToPath: ${where} has 2 points and closed is true, which would fold the path back over itself; set closed false, give the path at least 3 points, or set shortGroups "skip" to leave those points in the cloud with no path over them`,
         );
       }
       primVertexStart.push(pointIndices.length);

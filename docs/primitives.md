@@ -520,7 +520,7 @@ Run it: `pcg run shape/disc`
 
 Builds a CLOSED PATH — polyline topology, not a loose point cloud — around a circle in the XZ plane, then sizes, rotates and moves it. This is the curve source a saved graph reaches for: feed it to `place/along-curve`, `filter/by-distance-to-curve`, `write/orient-along-path` or the `splineSample` / `pathResample` nodes, which all report finding no polylines when handed a point cloud. COUNT: `count` is the number of corner points and exactly the number of points emitted; closure is structural (a trailing vertex back to the first point), so there is no duplicated seam point to trip over. Built on `shape/ring`, so the points also carry `scale` at 1. Fully deterministic. TOPOLOGY IS FRAGILE: anything that can REMOVE points destroys it — the `filter/*` family, `partitionByAttribute` (categorised `attribute`, not `filter`) and `mergePoints` — so whatever must see a path has to come before them. The category is not the rule: `projectToPlane` is a `filter` that PRESERVES topology because it clones rather than gathers, and `filterByAttribute` drops it even when its predicate keeps every point.
 
-**Content hash:** `2603767744729512`
+**Content hash:** `967bd5d54b41820c`
 
 **Tags:** `shape`, `curve`, `path`, `radial`
 
@@ -545,7 +545,7 @@ Run it: `pcg run shape/path-loop`
 
 Builds an open PATH — polyline topology — that runs along X and wanders off the straight line by a noise field, then evens the spacing out again by arc length. The resampling is the content: displacing a polyline sideways stretches the segments where the wander is steep, so points placed along it afterwards would bunch on the straight parts, and the fix cannot be seen in a picture until something is spawned on it. Use it for a road, a river, a fence line or a trail. COUNT: `count` is both the number of corners the wander is built from and the number of points emitted, evenly spaced along the finished curve. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances wander IDENTICALLY unless their `variant` differs. Writes `P`, the unit `tangent` and `curveU` (0..1 along the path) on points the resample creates, so the recipe writes no working column at all and the per-point `scale` is 1. TOPOLOGY IS FRAGILE: anything that can REMOVE points destroys it — the `filter/*` family, `partitionByAttribute` and `mergePoints` — so a path has to reach its consumer before them. Being a `filter` is not the rule: `projectToPlane` PRESERVES topology (it clones), while `filterByAttribute` drops it even when its predicate keeps every point.
 
-**Content hash:** `bad7066a523e99ff`
+**Content hash:** `1e253e2bc2c982ce`
 
 **Tags:** `shape`, `curve`, `path`, `noise`
 

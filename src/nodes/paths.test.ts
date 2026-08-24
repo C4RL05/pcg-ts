@@ -45,6 +45,34 @@ function row(n: number): Geometry {
   return geo;
 }
 
+/** A point cloud with one point per given x, at (x, 0, 0). */
+function rowAt(xs: readonly number[]): Geometry {
+  const geo = createPointCloud(xs.length);
+  const P = geo.attrs.point.require("P");
+  xs.forEach((x, i) => P.setTuple(i, [x, 0, 0]));
+  return geo;
+}
+
+/**
+ * The x of every point each polyline walks, path by path. What "the same
+ * paths" means when the clouds under them differ: dropping a point
+ * renumbers every index behind it, so two cooks that build the same paths
+ * over different clouds agree on positions rather than on indices.
+ */
+function pathXs(geo: Geometry): number[][] {
+  const P = geo.attrs.point.require("P");
+  const out: number[][] = [];
+  for (let p = 0; p < geo.primitiveCount; p++) {
+    const start = geo.primVertexStart[p];
+    const xs: number[] = [];
+    for (let v = start; v < start + geo.primVertexCount[p]; v++) {
+      xs.push(P.get(geo.vertexToPoint[v], 0));
+    }
+    out.push(xs);
+  }
+  return out;
+}
+
 /** A cloud with a scalar numeric point attribute set per point. */
 function withAttr(geo: Geometry, name: string, values: readonly number[]): Geometry {
   const attr = geo.attrs.point.add(name, "f32", 1, 0);
@@ -265,6 +293,211 @@ describe("pointsToPath", () => {
         ),
       );
     expect(await run()).toEqual(await run());
+  });
+
+  it("skips a group too short for the path, keeping its points and attributes", async () => {
+    const src = withAttr(withAttr(row(5), "grp", [0, 0, 1, 2, 2]), "tag", [5, 6, 7, 8, 9]);
+    // The paired case: the same input is still a hard error by default.
+    await expect(
+      runNode(pointsToPath, { groupAttr: "grp" }, { in: [makeGeometryItem(src)] }),
+    ).rejects.toThrow(/group 1 \(attribute "grp"\) has 1 point/);
+    const geo = firstGeo(
+      (
+        await runNode(
+          pointsToPath,
+          { groupAttr: "grp", shortGroups: "skip" },
+          { in: [makeGeometryItem(src)] },
+        )
+      ).out,
+    );
+    // Group 1 built no primitive; groups 0 and 2 are the paths they were.
+    expect(topologyOf(geo)).toEqual({ v: [0, 1, 3, 4], start: [0, 2], count: [2, 2] });
+    expect(geo.primitiveCount).toBe(2);
+    // Point 2 is still in the cloud, at its own index, with every column
+    // it arrived with — the whole point domain is the input's, unmoved.
+    expect(geo.pointCount).toBe(5);
+    expect(snapshotGeometry(geo).point).toEqual(snapshotGeometry(src).point);
+    expect(geo.attrs.point.require("tag").get(2)).toBe(7);
+  });
+
+  it("leaves the surviving paths exactly as if the short group had never arrived", async () => {
+    const sparse = withAttr(rowAt([0, 1, 2, 3, 4, 5]), "grp", [0, 0, 1, 2, 2, 2]);
+    const skipped = firstGeo(
+      (
+        await runNode(
+          pointsToPath,
+          { groupAttr: "grp", shortGroups: "skip" },
+          { in: [makeGeometryItem(sparse)] },
+        )
+      ).out,
+    );
+    // The control: the same cloud with the lone point of group 1 never
+    // scattered at all, cooked with no skipping involved.
+    const control = withAttr(rowAt([0, 1, 3, 4, 5]), "grp", [0, 0, 2, 2, 2]);
+    const built = firstGeo(
+      (await runNode(pointsToPath, { groupAttr: "grp" }, { in: [makeGeometryItem(control)] })).out,
+    );
+    expect(pathXs(skipped)).toEqual([
+      [0, 1],
+      [3, 4, 5],
+    ]);
+    expect(pathXs(skipped)).toEqual(pathXs(built));
+    // And WHERE the skipped group sorts changes nothing: keyed last rather
+    // than in the middle, the survivors keep the same vertex ranges — a
+    // start pushed before the skip was decided would show up right here.
+    const trailing = firstGeo(
+      (
+        await runNode(
+          pointsToPath,
+          { groupAttr: "grp", shortGroups: "skip" },
+          { in: [makeGeometryItem(withAttr(rowAt([0, 1, 2, 3, 4, 5]), "grp", [0, 0, 9, 2, 2, 2]))] },
+        )
+      ).out,
+    );
+    expect(topologyOf(trailing)).toEqual(topologyOf(skipped));
+    expect(topologyOf(skipped)).toEqual({ v: [0, 1, 3, 4, 5], start: [0, 2], count: [2, 3] });
+  });
+
+  it("counts a 2-point group as short only when closed is true", async () => {
+    const src = withAttr(row(5), "grp", [0, 0, 1, 1, 1]);
+    const open = firstGeo(
+      (
+        await runNode(
+          pointsToPath,
+          { groupAttr: "grp", shortGroups: "skip" },
+          { in: [makeGeometryItem(src)] },
+        )
+      ).out,
+    );
+    // Open, 2 points is a path: nothing is short and nothing is skipped.
+    expect(topologyOf(open)).toEqual({ v: [0, 1, 2, 3, 4], start: [0, 2], count: [2, 3] });
+    const loop = firstGeo(
+      (
+        await runNode(
+          pointsToPath,
+          { groupAttr: "grp", closed: true, shortGroups: "skip" },
+          { in: [makeGeometryItem(src)] },
+        )
+      ).out,
+    );
+    // Closed, the SAME group is short: only the 3-point loop survives.
+    expect(topologyOf(loop)).toEqual({ v: [2, 3, 4, 2], start: [0], count: [4] });
+    expect(loop.pointCount).toBe(5);
+    // Paired: closing without the skip is the error it always was.
+    await expect(
+      runNode(
+        pointsToPath,
+        { groupAttr: "grp", closed: true },
+        { in: [makeGeometryItem(src)] },
+      ),
+    ).rejects.toThrow(/group 0 \(attribute "grp"\) has 2 points and closed is true/);
+  });
+
+  it("passes a cloud too small for any path straight through under skip", async () => {
+    // THE WHOLE-INPUT FLOOR, WHICH USED TO IGNORE `shortGroups` — and the
+    // case it excused was strictly less sparse than the case it refused.
+    // A streamed cell that lands ONE point in a cloud is sparser than one
+    // that lands one point in a lane, so a param whose whole purpose is
+    // "the population is data and cannot be sized in advance" has to
+    // govern both or it fails the harder case further from the author.
+    for (const n of [0, 1]) {
+      await expect(
+        runNode(pointsToPath, {}, { in: [makeGeometryItem(row(n))] }),
+      ).rejects.toThrow(/a path needs at least 2/);
+      const out = firstGeo(
+        (await runNode(pointsToPath, { shortGroups: "skip" }, { in: [makeGeometryItem(row(n))] }))
+          .out,
+      );
+      expect(out.pointCount).toBe(n);
+      expect(out.primitiveCount).toBe(0);
+      expect(out.vertexCount).toBe(0);
+    }
+    // PAIRED WITH THE BOUND IN PLACE: two points is not short for an open
+    // path, so `skip` changes nothing there and a path is still built.
+    // Without this the test above would pass for a node that had simply
+    // stopped building paths.
+    const two = firstGeo(
+      (await runNode(pointsToPath, { shortGroups: "skip" }, { in: [makeGeometryItem(row(2))] }))
+        .out,
+    );
+    expect(two.primitiveCount).toBe(1);
+    expect(two.vertexCount).toBe(2);
+  });
+
+  it("defaults to error, and skips the implicit whole-cloud group too", async () => {
+    expect(pointsToPath.defaultParams.shortGroups).toBe("error");
+    // With no groupAttr the only way to be short is 2 points, closed.
+    await expect(
+      runNode(pointsToPath, { closed: true }, { in: [makeGeometryItem(row(2))] }),
+    ).rejects.toThrow(/the input has 2 points and closed is true/);
+    const none = firstGeo(
+      (
+        await runNode(
+          pointsToPath,
+          { closed: true, shortGroups: "skip" },
+          { in: [makeGeometryItem(row(2))] },
+        )
+      ).out,
+    );
+    expect(none.primitiveCount).toBe(0);
+    expect(none.vertexCount).toBe(0);
+    expect(positionsOf(none)).toEqual([
+      [0, 0, 0],
+      [1, 0, 0],
+    ]);
+    // Paired: open, those same two points are still a path under skip.
+    expect(
+      topologyOf(
+        firstGeo(
+          (await runNode(pointsToPath, { shortGroups: "skip" }, { in: [makeGeometryItem(row(2))] }))
+            .out,
+        ),
+      ),
+    ).toEqual({ v: [0, 1], start: [0], count: [2] });
+    // The whole-input floor obeys `shortGroups` as well; it has its own
+    // test above, which is where the argument for that lives.
+  });
+
+  it("refuses an unrecognised shortGroups, before it looks at the geometry", async () => {
+    expect(
+      await rejection(
+        runNode(pointsToPath, { shortGroups: "ignore" }, { in: [makeGeometryItem(row(4))] }),
+      ),
+    ).toMatch(/shortGroups must be "error" or "skip", got "ignore"/);
+    // Ahead of the input check, so an author reads about their typo rather
+    // than about a pin they did wire in a real graph.
+    expect(await rejection(runNode(pointsToPath, { shortGroups: "ignore" }, {}))).toMatch(
+      /shortGroups must be "error" or "skip"/,
+    );
+    // Paired: with a value it recognises, the pin is what gets named.
+    expect(await rejection(runNode(pointsToPath, { shortGroups: "skip" }, {}))).toMatch(
+      /input pin "in"/,
+    );
+  });
+
+  it("is deterministic with short groups skipped", async () => {
+    const src = withAttr(row(7), "grp", [2, 0, 1, 0, 2, 0, 4]);
+    const run = async () =>
+      snapshotGeometry(
+        firstGeo(
+          (
+            await runNode(
+              pointsToPath,
+              { groupAttr: "grp", shortGroups: "skip" },
+              { in: [makeGeometryItem(src)] },
+            )
+          ).out,
+        ),
+      );
+    const first = await run();
+    expect(first).toEqual(await run());
+    // Groups 1 and 4 hold one point each and are gone; 0 and 2 are the
+    // paths they would have been, in ascending key order.
+    expect(first.topology).toEqual({
+      vertexToPoint: [1, 3, 5, 0, 4],
+      primVertexStart: [0, 3],
+      primVertexCount: [3, 2],
+    });
   });
 });
 
