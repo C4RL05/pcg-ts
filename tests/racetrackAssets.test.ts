@@ -28,7 +28,8 @@ import {
   repairIsMinimal,
   weightAt,
 } from "../demos/racetrack/assets.js";
-import { DEFAULT_KIT, kitOrAbsent, kitPath } from "./support/kits.js";
+import { DEFAULT_KIT, ENCLOSURE_KIT, kitOrAbsent, kitPath } from "./support/kits.js";
+import { SAME_SHARE } from "../demos/racetrack/tolerance.js";
 import { inCorridor, resolveCorridor } from "../demos/racetrack/zones.js";
 
 /**
@@ -540,5 +541,193 @@ describe.skipIf(!KIT)("placing from the kit's own `where`", () => {
     expect(bucketOf(14.9)).toBe("medium");
     expect(bucketOf(7)).toBe("medium");
     expect(bucketOf(6.9)).toBe("tight");
+  });
+});
+
+/**
+ * ONE LAP'S WORTH OF PLACEMENTS, AT THE MIX THE DEMO'S OWN SPLINE CARRIES.
+ *
+ * The bucket proportions are the vegetation suite's, repeated verbatim
+ * rather than shared with it. What the suite below compares is two KITS
+ * under ONE lap shape, so the shape has to be the same one — and hoisting
+ * the copy inside `placing from the kit's own \`where\`` would move a
+ * fixture that every figure that suite prints is quoted against, for a
+ * saving of twenty lines. The duplication is the cheaper of the two risks:
+ * if these two ever disagree the suites are measuring different laps, and
+ * that is visible here rather than hidden behind a shared helper's
+ * parameter.
+ */
+function lapOf(
+  assets: readonly PlaceableAsset[],
+  seed: number,
+  n = 330,
+): ReturnType<typeof placeAsset>[] {
+  const mix: [CurvatureBucket, number][] = [
+    ["straight", 0.51],
+    ["easy", 0.157],
+    ["medium", 0.256],
+    ["tight", 0.077],
+  ];
+  const out: ReturnType<typeof placeAsset>[] = [];
+  for (let i = 0; i < n; i++) {
+    let u = ((i * 2654435761) % 1000) / 1000;
+    let bucket: CurvatureBucket = "straight";
+    for (const [b, w] of mix) {
+      if (u < w) {
+        bucket = b;
+        break;
+      }
+      u -= w;
+    }
+    out.push(placeAsset(assets, bucket, seed, i));
+  }
+  return out;
+}
+
+/** Each band's share of the live placements, on the centre datum. */
+function bandShares(placements: readonly (ReturnType<typeof placeAsset>)[]): Record<Band, number> {
+  const live = placements.filter((p): p is NonNullable<typeof p> => p != null);
+  const c = Object.fromEntries((Object.keys(Z3) as Band[]).map((b) => [b, 0])) as Record<
+    Band,
+    number
+  >;
+  for (const p of live) c[bandOfPlacement(p.t, p.h, p.asset.size.tall)]++;
+  for (const b of Object.keys(c) as Band[]) c[b] /= live.length;
+  return c;
+}
+
+const ENCLOSED = kitPath(ENCLOSURE_KIT);
+
+/**
+ * THE SAME REPAIR, ON THE KIT THAT ACTUALLY EXERCISES IT — and the reason
+ * this suite exists at all is that the one above did not.
+ *
+ * Everything the vegetation kit can say about `repairBandMix` was already
+ * said: it settles in one pass, it is minimal, it stops at the edge. All
+ * of it was true, all of it kept being true, and none of it was evidence
+ * about the repair, because the vegetation kit gives the repair almost
+ * nothing to do — its assets sit where their medians say they sit, so
+ * nearly every draw the mix makes lands in the band it was drawn for.
+ *
+ * On the enclosed kit it does not. That kit's laterals are wide and
+ * overhead-heavy — it is 43% covered against a population median of 10.5%
+ * — so a draw from an asset's own distribution misses its own median band
+ * more often than it hits it. A repair that committed the draw regardless
+ * therefore reported a move for a placement that had not moved the shares
+ * at all: the same `src` and `dst` were chosen next pass, the same
+ * first-in-band donor was found again, and the repair returned
+ * `moves === n` — the entire live population — round after round, forever.
+ * Measured before the fix at twelve rounds and `converged: false` on every
+ * seed of the dressed lap, while the vegetation kit settled in two or
+ * three and the idempotence test above passed throughout.
+ *
+ * That is the standing lesson in one object: an exemplar chosen for one
+ * property will silently fail to exercise rules that depend on the others.
+ * The vegetation circuit was chosen for band mix and curvature response.
+ * Nobody chose it for the width of its laterals, and the width of its
+ * laterals is what this repair lives or dies on.
+ *
+ * Skips without the kit, like every suite here — a checkout with no local
+ * manifest must not fail, only report nothing.
+ */
+describe.skipIf(!ENCLOSED)("the band mix, on the kit that makes it work for it", () => {
+  const kit = kitOrAbsent<{ assets: PlaceableAsset[] }>(ENCLOSURE_KIT);
+  const assets = kit.assets.filter((a) => a.where);
+  const SEEDS = [1, 2, 3, 4];
+
+  /**
+   * IDEMPOTENCE AND PROGRESS, ASSERTED TOGETHER BECAUSE NEITHER IS WORTH
+   * ANYTHING ALONE.
+   *
+   * "A second pass makes no moves" is satisfied perfectly by a repair that
+   * never moves anything — which is the OTHER way this function can be
+   * broken, and the one a fix for the spin could plausibly introduce by
+   * being too quick to abandon a donor. So the settling claim is paired
+   * with the claim that there was something to settle: at least one seed
+   * moved something, and at least one band was reported outside its range
+   * before the repair ran. Without that pair a kit whose raw mix happens
+   * to be inside Z-3 would pass this test while telling nobody anything.
+   */
+  it("settles the enclosed kit's mix in one pass, having had work to do", () => {
+    let totalMoves = 0;
+    let bandsOutside = 0;
+    const rows: string[] = [];
+
+    for (const seed of SEEDS) {
+      const first = repairBandMix(lapOf(assets, seed), assets, seed);
+      const second = repairBandMix(first.placements, assets, seed);
+      const live = first.placements.filter((p) => p != null).length;
+      totalMoves += first.moves;
+      bandsOutside += first.wasOutside.length;
+
+      rows.push(
+        `  seed ${seed}: ${first.moves} of ${live} re-drawn, then ${second.moves}; was outside: ` +
+          (first.wasOutside
+            .map((w) => `${w.band} ${(100 * w.share).toFixed(1)}%->${(100 * w.edge).toFixed(0)}%`)
+            .join(", ") || "nothing"),
+      );
+
+      expect(second.moves, `seed ${seed} is not yet settled`).toBe(0);
+
+      // AND IT DID NOT SETTLE BY RUNNING OUT OF ROAD. The pass loop is
+      // bounded at one pass per live placement, so `moves === live` means
+      // every single pass moved something and the loop ended because the
+      // budget ended — never because the bounds were met. That is the
+      // spin's exact signature, and it is a derived bound rather than an
+      // observed one: the bound is the loop's own.
+      expect(
+        first.moves,
+        `seed ${seed}: the repair spent its whole pass budget (${first.moves} of ${live})`,
+      ).toBeLessThan(live);
+
+      // THE BANDS IT SAID WERE WRONG ARE RIGHT NOW. This is assertable
+      // even though nothing about a band's FINAL share is attributable to
+      // its own repair — the conservation argument in the suite above
+      // rules out "it landed near its edge", not "it landed inside its
+      // range". Inside the range is precisely the loop's halting
+      // condition, and a repair that gave a donor up while a band was
+      // still short would break this line and pass the idempotence one.
+      const after = bandShares(first.placements);
+      for (const w of first.wasOutside) {
+        const [lo, hi] = Z3[w.band].rule;
+        const at = `seed ${seed} ${w.band}: ${(100 * w.share).toFixed(1)}% -> ${(100 * after[w.band]).toFixed(1)}%, rule ${(100 * lo).toFixed(0)}-${(100 * hi).toFixed(0)}%`;
+        // The repair's own share tolerance, not a number chosen here: a
+        // share is a ratio of whole numbers and Z-3's bounds have two
+        // decimal places, so landing exactly on a bound is ordinary. See
+        // `mixInsideRule`.
+        expect(after[w.band], at).toBeGreaterThanOrEqual(lo - SAME_SHARE);
+        expect(after[w.band], at).toBeLessThanOrEqual(hi + SAME_SHARE);
+      }
+    }
+
+    console.log([`Z-3 repair on ${ENCLOSURE_KIT}, one call then a second:`, ...rows].join("\n"));
+
+    expect(totalMoves, "the repair moved nothing on any seed").toBeGreaterThan(0);
+    expect(bandsOutside, "no band was outside Z-3 on any seed, so this asserts nothing").toBeGreaterThan(
+      0,
+    );
+  });
+
+  /**
+   * AND THE REPAIR IS STILL MINIMAL HERE.
+   *
+   * The fix for the spin gave the mix two new ways to decline a move — a
+   * drawn placement that lands outside `dst` is thrown away, and a donor
+   * that fails is struck off for that destination — and both make the
+   * repair do LESS. Doing less cannot break minimality by itself, but the
+   * clamp that came with them does move a placement's lateral, and a
+   * repair that placed something it did not need to would show up here and
+   * nowhere else. The vegetation suite gates this; the kit that makes the
+   * mix work hardest did not, until now.
+   */
+  it("makes no move it could have done without", () => {
+    for (const seed of SEEDS) {
+      const r = repairBandMix(lapOf(assets, seed), assets, seed);
+      const { minimal, removable } = repairIsMinimal(r);
+      expect(
+        minimal,
+        `seed ${seed}: ${removable.length} of ${r.moves} moves were unnecessary`,
+      ).toBe(true);
+    }
   });
 });

@@ -89,6 +89,26 @@ import type { PlacedBox } from "../demos/racetrack/kit.js";
 const SEEDS = [1, 2, 3, 4] as const;
 
 /**
+ * How long a four-lap comparison may take.
+ *
+ * STATED, BECAUSE THE DEFAULT IS FIVE SECONDS AND THE HEAVY TESTS HERE
+ * WANT TWO TO THREE OF THEM ON AN IDLE MACHINE. Each cooks four road
+ * graphs, dresses four laps to a fixed point, runs the same fixed point
+ * again as a TypeScript reference, and — in the box test — cooks a graph
+ * that stamps three million points to keep eight thousand. Run alone they
+ * finish in about half the default; run inside the full suite, against
+ * every other file's workers, they do not.
+ *
+ * A TIMEOUT IS NOT A TOLERANCE, so this is not tuned to what was observed:
+ * it is far enough above it that machine load decides nothing, which is
+ * the only property a timeout should have. What would be wrong is leaving
+ * the default and letting a green suite depend on how busy the box was —
+ * the failure that prompted this looked exactly like a regression and was
+ * not one.
+ */
+const FOUR_LAP_MS = 60_000;
+
+/**
  * The largest mutual non-orthogonality the interpolated track frame has.
  *
  * NOT A TOLERANCE — a claim about `poseAt`, and every other constant in
@@ -693,7 +713,7 @@ describe("racetrack dressing, as a graph", () => {
     // settled in a single round the wrapper would be untested machinery,
     // so the suite says out loud that at least one lap needed a second.
     expect(totalRounds, "no lap needed more than one round").toBeGreaterThan(seeds);
-  });
+  }, FOUR_LAP_MS);
 
   it("builds the same boxes buildBoxes does", async () => {
     let worstCentre = 0;
@@ -852,7 +872,7 @@ describe("racetrack dressing, as a graph", () => {
     // asserted rather than only printed.
     expect(worstSkew).toBeGreaterThan(0);
     expect(worstSkew).toBeLessThan(MAX_FRAME_SKEW);
-  });
+  }, FOUR_LAP_MS);
 
   it("resolves the corridor the way resolveCorridor does, on both branches", async () => {
     let worstT = 0;
@@ -947,7 +967,7 @@ describe("racetrack dressing, as a graph", () => {
         `(${rose} rose, ${stoodOff} stood off) — worst |dt| ${worstT.toExponential(2)}W, ` +
         `worst |dh| ${worstH.toExponential(2)}W`,
     );
-  });
+  }, FOUR_LAP_MS);
 
   it("culls the cone the way cullSightlines does", async () => {
     let seeds = 0;
@@ -1065,7 +1085,7 @@ describe("racetrack dressing, as a graph", () => {
     // cone, and that is two laps in four.
     expect(pushed).toBeGreaterThan(0);
     expect(dropped).toBeGreaterThan(0);
-  });
+  }, FOUR_LAP_MS);
 
   it("breaks false edges the way repairFalseEdges does, one pass", async () => {
     let seeds = 0;
@@ -1213,7 +1233,7 @@ describe("racetrack dressing, as a graph", () => {
       extraPasses,
       "one pass of L-5 is losing more than it did; the missing repair loop now costs more",
     ).toBeLessThanOrEqual(3);
-  });
+  }, FOUR_LAP_MS);
 
   it("agrees with runFit about a false edge built to order", async () => {
     // THE RULE IS THIN ON REAL DATA — two runs on one lap, none on
@@ -1571,7 +1591,7 @@ describe("racetrack dressing, as a graph", () => {
     // change that doubled them would otherwise pass silently. Measured at
     // 25 over the four laps.
     expect(stepped).toBeLessThanOrEqual(40);
-  });
+  }, FOUR_LAP_MS);
 
   it("gives the same bytes whatever was asked for and in what order", async () => {
     // DETERMINISM IS THE LIBRARY'S HARD INVARIANT AND THIS IS THE ONE
@@ -1700,7 +1720,7 @@ describe("racetrack dressing, as a graph", () => {
         `${under} of them under cover (${shares}), masks identical, ` +
         `worst share delta ${worstShare.toExponential(2)}`,
     );
-  });
+  }, FOUR_LAP_MS);
 });
 
 const dot3 = (a: readonly number[], b: readonly number[]): number =>

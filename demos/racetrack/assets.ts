@@ -270,6 +270,27 @@ export function bandOfPlacement(
 }
 
 /** The |t| span each band occupies, for choosing an asset that lands in it. */
+/**
+ * The |t| range an asset's own instances actually reach, from the two
+ * quantiles the format publishes.
+ *
+ * A MEDIAN IS NOT A RANGE, AND CONFUSING THE TWO IS WHAT MADE THE BAND MIX
+ * SPIN. Eligibility for a band used to be "this asset's median lateral
+ * falls in it", and the placement's lateral was then drawn from the whole
+ * distribution — which is wide, so the draw landed in a different band as
+ * often as not. Overlap is the honest test: an asset belongs to a band if
+ * its instances are OBSERVED there, which is what makes placing one there
+ * a statement about the source rather than about an average.
+ *
+ * A distribution straddling the centreline reaches 0, because |t| does.
+ */
+function lateralReach(w: AssetWhere): readonly [number, number] {
+  const { p10, p90 } = w.lateral;
+  const a = Math.abs(p10);
+  const b = Math.abs(p90);
+  return [p10 <= 0 && p90 >= 0 ? 0 : Math.min(a, b), Math.max(a, b)];
+}
+
 const BAND_T: Record<Band, readonly [number, number]> = {
   over: [0, 1.5],
   // FROM 1W, NOT FROM 0. The verge is 1-1.5W, and drawing from 0 let the
@@ -388,6 +409,26 @@ export function mixInsideRule<T extends AssetPlacement>(
  * So: lift a band to its floor, trim it to its ceiling, stop. Enforce the
  * bound, preserve the spread inside it.
  */
+/**
+ * How many draws the mix may take before it gives a donor up.
+ *
+ * ONE DRAW IS NOT ENOUGH AND UNLIMITED DRAWS ARE NOT A REPAIR. An asset
+ * enters the pool because the MIDDLE of its measured lateral distribution
+ * falls in the band being filled, and the placement's own lateral is then
+ * drawn from that whole distribution — so a miss is the common case, not
+ * the exception, and giving up after one would leave the bands unrepaired
+ * on exactly the kits that need repairing most. Retrying until it lands,
+ * on the other hand, is a search whose cost is a property of the
+ * vocabulary rather than of the rule: an asset whose distribution barely
+ * overlaps its own median band would be drawn from forever.
+ *
+ * Eight is enough that a pool with any real overlap places on nearly every
+ * donor, and small enough that a pool with none is abandoned in a bounded
+ * number of tries and the donor marked. It is a search resolution, not a
+ * quantity anybody measured.
+ */
+const MIX_DRAW_ATTEMPTS = 8;
+
 export function repairBandMix<T extends AssetPlacement>(
   placements: readonly (T | undefined)[],
   assets: readonly PlaceableAsset[],
@@ -429,6 +470,77 @@ export function repairBandMix<T extends AssetPlacement>(
     return c;
   };
 
+  /**
+   * A freshly drawn placement, adjusted so that it does not immediately
+   * owe another rule a repair.
+   *
+   * IT RUNS BEFORE THE BAND IS CHECKED, WHICH IS THE WHOLE REASON IT IS A
+   * FUNCTION. Both adjustments below MOVE the placement, so the band it
+   * ends up in is not the band it was drawn into — checking the raw draw
+   * would accept pieces that Z-1 is about to relocate out of the band, and
+   * reject pieces that Z-1 is about to relocate into it.
+   */
+  const settleIntoBand = (drawn: AssetPlacement, dst: Band): AssetPlacement => {
+    const tall = drawn.asset.size.tall;
+
+    // THE BAND DECIDES THE LATERAL, WITHIN WHAT THE ASSET REACHES.
+    //
+    // The draw comes from the asset's whole distribution and the band is a
+    // slice of it, so most draws miss — that is arithmetic, not bad luck,
+    // and retrying it is a lottery rather than a repair. What the rule
+    // wants is a placement of THIS asset in THAT band, and the asset was
+    // chosen precisely because its own instances are observed there. So
+    // the drawn lateral is clamped into the intersection of the band and
+    // the asset's own reach, which keeps every placement inside the range
+    // the source measured for it.
+    //
+    // This is the same move the `over` branch below has always made with
+    // the height, for the same reason: the band is what is being repaired,
+    // so the band supplies the coordinate. What it deliberately is NOT is
+    // sliding the EXISTING placement sideways — that would put an asset
+    // where its instances never sat, which is the thing the surrounding
+    // comment refuses and still refuses.
+    const reach = drawn.asset.where ? lateralReach(drawn.asset.where) : ([0, 1e9] as const);
+    const [blo, bhi] = BAND_T[dst];
+    // The top of a band belongs to the band ABOVE it (`bandOfPlacement`
+    // puts a value on a boundary in the outer band, and says why), so the
+    // ceiling is approached and never touched.
+    const clampLo = Math.max(blo, reach[0]);
+    const clampHi = Math.min(bhi - 2 * SAME_PLACE_W, reach[1]);
+    if (clampHi >= clampLo) {
+      const sign = drawn.t < 0 ? -1 : 1;
+      const want = Math.min(Math.max(Math.abs(drawn.t), clampLo), clampHi);
+      drawn = { ...drawn, t: sign * want };
+    }
+    // AN `over` PLACEMENT SPANS THE CORRIDOR; IT DOES NOT SIT IN IT.
+    // The band is |t| < 1W — which is the corridor — so filling it from
+    // an asset's own measured height puts an object on the racing line at
+    // about knee height. Z-1 then either raises it (fine) or stands it off
+    // to the corridor edge, which takes it OUT of this band, so the mix
+    // refills it and the two rules oscillate: measured at 147 mix moves
+    // against 95 corridor fixes over six rounds, never settling, finishing
+    // with eight objects in the middle of the road.
+    //
+    // So the height comes from the BAND here rather than from the asset.
+    if (dst === "over") return { ...drawn, h: CORRIDOR.ceilingW + tall / 2 };
+
+    // AND EVERY OTHER BAND GETS Z-1 APPLIED AT THE POINT OF DRAWING.
+    //
+    // A replacement's lateral comes from its asset's own distribution,
+    // which reaches inside 1W for a good part of the vocabulary — so the
+    // mix emits corridor violations, Z-1 relocates them on the next round,
+    // relocating changes their band, and the mix rebalances. Neither
+    // repair is wrong and the pair never settles: measured at 56 mix moves
+    // and 23 corridor fixes over twelve rounds on a lap where every rule
+    // was already satisfied by round two.
+    //
+    // A repair must not emit something another repair has to undo.
+    const baseH = drawn.h - tall / 2;
+    const fixed = resolveCorridor(drawn.t, baseH, drawn.asset.size.across, tall);
+    if (fixed.t === drawn.t && fixed.baseH === baseH) return drawn;
+    return { ...drawn, t: fixed.t, h: fixed.baseH + tall / 2 };
+  };
+
   const before = shares();
   const log: MixMove<T>[] = [];
   const wasOutside: MixRepair["wasOutside"] = [];
@@ -439,7 +551,15 @@ export function repairBandMix<T extends AssetPlacement>(
   }
 
   let moves = 0;
-  // Bounded by the population: each pass moves exactly one placement.
+  // DONORS THIS REPAIR HAS ALREADY FAILED TO REFILL, keyed by donor and
+  // destination band. It is what turns "this placement cannot become an
+  // `over` piece" into progress rather than into another identical pass:
+  // the scan for a donor is a linear `find`, so without it the same
+  // first-in-band placement is chosen every time and the loop spends the
+  // whole population budget re-deciding the same thing.
+  const failed = new Set<string>();
+  // Bounded by the population: each pass either moves one placement or
+  // strikes one (donor, band) pair off, and both are finite.
   for (let pass = 0; pass < n; pass++) {
     const s = shares();
     let from: Band | undefined;
@@ -483,7 +603,17 @@ export function repairBandMix<T extends AssetPlacement>(
     const dst = pick(to, from);
     if (!src || !dst || src === dst) break;
 
-    const donor = live().find((x) => x.band === src && !protect.has(out[x.i]?.asset.id ?? -1));
+    // A DONOR THIS REPAIR HAS NOT ALREADY FAILED TO REPLACE. Keyed by the
+    // band it was being drawn INTO, because a donor that cannot be turned
+    // into an `over` piece may still make a perfectly good `verge` one.
+    // Without this the scan below returns the same first-in-band placement
+    // every pass, which is half of why this repair used to spin.
+    const donor = live().find(
+      (x) =>
+        x.band === src &&
+        !protect.has(out[x.i]?.asset.id ?? -1) &&
+        !failed.has(`${x.i}|${dst}`),
+    );
     if (!donor) break;
 
     // Re-place the station with an asset whose OWN measurements put it in
@@ -497,47 +627,60 @@ export function repairBandMix<T extends AssetPlacement>(
       // the overhead ceiling is a shell, and a shell placed here becomes
       // a roof over the whole band. See `fitsOverhead`.
       if (dst === "over" && !fitsOverhead(a.size.tall)) return false;
-      const m = a.where?.lateral.median;
-      return m !== undefined && Math.abs(m) >= lo && Math.abs(m) < hi;
+      if (!a.where) return false;
+      // OVERLAP, NOT THE MEDIAN — see `lateralReach`. On the enclosure kit
+      // the median test left the `verge` pool holding assets that almost
+      // never drew into the verge, which is how a repair with a non-empty
+      // pool still failed every placement it attempted.
+      const [rlo, rhi] = lateralReach(a.where);
+      return rhi >= lo && rlo < hi;
     });
     if (pool.length === 0) break;
-    let replacement = placeAsset(pool, "straight", seed, donor.i + 0x9e37 * (pass + 1));
-    if (!replacement) break;
 
-    // AN `over` PLACEMENT SPANS THE CORRIDOR; IT DOES NOT SIT IN IT.
-    // The band is |t| < 1W — which is the corridor — so filling it from
-    // an asset's own measured height puts an object on the racing line
-    // at about knee height. Z-1 then either raises it (fine) or stands
-    // it off to the corridor edge, which takes it OUT of this band, so
-    // the mix refills it and the two rules oscillate: measured at 147
-    // mix moves against 95 corridor fixes over six rounds, never
-    // settling, finishing with eight objects in the middle of the road.
+    // THE POOL IS CHOSEN BY THE MEDIAN AND THE PLACEMENT IS DRAWN FROM THE
+    // DISTRIBUTION, AND THAT GAP IS THE BUG THIS LOOP EXISTS TO CLOSE.
     //
-    // So the height comes from the BAND here rather than from the asset.
-    // Raised, it stays `over` for any |t| under 1.5W, Z-1 has nothing to
-    // fix, and the loop settles in two.
-    if (dst === "over") {
-      const tall = replacement.asset.size.tall;
-      replacement = { ...replacement, h: CORRIDOR.ceilingW + tall / 2 };
-    } else {
-      // AND EVERY OTHER BAND GETS Z-1 APPLIED AT THE POINT OF DRAWING.
-      //
-      // A replacement's lateral comes from its asset's own distribution,
-      // which reaches inside 1W for a good part of the vocabulary — so
-      // the mix emits corridor violations, Z-1 relocates them on the next
-      // round, relocating changes their band, and the mix rebalances.
-      // Neither repair is wrong and the pair never settles: measured at
-      // 56 mix moves and 23 corridor fixes over twelve rounds on a lap
-      // where every rule was already satisfied by round two.
-      //
-      // A repair must not emit something another repair has to undo.
-      const tall = replacement.asset.size.tall;
-      const baseH = replacement.h - tall / 2;
-      const fixed = resolveCorridor(replacement.t, baseH, replacement.asset.size.across, tall);
-      if (fixed.t !== replacement.t || fixed.baseH !== baseH) {
-        replacement = { ...replacement, t: fixed.t, h: fixed.baseH + tall / 2 };
+    // An asset qualifies for `dst` because the middle of its measured
+    // lateral distribution falls in that band. `placeAsset` then draws
+    // this placement's lateral from the same distribution, which is wide —
+    // so the draw lands wherever it lands, and for a good part of the
+    // vocabulary that is a different band from the one the asset was
+    // picked for. The old code committed that draw regardless and counted
+    // it as a move. On a kit where the misses outnumber the hits the
+    // result is a repair that reports `moves === n` every round, forever:
+    // the shares never change, so the same `src` and `dst` are chosen
+    // again, and the same donor is found again. Measured on the enclosure
+    // kit at twelve rounds and `converged: false` on every seed.
+    //
+    // So the draw is CHECKED, and only a draw that actually lands in `dst`
+    // is committed. A few attempts, because one draw from a wide
+    // distribution misses more often than not and giving up after one
+    // would leave the bands unrepaired — which is a quieter failure than
+    // spinning, not a better one.
+    let replacement: AssetPlacement | undefined;
+    for (let attempt = 0; attempt < MIX_DRAW_ATTEMPTS; attempt++) {
+      const drawn = placeAsset(
+        pool,
+        "straight",
+        seed,
+        donor.i + 0x9e37 * (pass + 1) + attempt * 0x85eb_ca6b,
+      );
+      if (!drawn) break;
+      const settled = settleIntoBand(drawn, dst);
+      if (bandOfPlacement(settled.t, settled.h, settled.asset.size.tall, datum) === dst) {
+        replacement = settled;
+        break;
       }
     }
+    // Nothing this asset pool produced landed where it was needed. Leave
+    // the donor alone, remember that, and let the next pass try another.
+    // Not counted as a move, which is what lets the caller's own loop see
+    // that this repair has finished.
+    if (!replacement) {
+      failed.add(`${donor.i}|${dst}`);
+      continue;
+    }
+
     log.push({ index: donor.i, before: out[donor.i] });
     // SPREAD OVER THE DONOR, never straight onto it. `placeAsset` returns
     // an asset, a lateral and a height and knows nothing about the rest
