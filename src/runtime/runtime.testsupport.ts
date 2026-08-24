@@ -49,6 +49,11 @@ export function scatterLevel(opts: {
   path?: { length: number; closed: boolean };
   generationRadius?: number;
   retainRadius?: number;
+  /** Directional `"path"` window; mutually exclusive with the radii above. */
+  aheadArc?: number;
+  behindArc?: number;
+  retainAheadArc?: number;
+  retainBehindArc?: number;
   count?: number;
   jitter?: boolean;
 }): ScatterLevel {
@@ -70,6 +75,14 @@ export function scatterLevel(opts: {
     path: opts.path,
     generationRadius: opts.generationRadius,
     retainRadius: opts.retainRadius,
+    // Spread rather than assigned: the World refuses a directional window
+    // stated alongside generationRadius, and an explicit `aheadArc:
+    // undefined` would read as stated. This keeps a symmetric level's def
+    // byte-for-byte the shape it was before the pair existed.
+    ...(opts.aheadArc !== undefined ? { aheadArc: opts.aheadArc } : {}),
+    ...(opts.behindArc !== undefined ? { behindArc: opts.behindArc } : {}),
+    ...(opts.retainAheadArc !== undefined ? { retainAheadArc: opts.retainAheadArc } : {}),
+    ...(opts.retainBehindArc !== undefined ? { retainBehindArc: opts.retainBehindArc } : {}),
     graph,
     bind(g, ctx) {
       if (unbounded) {

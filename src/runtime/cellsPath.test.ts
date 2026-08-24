@@ -16,14 +16,23 @@ import { childEchoLevel, coordKeys, outputsDiff, scatterLevel } from "./runtime.
 import type { CellContext, LevelDef } from "./types.js";
 import { World, WorldValidationError } from "./world.js";
 
-/** A 100-unit table cut into ten 10-unit sectors (0..9). */
+/**
+ * A 100-unit table cut into ten 10-unit sectors (0..9). The window is
+ * stated either symmetrically (`generationRadius`) or directionally
+ * (`aheadArc` + `behindArc`) — never both, which is what the World
+ * refuses — so this helper takes them as alternatives too.
+ */
 function trackLevel(opts: {
   name?: string;
   closed: boolean;
   cellSize?: number;
   length?: number;
-  generationRadius: number;
+  generationRadius?: number;
   retainRadius?: number;
+  aheadArc?: number;
+  behindArc?: number;
+  retainAheadArc?: number;
+  retainBehindArc?: number;
   jitter?: boolean;
 }): LevelDef {
   return scatterLevel({
@@ -33,6 +42,10 @@ function trackLevel(opts: {
     path: { length: opts.length ?? 100, closed: opts.closed },
     generationRadius: opts.generationRadius,
     retainRadius: opts.retainRadius,
+    aheadArc: opts.aheadArc,
+    behindArc: opts.behindArc,
+    retainAheadArc: opts.retainAheadArc,
+    retainBehindArc: opts.retainBehindArc,
     jitter: opts.jitter,
   }).def;
 }
@@ -170,6 +183,252 @@ describe("path wanted set", () => {
     expect(bounds[2][2]).toBe(100);
     expect(bounds[0][2]).toBe(bounds[1][1]);
     expect(bounds[1][2]).toBe(bounds[2][1]);
+  });
+});
+
+describe("path directional window", () => {
+  it("wants the hand-computed asymmetric set, and only it", async () => {
+    // Ten 10-unit sectors, anchor 52, 25 ahead and 5 behind: the window
+    // [47, 77]. Sector 5 holds the anchor; 6 starts 8 ahead and 7 starts
+    // 18 ahead, both inside 25; 8 starts 28 ahead and is out. Sector 4
+    // ends 2 behind and is inside 5; sector 3 ends 12 behind and is out.
+    const world = new World({
+      seed: 1,
+      levels: [trackLevel({ closed: false, aheadArc: 25, behindArc: 5 })],
+    });
+    const stats = await world.update([0, 0, 0], { anchors: { track: 52 } });
+    expect(coordKeys(stats.cooked).sort()).toEqual(["4", "5", "6", "7"]);
+    expect(stats.pending).toBe(0);
+
+    // The symmetric window that reaches as far ahead wants five more
+    // sectors, every one of them behind the car — the disc this mode
+    // exists to stop paying for.
+    const disc = new World({
+      seed: 1,
+      levels: [trackLevel({ closed: false, generationRadius: 25 })],
+    });
+    const discStats = await disc.update([0, 0, 0], { anchors: { track: 52 } });
+    expect(coordKeys(discStats.cooked).sort()).toEqual(["2", "3", "4", "5", "6", "7"]);
+  });
+
+  it("cooks nearest as a fraction of its own half, not nearest in raw arc", async () => {
+    // Anchor 45 (inside sector 4), 40 ahead and 10 behind. Ranks are the
+    // gap over that half's depth: 4 is 0; 5 starts 5 ahead (5/40 = .125);
+    // 6 starts 15 ahead (.375); 3 ends 5 BEHIND (5/10 = .5); 7 (25/40 =
+    // .625); 8 (35/40 = .875). Sector 9 starts 45 ahead and 2 ends 15
+    // behind: both out.
+    const world = new World({
+      seed: 1,
+      levels: [trackLevel({ closed: false, aheadArc: 40, behindArc: 10 })],
+    });
+    const stats = await world.update([0, 0, 0], { anchors: { track: 45 } });
+    // Raw arc distance would have put sector 3 (5 away) second. It cooks
+    // fourth, behind sector 6 which is fifteen units further off: the car
+    // will be at 60 in a moment and will not see 35 again this lap.
+    expect(coordKeys(stats.cooked)).toEqual(["4", "5", "6", "3", "7", "8"]);
+  });
+
+  it("is exactly the symmetric window when both halves are equal", async () => {
+    // The claim generationRadius makes on a "path" level, pinned: it is
+    // aheadArc = behindArc = generationRadius, same set and same order.
+    const symmetric = new World({
+      seed: 1,
+      levels: [trackLevel({ closed: true, generationRadius: 15 })],
+    });
+    const spelledOut = new World({
+      seed: 1,
+      levels: [trackLevel({ closed: true, aheadArc: 15, behindArc: 15 })],
+    });
+    const a = await symmetric.update([0, 0, 0], { anchors: { track: 5 } });
+    const b = await spelledOut.update([0, 0, 0], { anchors: { track: 5 } });
+    expect(coordKeys(a.cooked)).toEqual(["0", "1", "9", "2"]);
+    expect(coordKeys(b.cooked)).toEqual(coordKeys(a.cooked));
+  });
+
+  it("wants only the anchor's own sector and the road ahead when behindArc is 0", async () => {
+    const world = new World({
+      seed: 1,
+      levels: [trackLevel({ closed: false, aheadArc: 20, behindArc: 0 })],
+    });
+    // The anchor is INSIDE sector 5, so its gap is zero on both sides and
+    // a zero-depth half still wants it. Sector 4 ends 2 behind — a real
+    // gap against a half of depth 0 — and is not wanted.
+    const stats = await world.update([0, 0, 0], { anchors: { track: 52 } });
+    expect(coordKeys(stats.cooked)).toEqual(["5", "6", "7"]);
+
+    // retainBehind is 0 * 1.25 = 0, so a sector evicts the moment the
+    // anchor leaves it. That is the config saying what it means.
+    const next = await world.update([0, 0, 0], { anchors: { track: 62 } });
+    expect(coordKeys(next.evicted)).toEqual(["5"]);
+    expect(coordKeys(world.cells("track")).sort()).toEqual(["6", "7", "8"]);
+  });
+
+  it("clamps a window longer than the lap to the lap, wanting each sector once", async () => {
+    // 90 ahead + 30 behind = 120 on a 100-unit closed table. The two
+    // halves overlap round the back; the wanted set is keyed by sector,
+    // so each is wanted once, claimed by whichever half reaches it in
+    // fewer arc units — which is also the order they cook in.
+    const world = new World({
+      seed: 1,
+      levels: [trackLevel({ closed: true, aheadArc: 90, behindArc: 30 })],
+    });
+    const stats = await world.update([0, 0, 0], { anchors: { track: 25 } });
+    const keys = coordKeys(stats.cooked);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys).toEqual(["2", "3", "1", "4", "5", "6", "0", "7", "8", "9"]);
+    expect(world.cells("track")).toHaveLength(10);
+
+    // Widening past a lap buys nothing: the same sectors in the same
+    // order, because every rank scaled by the same factor.
+    const wider = new World({
+      seed: 1,
+      levels: [trackLevel({ closed: true, aheadArc: 900, behindArc: 300 })],
+    });
+    const widerStats = await wider.update([0, 0, 0], { anchors: { track: 25 } });
+    expect(coordKeys(widerStats.cooked)).toEqual(keys);
+  });
+
+  it("lets an over-long window run off both ends of an open table", async () => {
+    const world = new World({
+      seed: 1,
+      levels: [trackLevel({ closed: false, aheadArc: 200, behindArc: 200 })],
+    });
+    const stats = await world.update([0, 0, 0], { anchors: { track: 50 } });
+    const keys = coordKeys(stats.cooked);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys.slice().sort()).toEqual(
+      ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"].sort(),
+    );
+  });
+});
+
+describe("path directional retention", () => {
+  /** 40 ahead, 10 behind: retain bands of 50 and 12.5, each half's own. */
+  function directionalWorld(): World {
+    return new World({
+      seed: 1,
+      levels: [trackLevel({ closed: false, aheadArc: 40, behindArc: 10 })],
+    });
+  }
+
+  it("keeps a sector parked just past the behind boundary, and drops it past the band", async () => {
+    const world = directionalWorld();
+    const first = await world.update([0, 0, 0], { anchors: { track: 45 } });
+    expect(coordKeys(first.cooked).sort()).toEqual(["3", "4", "5", "6", "7", "8"]);
+
+    // Anchor 52: sector 3 ends 12 behind. That is outside the 10-unit
+    // generation half — it is not re-cooked — and inside the 12.5 retain
+    // band, so it stays. This is the parked-just-past-a-boundary case:
+    // without a band of its own, the behind half would cook and evict
+    // sector 3 on alternate updates as the car crept over 50.
+    const second = await world.update([0, 0, 0], { anchors: { track: 52 } });
+    expect(coordKeys(second.cooked)).toEqual(["9"]);
+    expect(second.evicted).toEqual([]);
+    expect(coordKeys(world.cells("track")).sort()).toEqual([
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+    ]);
+
+    // Half a unit further and it is 13 behind, past 12.5, gone.
+    const third = await world.update([0, 0, 0], { anchors: { track: 53 } });
+    expect(coordKeys(third.evicted)).toEqual(["3"]);
+    expect(third.cooked).toEqual([]);
+  });
+
+  it("gives the ahead half its own, longer band", async () => {
+    const world = directionalWorld();
+    await world.update([0, 0, 0], { anchors: { track: 45 } });
+
+    // Backing up to 30 leaves sector 8 starting 50 ahead: outside the
+    // 40-unit generation half, exactly on its own 50-unit band, kept —
+    // the ahead comparison is inclusive because sMin belongs to the
+    // sector. Sector 2 ends exactly at the anchor and joins; sector 1
+    // ends exactly 10 behind, which the half-open range makes a miss.
+    const second = await world.update([0, 0, 0], { anchors: { track: 30 } });
+    expect(coordKeys(second.cooked)).toEqual(["2"]);
+    expect(second.evicted).toEqual([]);
+    expect(coordKeys(world.cells("track")).sort()).toEqual([
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+    ]);
+
+    // One more unit back and sector 8 is 51 ahead, past 50. Sector 7, 41
+    // ahead, is out of the generation half but inside the band — the two
+    // halves are measured separately and so is every cell in them.
+    const third = await world.update([0, 0, 0], { anchors: { track: 29 } });
+    expect(coordKeys(third.evicted)).toEqual(["8"]);
+    expect(coordKeys(third.cooked)).toEqual(["1"]);
+    expect(coordKeys(world.cells("track"))).toContain("7");
+  });
+
+  it("scales each half from its own depth, which one scalar cannot do", async () => {
+    // The two bands the defaults produce are 50 and 12.5 — a factor of
+    // four apart, because the halves are. Pin both boundaries at once by
+    // parking exactly on each: the ahead 50 keeps sector 8 at anchor 30
+    // (previous test) while the behind 12.5 drops sector 3 at anchor 53.
+    // A single scalar has to be one number: 50 would have kept sector 3
+    // four times deeper than asked, 12.5 would have evicted sector 8 in
+    // the same update that cooked it.
+    const single = new World({
+      seed: 1,
+      // The symmetric spelling sized for the AHEAD half, run through the
+      // same anchors: it keeps everything the directional world dropped.
+      levels: [trackLevel({ closed: false, generationRadius: 40, retainRadius: 50 })],
+    });
+    await single.update([0, 0, 0], { anchors: { track: 45 } });
+    await single.update([0, 0, 0], { anchors: { track: 53 } });
+    expect(coordKeys(single.cells("track"))).toContain("3");
+    // And it wanted three sectors entirely behind the car to begin with.
+    expect(coordKeys(single.cells("track")).sort()).toEqual([
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+    ]);
+  });
+
+  it("honors explicit per-half bands", async () => {
+    const world = new World({
+      seed: 1,
+      levels: [
+        trackLevel({
+          closed: false,
+          aheadArc: 40,
+          behindArc: 10,
+          retainAheadArc: 40,
+          retainBehindArc: 35,
+        }),
+      ],
+    });
+    await world.update([0, 0, 0], { anchors: { track: 45 } });
+    // retainBehind 35 keeps sector 3 at 13 behind, where the default 12.5
+    // evicted it in the test above — same anchors, different half.
+    const second = await world.update([0, 0, 0], { anchors: { track: 53 } });
+    expect(second.evicted).toEqual([]);
+    expect(coordKeys(world.cells("track"))).toContain("3");
+
+    // retainAhead 40 is no band at all: sector 8 starts 41 ahead of 39
+    // and goes the moment it leaves the generation half, while sector 9
+    // (51 ahead) goes with it.
+    const third = await world.update([0, 0, 0], { anchors: { track: 39 } });
+    expect(coordKeys(third.evicted)).toEqual(["8", "9"]);
+    expect(coordKeys(third.cooked)).toEqual(["2"]);
   });
 });
 
@@ -385,6 +644,56 @@ describe("path determinism", () => {
     expect(outputsDiff(before ?? {}, after ?? {})).toBeNull();
   });
 
+  it("different anchor paths produce byte-identical sectors under an asymmetric window", async () => {
+    // The anchor chooses WHICH sectors are wanted; nothing about the
+    // window may reach a sector's contents. An asymmetric window is the
+    // sharper version of that claim, because the two worlds below reach
+    // the same ten sectors by opposite routes and through halves of
+    // different depths.
+    function asymmetricWorld(): World {
+      return new World({
+        seed: 42,
+        levels: [
+          trackLevel({
+            closed: true,
+            aheadArc: 30,
+            behindArc: 10,
+            retainAheadArc: 1000,
+            retainBehindArc: 1000,
+            jitter: true,
+          }),
+        ],
+      });
+    }
+    const a = asymmetricWorld();
+    const b = asymmetricWorld();
+    await a.update([0, 0, 0], { anchors: { track: 5 } });
+    await a.update([0, 0, 0], { anchors: { track: 55 } });
+    await b.update([0, 0, 0], { anchors: { track: 55 } });
+    await b.update([0, 0, 0], { anchors: { track: 105 } });
+
+    const coordsA = coordKeys(a.cells("track")).sort();
+    expect(coordsA).toEqual(coordKeys(b.cells("track")).sort());
+    expect(coordsA).toHaveLength(10);
+    for (const cell of a.cells("track")) {
+      const other = b.getCell("track", cell.coord);
+      expect(other, `sector ${cell.coord.join(",")} missing in B`).toBeDefined();
+      expect(outputsDiff(cell.outputs, other?.outputs ?? {})).toBeNull();
+    }
+
+    // And identical to what the symmetric spelling produces for the same
+    // sectors: the window picks the set, never the bytes.
+    const symmetric = new World({
+      seed: 42,
+      levels: [trackLevel({ closed: true, generationRadius: 60, retainRadius: 1000, jitter: true })],
+    });
+    await symmetric.update([0, 0, 0], { anchors: { track: 5 } });
+    for (const cell of a.cells("track")) {
+      const other = symmetric.getCell("track", cell.coord);
+      expect(outputsDiff(cell.outputs, other?.outputs ?? {})).toBeNull();
+    }
+  });
+
   it("a partial cook resumes to the same bytes a whole one produces", async () => {
     const budgeted = new World({
       seed: 42,
@@ -523,6 +832,101 @@ describe("path validation", () => {
     ];
     expect(() => new World({ seed: 1, levels: crossFamily })).toThrow(
       /uses "path" cells under the "xz" parent "region"/,
+    );
+  });
+
+  it("refuses both spellings of the window on one level, naming both fixes", () => {
+    const bad: LevelDef = {
+      ...trackLevel({ closed: false, aheadArc: 40, behindArc: 10 }),
+      generationRadius: 25,
+    };
+    expect(() => new World({ seed: 1, levels: [bad] })).toThrow(WorldValidationError);
+    expect(() => new World({ seed: 1, levels: [bad] })).toThrow(
+      /level 0 \("track"\): declares generationRadius \(25\) as well as a directional window \(aheadArc 40, behindArc 10\).*generationRadius IS the symmetric window.*Drop generationRadius to stream 40 ahead and 10 behind, or drop aheadArc\/behindArc to stream 25 in both directions/,
+    );
+  });
+
+  it("refuses a half-stated window, naming the missing half", () => {
+    const onlyAhead = trackLevel({ closed: false, aheadArc: 40 });
+    expect(() => new World({ seed: 1, levels: [onlyAhead] })).toThrow(
+      /level 0 \("track"\): a directional window states both halves, and behindArc is missing \(this level sets aheadArc\).*behindArc: 0 is legal/,
+    );
+    const onlyRetain = trackLevel({ closed: false, retainAheadArc: 40 });
+    expect(() => new World({ seed: 1, levels: [onlyRetain] })).toThrow(
+      /aheadArc and behindArc are missing \(this level sets retainAheadArc\)/,
+    );
+  });
+
+  it("refuses one retain scalar across two unequal halves, naming the pair", () => {
+    const bad: LevelDef = {
+      ...trackLevel({ closed: false, aheadArc: 40, behindArc: 10 }),
+      retainRadius: 50,
+    };
+    expect(() => new World({ seed: 1, levels: [bad] })).toThrow(
+      /level 0 \("track"\): declares retainRadius \(50\) alongside a directional window \(aheadArc 40, behindArc 10\); one hysteresis scalar cannot describe two halves of different depths.*Use retainAheadArc and retainBehindArc, which default to aheadArc \* 1\.25 and behindArc \* 1\.25/,
+    );
+  });
+
+  it("refuses a directional window on a level that partitions space", () => {
+    const def = scatterLevel({ name: "chunk", cellSize: 10, generationRadius: 8 }).def;
+    const bad: LevelDef = { ...def, aheadArc: 40, behindArc: 10 };
+    expect(() => new World({ seed: 1, levels: [bad] })).toThrow(
+      /level 0 \("chunk"\): a directional window \(aheadArc, behindArc\) describes travel along a centreline and applies only to cellMode: "path"; a "xz" cell is wanted by distance from the viewpoint in every direction at once, so it has no ahead/,
+    );
+  });
+
+  it("rejects a negative or non-finite half, saying that 0 is not one", () => {
+    for (const [name, level] of [
+      ["aheadArc", trackLevel({ closed: false, aheadArc: -1, behindArc: 10 })],
+      ["behindArc", trackLevel({ closed: false, aheadArc: 40, behindArc: Number.NaN })],
+    ] as const) {
+      expect(() => new World({ seed: 1, levels: [level] })).toThrow(
+        new RegExp(
+          `level 0 \\("track"\\): ${name} must be a finite number >= 0 \\(arc units along the centreline; 0 wants only the sector the anchor is standing in, on that side\\)`,
+        ),
+      );
+    }
+    // 0 itself is legal on either half and builds without complaint.
+    expect(
+      () => new World({ seed: 1, levels: [trackLevel({ closed: false, aheadArc: 40, behindArc: 0 })] }),
+    ).not.toThrow();
+  });
+
+  it("rejects a retain band shorter than its own half", () => {
+    const bad = trackLevel({
+      closed: false,
+      aheadArc: 40,
+      behindArc: 10,
+      retainBehindArc: 4,
+    });
+    expect(() => new World({ seed: 1, levels: [bad] })).toThrow(
+      /level 0 \("track"\): retainBehindArc \(4\) must be a finite number >= behindArc \(10\); the retain band is hysteresis AROUND its own half of the generation window, not a shorter window inside it/,
+    );
+  });
+
+  it("refuses a directional window on an unbounded level rather than dropping it", () => {
+    // cellMode and generationRadius are accepted and ignored up here, for
+    // a backward-compatibility reason that cannot apply to a window this
+    // new. Silence would be the failure its own error messages argue
+    // against: a number present, apparently live, never read.
+    const def = scatterLevel({ name: "planet", cellSize: "unbounded", count: 3 }).def;
+    const bad: LevelDef = { ...def, aheadArc: 400, behindArc: 100 };
+    expect(() => new World({ seed: 1, levels: [bad] })).toThrow(WorldValidationError);
+    expect(() => new World({ seed: 1, levels: [bad] })).toThrow(
+      /level 0 \("planet"\): a directional window \(aheadArc, behindArc\) on an unbounded level, which is one global cell and partitions no arc length, so there is no sector for the window to choose between; remove aheadArc, behindArc, or give this level a finite cellSize with cellMode: "path" and a path table/,
+    );
+    // The band fields alone are refused by the same rule, not just the pair.
+    expect(
+      () => new World({ seed: 1, levels: [{ ...def, retainBehindArc: 50 }] }),
+    ).toThrow(/a directional window \(retainBehindArc\) on an unbounded level/);
+    // And an unbounded level with none of them still builds, unchanged.
+    expect(() => new World({ seed: 1, levels: [def] })).not.toThrow();
+  });
+
+  it("tells a windowless path level about both spellings", () => {
+    const bad = trackLevel({ closed: false });
+    expect(() => new World({ seed: 1, levels: [bad] })).toThrow(
+      /level 0 \("track"\): a bounded level requires a window: generationRadius \(a positive finite number\) for the symmetric one, or aheadArc and behindArc together \(finite, >= 0\) for a directional one; only an unbounded level may omit both/,
     );
   });
 

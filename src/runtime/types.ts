@@ -13,6 +13,9 @@
  * along a curve, addressed by a single sector index `[cs]`, and it streams
  * as "the next N metres" rather than as a disc. That is what
  * one-dimensional content — a racetrack, a road, a river — actually wants.
+ * Such a level may also state its window DIRECTIONALLY
+ * ({@link LevelDef.aheadArc} / {@link LevelDef.behindArc}), because the
+ * thing riding a curve is usually going one way along it.
  */
 import type { CookResult, Graph } from "../graph/index.js";
 
@@ -257,7 +260,10 @@ export type CellContext = CellContextXZ | CellContextXYZ | CellContextPath;
  * other, because an arc length and a world length are not comparable
  * quantities. Each level's `generationRadius` should be at least as large
  * as every finer level's, so a wanted cell's parent is also wanted —
- * a cell whose parent cell was never cooked stays pending.
+ * a cell whose parent cell was never cooked stays pending. That rule
+ * applies PER HALF to a directional `"path"` window: a child wanting 400
+ * units ahead under a parent wanting 200 leaves the far half of the
+ * child's window pending forever, exactly as an oversized radius would.
  */
 export interface LevelDef {
   /** Unique level name, used in stats, callbacks, and accessors. */
@@ -283,7 +289,10 @@ export interface LevelDef {
    *   (keyed by level name), not from the viewpoint, and the radii are
    *   arc distances to the sector's nearest bound, so a `"path"` level
    *   streams "the next N metres" rather than a disc. Cells are neither
-   *   generated nor retained by any world-space measure.
+   *   generated nor retained by any world-space measure. The window may
+   *   be symmetric ({@link generationRadius}) or directional
+   *   ({@link aheadArc} + {@link behindArc}) — one spelling per level,
+   *   and the second is refused alongside the first.
    *
    * Nesting rules (the parent is the level above):
    * - `"xz"` under `"xz"`: the parent is the XZ cell containing this
@@ -340,20 +349,122 @@ export interface LevelDef {
    * viewpoint: distance in XZ for `"xz"` levels, in XYZ for `"xyz"`
    * levels (both in world units). For `"path"` levels it is instead an
    * ARC distance, in the same units as `path.length`, from the level's
-   * anchor to the sector's nearest bound. Required for bounded levels (a
-   * positive finite number). Optional for an unbounded level: omit it,
-   * or pass a value and it is accepted and ignored — both spellings are
-   * valid, so configs written before it became optional keep working
-   * unchanged.
+   * anchor to the sector's nearest bound — the SYMMETRIC spelling of the
+   * window {@link aheadArc} / {@link behindArc} state directionally, and
+   * exactly equivalent to `aheadArc = behindArc = generationRadius`.
+   * Required for bounded levels (a positive finite number), except a
+   * `"path"` level that states the directional pair instead, where it is
+   * refused. Optional for an unbounded level: omit it, or pass a value
+   * and it is accepted and ignored — both spellings are valid, so configs
+   * written before it became optional keep working unchanged.
    */
   readonly generationRadius?: number;
   /**
    * Hysteresis: a generated cell is kept until its center exits this
    * radius (same distance metric and units as `generationRadius`, so arc
    * length for a `"path"` level). Defaults to `generationRadius * 1.25`;
-   * must be >= `generationRadius`. Ignored for an unbounded level.
+   * must be >= `generationRadius`. Ignored for an unbounded level, and
+   * refused on a `"path"` level with a directional window, which uses
+   * {@link retainAheadArc} / {@link retainBehindArc} instead — see the
+   * argument there for why one scalar cannot serve two unequal halves.
    */
   readonly retainRadius?: number;
+  /**
+   * How far AHEAD of the anchor a `"path"` level wants sectors, in the
+   * units of {@link path}`.length`. Its partner {@link behindArc} states
+   * the other half; together they REPLACE {@link generationRadius} on
+   * this level, which is refused alongside them. Finite and >= 0.
+   *
+   * WHY A WINDOW RATHER THAN A RADIUS. A radius is the right shape for a
+   * viewpoint that may turn around: every direction is equally likely, so
+   * the want-set is a disc. A car at racing speed is the opposite case.
+   * It will be four hundred metres further down the road in a few seconds
+   * and will not revisit the hundred metres behind it this lap, so a
+   * symmetric window spends half its cell budget on road already spent
+   * and still runs out of road in front. `aheadArc: 400, behindArc: 100`
+   * keeps the same 500 units of track resident as
+   * `generationRadius: 250` and puts four fifths of it where the car is
+   * going. That is not a tuning preference, it is the reason
+   * `cellMode: "path"` exists: content on a curve is consumed in one
+   * direction, and a disc is the shape that ignores that.
+   *
+   * "AHEAD" NEEDS NO HEADING INPUT. The table has its own direction —
+   * increasing arc IS ahead, by the same convention that puts sector 0 at
+   * `s = 0` — so a level travelled the other way states its window
+   * mirrored (`aheadArc: 100, behindArc: 400`) rather than passing a
+   * reverse flag. A flag would have to be one of two things, and both are
+   * worse: static configuration, in which case the mirrored window
+   * already IS it under a shorter name, or per-update state, in which
+   * case which sectors are wanted becomes a function of the frame that
+   * asked and the cook schedule stops being reproducible from
+   * configuration plus anchor path.
+   *
+   * IT IS POLICY, WHICH IS WHY IT LIVES HERE AND NOT ON `update`. The
+   * anchor is a COORDINATE and moves every frame; the window is the same
+   * kind of thing as `generationRadius` and `maxCellsPerLevel` — a
+   * standing statement of how much of the world this level keeps
+   * resident. The runtime already draws that line, and a per-frame window
+   * would cross it: two runs feeding the same anchors would want
+   * different sets, and "same result whatever the cook order" would no
+   * longer be checkable.
+   *
+   * ZERO IS LEGAL, unlike `generationRadius`, which must be positive.
+   * `behindArc: 0` wants the sector the anchor is standing in — the
+   * anchor is inside it, so its gap is zero on both sides — and nothing
+   * further back. A level that never looks behind is the limit case of
+   * the feature, not a misconfiguration.
+   *
+   * A WINDOW LONGER THAN THE TABLE CLAMPS TO THE TABLE. On a closed
+   * table, `aheadArc + behindArc >= path.length` wants every sector
+   * exactly once (each claimed by whichever half reaches it in fewer arc
+   * units, which is also the order they cook in); widening further
+   * changes nothing, and the two halves never fight over a sector because
+   * the wanted set is keyed by sector index. It is deliberately not an
+   * error: a short circuit with a long look-ahead is a real
+   * configuration — "keep the whole lap resident" — and refusing it would
+   * turn an edit to `path.length` into a breakage. On an open table the
+   * overflow simply runs off the ends, where no sectors exist.
+   */
+  readonly aheadArc?: number;
+  /**
+   * How far BEHIND the anchor a `"path"` level wants sectors (decreasing
+   * arc), in the units of {@link path}`.length`. The other half of
+   * {@link aheadArc} — see there for the whole argument, including why
+   * both halves must be stated, why 0 is legal, and what an over-long
+   * window means. Finite and >= 0.
+   */
+  readonly behindArc?: number;
+  /**
+   * Hysteresis for the AHEAD half of a directional `"path"` window: a
+   * generated sector is kept until it lies more than this many arc units
+   * ahead of the anchor. Defaults to `aheadArc * 1.25` — the same 1.25
+   * {@link retainRadius} applies, applied to this half alone — and must
+   * be finite and >= `aheadArc`.
+   *
+   * WHY EACH HALF SCALES INDEPENDENTLY. A single retain scalar across
+   * both halves is not a simpler version of this rule, it is a different
+   * and worse one, and it fails in both directions. Take
+   * `aheadArc: 400, behindArc: 100`. One retain of 500 keeps a sector
+   * that is 480 units BEHIND — the behind half silently grows to five
+   * times the depth that was asked for, until the LRU cap starts
+   * arbitrating what the window was supposed to. One retain of 125 strips
+   * the ahead half's band instead: a sector 130 ahead is wanted, cooked,
+   * and evicted in the same update, and wanted again on the next one —
+   * the exact thrash the band exists to prevent, for a car parked just
+   * past a boundary. There is no third value that serves both halves,
+   * because the halves are unequal by construction. So `retainRadius` is
+   * REFUSED alongside a directional window rather than quietly applied to
+   * both: the config that cannot express the intent should not typecheck
+   * into the one that gets it wrong.
+   */
+  readonly retainAheadArc?: number;
+  /**
+   * Hysteresis for the BEHIND half of a directional `"path"` window; the
+   * partner of {@link retainAheadArc}, defaulting to `behindArc * 1.25`
+   * and required to be finite and >= `behindArc`. See there for why the
+   * two halves carry their own bands instead of sharing one scalar.
+   */
+  readonly retainBehindArc?: number;
   /**
    * The graph cooked for each cell of this level. It is shared across the
    * level's cells: before each cell cook the runtime calls {@link bind},
