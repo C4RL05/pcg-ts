@@ -13,7 +13,7 @@
  * distance in world units and the car moves at the speed it is given.
  */
 import { type Geometry } from "pcg-ts";
-import { TRACK_FRAME } from "./graph.js";
+import { CORNER_MODEL, TRACK_FRAME } from "./graph.js";
 
 /** A pose on the lap: where, and the three axes of the track frame there. */
 export interface Pose {
@@ -36,6 +36,25 @@ export interface TrackCoord {
   readonly height: number;
 }
 
+/**
+ * The corner model, as the graph cooked it. See `CORNER_MODEL`.
+ *
+ * Four columns rather than a list of corners, because that is the shape a
+ * point attribute has: the graph answers per frame, and assembling the
+ * frames into corners is `cornersOf`'s job. Reading them costs one pass
+ * and saves every consumer from differencing the tangents again.
+ */
+export interface CornerColumns {
+  /** Local corner radius in W, per frame. Infinite on a straight. */
+  readonly radiusW: Float64Array;
+  /** Signed curvature in 1/W, per frame. Positive turns RIGHT. */
+  readonly turnK: Float64Array;
+  /** Per frame, xy: frames into this corner counting this one, and the turn so far. */
+  readonly behind: Float64Array;
+  /** Per frame, xy: frames left counting this one, and the turn remaining. */
+  readonly ahead: Float64Array;
+}
+
 /** The lap, in the form the cameras and the placement lookup read it. */
 export interface Lap {
   readonly count: number;
@@ -55,6 +74,19 @@ export interface Lap {
   readonly halfWidth: number;
   /** Total lap length in half-widths, which is what a station wraps at. */
   readonly lengthW: number;
+  /**
+   * The cooked corner model, when the frames carried one.
+   *
+   * OPTIONAL BECAUSE A LAP NEED NOT HAVE BEEN COOKED. The corner suites
+   * build laps by hand out of stated positions and stated tangents — a
+   * circle whose radius is known by construction, a stadium with exactly
+   * two bends — precisely so the model can be checked against arithmetic
+   * rather than against itself, and there is no graph in that. `corners.ts`
+   * reads these columns when they are here and states the same rule in
+   * TypeScript when they are not; see its header for why that second
+   * statement is worth its keep rather than being a duplicate to delete.
+   */
+  readonly corner?: CornerColumns;
 }
 
 /** Read a numeric point column as plain numbers, live elements only. */
@@ -88,7 +120,37 @@ export function readLap(frames: Geometry): Lap {
     s[i + 1] = s[i] + Math.hypot(dx, dy, dz);
   }
   const length = s[count];
-  return { count, p, tangent, across, up, s, length, halfWidth, lengthW: length / halfWidth };
+  return {
+    count,
+    p,
+    tangent,
+    across,
+    up,
+    s,
+    length,
+    halfWidth,
+    lengthW: length / halfWidth,
+    corner: readCorner(frames),
+  };
+}
+
+/**
+ * The corner columns, if the graph that cooked these frames wrote them.
+ *
+ * TOLERANT OF THEIR ABSENCE ON PURPOSE. `readLap` is the reader for any
+ * framed centreline, and the corner model is an opt-in branch off the
+ * frame — a graph that only wants a camera to ride has no reason
+ * to pay for them. Requiring the columns here would make every such graph
+ * fail at the read rather than at the rule that actually wanted a corner.
+ */
+function readCorner(frames: Geometry): CornerColumns | undefined {
+  if (!frames.attrs.point.get(CORNER_MODEL.radius)) return undefined;
+  return {
+    radiusW: col(frames, CORNER_MODEL.radius),
+    turnK: col(frames, CORNER_MODEL.turn),
+    behind: col(frames, CORNER_MODEL.behind),
+    ahead: col(frames, CORNER_MODEL.ahead),
+  };
 }
 
 /**
