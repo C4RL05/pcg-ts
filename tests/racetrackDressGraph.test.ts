@@ -54,11 +54,12 @@
  */
 import { describe, expect, it } from "vitest";
 import { Quaternion, Vector3 } from "three";
-import { Graph, cook, firstGeometry, type Geometry } from "pcg-ts";
+import { Graph, cook, firstGeometry, type DataCollection, type Geometry } from "pcg-ts";
 import {
   DRESS_OUTPUTS,
   COVER,
   buildDressGraph,
+  buildRoundGraph,
   dressLapByGraph,
   type GraphDressing,
 } from "../demos/racetrack/dressGraph.js";
@@ -77,7 +78,7 @@ import {
   type CullResult,
   type Occluder,
 } from "../demos/racetrack/sightline.js";
-import { SAME_PLACE_W } from "../demos/racetrack/tolerance.js";
+import { SAME_PLACE_W, SAME_STATION_W } from "../demos/racetrack/tolerance.js";
 import { bucketOf, placeAsset, type PlaceableAsset } from "../demos/racetrack/assets.js";
 import { radiusAtW } from "../demos/racetrack/corners.js";
 import { reserveMarkers, type StationedPlacement } from "../demos/racetrack/legibility.js";
@@ -422,6 +423,80 @@ const lateralBound = (lap: Lap, px: number, py: number, pz: number, t: number): 
   (ulp(px) + ulp(py) + ulp(pz)) / lap.halfWidth + 4 * ulp(t);
 
 /**
+ * The three repairs that have a fixed point, iterated as the graph iterates
+ * them - the reference for the `repeatUntil` in `buildDressGraph`.
+ *
+ * NOT `dressLap`'s LOOP, AND THE DIFFERENCE IS THE POINT. That loop runs
+ * eight repairs; five of them read a lap-wide measurement of the dressing
+ * every earlier repair rewrote, or draw from `seed + rounds`, and one of
+ * those does not terminate at all on the enclosed kit. The graph iterates
+ * the three that answer from the list they were handed, so the honest
+ * reference is those same three iterated the same way. Comparing against
+ * `dressLap` would measure the five that are missing.
+ *
+ * THE SETTLE RULE IS THE GRAPH'S, restated here rather than imported,
+ * because the whole claim is that two independent statements of it agree.
+ * It counts SURVIVORS that moved and deliberately not placements the cull
+ * removed - `writeSettleCount` argues why that is correct rather than
+ * convenient, and the round counts here are what would catch it if it
+ * were not.
+ */
+function repairReference(
+  lap: Lap,
+  start: readonly StationedPlacement[],
+  immovable: ReadonlySet<number>,
+  maxRounds = 12,
+): { placements: StationedPlacement[]; rounds: number; converged: boolean } {
+  // THE SAME NUMBERS THE GRAPH STARTS FROM, WHICH IS NOT THE SAME AS THE
+  // SAME LIST. The graph's first act is to store this list in f32 columns,
+  // so its Z-1 tests an f32 lateral where a f64 reference would test the
+  // number the catalogue published. That difference is about 5e-7W — far
+  // below any threshold here, and a BOOLEAN occlusion verdict does not
+  // care how far below: a placement whose cone test is marginal can flip
+  // on one side and not the other, and the symptom is a survivor-count
+  // mismatch blamed on the loop. Rounding the start is what makes the two
+  // sides comparable by construction rather than by luck; it is the guard
+  // an earlier version of this file placed mid-chain, moved to the only
+  // place a loop still has one.
+  let list = start.map((p) => ({ ...p, t: Math.fround(p.t), h: Math.fround(p.h) }));
+  let rounds = 0;
+  let converged = false;
+  for (let r = 0; r < maxRounds; r++) {
+    rounds = r + 1;
+    let moved = 0;
+
+    list = list.map((p) => {
+      const want = corridorReference(p);
+      if (want.t === p.t && want.h === p.h) return p;
+      moved++;
+      return { ...p, t: want.t, h: want.h };
+    });
+
+    const cull = cullReference(lap, list, immovable);
+    moved += cull.moved;
+    list = cull.kept.map((o) => ({ ...o.src, t: o.t }));
+
+    const edged = repairFalseEdges(list, lap.lengthW, 1);
+    moved += edged.moves;
+    list = edged.placements;
+
+    if (moved === 0) {
+      converged = true;
+      break;
+    }
+  }
+  return { placements: list, rounds, converged };
+}
+
+/** The one number on a value output, for the loop's `rounds`/`converged`. */
+function numberOf(collection: DataCollection | undefined): number {
+  for (const item of collection ?? []) {
+    if (item.kind === "value" && typeof item.value === "number") return item.value;
+  }
+  throw new Error("expected a value item carrying a number");
+}
+
+/**
  * `buildBoxes` over the list L-1 left — the reference geometry for every
  * comparison that is about boxes rather than about the cull.
  *
@@ -433,25 +508,32 @@ const lateralBound = (lap: Lap, px: number, py: number, pz: number, t: number): 
  * the graph's geometry, or the box comparison folds into the coverage one
  * and neither says which half was wrong.
  *
- * The cull runs over `readPlacements(got.placed, ...)` rather than over the
- * caller's own list, for the reason that function gives: an f32 lateral
- * and an f64 one reaching the same boolean occlusion verdict is luck, not
- * a property.
+ * IT RUNS THE WHOLE FIXED POINT, and the f32 guard that used to sit
+ * mid-chain has moved to the start of it. This used to cull once from
+ * `readPlacements(got.placed, ...)` so that both sides tested the same f32
+ * laterals; now the graph iterates, there is no single mid-point to hand
+ * over, and `repairReference` rounds its starting list to f32 instead. The
+ * reason is unchanged and is worth keeping in view: an f32 lateral and an
+ * f64 one reaching the same BOOLEAN occlusion verdict is luck, not a
+ * property, and the symptom of that luck running out would be a survivor
+ * count blamed on the box build.
  */
 function referenceBoxes(
   lap: Lap,
-  got: GraphDressing,
   placements: readonly StationedPlacement[],
   immovable: ReadonlySet<number>,
   seed: number,
 ): PlacedBox[] {
-  const cull = cullReference(lap, readPlacements(got.placed, placements), immovable);
-  // ONE PASS OF L-5, matching the graph. `repairFalseEdges` defaults to
-  // eight and the graph states one, so the reference has to say which.
-  // How much that costs is measured by the L-5 test rather than guessed
-  // at here.
-  const edged = repairFalseEdges(cull.kept.map((o) => ({ ...o.src, t: o.t })), lap.lengthW, 1);
-  return buildBoxes(shippedVocabulary(), lap, edged.placements, seed);
+  // THE WHOLE FIXED POINT, NOT ONE ROUND OF IT, since the graph now runs
+  // the three repairs to convergence before it builds a box. A one-round
+  // reference would differ by whatever the second round moved, and would
+  // report it as a box-building defect.
+  return buildBoxes(
+    shippedVocabulary(),
+    lap,
+    repairReference(lap, placements, immovable).placements,
+    seed,
+  );
 }
 
 describe("racetrack dressing, as a graph", () => {
@@ -465,6 +547,152 @@ describe("racetrack dressing, as a graph", () => {
     expect(COVER.floorW).toBe(ENCLOSURE.floorW);
     expect(COVER.ceilingW).toBe(ENCLOSURE.ceilingW);
     expect(COVER.minHits).toBe(ENCLOSURE.minHits);
+  });
+
+  it("lowers a false-edge member clear of the band, which is what lets the loop stop", () => {
+    // THE MARGIN THE WHOLE FIXED POINT RESTS ON, AND NOTHING ELSE STATES IT.
+    //
+    // L-5's settle flag is `edgeDrop`, and `edgeDrop` marks the member the
+    // rule SELECTED, not one it observed to have moved — re-selecting an
+    // already-lowered member would set it again. The loop terminates only
+    // because a lowered member leaves the edge band and so cannot be a run
+    // member next round: the rule drops it to `heightW[0] - 0.05`, and the
+    // band test is slacked outward by `SAME_PLACE_W`, so what actually has
+    // to hold is that 0.05 is bigger than that slack.
+    //
+    // It is bigger by five hundred times today, so this looks like a
+    // formality. It is not: retune the drop toward the floor — or widen
+    // `SAME_PLACE_W`, which a later f32 finding could easily argue for —
+    // and the loop spins to `maxRounds` reporting `converged: false` with
+    // nothing actually moving, which is the hardest kind of failure to
+    // read. This is the assertion that names the connection.
+    const DROP_BELOW_FLOOR = 0.05;
+    expect(DROP_BELOW_FLOOR).toBeGreaterThan(SAME_PLACE_W);
+    // And the lowered height really is outside the slacked band test the
+    // graph uses, which is the thing that has to be true.
+    expect(FALSE_EDGE.heightW[0] - DROP_BELOW_FLOOR).toBeLessThan(
+      FALSE_EDGE.heightW[0] - SAME_PLACE_W,
+    );
+  });
+
+  it("runs the three repairs to the same fixed point the rules do", async () => {
+    // WHAT ONLY A LOOP CAN BE WRONG ABOUT. Every other test here checks
+    // one rule for one round. This checks the three things that are
+    // properties of the iteration and of nothing inside it: that it
+    // stops, that it stops in the same place the TypeScript does, and
+    // that where it stopped is actually a fixed point.
+    let seeds = 0;
+    let totalRounds = 0;
+    let worstT = 0;
+    let worstMargin = 0;
+    const perSeed: string[] = [];
+
+    for (const seed of SEEDS) {
+      const { lap, frames } = await cookLap(seed);
+      const src = beforeCorridor(lap, seed);
+      const immovable = brakeOf(seed);
+      const g = buildDressGraph({
+        kit: shippedVocabulary(),
+        lap,
+        frames,
+        placements: src,
+        seed,
+        immovable,
+      });
+      const out = (
+        await cook(g, {
+          outputs: [DRESS_OUTPUTS.placements, DRESS_OUTPUTS.rounds, DRESS_OUTPUTS.converged],
+        })
+      ).outputs;
+      const after = firstGeometry(out[DRESS_OUTPUTS.placements] ?? []);
+      if (!after) throw new Error("the dress graph produced no placements");
+      const rounds = numberOf(out[DRESS_OUTPUTS.rounds]);
+      const converged = numberOf(out[DRESS_OUTPUTS.converged]) !== 0;
+
+      const ref = repairReference(lap, src, immovable);
+      seeds++;
+      totalRounds += rounds;
+      perSeed.push(`${seed}:${rounds}${converged ? "" : "!"}`);
+
+      // IT SETTLED. A bounded repair that ran out is not a failed cook and
+      // is not a pass either — it is a lap on which some rule is still
+      // broken, which is exactly why the node reports it instead of
+      // returning quietly.
+      expect(converged, `seed ${seed}: the repair loop ran out of rounds`).toBe(true);
+      expect(ref.converged, `seed ${seed}: the reference loop ran out of rounds`).toBe(true);
+
+      // THE SAME NUMBER OF ROUNDS. This is the assertion that would catch
+      // a settle signal counting the wrong thing: a loop that stopped one
+      // round early or late would still land on the same answer here (the
+      // extra round moves nothing) and only the count would say so.
+      expect(rounds, `seed ${seed}: rounds`).toBe(ref.rounds);
+
+      // AND THE SAME PLACE, member by member. The station is what says
+      // WHICH placement each one is — see the comment on the comparison
+      // itself — rather than `placementId`, which the reference has no way
+      // to carry through three repairs that all rebuild their lists.
+      expect(after.pointCount, `seed ${seed}: survivor count`).toBe(ref.placements.length);
+      const kP = after.attrs.point.require("P");
+      const kStation = after.attrs.point.require("stationW");
+      const kT = after.attrs.point.require("trackT");
+      const kH = after.attrs.point.require("trackH");
+      for (let i = 0; i < after.pointCount; i++) {
+        const want = ref.placements[i];
+        // The station pins WHICH placement this is: it is drawn from a
+        // continuous process and no repair in this body changes it, so two
+        // lists agreeing on it position by position are the same list in
+        // the same order. The lateral and the height are what the repairs
+        // actually moved.
+        expect(
+          Math.abs(kStation.get(i) - want.station),
+          `seed ${seed}: placement ${i} is a different placement`,
+        ).toBeLessThan(SAME_STATION_W);
+        // THE SAME MECHANISM THE CULL TEST DERIVES, TIMES THE ROUNDS.
+        // `trackT` is not merely re-stored each round, it is RECOMPUTED:
+        // L-1 recovers its push by projecting a world position onto
+        // `across` and dividing by the half-width, so the lateral inherits
+        // the f32 rounding of a coordinate at the lap's world scale. That
+        // is `lateralBound`, and it dominates the lateral's own spacing by
+        // two orders. Sizing this on `ulp(t)` instead passed at 98% of its
+        // bound, which is a bound that has not understood what it is
+        // bounding — the number it tracked was a coincidence of how far
+        // this circuit happens to sit from the origin.
+        const bound =
+          rounds * lateralBound(lap, kP.get(i, 0), kP.get(i, 1), kP.get(i, 2), want.t);
+        worstT = Math.max(worstT, Math.abs(kT.get(i) - want.t));
+        worstMargin = Math.max(worstMargin, Math.abs(kT.get(i) - want.t) / bound);
+        expect(Math.abs(kT.get(i) - want.t), `seed ${seed}: placement ${i} lateral`).toBeLessThan(
+          bound,
+        );
+        // The height takes no such route — nothing recovers it from a
+        // world position — so it is storage and arithmetic alone, four
+        // spacings a round.
+        expect(Math.abs(kH.get(i) - want.h), `seed ${seed}: placement ${i} height`).toBeLessThan(
+          4 * rounds * ulp(want.h),
+        );
+      }
+
+      // AND IT REALLY IS A FIXED POINT — of the GRAPH'S cloud, which is the
+      // only version of this assertion that can fail. Running one more
+      // reference round from `ref.placements` would be a tautology: the
+      // reference has already been asserted to have converged, so its last
+      // round moved nothing and a further round over the same list is the
+      // same computation again. Reading the graph's own survivors back and
+      // running the rule over THOSE is a claim about the graph.
+      const again = repairReference(lap, readCulled(after, src), immovable, 1);
+      expect(again.converged, `seed ${seed}: the settled lap is not a fixed point`).toBe(true);
+    }
+
+    console.log(
+      `dress graph repair loop: ${seeds} seeds settled in ${perSeed.join(", ")} rounds ` +
+        `(${(totalRounds / seeds).toFixed(2)} mean); "!" would mark one that ran out. ` +
+        `Worst lateral ${worstT.toExponential(2)}W, using ${(worstMargin * 100).toFixed(1)}% ` +
+        `of its per-round bound`,
+    );
+    // A LOOP THAT ALWAYS RAN ONCE WOULD NOT BE A LOOP. If every seed
+    // settled in a single round the wrapper would be untested machinery,
+    // so the suite says out loud that at least one lap needed a second.
+    expect(totalRounds, "no lap needed more than one round").toBeGreaterThan(seeds);
   });
 
   it("builds the same boxes buildBoxes does", async () => {
@@ -525,17 +753,15 @@ describe("racetrack dressing, as a graph", () => {
       // handful of laterals per lap, which is precisely the finding the
       // sampling test below states.
       //
-      // AND IT STARTS FROM THE GRAPH'S OWN Z-1 ANSWER, for the reason
-      // `readPlacements` gives: `dressing.placements` carries f64 laterals
-      // where the graph's cull sees f32 ones, and the corridor test
-      // measures that gap at 5e-7W. Feeding the two culls different
-      // laterals folds an f32 difference into a BOOLEAN occlusion verdict,
-      // where a grazing placement can flip on one side only — and the
-      // symptom would be a box COUNT mismatch reported as a box-building
-      // defect, which is the exact misattribution this paragraph is about.
+      // AND IT STARTS FROM THE SAME f32 NUMBERS THE GRAPH DOES.
+      // `dressing.placements` carries f64 laterals where the graph's
+      // columns carry f32 ones, and the corridor test measures that gap at
+      // 5e-7W. Below every threshold here — and a BOOLEAN occlusion
+      // verdict does not care how far below, which is why
+      // `repairReference` rounds its input rather than trusting the gap to
+      // stay harmless.
       const want: readonly PlacedBox[] = referenceBoxes(
         lap,
-        got,
         dressing.placements,
         immovable,
         seed,
@@ -639,7 +865,7 @@ describe("racetrack dressing, as a graph", () => {
     for (const seed of SEEDS) {
       const { lap, frames } = await cookLap(seed);
       const placements = beforeCorridor(lap, seed);
-      const g = buildDressGraph({
+      const g = buildRoundGraph({
         kit: shippedVocabulary(),
         lap,
         frames,
@@ -745,7 +971,7 @@ describe("racetrack dressing, as a graph", () => {
       // the comparison worth making.
       const src = beforeCorridor(lap, seed);
       const immovable = brakeOf(seed);
-      const g = buildDressGraph({
+      const g = buildRoundGraph({
         kit: shippedVocabulary(),
         lap,
         frames,
@@ -854,7 +1080,7 @@ describe("racetrack dressing, as a graph", () => {
       const { lap, frames } = await cookLap(seed);
       const src = beforeCorridor(lap, seed);
       const immovable = brakeOf(seed);
-      const g = buildDressGraph({
+      const g = buildRoundGraph({
         kit: shippedVocabulary(),
         lap,
         frames,
@@ -1060,7 +1286,7 @@ describe("racetrack dressing, as a graph", () => {
 
     for (const c of cases) {
 
-      const g = buildDressGraph({
+      const g = buildRoundGraph({
         kit,
         lap,
         frames,
@@ -1170,7 +1396,7 @@ describe("racetrack dressing, as a graph", () => {
 
       const src = beforeCorridor(lap, seed);
       const immovable = brakeOf(seed);
-      const g = buildDressGraph({
+      const g = buildRoundGraph({
         kit: shippedVocabulary(),
         lap,
         frames,
@@ -1224,7 +1450,7 @@ describe("racetrack dressing, as a graph", () => {
     const { lap, frames } = await cookLap(seed);
     const src = beforeCorridor(lap, seed);
     const build = (immovable: ReadonlySet<number>): Graph =>
-      buildDressGraph({ kit: shippedVocabulary(), lap, frames, placements: src, seed, immovable });
+      buildRoundGraph({ kit: shippedVocabulary(), lap, frames, placements: src, seed, immovable });
 
     const open0 = (await cook(build(new Set()), { outputs: [DRESS_OUTPUTS.placed] })).outputs;
     const before = firstGeometry(open0[DRESS_OUTPUTS.placed] ?? []);
@@ -1424,7 +1650,7 @@ describe("racetrack dressing, as a graph", () => {
       // measurements of two different laps, and the masks agreeing would
       // be luck about whether a pushed piece happened to still cover the
       // frame it used to.
-      const want = enclosureMask(lap, referenceBoxes(lap, got, dressing.placements, immovable, seed));
+      const want = enclosureMask(lap, referenceBoxes(lap, dressing.placements, immovable, seed));
       expect(got.covered.length).toBe(want.length);
 
       // THE LAP HAS TO BE COVERED SOMEWHERE, OR THIS PROVES NOTHING.

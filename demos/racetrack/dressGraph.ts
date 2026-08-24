@@ -118,11 +118,13 @@
 import {
   Graph,
   type DataCollection,
+  type ExposedPin,
   type Geometry,
   type NodeHandle,
   abs,
   add,
   attribute,
+  attributeReduce,
   copyToPoints,
   cook,
   createPointCloud,
@@ -144,6 +146,7 @@ import {
   orientAlongVector,
   pathCoverage,
   pointsToPath,
+  repeatUntilNode,
   runFit,
   select,
   setAttribute,
@@ -165,6 +168,18 @@ import { CORRIDOR } from "./zones.js";
 export const DRESS_OUTPUTS = {
   /** One point per placed box: P the world centre, rot the track frame, scale the world extents. */
   boxes: "boxes",
+  /**
+   * How many rounds the repair loop ran, and whether it settled.
+   *
+   * VALUE ITEMS RATHER THAN COLUMNS, because neither is a fact about a
+   * placement. `rounds` counts cooks of the body; `converged` is false
+   * exactly when the last round still moved something and the cap stopped
+   * it. `dressLap` reports both in a stat line and this restates them as
+   * graph outputs, which is the difference between a bounded repair that
+   * says it ran out and one whose caller has to know to look.
+   */
+  rounds: "rounds",
+  converged: "converged",
   /**
    * One point per placement, after Z-1 and lifted into the world, before
    * L-1 has removed or moved anything.
@@ -235,6 +250,29 @@ export const COVER = {
   /** At least half. */
   minHits: 3,
 } as const;
+
+/**
+ * The detail attribute the repair body publishes and `repeatUntil` reads.
+ *
+ * Named here rather than left at the node's default so that the body and
+ * the wrapper cannot disagree about it: they are wired together in
+ * {@link assemble}, and a default that matched by luck would keep matching
+ * right up until somebody changed one of them.
+ */
+const SETTLE_ATTR = "moves";
+
+/**
+ * How many rounds the repair may take before it is stopped and told so.
+ *
+ * TWELVE, WHICH IS `dressLap`'s `MAX_REPAIR_ROUNDS` AND NOT A COINCIDENCE
+ * — the two loops have to be able to disagree about the ANSWER without
+ * disagreeing about how hard they tried. It is a ceiling and not a
+ * schedule: these three repairs settle in one round on the shipped
+ * vocabulary and two on one of the four seeds, so the cap has never been
+ * approached here. `dressLap` reaches it on the enclosed kit, but on a
+ * repair that is not in this body.
+ */
+const MAX_ROUNDS = 12;
 
 /** The columns this graph reads off the placement cloud it is handed. */
 const PLACEMENT = {
@@ -363,6 +401,18 @@ const PLACEMENT = {
   runCount: "edgeCount",
   /** 1 on the one placement per qualifying run that L-5 lowers. */
   drop: "edgeDrop",
+  /** 1 where Z-1 moved this placement this round. See {@link writeCorridor}. */
+  corridorMoved: "corridorMoved",
+  /**
+   * 1 where ANY repair moved this placement this round — the per-point half
+   * of the loop's settle signal.
+   *
+   * A COLUMN AND NOT A COUNT, because the only thing that can be summed
+   * into a geometry-wide number is a per-element attribute. See
+   * {@link writeSettleCount} for what it is summed into and for the one
+   * thing it deliberately cannot see.
+   */
+  roundMoved: "roundMoved",
 } as const;
 
 /** The columns the pose library carries, one point per box of one pose. */
@@ -426,6 +476,16 @@ export interface GraphDressing {
    * against `repairFalseEdges(..., 1)` for exactly that reason.
    */
   readonly lowered: number;
+  /**
+   * How many rounds the repair loop ran, and whether it settled.
+   *
+   * `converged` false does NOT mean the cook failed — it means some rule
+   * is still unsatisfied on this lap and the cap stopped the search. That
+   * is a fact the caller decides what to do with, and the whole reason a
+   * bounded repair has to report it rather than returning quietly.
+   */
+  readonly rounds: number;
+  readonly converged: boolean;
   /**
    * How many copies the box build stamped before the filter, which is
    * the pose library times the placement count.
@@ -733,7 +793,7 @@ function placementCloudInTrackFrame(
  * would leave that piece exactly where it was, inside the corridor,
  * having been "resolved".
  */
-function writeCorridor(g: Graph, target: NodeHandle, tag: string): NodeHandle {
+function writeCorridor(g: Graph, tag: string): { head: NodeHandle; tail: NodeHandle } {
   const t = attribute(PLACEMENT.t);
   const h = attribute(PLACEMENT.h);
   const tall = attribute(PLACEMENT.sizeTall);
@@ -813,6 +873,15 @@ function writeCorridor(g: Graph, target: NodeHandle, tag: string): NodeHandle {
     gt(abs(sub(wantBase, baseH)), SAME_PLACE_W),
   );
 
+  // THE GATE IS ALSO PUBLISHED, because a repair inside a fixed point has
+  // to say whether it fired. `dressLap` keeps this as a local counter it
+  // adds up per round; a graph has nowhere to put a local, so the same
+  // fact becomes a column and {@link writeSettleCount} reduces it. It is
+  // written FIRST in the chain, off the same expression the two fixes read,
+  // so it describes the decision rather than its result — recovering it
+  // afterwards by comparing `trackT` against what came in would be a
+  // second derivation of a value this node already has.
+
   // THE LATERAL LANDS IN A COLUMN OF ITS OWN AND IS MOVED ACROSS LAST,
   // AND WITHOUT THAT THIS IS A RULE THAT READS ITS OWN OUTPUT.
   //
@@ -833,12 +902,18 @@ function writeCorridor(g: Graph, target: NodeHandle, tag: string): NodeHandle {
   // from a column nothing else reads. Every node then reads inputs no
   // earlier node in this stage has written, which is a property that can
   // be checked by looking rather than by case analysis.
+  const fired = g.add(
+    setAttribute,
+    { name: PLACEMENT.corridorMoved, tupleSize: 1, value: moved },
+    `${tag}_corridorFired`,
+  );
+
   const nextT = g.add(
     setAttribute,
     { name: PLACEMENT.tNext, tupleSize: 1, value: select(moved, wantT, t) },
     `${tag}_corridorT`,
   );
-  g.connect(target, "out", nextT, "in");
+  g.connect(fired, "out", nextT, "in");
 
   // Back to a centre height, through the same `base + tall/2` the rule
   // uses — so a placement the gate found unmoved keeps the `h` it came in
@@ -860,7 +935,7 @@ function writeCorridor(g: Graph, target: NodeHandle, tag: string): NodeHandle {
     `${tag}_corridorApply`,
   );
   g.connect(outH, "out", outT, "in");
-  return outT;
+  return { head: fired, tail: outT };
 }
 
 /**
@@ -1034,10 +1109,9 @@ function writeWorldTransform(
 function writeSightlineCull(
   g: Graph,
   placements: NodeHandle,
-  frames: NodeHandle,
   halfWidth: number,
   tag: string,
-): NodeHandle {
+): { tail: NodeHandle; sight: NodeHandle } {
   const cull = g.add(
     occlusionCull,
     {
@@ -1078,7 +1152,10 @@ function writeSightlineCull(
     `${tag}_cone`,
   );
   g.connect(placements, "out", cull, "in");
-  g.connect(frames, "out", cull, "sight");
+  // The `sight` pin is left UNCONNECTED and handed back, because inside the
+  // repair body it is fed by a portal rather than by a node: the lap's
+  // frames are the same every round, so `repeatUntil` broadcasts them
+  // whole and only the placement cloud is carried forward.
 
   // HOW FAR IT MOVED, RECOVERED FROM THE TWO POSITIONS RATHER THAN FROM THE
   // MOVED ONE. See `PLACEMENT.placedP`: the difference is purely along
@@ -1115,7 +1192,7 @@ function writeSightlineCull(
     `${tag}_coneT`,
   );
   g.connect(push, "out", lateral, "in");
-  return lateral;
+  return { tail: lateral, sight: cull };
 }
 
 /**
@@ -1344,6 +1421,150 @@ function writeFalseEdges(g: Graph, target: NodeHandle, lapW: number, tag: string
 }
 
 /**
+ * THE SETTLE SIGNAL: how many placements this round moved.
+ *
+ * `repeatUntil` re-cooks its body until a named DETAIL attribute reads
+ * zero, so a repair that wants to be iterated has to publish whether it
+ * fired. `dressLap` keeps eight local counters and tests them all at the
+ * bottom of the round; this is the same fact, in the only place a graph
+ * has to put a number about a whole geometry.
+ *
+ * THREE FLAGS, OR-ED, THEN SUMMED. Z-1 writes {@link PLACEMENT.corridorMoved}
+ * off its own gate, L-1 leaves a non-zero {@link PLACEMENT.pushW} on
+ * anything it shoved, and L-5 sets {@link PLACEMENT.drop} on the member it
+ * lowered. `max` rather than `add` so a placement two rules touched counts
+ * once — the number is "how many placements moved", not "how many rules
+ * fired", and the loop only ever compares it against zero anyway.
+ *
+ * WHAT IT DELIBERATELY DOES NOT COUNT. It counts SURVIVORS, so a round in
+ * which L-1 dropped a placement and nothing else moved reports zero and
+ * the loop stops. `dressLap` runs one more round there, because its test
+ * is `cull.blocking === 0` and a dropped placement was blocking.
+ *
+ * THE REASON IS THAT NOTHING IS LEFT TO DO, and it is worth stating on its
+ * own because a first draft of this comment gave two reasons and the
+ * second one was false. A drop cannot make another placement move in THIS
+ * body: `occlusionCull` runs at `pushClearance: 0`, where every point's
+ * verdict is a function of the sight path alone and of nothing another
+ * point did, and L-5 saw the shortened list inside the same round. The
+ * round `dressLap` adds is a confirming one that moves nothing.
+ *
+ * IT IS A CHOICE AND NOT A LIMITATION, WHICH IS WHAT THE FIRST DRAFT GOT
+ * WRONG. That draft claimed the count could not be taken at all — that a
+ * point filter always drops the detail domain and that a field cannot read
+ * a detail attribute. Both are false, and both were concluded from one
+ * experiment in which the attribute had already been dropped for a
+ * different reason. What is actually true:
+ *
+ *   - A point filter drops the detail domain only under `topology: "drop"`;
+ *     the `"keep"` arm copies it. `occlusionCull` is the unconditional
+ *     case, because it always rebuilds through `gatherPoints` — which is a
+ *     fact about this stage's own node and not about filters.
+ *   - A field evaluated ON the detail domain reads detail attributes
+ *     normally, and `promoteAttribute` broadcasts a detail value onto every
+ *     point, where it survives any filter. So the before-and-after count IS
+ *     reachable: reduce, promote, filter, reduce again.
+ *
+ * The count is left out because the semantics above are right, not because
+ * the library cannot express it. Anything relying on the opposite should
+ * check first.
+ */
+function writeSettleCount(g: Graph, target: NodeHandle, tag: string): NodeHandle {
+  const flags = g.add(
+    setAttribute,
+    {
+      name: PLACEMENT.roundMoved,
+      tupleSize: 1,
+      value: max(
+        attribute(PLACEMENT.corridorMoved),
+        max(gt(abs(attribute(PLACEMENT.pushW)), 0), attribute(PLACEMENT.drop)),
+      ),
+    },
+    `${tag}_moved`,
+  );
+  g.connect(target, "out", flags, "in");
+
+  const total = g.add(
+    attributeReduce,
+    {
+      name: PLACEMENT.roundMoved,
+      domain: "point",
+      mode: "sum",
+      outName: SETTLE_ATTR,
+    },
+    `${tag}_settle`,
+  );
+  g.connect(flags, "out", total, "in");
+  return total;
+}
+
+/**
+ * The repair body: one round of the rules that have a fixed point.
+ *
+ * THREE OF THE EIGHT, AND THE OTHER FIVE ARE NOT NEAR-MISSES. `dressLap`
+ * iterates Z-1, L-1, L-6's top-up, L-6's trim, D-4, L-4, L-5 and Z-3. Of
+ * those, exactly Z-1, L-1 and L-5 answer from the list they were handed:
+ * the two L-6 halves and Z-3 and L-4 all read a lap-wide measurement of
+ * the dressing every earlier repair rewrote, and three of them draw from
+ * `seed + rounds`, which is worth naming precisely — a body whose seed
+ * varies with the round number is a DIFFERENT FUNCTION each round, so it
+ * does not have a fixed point to find. D-4 is pure but rewrites `station`
+ * against the gap ring of the whole lap, which is the unbounded level's
+ * business rather than a cell's.
+ *
+ * SO THE LOOP HERE IS SMALLER THAN `dressLap`'s AND IS NOT A SUBSET OF IT
+ * IN BEHAVIOUR — it is the sub-loop those three would run on their own.
+ * The test compares it against exactly that, and not against `dressLap`.
+ *
+ * MEASURED, THE THREE BARELY NEED EACH OTHER — one round on the shipped
+ * vocabulary, sometimes two. That is not an argument against the loop: it
+ * is the same argument `dressLap` makes for having one, which is that a
+ * single pass CANNOT be shown to be enough without running the second.
+ */
+export function buildRepairBody(lap: Lap): {
+  graph: Graph;
+  inputs: ExposedPin[];
+  outputs: ExposedPin[];
+} {
+  // The body's own seed is never rotated per round — see `repeatUntil`.
+  // It carries no randomness at all: all three repairs are arithmetic and
+  // a deterministic search, so the round is a pure function of its input
+  // and the fixed point is a pure function of the list that went in.
+  const b = new Graph(1);
+
+  const z1 = writeCorridor(b, "z1");
+  const oriented = writeWorldTransform(b, z1.tail, lap.halfWidth, "z1");
+  const seen = writeSightlineCull(b, oriented, lap.halfWidth, "l1");
+  const edged = writeFalseEdges(b, seen.tail, lap.lengthW, "l5");
+  const settled = writeLift(b, edged, lap.halfWidth, "l5");
+  const counted = writeSettleCount(b, settled, "round");
+
+  return {
+    graph: b,
+    inputs: [
+      // The name `repeatUntil` reserves for the pin it feeds back.
+      { name: "carry", node: z1.head, pin: "in" },
+      // Broadcast whole to every round: the lap's frames never change.
+      { name: "sight", node: seen.sight, pin: "sight" },
+    ],
+    // THE TWO INTERMEDIATES ARE PUBLISHED AS WELL AS THE CARRY, and that
+    // is what keeps the individual rules testable once they are inside a
+    // loop. A wrapper hides everything its body computes, so a graph that
+    // only returned the settled cloud would make Z-1's verdict and L-1's
+    // unreadable from outside — and worse, unreadable in the one place
+    // they can still be checked cheaply, which is a single round.
+    // `repeatUntil` hands back its LAST round's outputs, so these are the
+    // final round's, and a test that wants a rule's answer on a population
+    // it has not already settled cooks the body once instead.
+    outputs: [
+      { name: "carry", node: counted, pin: "out" },
+      { name: "placed", node: oriented, pin: "out" },
+      { name: "culled", node: seen.tail, pin: "out" },
+    ],
+  };
+}
+
+/**
  * The track's scale, written over the asset's box for `copyToPoints`.
  *
  * ONE NODE, IMMEDIATELY BEFORE THE STAMP, and {@link writeWorldTransform}
@@ -1363,13 +1584,16 @@ function writeCopyScale(
   target: NodeHandle,
   halfWidth: number,
   tag: string,
+  // Named because the repair loop's carried output is not called "out":
+  // a wrapper's pins are the names its body exposed.
+  pin = "out",
 ): NodeHandle {
   const scale = g.add(
     setAttribute,
     { name: "scale", tupleSize: 3, value: vec(halfWidth, halfWidth, halfWidth) },
     `${tag}_trackScale`,
   );
-  g.connect(target, "out", scale, "in");
+  g.connect(target, pin, scale, "in");
   return scale;
 }
 
@@ -1514,6 +1738,58 @@ function writeCoverage(
 }
 
 /**
+ * The repair body as a graph that runs it ONCE, over a bound placement list.
+ *
+ * WHY A SECOND ENTRY POINT EXISTS AT ALL. Wrapping the three repairs in
+ * `repeatUntil` makes their intermediates invisible from outside — a
+ * wrapper publishes what its body exposes and nothing else, and what it
+ * publishes is the LAST round's, which on a settled lap is a round in
+ * which every rule did nothing. That is the right answer for the loop and
+ * it is useless for checking a rule: "Z-1 moved nothing" is what Z-1 is
+ * supposed to report once the lap has settled, so a test reading it would
+ * pass for a Z-1 that had been deleted.
+ *
+ * So the rules are checked one round at a time, against the population
+ * that actually exercises them, and the LOOP is checked separately for the
+ * thing only a loop can be wrong about — whether it settles, in how many
+ * rounds, and on the same answer as the TypeScript's own loop. Two
+ * subjects, two entry points, and neither one re-implements the other:
+ * both call {@link buildRepairBody}.
+ *
+ * `rounds` and `converged` are not published here. One round is one round;
+ * a number that can only be 1 is not a measurement.
+ */
+export function buildRoundGraph(input: DressGraphInput): Graph {
+  // A BODY OF ITS OWN, not the one `assemble` built. Wrapping a body
+  // CONNECTS its exposed input pins to the portals the wrapper injects, so
+  // reusing that body here would find `carry` already wired and refuse —
+  // which is the machinery telling the truth: a body belongs to one
+  // wrapper, and running it bare is a different graph rather than the same
+  // graph with the loop switched off.
+  const { kit, lap, placements, seed, immovable } = input;
+  const lib = poseLibrary(kit);
+  const body = buildRepairBody(lap);
+  const g = body.graph;
+
+  // The portals `repeatUntil` would have injected, added by hand — which
+  // is all a wrapper does to an input pin, minus the loop.
+  const carry = g.add(dataInput, {}, "roundCarry");
+  g.setParam(carry, "items", [
+    makeGeometryItem(placementCloudInTrackFrame(lap, placements, lib, seed, immovable)),
+  ]);
+  const sight = g.add(dataInput, {}, "roundSight");
+  g.setParam(sight, "items", [makeGeometryItem(input.frames)]);
+
+  for (const pin of body.inputs) {
+    g.connect(pin.name === "carry" ? carry : sight, "out", pin.node, pin.pin);
+  }
+  for (const pin of body.outputs) {
+    g.output(pin.node, pin.pin, pin.name === "carry" ? DRESS_OUTPUTS.placements : pin.name);
+  }
+  return g;
+}
+
+/**
  * Build the graph, with the lap and the placement list already bound in.
  *
  * A GRAPH WITH ITS DATA IN IT COSTS WHAT THE DATA COSTS, which is worth
@@ -1559,46 +1835,51 @@ function assemble(input: DressGraphInput): { graph: Graph; libraryBoxes: number 
   // corridor is stated in half-widths about a centreline; resolving it
   // after the lift would mean recovering a lateral from a world position,
   // which on a lap that folds back on itself has no single answer.
-  const resolved = writeCorridor(g, placementsIn, "z1");
-  const oriented = writeWorldTransform(g, resolved, lap.halfWidth, "z1");
-  // L-1 AFTER Z-1 AND BEFORE THE BOXES, WHICH IS `dressLap`'s OWN ORDER
-  // AND IS ARGUED THERE AT LENGTH. Z-1 stands a large piece off to the
-  // corridor EDGE and no further, by rule, so half its width still
-  // overhangs and the cone can still be blocked; running the corridor
-  // after the cull put the two in a loop, with the cull pushing a piece
-  // clear and Z-1 pulling it back to the edge. Section 9 gives L-1 the
-  // last word, so L-1 goes last.
-  const seen = writeSightlineCull(g, oriented, framesIn, lap.halfWidth, "l1");
-  // L-5 AFTER L-1, WHICH IS `dressLap`'s ORDER AND MATTERS FOR THE SAME
-  // REASON Z-1's DOES. The cull moves placements laterally, which is
-  // exactly what decides edge-band membership — so a run found before it
-  // is a run measured over laterals that are about to change. `dress.ts`
-  // runs the detector last in the round for that reason.
+  // THE THREE REPAIRS RUN TO A FIXED POINT, NOT ONCE EACH. Z-1, L-1 and
+  // L-5 are inside one `repeatUntil` because each undoes the others' work:
+  // the cull moves a placement laterally, which is what decides edge-band
+  // membership, and L-5 lowers a height, which moves a box, which changes
+  // what blocks the cone. Running them once in sequence answers a
+  // DIFFERENT QUESTION — it gives a lap on which each rule has been
+  // APPLIED, not one on which all three HOLD — and that distinction is the
+  // whole reason `dressLap` has a loop at all.
   //
-  // AND IT WORKS IN TRACK COORDINATES, SO THE WORLD POSITION IS REBUILT
-  // AFTER IT. L-5 lowers a height in W; `P` was lifted before the cull and
-  // knows nothing about it. Re-running the lift is three multiplies on a
-  // few hundred points and is the only honest option — leaving `P` stale
-  // would put the boxes of every lowered placement back at edge height
-  // while `trackH` said otherwise, which is the two-accounts-of-one-move
-  // failure `writeSightlineCull` avoids on the other side.
-  const edged = writeFalseEdges(g, seen, lap.lengthW, "l5");
-  const settled = writeLift(g, edged, lap.halfWidth, "l5");
-  const boxes = writeBoxes(g, posesIn, writeCopyScale(g, settled, lap.halfWidth, "dress"), "dress");
+  // The order inside the body is `dressLap`'s and is load-bearing twice
+  // over. See {@link buildRepairBody}.
+  const body = buildRepairBody(lap);
+  const repair = g.add(
+    repeatUntilNode(body.graph, body.inputs, body.outputs),
+    { maxRounds: MAX_ROUNDS, settleAttr: SETTLE_ATTR },
+    "repair",
+  );
+  g.connect(placementsIn, "out", repair, "carry");
+  g.connect(framesIn, "out", repair, "sight");
+
+  const boxes = writeBoxes(
+    g,
+    posesIn,
+    writeCopyScale(g, repair, lap.halfWidth, "dress", "carry"),
+    "dress",
+  );
   const coverage = writeCoverage(g, framesIn, boxes, lap.halfWidth, "l6");
 
   g.output(boxes, "out", DRESS_OUTPUTS.boxes);
-  g.output(oriented, "out", DRESS_OUTPUTS.placed);
   // THE FULLY REPAIRED CLOUD, WHOSE `scale` IS STILL THE ASSET'S OWN BOX.
   // The copy scale is written on a branch of its own so that what this
   // output publishes is a placement — position, orientation, size —
   // rather than an argument to `copyToPoints`.
-  g.output(settled, "out", DRESS_OUTPUTS.placements);
-  // AND THE CLOUD L-1 LEFT, BEFORE L-5 TOUCHED IT. Same argument as
-  // `placed` one stage up: a height L-5 lowered is indistinguishable, in
-  // `trackH` alone, from one Z-3 placed low, so a test that wants either
-  // rule's verdict on its own needs the cloud from before the next one ran.
-  g.output(seen, "out", DRESS_OUTPUTS.culled);
+  g.output(repair, "carry", DRESS_OUTPUTS.placements);
+  // The final round's intermediates, which are a settled lap's and so say
+  // what the rules did LAST rather than what they did at all. A test that
+  // wants a rule's verdict on an unsettled population cooks the body once.
+  g.output(repair, "placed", DRESS_OUTPUTS.placed);
+  g.output(repair, "culled", DRESS_OUTPUTS.culled);
+  // WHETHER IT SETTLED, AND IN HOW MANY ROUNDS. `dressLap` reports the
+  // same two in a stat line; here they are graph outputs, which is the
+  // difference between a bounded repair that says it ran out and one whose
+  // caller has to know to look.
+  g.output(repair, "rounds", DRESS_OUTPUTS.rounds);
+  g.output(repair, "converged", DRESS_OUTPUTS.converged);
   g.output(coverage, "out", DRESS_OUTPUTS.coverage);
   return { graph: g, libraryBoxes: library.pointCount };
 }
@@ -1668,11 +1949,28 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
     share: arcW / lap.lengthW,
     pushed,
     dropped: input.placements.length - placements.pointCount,
+    rounds: requireNumber(out[DRESS_OUTPUTS.rounds], DRESS_OUTPUTS.rounds),
+    converged: requireNumber(out[DRESS_OUTPUTS.converged], DRESS_OUTPUTS.converged) !== 0,
     lowered,
     stamped: libraryBoxes * placements.pointCount,
     graph,
     cookMs: performance.now() - t0,
   };
+}
+
+/**
+ * One number off a value output.
+ *
+ * The loop reports `rounds` and `converged` as value items rather than as
+ * columns, because neither is a fact about a placement — see
+ * {@link DRESS_OUTPUTS}. `converged` arrives as 0 or 1: a value item holds
+ * a number, and a boolean that travelled as a number is still the answer.
+ */
+function requireNumber(collection: DataCollection | undefined, name: string): number {
+  for (const item of collection ?? []) {
+    if (item.kind === "value" && typeof item.value === "number") return item.value;
+  }
+  throw new Error(`dressGraph: output "${name}" carried no number`);
 }
 
 function requireGeo(collection: DataCollection | undefined, name: string): Geometry {
