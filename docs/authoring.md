@@ -2501,7 +2501,11 @@ Either way, cell content stays a pure function of (world seed, level,
 coord, graph, parent content) — independent of cook order, viewpoint
 path, and eviction history. `ctx.seed` hashes every cell coordinate:
 `hashCombine(worldSeed, levelIndex, cx, cz)` for a 2D cell,
-`hashCombine(worldSeed, levelIndex, cx, cy, cz)` for a 3D one.
+`hashCombine(worldSeed, levelIndex, cx, cy, cz)` for a 3D one, and
+`hashCombine(worldSeed, levelIndex, cs)` for the single sector index of
+a `"path"` cell. The hash chain's length prefix keeps the three arities
+structurally distinct, so 1-, 2- and 3-tuple chains never collide at the
+same numbers.
 
 ### Content that must NOT vary per cell
 
@@ -2617,15 +2621,20 @@ rather than trim it, so ownership becomes a primitive-domain decision:
 first vertex lies inside it. See "Owning primitives instead of destroying
 them" above for the full recipe.
 
-## 3D cells (cellMode)
+## Cell modes (cellMode)
 
 Levels default to 2D cells on the XZ plane (`cellMode: "xz"`): square
-cells, unbounded in Y, addressed `[cx, cz]`. Set `cellMode: "xyz"` on a
-level for cube cells addressed `[cx, cy, cz]` — the generation/retain
-radii then measure full XYZ distance from the viewpoint, and the
-per-cell seed hashes all three coordinates. `CellContext` is a
-discriminated union on `cellMode`, so `bind` narrows to the right
-coord/bounds shape:
+cells, unbounded in Y, addressed `[cx, cz]`. The other two modes change
+what a cell *is* — `"xyz"` cuts Y as well, and `"path"` stops cutting
+space at all. `CellContext` is a discriminated union on `cellMode`, so
+`bind` narrows to the shape its own level declared.
+
+### Cube cells (`"xyz"`)
+
+Set `cellMode: "xyz"` on a level for cube cells addressed
+`[cx, cy, cz]` — the generation/retain radii then measure full XYZ
+distance from the viewpoint, and the per-cell seed hashes all three
+coordinates:
 
 ```ts
 bind(g, ctx) {
@@ -2638,19 +2647,229 @@ bind(g, ctx) {
 }
 ```
 
+### Arc sectors (`"path"`)
+
+A `"path"` cell is not a box. It is the half-open arc range
+`[sMin, sMax)` along the level's centreline, addressed by a single
+sector index `[cs]`, and such a level streams **the next N metres**
+instead of a disc around the viewpoint.
+
+That is what one-dimensional content — a road, a river, a racetrack —
+actually wants. Around a car at speed a disc spends half of what it
+loads on the stretch just left behind, does not reach far enough down
+the road being driven, and counts its cells by bounding-box AREA while
+the content it holds is measured in LENGTH: a circuit that doubles back
+past its own paddock pays for every square between the two straights.
+An arc window measures the one quantity the content actually has.
+
+The table is cut into `round(length / cellSize)` equal sectors, so
+`cellSize` is a TARGET rather than an exact width: the seam then falls
+exactly at `s = 0` instead of leaving a short runt sector in front of
+it. Sector 0 starts at arc length 0, and the last sector's upper bound
+is the table length itself.
+
+**The runtime learns a ruler, not a curve.** `LevelDef.path` is
+`{ length, closed }` and nothing more — two numbers, no geometry. Those
+plus `cellSize` are everything needed to turn an arc coordinate into a
+sector and to wrap one, so the `World` never becomes content-aware and
+there is no second copy of the centreline to disagree with the one the
+graph cooks.
+
+The table is also **static**, and cannot be sourced from a parent
+level's outputs however natural that looks when the curve is itself
+generated. `update` computes the whole wanted set before it consults any
+parent cell, since parent outputs exist only at bind time: a
+parent-sourced table would make wanted-set MEMBERSHIP a function of cook
+state — nothing wanted at all on the first update, and "the same cells
+whatever the cook order" gone with it. A level whose centreline is
+generated upstream still declares the length here, as configuration
+matching the curve it will be handed.
+
+**The caller supplies the arc position**, once per update, keyed by
+level name:
+
+```ts
+const dressing: LevelDef = {
+  name: "dressing",
+  cellMode: "path",
+  cellSize: 40,                        // target: round(2400 / 40) = 60 sectors
+  path: { length: 2400, closed: true },
+  aheadArc: 400,                       // the next 400 units of track
+  behindArc: 100,                      // and a little of the last
+  graph: dress,
+  bind(g, ctx) {
+    if (ctx.cellMode !== "path") throw new Error("dressing is a path level");
+    // The cell IS an arc range: hand it to whatever walks the
+    // centreline. `start` and `span` here are setAttribute nodes
+    // writing `runStart` and `runSpan`, the names arcTile reads its
+    // ranges from.
+    g.setParam(start, "value", ctx.sMin);
+    g.setParam(span, "value", ctx.sMax - ctx.sMin);
+    g.setParam(scatter, "seed", ctx.seed);
+  },
+};
+
+await world.update([camera.x, camera.y, camera.z], {
+  anchors: { dressing: car.station },  // an arc length, not a world point
+  budgetMs: 8,
+});
+```
+
+An anchor is a COORDINATE, exactly like the viewpoint, and the window
+around it is POLICY, exactly like `generationRadius` — which is why one
+is an update option and the other lives on `LevelDef`. Nothing projects
+a world point onto the centreline: the caller already knows its station
+(anything lapping a circuit tracks it for timing regardless), and
+projection would have made the World carry geometry to answer a question
+the caller can answer exactly, needing a stated tie-break at every
+crossover where two arc positions are equally near. A mixed World
+therefore streams in one call — the world point drives the `"xz"` and
+`"xyz"` levels, each entry in `anchors` drives its own `"path"` level.
+Every `"path"` level needs a finite entry, and a missing one, a
+non-finite one, an unknown level name, or a name that is not a `"path"`
+level throws `WorldValidationError`, all of it checked before any cell
+of the update cooks.
+
+**A window that knows which way you are going.** `generationRadius`
+still works on a `"path"` level and reads as an arc distance to the
+sector's nearest bound, symmetric around the anchor, with `retainRadius`
+as its band in the same arc units — which is the shape to use when the
+thing riding the curve may turn around. A car at racing speed is the
+opposite case: it will be four hundred units further down the road in a
+few seconds and will not revisit the hundred behind it this lap, so a
+symmetric window spends half its budget on road already driven and still
+runs out of road in front. State the two halves instead:
+
+- `aheadArc` and `behindArc` REPLACE `generationRadius` on that level,
+  which is refused alongside them — on a `"path"` level
+  `generationRadius` *is* `aheadArc = behindArc = generationRadius`,
+  exactly and not approximately, so a level carrying both spellings has
+  one number present and never read. Both halves must be stated: a
+  half-stated window would have to borrow its other half from
+  `generationRadius`, which is the same collision under a shorter name.
+- Either half may be `0`, where `generationRadius` must be positive.
+  `behindArc: 0` wants the sector the anchor is standing in — the anchor
+  is inside it, so its gap is zero on both sides — and nothing further
+  back. A level that never looks behind is the limit case, not a
+  misconfiguration.
+- Hysteresis is per half: `retainAheadArc` and `retainBehindArc`, each
+  defaulting to its own half times 1.25 and each required to be at least
+  its own half. `retainRadius` is refused alongside a directional
+  window rather than quietly applied to both, because one scalar cannot
+  describe two halves of different depths. Against
+  `aheadArc: 400, behindArc: 100`, a single 500 grows the behind half to
+  five times the depth that was asked for until the LRU cap starts
+  arbitrating what the window was supposed to; a single 125 strips the
+  ahead half's band instead, and a sector 130 ahead is cooked and
+  evicted in the same update, then wanted again on the next — the exact
+  thrash a retain band exists to prevent.
+- "Ahead" needs no heading input. The table has its own direction —
+  increasing arc IS ahead, by the same convention that puts sector 0 at
+  `s = 0` — so a level travelled the other way states its window
+  mirrored (`aheadArc: 100, behindArc: 400`) rather than passing a
+  reverse flag. As static configuration such a flag would be the
+  mirrored window under a longer name; as per-update state it would make
+  which sectors are wanted a function of the frame that asked, and the
+  cook schedule would stop being reproducible from configuration plus
+  anchor path.
+
+The window also changes what "nearest first" means, and the scheduler
+follows it: a wanted sector's cook priority is its gap as a FRACTION of
+the half that claims it, not its raw arc distance. Both halves then
+drain outward from the anchor at the same proportional rate, so a
+starved budget spends proportionally more of itself on the longer half
+— which is what asking for a longer half meant. Ranking by raw distance
+would put the road already driven ahead of the road coming, which is the
+failure the directional window exists to fix, reintroduced one layer
+down in the scheduler. With equal halves the rank degenerates exactly,
+not approximately, to the ordering a symmetric level always had.
+
+The rule that a level's radius should be at least as large as every
+finer level's applies here PER HALF: a child wanting 400 ahead under a
+parent wanting 200 leaves the far half of its window pending forever,
+exactly as an oversized radius would.
+
+**Wrapping.** On a closed table the seam at `s = 0` is not a boundary:
+the last sector is adjacent to sector 0, both gaps are cyclic, and the
+anchor itself wraps, so `s = 105` on a 100-unit lap is `s = 5` and wants
+the same sectors in the same order. That is the rule the path NODES
+already keep: `pathRuns` treats a closed path's seam as no boundary
+unless something flags it, `runFit` and `arcTile` match it to the
+letter, and nothing can flag it here — so a sector window and a run
+tiled across the start/finish line agree about where a lap begins. A
+window longer than the table clamps to it, wanting every sector exactly
+once, each claimed by whichever half reaches it in fewer arc units;
+widening further changes nothing. That is deliberately not an error,
+because "keep the whole lap resident" is a real configuration and
+refusing it would turn an edit to `path.length` into a breakage.
+
+On an OPEN table the seam is a hard boundary instead: the two ends are
+as far apart as their arc lengths say rather than adjacent, the
+direction a sector is not on is unreachable rather than a long way
+round, and a window running off either end simply finds no sectors
+there.
+
+**The context carries no box, deliberately.** A `"path"` cell's context
+is `sMin`, `sMax`, `pathLength` and `closed` — plus the usual seeds,
+coord and parent — and has no `min`/`max` at all. An arc sector is a
+curved tube, so a world-space box would be a lie about what the cell
+covers; worse, a third `min` under the same name (2-arity on `"xz"`,
+3-arity on `"xyz"`) would let the common
+`ctx.cellMode === "xyz" ? … : (xz)` else-branch read a 1-tuple's
+`min[1]` as a z that was never there, and be silently wrong. Omitting it
+breaks that pattern at COMPILE time instead. For the square case the
+narrowing every such `bind` needs ships as a helper:
+
+```ts
+import { xzCell } from "pcg-ts";
+
+bind(g, ctx) {
+  const { min, max } = xzCell(ctx);   // throws, naming the mode it got
+  g.setParam(scatter, "boundsMin", [min[0], 0, min[1]]);
+  g.setParam(scatter, "boundsMax", [max[0], 0, max[1]]);
+}
+```
+
 Nesting rules (the parent is the level above):
 
-- like under like: the parent is the cell containing this cell's center;
+- like under like: the parent is the cell containing this cell's center,
+  and for `"path"` the parent SECTOR containing this sector's arc
+  midpoint;
 - `"xyz"` under `"xz"`: the parent is the containing XZ column cell;
 - `"xz"` under a bounded `"xyz"` parent is rejected at World
   construction — a 2D column spans every Y layer of the parent, so no
   single parent cell contains it (make the parent `"xz"` or the child
   `"xyz"`);
-- an unbounded parent (one global cell) accepts either mode below it.
+- nested `"path"` levels ride ONE table: the same `path.length` and
+  `path.closed` on both, enforced at construction, since a sector's
+  parent is found by arc length alone. They may still differ in
+  `cellSize`;
+- `"path"` under a bounded `"xz"`/`"xyz"` parent, and either of those
+  under a bounded `"path"` parent, are both rejected — an arc sector is
+  a tube along a curve, so no square cell contains it and it contains no
+  square cell, which is the argument that rejects `"xz"` under `"xyz"`
+  one dimension along;
+- an unbounded parent (one global cell) accepts any mode below it.
+
+Two consequences of that last pair. Levels form one chain, so a bounded
+square level and a `"path"` level cannot coexist in one `World` — only
+an unbounded level above a `"path"` level mixes today. And the
+coarse-to-fine `cellSize` rule is checked WITHIN a mode family, the
+world-space modes against each other and `"path"` levels against each
+other, because an arc length and a world length are not comparable
+quantities.
+
+`src/runtime/cellsPath.test.ts` pins all of the above, and needs no
+curve to do it: the whole mode is exercised with a length and a boolean,
+which is the clearest statement that the runtime never sees the
+centreline.
 
 An unbounded level (`cellSize: "unbounded"`, first level only) needs no
 `generationRadius`; omit it — a value is accepted and ignored, so
-configs written before it became optional keep working.
+configs written before it became optional keep working. It partitions
+nothing, so `cellMode` is ignored there too, `"path"` included: sectors
+need a table to mean anything, and a directional window on an unbounded
+level is refused outright rather than dropped.
 
 ## GPU evaluation of field expressions (pcg-ts/gpu)
 

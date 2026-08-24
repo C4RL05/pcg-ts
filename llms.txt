@@ -1065,15 +1065,49 @@ coarse to fine (optionally one leading unbounded level); each is a
 - `cellSize`: number (cell edge, world units) or `"unbounded"` (one
   global cell, must be the first level).
 - `cellMode?`: `"xz"` (default — square XZ cells, unbounded in Y,
-  coords `[cx, cz]`) or `"xyz"` (cube cells, coords `[cx, cy, cz]`,
-  radii in full XYZ distance). Nesting: like under like; `"xyz"` under
-  `"xz"` uses the containing XZ column as parent; `"xz"` under a
-  bounded `"xyz"` parent is rejected at construction; an unbounded
-  parent accepts either mode.
+  coords `[cx, cz]`), `"xyz"` (cube cells, coords `[cx, cy, cz]`,
+  radii in full XYZ distance), or `"path"` (ARC LENGTH along a
+  centreline: a cell is the half-open range `[sMin, sMax)`, coord
+  `[cs]`, the table cut into `round(length / cellSize)` equal sectors so
+  the seam falls exactly at `s = 0`). Nesting: like under like (a
+  `"path"` child maps to the parent SECTOR containing its arc midpoint,
+  and nested `"path"` levels must declare the same `path` table);
+  `"xyz"` under `"xz"` uses the containing XZ column as parent; `"xz"`
+  under a bounded `"xyz"` parent is rejected at construction, and so is
+  `"path"` mixed with either world-space mode in either direction — an
+  arc sector is a tube along a curve, so no square cell contains it and
+  it contains none, which also means a bounded square level and a
+  `"path"` level cannot coexist in one World. An unbounded parent
+  accepts any mode. Coarse-to-fine `cellSize` is checked WITHIN a mode
+  family (arc lengths against arc lengths).
+- `path?`: `{ length, closed }` — required for `"path"`, refused
+  otherwise. A RULER, not a curve: the World never sees the centreline,
+  and there is no second copy of it to disagree with the graph's. It is
+  STATIC and cannot come from a parent's outputs — the wanted set is
+  built before any cell cooks, so a parent-sourced table would make
+  wanted-set membership a function of cook state.
 - `generationRadius?`: cells cook when their center enters this radius.
   Required (positive) for bounded levels; omit for an unbounded level
-  (a value is accepted and ignored there).
+  (a value is accepted and ignored there). On a `"path"` level it is an
+  ARC distance from the anchor to the sector's nearest bound, and IS the
+  symmetric window: exactly `aheadArc = behindArc = generationRadius`.
 - `retainRadius?`: eviction hysteresis, default generationRadius * 1.25.
+  Refused on a `"path"` level that states a directional window.
+- `aheadArc?` / `behindArc?` (`"path"` only): the directional window, in
+  arc units forward and back of the anchor. Both must be stated, both
+  finite and >= 0 (0 is legal — it still wants the sector the anchor is
+  standing in, and nothing further on that side), and they REPLACE
+  `generationRadius`, which is refused alongside them. "Ahead" is
+  increasing arc, so a level travelled the other way mirrors its window
+  rather than passing a reverse flag. Cook order ranks by gap / that
+  half's depth, not by raw arc, so a starved budget is not spent on road
+  already driven. A window longer than a closed table clamps to it
+  (every sector wanted once); on an open table it runs off the ends.
+- `retainAheadArc?` / `retainBehindArc?`: per-half hysteresis, each
+  defaulting to its own half * 1.25 and required to be >= its own half.
+  One scalar across two unequal halves either inflates the short half or
+  strips the long half's band, which is why `retainRadius` is refused
+  with a directional window rather than applied to both.
 - `cookOutputs?`: cook only these declared outputs of the graph per
   cell (per-output cooking; names validated at construction). Omit to
   cook all.
@@ -1082,12 +1116,21 @@ Before each cell cook, `bind(graph, ctx)` wires the `CellContext` into
 the graph — the only channel for cell data. `ctx` is a discriminated
 union on `cellMode`: `{ cellMode, coord, min, max, levelIndex,
 levelName, worldSeed, levelSeed, seed, parent? }` with 2D coord/min/max
-for `"xz"` (and unbounded) levels, 3D for `"xyz"`. Three seeds, and
-picking the wrong one is the classic streaming bug:
+for `"xz"` (and unbounded) levels, 3D for `"xyz"`. A `"path"` cell
+carries `{ coord: [cs], sMin, sMax, pathLength, closed }` and NO
+`min`/`max`, deliberately: an arc sector is a curved tube with no
+world-space box, and a third `min` under the same name would let the
+usual `cellMode === "xyz" ? … : (xz)` else-branch read a 1-tuple's
+`min[1]` as a z that was never there. Omitting it breaks that at COMPILE
+time; `xzCell(ctx)` (exported) is the narrowing for the square case, and
+a `"path"` bind narrows on `ctx.cellMode` and reads `sMin`/`sMax`.
+Three seeds, and picking the wrong one is the classic streaming bug:
 
 - `seed` — PER CELL, = hashCombine(worldSeed, levelIndex, ...coord)
-  (every cell coordinate is hashed). Wire it into every stochastic node
-  whose content is MEANT to differ per cell.
+  (every cell coordinate is hashed — `[cs]` alone on a `"path"` level;
+  the chain's length prefix keeps the 1-, 2- and 3-tuple arities from
+  colliding). Wire it into every stochastic node whose content is MEANT
+  to differ per cell.
 - `worldSeed` — the `World`'s own `seed`, identical in every cell of
   every level. The coarsest cell-INVARIANT anchor.
 - `levelSeed` — = hashCombine(worldSeed, levelIndex), identical within a
@@ -1102,10 +1145,27 @@ reseed the whole graph via `graph.setSeed(...)` inside bind — memo keys
 include seeds and bind-time writes never count as user edits, so neither
 causes phantom recooks. Parent-cell outputs arrive as
 `ctx.parent.outputs`; inject them via a dataInput node. `await
-world.update([x, y, z], { budgetMs?, signal?, maxCooksPerUpdate? })`
-cooks nearest-first, evicts by retainRadius + LRU, and reports {
-cooked, evicted, pending }. `world.invalidate(level?, coord?)` forces
-recooks; parent recooks cascade staleness to children automatically.
+world.update([x, y, z], { budgetMs?, signal?, maxCooksPerUpdate?,
+anchors? })` cooks nearest-first, evicts by retainRadius + LRU, and
+reports { cooked, evicted, pending }. `world.invalidate(level?, coord?)`
+forces recooks; parent recooks cascade staleness to children
+automatically.
+
+`anchors` is `{ [levelName]: s }`, the arc position of each `"path"`
+level, and every `"path"` level REQUIRES a finite entry: such a level
+ignores the viewpoint entirely, so the anchor is the only way it gets a
+position. A missing entry, a non-finite value, an unknown level name, or
+a name that is not a `"path"` level throws `WorldValidationError`, all
+checked before any cell of the update cooks. On a closed table the
+anchor wraps (any real number is in range and the `s = 0` seam is not a
+boundary, matching `pathRuns`/`arcTile`); on an open one it is used as
+given and the seam IS a boundary. A mixed World streams in one call: the
+world point drives the `"xz"`/`"xyz"` levels, each anchor its own path
+level. An anchor is a COORDINATE (like the viewpoint); the window is
+POLICY and stays on `LevelDef` — a per-frame window would make the
+wanted set a function of the frame that asked. Nothing projects a world
+point onto the centreline: the caller already knows its station, and a
+projection would need a stated tie-break at every crossover.
 
 ### Cross-cell content: halos and ownership
 

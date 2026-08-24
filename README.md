@@ -634,14 +634,67 @@ move a survivor's draw. The seeded ones still need a cell-invariant seed;
 cell") has the full table, and `demos/infinite-world` reproduces
 each failure live with a toggle.
 
+### Cells that are not boxes
+
 Levels use square XZ-plane cells by default; `cellMode: "xyz"` switches
 a level to cube cells addressed `[cx, cy, cz]`, with radii measured in
 full XYZ distance and all three coordinates hashed into the cell seed
-(`ctx` is a discriminated union on `cellMode`, so `bind` can narrow it).
-An optional leading `cellSize: "unbounded"` level covers the world with
-one global cell and needs no `generationRadius`. `cookOutputs: [...]` on
-a level cooks only those declared outputs per cell — a terminal branch
-another consumer uses costs the level nothing.
+(`ctx` is a discriminated union on `cellMode`, so `bind` can narrow it —
+`xzCell(ctx)` is the shipped narrowing for the square case). An optional
+leading `cellSize: "unbounded"` level covers the world with one global
+cell and needs no `generationRadius`. `cookOutputs: [...]` on a level
+cooks only those declared outputs per cell — a terminal branch another
+consumer uses costs the level nothing.
+
+`cellMode: "path"` partitions **arc length** instead of space: a cell is
+the half-open range `[sMin, sMax)` along a centreline, addressed by a
+single sector index, and the level streams *the next N metres* rather
+than a disc around the viewpoint. That is the shape one-dimensional
+content — a road, a river, a racetrack — actually has. A disc around a
+moving car loads the stretch just left behind, does not reach far enough
+down the road being driven, and counts its cells by bounding-box area
+while the content it holds is measured in length.
+
+The level declares a **ruler, not a curve**: `path: { length, closed }`
+and nothing else, static configuration rather than something a parent
+level produces — the wanted set is computed before any cell cooks, so a
+parent-sourced table would make membership a function of cook state. The
+World never learns where the curve goes. The caller supplies the arc
+position per update instead, keyed by level name, because it already
+knows it and a projection would need a stated tie-break at every
+crossover:
+
+```ts
+levels: [{
+  name: "dressing",
+  cellMode: "path",
+  cellSize: 40,                        // a target: round(2400 / 40) sectors
+  path: { length: 2400, closed: true },
+  aheadArc: 400,                       // the next 400 units of track
+  behindArc: 100,                      // and a little of the last
+  graph: dress,
+  bind(g, ctx) { /* ctx.sMin, ctx.sMax, ctx.seed — there is no ctx.min here */ },
+}]
+
+await world.update([camera.x, camera.y, camera.z], {
+  anchors: { dressing: car.station },  // an arc length, not a world point
+});
+```
+
+An anchor is a coordinate, like the viewpoint; the window stays policy,
+like `generationRadius` — which on a `"path"` level *is* the symmetric
+spelling (`aheadArc = behindArc = generationRadius`, exactly) and is
+refused alongside the directional pair. Each half carries its own retain
+band (`retainAheadArc` / `retainBehindArc`, defaulting to 1.25× its own
+half), because one hysteresis scalar across two unequal halves either
+inflates the short one or strips the long one's band and thrashes.
+Cook order follows the same asymmetry: a sector ranks by its gap as a
+fraction of the half claiming it, so a starved budget is not spent on
+road already driven. On a closed table the `s = 0` seam is not a
+boundary, matching what `pathRuns` and `arcTile` already do with a lap.
+A `"path"` level nests only under another `"path"` level on the same
+table, or under an unbounded one: an arc sector is a tube along a curve,
+so no square cell contains it and it contains no square cell.
 
 ## three.js interop
 
