@@ -419,10 +419,14 @@ const PLACEMENT = {
 const BOX = {
   /** Which pose this box belongs to, matched against `PLACEMENT.pose`. */
   pose: "boxPose",
-  /** panel / leg / post / span / head / mass — the kit's own label. */
-  role: "boxRole",
-  /** RMS departure from the box's own best-fit plane, in W. See `kit.ts`. */
-  thickness: "boxThickness",
+  // THE KIT'S ROLE AND THICKNESS ARE NOT CARRIED, and the omission is the
+  // same economics `writeBoxes` argues for `cover`. Both were on the pose
+  // cloud and nothing read either. A source column rides EVERY copy the
+  // broadcast stamps — on the shipped vocabulary that is ~776,000 per lap
+  // — and `role` was a STRING, so each of those was a fresh intern on top
+  // of the write. `spawn.ts` derives the role it needs from the kit
+  // directly, which is one lookup instead of three quarters of a million
+  // writes to throw away.
   /** Index of the placement this box decomposes, written by `copyToPoints`. */
   placement: "placementIndex",
 } as const;
@@ -653,8 +657,6 @@ function poseCloud(lib: PoseLibrary, halfWidth: number): Geometry {
   const P = pts.require("P");
   const scale = pts.require("scale");
   const pose = pts.add(BOX.pose, "f32", 1);
-  const role = pts.add(BOX.role, "string", 1);
-  const thickness = pts.add(BOX.thickness, "f32", 1);
 
   // The floor is stated on the WORLD extent (`buildBoxes` clamps after
   // multiplying by W), so it has to be divided back out here — the target
@@ -676,8 +678,6 @@ function poseCloud(lib: PoseLibrary, halfWidth: number): Geometry {
         Math.max(b.max[2] - b.min[2], minExtentW),
       ]);
       pose.set(i, id);
-      role.setString(i, b.role ?? "mass");
-      thickness.set(i, b.thickness ?? 0);
       i++;
     }
   }

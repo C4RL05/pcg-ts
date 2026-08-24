@@ -488,6 +488,21 @@ function settleQuietly(dispatched: readonly { result: Promise<unknown> }[]): voi
 export class World {
   private readonly worldSeed: number;
   private readonly levels: LevelState[];
+  /**
+   * The anchor array a world with no `"path"` level always resolves to.
+   *
+   * ONE ALLOCATION FOR THE LIFE OF THE WORLD, RATHER THAN ONE PER FRAME.
+   * `resolveAnchors` runs on every `update`, and its general form maps over
+   * the levels — which builds an array and calls a closure per level, sixty
+   * times a second, to produce a row of zeros that cannot change. Three of
+   * the four shipped demos have no path level at all and were paying it.
+   *
+   * Safe to precompute because `levels` is readonly and built once in the
+   * constructor: a world's level stack is its configuration, not its state.
+   */
+  private readonly zeroAnchors: number[];
+  /** Whether any level takes an arc anchor, decided once for the same reason. */
+  private readonly anyPathLevel: boolean;
   private readonly maxCellsPerLevel: number;
   private readonly onCellReady: WorldOptions["onCellReady"];
   private readonly onCellEvicted: WorldOptions["onCellEvicted"];
@@ -844,6 +859,8 @@ export class World {
         baselineVersion: undefined,
       };
     });
+    this.anyPathLevel = this.levels.some((l) => l.mode === "path");
+    this.zeroAnchors = this.levels.map(() => 0);
   }
 
   /**
@@ -1039,6 +1056,11 @@ export class World {
    * half-stream a World.
    */
   private resolveAnchors(anchors: Readonly<Record<string, number>> | undefined): number[] {
+    // THE COMMON CASE, ANSWERED WITHOUT TOUCHING THE LEVELS. No anchors
+    // passed and no level that could take one: every entry is 0 and the
+    // array is the same array every frame. Everything below is validation
+    // of an argument that is not here and of levels that cannot want it.
+    if (anchors === undefined && !this.anyPathLevel) return this.zeroAnchors;
     if (anchors !== undefined) {
       for (const name of Object.keys(anchors)) {
         const level = this.levels.find((l) => l.def.name === name);

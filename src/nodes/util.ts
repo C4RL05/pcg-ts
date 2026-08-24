@@ -749,6 +749,121 @@ export function carryPrimitiveAttributes(
  * `src`, carrying every point attribute (types, tuple sizes, defaults,
  * string tables). Topology is not carried — the result is a point cloud.
  */
+/**
+ * How little of a segment may lie along a slab axis before the slab counts
+ * as parallel to it, as a FRACTION of the segment's own length.
+ *
+ * Relative, never absolute, because "little" has nothing else to be
+ * measured against here. {@link segmentHitsBox} asks whether the segment
+ * has any extent along an axis before dividing by that extent, and the
+ * same 1e-9 of projection is a dead-parallel ray on a chord tens of units
+ * long and an ordinary crossing on a chord that short. An absolute epsilon
+ * small enough for the short chord is below what f32 can hold at world
+ * scale, so the branch would never be taken and a grazing chord would
+ * divide by something indistinguishable from zero.
+ *
+ * 1e-6 is about eight f32 spacings and changes nothing in f64: for a
+ * near-parallel chord the two branches already AGREE in the limit —
+ * outside the slab the two enormous roots share a sign and fail
+ * `tMin > tMax`, which is the parallel branch's `return false`; inside it
+ * they straddle and leave the interval alone, which is its `continue`.
+ * This computes that answer instead of arriving at it through 1e12.
+ */
+export const PARALLEL_FRACTION = 1e-6;
+
+/**
+ * Does the segment from (fx, fy, fz) to (tx, ty, tz) pass through the box
+ * whose centre, axes and half extents sit at the given offsets?
+ *
+ * The slab method IN THE BOX'S OWN FRAME, not the world frame. A box in
+ * this library is oriented by a quaternion and is axis-aligned in nobody's
+ * frame but its own, so the segment is projected onto the box's three axes
+ * and the interval test runs there. A world-space AABB test would be a
+ * different — and always larger — box, which on a banked or rolled
+ * placement reports a hit that is not there. On a straight the two agree
+ * and through a bend they do not, which is precisely where it matters.
+ *
+ * OFFSETS FOR THE TABLES, SCALARS FOR THE CENTRE, because this runs once
+ * per (point, box, ray) triple and a per-call `[x, y, z]` is exactly the
+ * per-element allocation the hot-path rule forbids. A caller holding one
+ * box in scratch passes offset 0; a caller walking an SoA table passes
+ * `b * 9` and `b * 3`. The centre is three scalars rather than a third
+ * table because one caller MOVES it — `occlusionCull` re-tests the same
+ * box at each rung of its push ladder — and a table would have to be
+ * rewritten per attempt to say the same thing.
+ *
+ * `<=` in the parallel test rather than `<` so that a degenerate
+ * zero-length segment — a point, which `near === far` with `spread === 0`
+ * produces, and which an eye with nowhere to look produces — takes the
+ * parallel branch on all three axes and is tested for CONTAINMENT instead
+ * of dividing by zero. That is the only reading a degenerate segment has.
+ *
+ * TWO NODES SHARE THIS AND THEY DID NOT ALWAYS. `occlusionCull` and
+ * `pathCoverage` each carried a copy, and the copies had already drifted
+ * apart inside one change: one measured the segment with `Math.hypot` and
+ * the other with `Math.sqrt` of the sum of squares, which are not the same
+ * f64 and so gave the two nodes different parallel thresholds. A slab test
+ * is delicate enough that one copy is the only maintainable number.
+ */
+export function segmentHitsBox(
+  fx: number,
+  fy: number,
+  fz: number,
+  tx: number,
+  ty: number,
+  tz: number,
+  cx: number,
+  cy: number,
+  cz: number,
+  axes: ArrayLike<number>,
+  axesOffset: number,
+  half: ArrayLike<number>,
+  halfOffset: number,
+): boolean {
+  const ox = fx - cx;
+  const oy = fy - cy;
+  const oz = fz - cz;
+  const dx = tx - fx;
+  const dy = ty - fy;
+  const dz = tz - fz;
+  // `Math.sqrt` of the sum rather than `Math.hypot`: hypot carries an
+  // overflow guard this does not need — these are world coordinates, not
+  // values within a factor of two of the f64 ceiling — and it costs about
+  // ten times as much in the innermost loop of two nodes. The two copies
+  // this replaced disagreed on exactly this line.
+  const parallel = PARALLEL_FRACTION * Math.sqrt(dx * dx + dy * dy + dz * dz);
+  let tMin = 0;
+  let tMax = 1;
+  for (let a = 0; a < 3; a++) {
+    const o = axesOffset + a * 3;
+    const ex = axes[o];
+    const ey = axes[o + 1];
+    const ez = axes[o + 2];
+    const lo = ox * ex + oy * ey + oz * ez;
+    const ld = dx * ex + dy * ey + dz * ez;
+    const h = half[halfOffset + a];
+    if (Math.abs(ld) <= parallel) {
+      // Parallel to this slab: outside it here is outside it everywhere.
+      if (lo < -h || lo > h) return false;
+      continue;
+    }
+    let t1 = (-h - lo) / ld;
+    let t2 = (h - lo) / ld;
+    if (t1 > t2) {
+      const swap = t1;
+      t1 = t2;
+      t2 = swap;
+    }
+    if (t1 > tMin) tMin = t1;
+    if (t2 < tMax) tMax = t2;
+    if (tMin > tMax) return false;
+  }
+  return true;
+}
+
+/** How often a per-element scan checks for cancellation. */
+export const CANCEL_STRIDE = 256;
+
 export function gatherPoints(src: Geometry, indices: ArrayLike<number>): Geometry {
   const out = new Geometry();
   copyElements(src.attrs.point, out.attrs.point, indices, indices.length);

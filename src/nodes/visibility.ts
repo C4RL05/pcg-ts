@@ -25,6 +25,9 @@ import { makeGeometryItem } from "../graph/index.js";
 import { UniformGrid } from "../spatial/index.js";
 import { standardNode } from "./registry.js";
 import {
+  CANCEL_STRIDE,
+  PARALLEL_FRACTION,
+  segmentHitsBox,
   type FieldParam,
   gatherPoints,
   locateOnArcLength,
@@ -65,98 +68,7 @@ const MAX_SIGHT_CHORDS = 1_048_576;
  */
 const MAX_PUSH_STEPS = 4096;
 
-/**
- * How little of a chord may lie along a slab axis before the slab counts as
- * parallel to it, as a FRACTION of the chord's own length.
- *
- * Relative, never absolute, because "little" has nothing else to be
- * measured against here. The guard below asks whether the chord has any
- * extent along an axis before it divides by that extent, and the same 1e-9
- * of projection is a dead-parallel ray on a look-ahead chord tens of units
- * long and an ordinary crossing on a chord that short. An absolute epsilon
- * small enough for the short chord is below what f32 can even hold at world
- * scale, so the branch would never be taken and a grazing chord would
- * divide by something indistinguishable from zero.
- *
- * 1e-6 is about eight f32 spacings and changes nothing in f64: for a
- * near-parallel chord the two branches already AGREE in the limit — outside
- * the slab the two enormous roots share a sign and fail `tMin > tMax`,
- * which is the parallel branch's `return false`; inside it they straddle
- * and leave the interval alone, which is its `continue`. This computes that
- * answer instead of arriving at it through 1e12.
- */
-const PARALLEL_FRACTION = 1e-6;
 
-/** How often the point scan checks for cancellation. */
-const CANCEL_STRIDE = 256;
-
-/**
- * Does the segment from (ex, ey, ez) to (tx, ty, tz) pass through the box
- * centred at (cx, cy, cz)?
- *
- * The slab method, in the BOX'S OWN FRAME: `axes` holds the images of the
- * box's local +X, +Y and +Z as nine packed numbers (three unit vectors),
- * `half` its three half extents. A box that is axis-aligned in its own
- * frame is not axis-aligned in the world, and testing in the world would
- * check a different, larger box — which is exactly the case that matters,
- * since a box turned into the line of sight presents a narrower profile
- * than its world-aligned hull.
- *
- * All arguments are scalars or caller-owned scratch buffers: this runs once
- * per (point, eye, sample) and the SoA rule forbids allocating in it.
- *
- * A ZERO-LENGTH segment — an eye with nowhere to look — takes the parallel
- * branch on all three axes (`<=`, not `<`) and so asks whether the eye is
- * INSIDE the box, which is the only reading a degenerate chord has.
- */
-function segmentHitsBox(
-  ex: number,
-  ey: number,
-  ez: number,
-  tx: number,
-  ty: number,
-  tz: number,
-  cx: number,
-  cy: number,
-  cz: number,
-  axes: Float64Array,
-  half: Float64Array,
-): boolean {
-  const ox = ex - cx;
-  const oy = ey - cy;
-  const oz = ez - cz;
-  const dx = tx - ex;
-  const dy = ty - ey;
-  const dz = tz - ez;
-  const parallel = PARALLEL_FRACTION * Math.sqrt(dx * dx + dy * dy + dz * dz);
-  let tMin = 0;
-  let tMax = 1;
-  for (let a = 0; a < 3; a++) {
-    const j = a * 3;
-    const nx = axes[j];
-    const ny = axes[j + 1];
-    const nz = axes[j + 2];
-    const lo = ox * nx + oy * ny + oz * nz;
-    const ld = dx * nx + dy * ny + dz * nz;
-    const h = half[a];
-    if (Math.abs(ld) <= parallel) {
-      // Parallel to this slab: a miss here is a miss overall.
-      if (lo < -h || lo > h) return false;
-      continue;
-    }
-    let t1 = (-h - lo) / ld;
-    let t2 = (h - lo) / ld;
-    if (t1 > t2) {
-      const swap = t1;
-      t1 = t2;
-      t2 = swap;
-    }
-    if (t1 > tMin) tMin = t1;
-    if (t2 < tMax) tMax = t2;
-    if (tMin > tMax) return false;
-  }
-  return true;
-}
 
 /**
  * Write the images of local +X, +Y and +Z under the rotation `q` into
@@ -729,7 +641,9 @@ export const occlusionCull = standardNode<OcclusionCullParams>({
               cy,
               cz,
               axes,
+              0,
               half,
+              0,
             )
           ) {
             return true;

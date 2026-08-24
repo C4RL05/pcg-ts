@@ -39,10 +39,7 @@ import { describe, expect, it } from "vitest";
 import { Matrix4, Quaternion, Vector3 } from "three";
 import { buildInstanceBatches, cook, firstGeometry } from "pcg-ts";
 import { dressLap, frameLookup } from "../demos/racetrack/dress.js";
-import { readLap } from "../demos/racetrack/lap.js";
-import { buildRoadGraph, OUTPUTS } from "../demos/racetrack/graph.js";
-import { makeTrackSpline } from "../demos/racetrack/spline.js";
-import { shippedVocabulary } from "../demos/racetrack/vocabulary.js";
+import { dressedLapFor } from "./support/lap.js";
 import type { PlacedBox } from "../demos/racetrack/kit.js";
 import {
   ASSET_ATTR,
@@ -109,15 +106,12 @@ function withoutShear(m: Matrix4): Matrix4 {
 const dot3 = (a: readonly number[], b: readonly number[]): number =>
   a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
-async function dressOnce(seed = 1) {
-  const spline = makeTrackSpline({ seed });
-  const graph = buildRoadGraph({ spline, seed });
-  const out = (await cook(graph)).outputs;
-  const frames = firstGeometry(out[OUTPUTS.frames]);
-  if (!frames) throw new Error("the graph produced no frames");
-  const lap = readLap(frames);
-  return { lap, dressing: dressLap(shippedVocabulary(), lap, seed, {}) };
-}
+/**
+ * The shared fixture, memoized across the whole suite — see
+ * `tests/support/lap.ts`. Every caller here wants seed 1, which is why the
+ * default this replaced had five callers and no argument between them.
+ */
+const dressOnce = (): ReturnType<typeof dressedLapFor> => dressedLapFor(1);
 
 describe("racetrack spawn seam", () => {
   it("composes the same instance transforms the hand-written renderer did", async () => {

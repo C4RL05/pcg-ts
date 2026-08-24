@@ -269,7 +269,6 @@ export function bandOfPlacement(
   return "distant";
 }
 
-/** The |t| span each band occupies, for choosing an asset that lands in it. */
 /**
  * The |t| range an asset's own instances actually reach, from the two
  * quantiles the format publishes.
@@ -291,6 +290,7 @@ function lateralReach(w: AssetWhere): readonly [number, number] {
   return [p10 <= 0 && p90 >= 0 ? 0 : Math.min(a, b), Math.max(a, b)];
 }
 
+/** The |t| span each band occupies, for choosing an asset that lands in it. */
 const BAND_T: Record<Band, readonly [number, number]> = {
   over: [0, 1.5],
   // FROM 1W, NOT FROM 0. The verge is 1-1.5W, and drawing from 0 let the
@@ -412,20 +412,23 @@ export function mixInsideRule<T extends AssetPlacement>(
 /**
  * How many draws the mix may take before it gives a donor up.
  *
- * ONE DRAW IS NOT ENOUGH AND UNLIMITED DRAWS ARE NOT A REPAIR. An asset
- * enters the pool because the MIDDLE of its measured lateral distribution
- * falls in the band being filled, and the placement's own lateral is then
- * drawn from that whole distribution — so a miss is the common case, not
- * the exception, and giving up after one would leave the bands unrepaired
- * on exactly the kits that need repairing most. Retrying until it lands,
- * on the other hand, is a search whose cost is a property of the
- * vocabulary rather than of the rule: an asset whose distribution barely
- * overlaps its own median band would be drawn from forever.
+ * ONE DRAW IS NOT ENOUGH AND UNLIMITED DRAWS ARE NOT A REPAIR, and what
+ * makes one draw insufficient is Z-1 rather than the draw itself.
+ * `settleIntoBand` clamps the drawn lateral into the band, so the lateral
+ * lands where it was asked to — and then applies the corridor rule, which
+ * can stand a WIDE piece off far enough to leave the band again. Nothing
+ * about the asset says in advance whether it is narrow enough to survive
+ * that, so the only way to find a piece that fits is to draw another one.
  *
- * Eight is enough that a pool with any real overlap places on nearly every
- * donor, and small enough that a pool with none is abandoned in a bounded
- * number of tries and the donor marked. It is a search resolution, not a
- * quantity anybody measured.
+ * Retrying without a bound would be a search whose cost is a property of
+ * the vocabulary rather than of the rule: a band whose every candidate is
+ * too wide would be drawn from forever.
+ *
+ * Eight is enough that a pool holding any piece that fits finds one, and
+ * small enough that a pool holding none is abandoned and the donor marked.
+ * It is a search resolution and not a quantity anybody measured — but it is
+ * load-bearing, not a margin: at one attempt the enclosed kit's mix test
+ * fails outright, which is the check that says so.
  */
 const MIX_DRAW_ATTEMPTS = 8;
 
@@ -500,7 +503,10 @@ export function repairBandMix<T extends AssetPlacement>(
     // sliding the EXISTING placement sideways — that would put an asset
     // where its instances never sat, which is the thing the surrounding
     // comment refuses and still refuses.
-    const reach = drawn.asset.where ? lateralReach(drawn.asset.where) : ([0, 1e9] as const);
+    // `where` is present by construction: the pool filter refuses an asset
+    // without one, so there is no band an asset with no measurements could
+    // have been drawn for.
+    const reach = lateralReach(drawn.asset.where as AssetWhere);
     const [blo, bhi] = BAND_T[dst];
     // The top of a band belongs to the band ABOVE it (`bandOfPlacement`
     // puts a value on a boundary in the outer band, and says why), so the
@@ -637,26 +643,26 @@ export function repairBandMix<T extends AssetPlacement>(
     });
     if (pool.length === 0) break;
 
-    // THE POOL IS CHOSEN BY THE MEDIAN AND THE PLACEMENT IS DRAWN FROM THE
-    // DISTRIBUTION, AND THAT GAP IS THE BUG THIS LOOP EXISTS TO CLOSE.
+    // DRAW, SETTLE, AND CHECK WHERE IT ACTUALLY LANDED — the loop that
+    // stops this repair claiming moves it did not make.
     //
-    // An asset qualifies for `dst` because the middle of its measured
-    // lateral distribution falls in that band. `placeAsset` then draws
-    // this placement's lateral from the same distribution, which is wide —
-    // so the draw lands wherever it lands, and for a good part of the
-    // vocabulary that is a different band from the one the asset was
-    // picked for. The old code committed that draw regardless and counted
-    // it as a move. On a kit where the misses outnumber the hits the
-    // result is a repair that reports `moves === n` every round, forever:
-    // the shares never change, so the same `src` and `dst` are chosen
-    // again, and the same donor is found again. Measured on the enclosure
-    // kit at twelve rounds and `converged: false` on every seed.
+    // The bug it closes: eligibility used to be "this asset's MEDIAN
+    // lateral falls in `dst`" while the placement's lateral was drawn from
+    // the asset's whole distribution, which is wide. The draw therefore
+    // landed in a different band as often as not, and was committed and
+    // counted regardless. On a kit where the misses outnumber the hits the
+    // shares never changed, so the same `src` and `dst` were chosen again
+    // and the same donor found again: `moves === n` every round, forever,
+    // measured on the enclosure kit at twelve rounds and `converged:
+    // false` on every seed.
     //
-    // So the draw is CHECKED, and only a draw that actually lands in `dst`
-    // is committed. A few attempts, because one draw from a wide
-    // distribution misses more often than not and giving up after one
-    // would leave the bands unrepaired — which is a quieter failure than
-    // spinning, not a better one.
+    // Two things fixed it and the check is the second. The pool is now
+    // chosen by OVERLAP (see `lateralReach`) and `settleIntoBand` places
+    // within the band, so the lateral lands where it was asked to. What
+    // can still move it is Z-1, which stands a wide piece off the corridor
+    // and may push it out of the band again — so the result is verified
+    // rather than assumed, and only a placement that IS in `dst` is
+    // committed. See `MIX_DRAW_ATTEMPTS` for why more than one draw.
     let replacement: AssetPlacement | undefined;
     for (let attempt = 0; attempt < MIX_DRAW_ATTEMPTS; attempt++) {
       const drawn = placeAsset(

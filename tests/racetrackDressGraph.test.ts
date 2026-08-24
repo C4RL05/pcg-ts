@@ -65,6 +65,7 @@ import {
 } from "../demos/racetrack/dressGraph.js";
 import { buildBoxes, dressLap, frameLookup } from "../demos/racetrack/dress.js";
 import { readLap, type Lap } from "../demos/racetrack/lap.js";
+import { dressedLapFor } from "./support/lap.js";
 import { buildRoadGraph, OUTPUTS } from "../demos/racetrack/graph.js";
 import { makeTrackSpline } from "../demos/racetrack/spline.js";
 import { shippedVocabulary } from "../demos/racetrack/vocabulary.js";
@@ -204,20 +205,11 @@ const AXIS_TOL = MAX_FRAME_SKEW + 1e-5;
  */
 const SHARE_TOL = 1e-9;
 
-interface Cooked {
-  readonly lap: Lap;
-  readonly frames: Geometry;
-  readonly dressing: ReturnType<typeof dressLap>;
-}
-
-async function cookLap(seed: number): Promise<Cooked> {
-  const spline = makeTrackSpline({ seed });
-  const out = (await cook(buildRoadGraph({ spline, seed }))).outputs;
-  const frames = firstGeometry(out[OUTPUTS.frames] ?? []);
-  if (!frames) throw new Error("the road graph produced no frames");
-  const lap = readLap(frames);
-  return { lap, frames, dressing: dressLap(shippedVocabulary(), lap, seed, {}) };
-}
+/**
+ * The shared fixture, memoized across the whole suite — see
+ * `tests/support/lap.ts` for why it is not spelled out here.
+ */
+const cookLap = dressedLapFor;
 
 /** The three axes a `rot` quaternion stands for, as the box basis. */
 function axesOf(rot: Float32Array | ArrayLike<number>, i: number): {

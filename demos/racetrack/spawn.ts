@@ -141,6 +141,18 @@ const AZ = new Vector3();
 const Q = new Quaternion();
 
 /**
+ * Where the quaternion's four components are handed to `setTuple`.
+ *
+ * MODULE-LEVEL BESIDE `Q` AND `BASIS`, FOR THE REASON THEY ARE. A literal
+ * `[Q.x, Q.y, Q.z, Q.w]` at the call site allocates one array per box, and
+ * a dressing is a couple of thousand boxes drawn twice — the generated
+ * population and the reference overlay — on every recook. The project rule
+ * is that hot paths never build per-element objects, and a four-element
+ * array in a per-box loop is exactly that, however small it looks.
+ */
+const Q4: [number, number, number, number] = [0, 0, 0, 0];
+
+/**
  * One point per placed box.
  *
  * `P` is the box's world centre, `scale` its world extents along the
@@ -170,7 +182,11 @@ export function boxCloud(boxes: readonly PlacedBox[]): Geometry {
     P.setTuple(i, b.centre);
     scale.setTuple(i, b.size);
     basisToQuat(Q, b.basis.across, b.basis.along, b.basis.up);
-    rot.setTuple(i, [Q.x, Q.y, Q.z, Q.w]);
+    Q4[0] = Q.x;
+    Q4[1] = Q.y;
+    Q4[2] = Q.z;
+    Q4[3] = Q.w;
+    rot.setTuple(i, Q4);
     asset.setString(i, boxAssetId(b));
   }
   return geo;
@@ -207,7 +223,11 @@ export function placementCloud(
     const f = frameAt(p.station, p.t, p.h);
     P.setTuple(i, f.p);
     basisToQuat(Q, f.across, f.dir, f.up);
-    rot.setTuple(i, [Q.x, Q.y, Q.z, Q.w]);
+    Q4[0] = Q.x;
+    Q4[1] = Q.y;
+    Q4[2] = Q.z;
+    Q4[3] = Q.w;
+    rot.setTuple(i, Q4);
     asset.setString(i, placementAssetId(p.asset.id));
   }
   return geo;

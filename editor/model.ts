@@ -47,15 +47,24 @@ export { nodeCategory, nodePinsForType } from "../shared/graph/view.js";
  * has none, and it is OFFERED in the palette below, where dropping it
  * builds the metadata-only def and errors on the next cook.
  *
+ * DERIVED FROM THE REGISTRY RATHER THAN LISTED, and that is the whole
+ * point of it living here. The three wrappers each declare
+ * `category: "composite"`, which the registry defines as "nodes wrapping
+ * inner graphs" — so asking the registry what the wrappers are cannot fall
+ * out of date, where a hand-written set silently can. It already had: this
+ * set was `{subgraph, forEach}` until a third wrapper arrived, and the
+ * editor's symptom was not a compile error but a graph that would not open
+ * and a palette entry that errored on drop.
+ *
  * It lives here rather than in `controller.ts` because both files need it
  * and the import may only run one way: the controller imports this module
  * at runtime, so a value import back would close a cycle.
  */
-export const WRAPPER_TYPES: ReadonlySet<string> = new Set([
-  "subgraph",
-  "forEach",
-  "repeatUntil",
-]);
+export const WRAPPER_TYPES: ReadonlySet<string> = new Set(
+  listNodeTypes()
+    .filter((info) => info.category === "composite")
+    .map((info) => info.type),
+);
 
 function fmtValue(view: ParamView): string {
   if (view.mode === "field") {

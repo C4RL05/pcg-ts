@@ -29,6 +29,9 @@ import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { UniformGrid } from "../spatial/index.js";
 import { standardNode } from "./registry.js";
 import {
+  CANCEL_STRIDE,
+  PARALLEL_FRACTION,
+  segmentHitsBox,
   ORIENT_PARALLEL_EPS,
   type FieldParam,
   polylineArcTables,
@@ -43,103 +46,7 @@ import {
   writePolylineTangents,
 } from "./util.js";
 
-/**
- * How little of a ray may lie along a slab axis before the slab counts as
- * parallel to it — as a FRACTION of the ray's own length, because that is
- * the only thing "little" can be measured against here.
- *
- * PARALLEL IS A RATIO, NOT A LENGTH. The guard asks whether the ray has any
- * extent along an axis before it divides by that extent, and "any" only
- * means something relative to the ray itself: the same 1e-9 of projection
- * is a dead-parallel cast on a ray tens of units long and a perfectly
- * ordinary crossing on a ray that short.
- *
- * An ABSOLUTE guard is what this replaces, and the absolute value that
- * looked safe (1e-12) is below what f32 can even hold at world scale — one
- * part in 10^12 of a 30-unit ray is a hundred thousand times finer than the
- * f32 spacing there, so the branch would never be taken and a grazing ray
- * would divide by something indistinguishable from zero. `t1` and `t2` come
- * back at 1e12 and the slab arithmetic that follows is meaningless.
- *
- * A relative threshold of 1e-6 is about eight f32 spacings, and it changes
- * nothing in f64: for a near-parallel ray the two branches already AGREE in
- * the limit — outside the slab the two enormous roots share a sign and fail
- * `tMin > tMax`, which is the parallel branch's `return false`; inside it
- * they straddle and leave `tMin`/`tMax` alone, which is its `continue`.
- * This computes that answer instead of arriving at it through 1e12.
- */
-const PARALLEL_FRACTION = 1e-6;
 
-/** How many path points between cancellation checks. */
-const CANCEL_STRIDE = 256;
-
-/**
- * Does the segment from (fx, fy, fz) to (tx, ty, tz) pass through box `b`?
- *
- * The slab method IN THE BOX'S OWN FRAME, not the world frame. A box in
- * this library is oriented by a quaternion and is axis-aligned in nobody's
- * frame but its own, so the segment is projected onto the box's three axes
- * and the interval test runs there. A world-space AABB test would be a
- * different (and always larger) box, which on a banked or rolled placement
- * reports cover that is not there.
- *
- * Reads the SoA tables directly and takes no vectors: this runs once per
- * (path point, box, ray) triple, and a per-call `[x, y, z]` is exactly the
- * per-element allocation the hot-path rule forbids.
- *
- * `<=` in the parallel test rather than `<` so that a degenerate
- * zero-length ray — a point, which is what `near === far` and `spread === 0`
- * produce — takes the parallel branch on all three axes and is tested for
- * containment instead of dividing by zero.
- */
-function segmentHitsBox(
-  b: number,
-  centre: Float64Array,
-  axes: Float64Array,
-  half: Float64Array,
-  fx: number,
-  fy: number,
-  fz: number,
-  tx: number,
-  ty: number,
-  tz: number,
-): boolean {
-  const c = b * 3;
-  const ox = fx - centre[c];
-  const oy = fy - centre[c + 1];
-  const oz = fz - centre[c + 2];
-  const dx = tx - fx;
-  const dy = ty - fy;
-  const dz = tz - fz;
-  const parallel = PARALLEL_FRACTION * Math.hypot(dx, dy, dz);
-  let tMin = 0;
-  let tMax = 1;
-  for (let a = 0; a < 3; a++) {
-    const o = b * 9 + a * 3;
-    const ex = axes[o];
-    const ey = axes[o + 1];
-    const ez = axes[o + 2];
-    const lo = ox * ex + oy * ey + oz * ez;
-    const ld = dx * ex + dy * ey + dz * ez;
-    const h = half[c + a];
-    if (Math.abs(ld) <= parallel) {
-      // Parallel to this slab: outside it here is outside it everywhere.
-      if (lo < -h || lo > h) return false;
-      continue;
-    }
-    let t1 = (-h - lo) / ld;
-    let t2 = (h - lo) / ld;
-    if (t1 > t2) {
-      const swap = t1;
-      t1 = t2;
-      t2 = swap;
-    }
-    if (t1 > tMin) tMin = t1;
-    if (t2 < tMax) tMax = t2;
-    if (tMin > tMax) return false;
-  }
-  return true;
-}
 
 /**
  * The box cloud in the only form the ray test wants: SoA world centres,
@@ -716,16 +623,19 @@ export const pathCoverage = standardNode<PathCoverageParams>({
             const r = k * 3;
             if (
               segmentHitsBox(
-                b,
-                centre,
-                axes,
-                half,
                 rayFrom[r],
                 rayFrom[r + 1],
                 rayFrom[r + 2],
                 rayTo[r],
                 rayTo[r + 1],
                 rayTo[r + 2],
+                centre[b * 3],
+                centre[b * 3 + 1],
+                centre[b * 3 + 2],
+                axes,
+                b * 9,
+                half,
+                b * 3,
               )
             ) {
               hitFlag[k] = 1;
