@@ -35,6 +35,51 @@ existed, so the discipline is to let the consumer specify the mechanism
 rather than guess at it. Each entry carries the analysis, because
 re-deriving it is the expensive part.
 
+### Z-3's band mix does not terminate on the enclosed kit, 2026-08-24
+
+Measured while surveying `dressLap`'s repair loop for the `repeatUntil`
+port. On `DEFAULT_KIT` every seed settles in two or three rounds. On
+`ENCLOSURE_KIT` every seed runs all twelve and reports
+`converged: false`, and one repair is responsible: `repairBandMix` moves
+exactly `n` placements every round, where `n` is the live placement count.
+It is not converging slowly, it is burning its whole budget forever.
+
+The mechanism, from the code rather than from the counter. The
+replacement pool is filtered on an asset's MEDIAN lateral
+(`assets.ts:493`), and `placeAsset` then draws that placement's lateral
+from the asset's own DISTRIBUTION — so a redraw need not land in the band
+it was selected for. The share it was fixing does not move, the same
+first-in-band donor is picked again (`live().find(...)`, `assets.ts:486`),
+and the round repeats identically. `dressLap`'s own comment records this
+pair being fixed once against Z-1; it is not fixed, it has merely stopped
+involving Z-1.
+
+Why it is not urgent: the shipped demo runs the vegetation kit, so nothing
+on the page shows it, and `converged` is reported rather than swallowed.
+Why it is worth doing: a repair that cannot converge is a repair whose
+budget is spent proving nothing, it is the reason the enclosed kit cannot
+be dressed to its own rules, and it is the one member of `dressLap`'s loop
+that a fixed-point node could not rescue as written — a body with no fixed
+point does not acquire one by being iterated more carefully.
+
+The fix is a mechanism question, not a threshold one: either select the
+donor by the lateral it will actually be given, or accept the draw and
+re-test rather than assuming the median stands for it.
+
+### Probing a registered recipe assumes it is a `subgraph`, 2026-08-24
+
+`src/cli/primitiveRun.ts:70` and `src/docs/primitives.ts:81` both
+materialize a registered recipe with a hardcoded `type: "subgraph"`. A
+recipe whose body exposes a wrapper's reserved pin is then refused by the
+reserved-name guard — the same hazard fixed in `subgraphRegistry.ts` when
+`repeatUntil` landed, where the inference now covers all three kinds.
+
+It predates the loop node: a `forEach` body breaks these two identically,
+and has been able to since `forEach` shipped. It is latent only because no
+shipped primitive is a loop body. Fixing it means one shared inference
+helper reachable from both the CLI and the docs generator, which is why it
+was left rather than patched twice.
+
 ### Two arc lengths, one parameter: `pathPointAt` on a resampled path, 2026-08-19
 
 Found while building `tests/trackDressing.test.ts`, and it cost most of a
