@@ -1,0 +1,151 @@
+var e=`{
+  "formatVersion": 1,
+  "seed": 2026,
+  "meta": {
+    "title": "run a body until it settles",
+    "description": "\`repeatUntil\` cooks its inner graph again and again, feeding each round's \`carry\` output back into its own \`carry\` input, and stops when the body says nothing changed. This is the loop a DAG cannot wire — a wire from an output back to an input is a cycle, which \`connect\` refuses — so the feedback is an assignment between cooks instead. The body here is a damped descent: every round halves each point's height, then writes 1 for every point still further than 0.01 from the ground and reduces that to the DETAIL attribute \`moves\`. When \`moves\` reaches zero the cloud has settled and the loop stops; the scatter starts up to 8 high, so halving takes about ten rounds and the \`rounds\` output says exactly how many. Two things are worth reading off this graph. The settle signal rides the DETAIL domain because a wrapper has no non-geometry output pin — \`attributeReduce\` is what normally writes it, and an ABSENT \`moves\` is refused by name rather than read as zero, so a typo cannot report convergence on round one. And the body's seed is NOT rotated per round: a fixed point exists only if the body is the same function every time, so a body seeded on the round number can never converge, however many rounds it is given. Every real use has this skeleton — push overlapping props apart, snap dangling edges, repair a placement against a rule — and differs only in what one round does.",
+    "tags": [
+      "basics",
+      "repeatuntil",
+      "relaxation",
+      "composite"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "scatter",
+      "type": "pointScatterInBounds",
+      "params": {
+        "count": 600,
+        "boundsMin": [
+          -20,
+          -8,
+          -20
+        ],
+        "boundsMax": [
+          20,
+          8,
+          20
+        ],
+        "seed": 0
+      }
+    },
+    {
+      "id": "settle",
+      "type": "repeatUntil",
+      "params": {
+        "maxRounds": 12,
+        "settleAttr": "moves"
+      },
+      "subgraph": {
+        "graph": {
+          "formatVersion": 1,
+          "seed": 0,
+          "nodes": [
+            {
+              "id": "halve",
+              "type": "transformPoints",
+              "params": {
+                "translate": {
+                  "fn": "mul",
+                  "args": [
+                    { "fn": "position" },
+                    [0, -0.5, 0]
+                  ]
+                },
+                "rotateEuler": [0, 0, 0],
+                "scale": [1, 1, 1]
+              }
+            },
+            {
+              "id": "moving",
+              "type": "setAttribute",
+              "params": {
+                "name": "moving",
+                "domain": "point",
+                "type": "f32",
+                "tupleSize": 1,
+                "value": {
+                  "fn": "gt",
+                  "args": [
+                    {
+                      "fn": "abs",
+                      "args": [
+                        { "fn": "component", "args": [{ "fn": "position" }], "index": 1 }
+                      ]
+                    },
+                    0.01
+                  ]
+                },
+                "select": 0,
+                "values": [],
+                "weights": [],
+                "stringValue": "",
+                "seed": 0
+              }
+            },
+            {
+              "id": "moves",
+              "type": "attributeReduce",
+              "params": {
+                "name": "moving",
+                "domain": "point",
+                "mode": "sum",
+                "outName": "moves"
+              }
+            }
+          ],
+          "connections": [
+            {
+              "from": ["halve", "out"],
+              "to": ["moving", "in"]
+            },
+            {
+              "from": ["moving", "out"],
+              "to": ["moves", "in"]
+            }
+          ],
+          "outputs": []
+        },
+        "inputs": [
+          {
+            "name": "carry",
+            "node": "halve",
+            "pin": "in"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "carry",
+            "node": "moves",
+            "pin": "out"
+          }
+        ]
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": ["scatter", "out"],
+      "to": ["settle", "carry"]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "settle",
+      "pin": "carry",
+      "name": "points"
+    },
+    {
+      "id": "settle",
+      "pin": "rounds",
+      "name": "rounds"
+    },
+    {
+      "id": "settle",
+      "pin": "converged",
+      "name": "converged"
+    }
+  ]
+}
+`;export{e as default};
