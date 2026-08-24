@@ -4,7 +4,7 @@ Generated from the graphs in [`graphs`](../graphs) by `node scripts/gen-graphs.m
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-68 examples, alphabetical by file:
+72 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -21,6 +21,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-filter-by-density.json](#basics-filter-by-densityjson) — thin a cloud by the density attribute
 - [basics-filter-by-expression.json](#basics-filter-by-expressionjson) — keep points with a predicate expression
 - [basics-filter-primitives-by-attribute.json](#basics-filter-primitives-by-attributejson) — keep whole primitives by an attribute comparison
+- [basics-fit-runs.json](#basics-fit-runsjson) — fit a line through each row of props, and catch the row that only looks straight
 - [basics-flatten-and-remember.json](#basics-flatten-and-rememberjson) — flatten a cloud onto a plane and keep the height it lost
 - [basics-foreach-per-group.json](#basics-foreach-per-groupjson) — treat each group on its own
 - [basics-gather-on-path.json](#basics-gather-on-pathjson) — gather evenly spaced points into clumps along a curve
@@ -49,16 +50,19 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-runs-along-a-path.json](#basics-runs-along-a-pathjson) — measure distance since the last gate, and to the next one, around a closed lap
 - [basics-scatter-in-bounds.json](#basics-scatter-in-boundsjson) — scatter points in a box
 - [basics-scatter-in-world.json](#basics-scatter-in-worldjson) — scatter points anchored to the world, not to the box
+- [basics-sightline-cull.json](#basics-sightline-culljson) — clear a line of sight by moving the props, not by deleting them
 - [basics-signed-distance.json](#basics-signed-distancejson) — a signed distance field, and which side of it
 - [basics-spawn-by-species.json](#basics-spawn-by-speciesjson) — spawn a different asset per point
 - [basics-spawn-instances.json](#basics-spawn-instancesjson) — turn points into instance batches
 - [basics-subgraph-exposed-params.json](#basics-subgraph-exposed-paramsjson) — wrap a graph as one node with its own knobs
 - [basics-surface-sample.json](#basics-surface-samplejson) — scatter points over a mesh surface
 - [basics-sweep-profile.json](#basics-sweep-profilejson) — put a real surface on a curve
+- [basics-tile-an-arc.json](#basics-tile-an-arcjson) — tile a repeated piece over three stretches of one lap, choosing the piece once per stretch
 - [basics-tiling-a-field.json](#basics-tiling-a-fieldjson) — tile a field across the origin
 - [basics-transfer-attribute.json](#basics-transfer-attributejson) — read a value off a surface below each point
 - [basics-transform-points.json](#basics-transform-pointsjson) — move, turn and size a whole cloud
 - [basics-two-kinds-of-bounds.json](#basics-two-kinds-of-boundsjson) — two things called bounds, and they are not the same thing
+- [basics-under-cover.json](#basics-under-coverjson) — measure what runs under cover, where the route passes close to itself
 - [basics-volume-scatter.json](#basics-volume-scatterjson) — fill a box with points, then carve it
 - [examples-forest.json](#examples-forestjson) — plant a hillside, thinned by slope and treeline
 - [examples-gpu-fields.json](#examples-gpu-fieldsjson) — a fusable chain, on the CPU or the device
@@ -348,6 +352,34 @@ Cook it: `pcg cook graphs/basics-filter-by-expression.json --stats`
 **Outputs:** `network` (from `short`.`out`)
 
 Cook it: `pcg cook graphs/basics-filter-primitives-by-attribute.json --stats`
+
+## basics-fit-runs.json
+
+**fit a line through each row of props, and catch the row that only looks straight**
+
+`pathRuns` cuts a path into runs at points something FLAGGED, and the flag has to come from somewhere. Nothing flags a row of posts: what separates one row from the next is empty arc, and a gap is a fact about TWO points at once — the shape of fact a field cannot state, because a field resolves each element from that element alone, and no boolean column exists to carry it until someone has already found the runs. `runFit` is the gap-delimited half of the family: it cuts at an along-arc distance, least-squares fits a numeric attribute against arc position inside each run, and writes slope, worst residual and span back onto every point of the run. Five rows of props are threaded onto one lap here — four of twenty and one of two — and the verdict is a colour with three values: GREEN for a row that really is a line, RED for one that is not, BLUE for one there is not enough of to say.
+
+THE ANSWER IS PER RUN AND IT LANDS ON EVERY POINT OF IT. A run is not a primitive — one path holds five of them, so the primitive domain has no element to hold one — and repeating the verdict per point is also the shape it gets used in, since every consumer is a per-point decision. The repetition is what the picture is made of. One row is nineteen posts on a line plus ONE post four units off it, and all twenty come out red, because the verdict belongs to the run and every member carries it. That row is also why the residual is the WORST member rather than an RMS: fitted from the offsets this graph builds, its worst residual is 3.762 and its RMS is 0.868, so a rule reading 'no post sits further than a unit off the line' fails on the worst and PASSES on the mean. An RMS lets one straggler hide behind nineteen good members, which is exactly the arrangement that reads as a line to the eye.
+
+THE BLUE PAIR IS THE MISTAKE THE NODE MOST WANTS YOU TO AVOID. Its residual is 0 — exactly, not nearly — because a line through two points is always perfect, and its slope of 6.878 is an invented number reported as confidently as any other. Those two posts sit 0.87 units apart along the road and 6 units apart across it: nothing anyone would call a row. `countAttr` is the only column that says so, which is why the colour is `runResidual < 1` ANDed with `runCount > 2` rather than the residual alone — straight is evidence only above three members, and a residual is compared against a threshold rather than against zero for the same reason every float is.
+
+THE FIT IS AGAINST RUN-LOCAL ARC, and that is invisible when it works. A least-squares fit only ever uses `s - mean(s)`, so fitting an order-1 offset against an order-300 lap coordinate subtracts away every leading digit the coordinate was written with. `runFit` rebases each run on its own start before summing anything, which is THE SAME LINE THROUGH THE SAME POINTS — a fit is translation-invariant in the abscissa, so slope and residual are unchanged — computed where the numbers are small, and exactly rather than approximately. The check is in the graph: those twenty offsets fitted from zero give slope 0.303833 and worst residual 3.7624, and the node, fitting them where they actually lie from station 179.70, reports 0.303833 and 3.762408. `runStart` still reports the lap position (179.70) rather than the zero the fit used, because a start is a range other nodes have to be able to read.
+
+THE ARC COORDINATE IS THE ROAD'S, NOT THE PROPS' OWN. `arcAttr` names `station` — `curveU` times the lap length — instead of being left empty to measure the polyline threaded through the props, and that choice is worth the two `promoteAttribute` nodes it costs. The props stand up to 6 units off the kerb, so the 3D chord between two of them carries their lateral offsets as well as their spacing. Cooked the other way, on the measured arc, this same graph reports the parallel row as spanning 17.57 units instead of 16.57 and the wobbling row as 53.70 instead of 16.57, and it CUTS THE PAIR IN HALF: their chord is 6.07 where the road distance between them is 0.87, so a 5-unit gap finds a break the road never had and two one-point runs appear, whose residuals are also 0. Naming a coordinate means naming its `period` too — here a field reading the lap length back off the primitive domain, since the props' own measured length is not what the station coordinate wraps at.
+
+THE SEAM IS NOT A BREAK. One row is laid deliberately ACROSS the start/finish line, ten posts before it and ten after, and with `wrap` on the walk starts at the first REAL gap rather than at vertex zero, so those twenty stay ONE run: one slope of 0.3439, one residual of 0, one span of 16.57, and a `runStart` of 305.31 that is larger than the station of its own last member. Set `wrap` false and it becomes two rows of ten, each with residual 0 and the same slope, each too short for any rule to act on, and nothing in the columns complains. Leaving `period` at 0 while naming an `arcAttr` used to do the same thing silently, and writing this graph is what found it: a period of 0 means the path's own measured length, which is a world-unit number handed to a coordinate that is not in world units, so the seam gap inflates and a break appears where the road has none. The node now REFUSES that combination rather than inventing one — the mistake a graph cannot make is better than the mistake a graph explains. A line of eight objects across the start line reading as two lines of four is the bug this whole family agrees about the seam to prevent. The re-threading at the end is `pointsToPath` grouped on `runId` and ordered by `runIndex` — the group key and the within-run position runFit hands out — and it is what draws that row as one arc crossing the line instead of a chord across the middle of the lap, because `runIndex` counts in the walk order the runs were cut in. The second output is the lap itself, so the rows can be read against the road they were measured along.
+
+**Tags:** `basics`, `path`, `runs`, `fit`, `closed`
+
+**Seed:** 3311
+
+**Node types:** `filterByExpression`, `pathResample`, `pointsToPath`, `promoteAttribute`, `runFit`, `setAttribute`, `subgraph`, `transformPoints`
+
+**Primitives:** `shape/path-loop`
+
+**Outputs:** `road` (from `lap`.`out`), `rows` (from `rows`.`out`)
+
+Cook it: `pcg cook graphs/basics-fit-runs.json --stats`
 
 ## basics-flatten-and-remember.json
 
@@ -869,6 +901,38 @@ The same shape of graph as 'scatter points in a box', with the one difference th
 
 Cook it: `pcg cook graphs/basics-scatter-in-world.json --stats`
 
+## basics-sightline-cull.json
+
+**clear a line of sight by moving the props, not by deleting them**
+
+`occlusionCull` is the only node in the library that MOVES a point as well as removing one, and this graph exists to show that the order of those two is the whole node rather than an optimisation inside it. Two identical culls run over the same 220 hoardings, differing in exactly one number. At `pushMax` 0 — the shipped default, and the conservative reading — every hoarding standing in the drivers' line of sight is deleted and 151 come out. At 8 the node first steps each blocker along `pushAxis` in half-unit rungs, keeps the first position that clears every chord, and drops only what it could not move: 220 come out. Same sight path, same swept band, same rule. The difference is 69 assets an author placed and a budget upstream counted. Dropping spends both, pushing spends neither, and that is why the default is 0 rather than something generous — 8 is a long way in a courtyard and nothing at all on a motorway, so a default distance would either do nothing or relocate an authored point by an amount nobody chose, and of the two failures the missing prop is the one an author notices.
+
+THE SIGHT PATH IS A CLOSED LOOP because the case this node is for is a route, and a route bends. The eyes are the loop resampled at 3-unit spacing, 55 of them, raised 1.5 by `eyeOffset` while the TARGETS stay on the road — lift both ends and a low box slips under the chord that was supposed to catch it. `lookAhead` is 30 world units of ARC LENGTH, so the chords from an eye cut across the inside of the bend and dip to 26·cos(30/52), about 21.8 of the loop's own 26. That annulus, widened by a hoarding's half-diagonal, is the strip the two outputs sweep clean: neither has a single hoarding left between radius 22 and 25, because the cull is the same cull and only the repair differs. Cost is one test per (point, nearby eye, sample), so it scales with EYE DENSITY as much as with the cloud — resample the sight path to the spacing the rule needs rather than the spacing it happens to have, since at 0.1 this same loop would be over sixteen hundred eyes for the identical answer.
+
+WHY THE FAN IS TEN CHORDS AND NOT ONE, stated as a number the graph will produce: set `samples` to 1 and the pure cull keeps 156 instead of 151. Those five hoardings stand squarely across the middle of the look-ahead while leaving its far end in plain view, so a single chord to the end of the run misses them and the rule passes vacuously. The targets sit at `lookAhead * i / samples`, so the gap between them here is 3 units, and a box narrower than that gap can still slip between two chords and be kept. Raise `samples` until the gap is smaller than the narrowest thing that matters; lowering it is the cheapest way to make this node fast and the first thing to make it wrong.
+
+`pushAxis` IS A FIELD HERE, which is the form the param is really for. `vec(P.x, 0, P.z)` gives every hoarding the outward radial of the place it stands, which on a circular route is its lateral; only the DIRECTION is read, since the node normalizes it and chooses the sign itself, pushing whichever of ±axis takes the point further from the nearest eye. That is what lets one expression serve the inside of the loop, which moves inward, and the outside, which moves outward, with no sign written per point. Replace it with the plain `[1, 0, 0]` this param defaults to and 19 hoardings are dropped anyway — the ones at the north and south of the loop, where world X runs ALONG the sight line, so a point pushed along it never leaves it. A world axis stops being an approximation the moment the route turns. `pushMax` is a real distance and not a slider: at 4 instead of 8, 18 blockers cannot reach clear air and are dropped after all.
+
+WHAT IS TESTED IS WHAT WILL BE DRAWN: `P` is the box centre, `rot` its orientation, `scale` its FULL extents, and those are the same three columns `spawnInstances` reads. Note there is no `boxSize` param here as there is on `pathCoverage` — `scale` alone is the world size, so a cloud standing for an asset that is not unit-sized has to fold the asset's own extent into `scale` before this node sees it. A cloud with NO `scale` column is read as a box with no extent, which blocks nothing: the node becomes a visible no-op rather than an error, and that asymmetry is deliberate, since assuming a unit box would delete points on the strength of a size nobody wrote. `write/random-yaw` turns each 3.2 by 1.0 hoarding, and the slab test runs in each box's OWN frame: one that presents its narrow edge to the chords survives where its world-aligned hull would not. On a straight the hull and the box agree; through a bend they do not, which is exactly where the rule matters, so testing the hull would be checking the one case that never fails.
+
+BOTH CULLS RUN AT `pushClearance` 0, which is what lets this graph claim anything about order. Points are visited in an order fixed by point IDENTITY — the bits of the stored position plus the `seed` attribute — and never by array index, so shuffling the cloud, filtering something upstream, or deriving the same hoardings inside another cell's halo yields the identical survivor set. At 0 a verdict depends on the sight input and the point itself and on nothing else, so a partitioned cook is EXACT given a window of `lookAhead` plus `pushMax` plus the widest box half-diagonal, about 40 units here. Raise it and each pushed point begins avoiding the ones already settled, which is a chain no halo width covers: the answer is still the same answer on every run, but a per-cell cook stops agreeing with a whole-region one and the disagreement shows up as pushed points overlapping at the seams rather than as an error. It is the knob to reach for when the pushed points land in a heap; on this scene they do not, because the 69 of them spread over an annulus 120 units around.
+
+TOPOLOGY DOES NOT SURVIVE under any setting, and unlike the five point filters there is no `topology: keep` to ask for it — a primitive kept over a MOVED point would describe a shape nobody authored, a road that follows its lamp posts sideways. Rebuild with `pointsToPath` or `connectPoints`. One consequence worth stating because nothing else will say it: a pushed point comes out with a different `P`, and `P` is half of a point's identity, so anything identity-keyed downstream re-rolls for exactly the points that moved.
+
+THE TWO SCENES ARE ONE SCENE, translated 92 units apart so they can be read side by side, and the loop under each is the same sight path. Read the band. On the left it is empty and the hoardings that stood in it are gone; on the right it is just as empty, and they are standing along both of its edges.
+
+**Tags:** `basics`, `visibility`, `filter`, `placement`
+
+**Seed:** 3391
+
+**Node types:** `mergePrimitives`, `occlusionCull`, `pathResample`, `pointScatterInBounds`, `setAttribute`, `spawnInstances`, `subgraph`, `transformPoints`
+
+**Primitives:** `shape/path-loop`, `write/random-yaw`
+
+**Outputs:** `roads` (from `roads`.`out`), `dropped` (from `spawnDrop`.`instances`), `pushed` (from `spawnPush`.`instances`)
+
+Cook it: `pcg cook graphs/basics-sightline-cull.json --stats`
+
 ## basics-signed-distance.json
 
 **a signed distance field, and which side of it**
@@ -977,6 +1041,34 @@ A curve becomes a skin. `sweepProfile` places a cross-section on EVERY POINT of 
 
 Cook it: `pcg cook graphs/basics-sweep-profile.json --stats`
 
+## basics-tile-an-arc.json
+
+**tile a repeated piece over three stretches of one lap, choosing the piece once per stretch**
+
+ENCLOSURE IS A PATTERN, NOT AN ASSET. On the most enclosed of twenty-two measured circuits the cover overhead is held up by 126 separate objects, and the largest single one accounts for 5.9% of it — the workhorse is one strip placed 24 times. There is no tunnel model to find and place; there is a run of repeated pieces over an arc range, and `arcTile` is the node that builds one. The ranges arrive as a SECOND GEOMETRY rather than as params: there are many of them and each carries its own decisions — where it starts, how long it is, which piece it is made of, how wide, which variant — and a param is one value for the whole cook. Three ranges here, hand-written as three points, become 48 tiles in three batches.
+
+THE PIECE IS CHOSEN ONCE PER RANGE, AND THAT IS THE WHOLE POINT. The draw happens on the ranges cloud, where there is exactly ONE element per stretch to draw on: `randomField` picks 0, 1 or 2, and that one number decides the asset id, the colour and the piece's length. `rangeNames` then COPIES those columns, unchanged, onto every tile of that range. Copying is what makes a run atomic. Move the same `setAttribute` downstream of `arcTile` and it becomes 48 draws instead of 3: every stretch turns into a speckle of all three assets, which is still 48 instances of the same vocabulary and is no longer three covered stretches. A per-tile draw can be uniform only by luck, and only until someone changes the seed — the case this node comes from measured a planned 17-unit covered stretch back as 8 the moment poses were drawn per piece, because varying the shape along a run reopens the seams the overlap existed to close.
+
+THE COLOUR IS CALLED `rangeColor` AND NOT `color` ON PURPOSE. `color` is one of the names `arcTile` writes on every tile itself, and `rangeNames` REFUSES such a name rather than resolving it quietly, because carrying it would delete what the node wrote and the cook would look entirely fine afterwards. So the per-range decision is written under a name the node does not own, and `spawnInstances` is pointed at that name directly — nothing is picked up automatically, and an attribute never named in `colorAttr` is silently not drawn. The picture is the test of the whole paragraph above: each stretch is one solid colour, and the three colours differ.
+
+SPACING IS A CEILING ON THE PITCH, NOT THE PITCH, and here it is a FIELD so the pitch can follow the piece. Each range writes `pieceLen` beside its asset id and `arcTile` resolves `spacing` on the ranges' POINT domain, so an 8-unit gantry, a 5-unit arch and a 2-unit rib tile at their own pitches in ONE cook, each reading the size its own range chose. A range of length L takes max(1, ceil(L / spacing)) tiles at the centres of that many equal sub-intervals, so the step is L / count and is at most `spacing`, never more: the 52-unit arch range takes 11 tiles at a pitch of 4.727, the 66-unit gantry range 9 at 7.333, the 55-unit rib range 28 at 1.964. Rounded UP, not to nearest, so that pieces meant to abut do — nearest would have given the arch range 10 tiles at 5.200, which is a fifth of a unit of daylight at every joint and two units of it over the range, and a gap in a tiled cover is not a near-miss but a hole. Nothing here knows how big your piece is, which is why OVERLAP is spelled as a spacing SMALLER than the piece; about 5% under closes the wedge two pieces leave on the outside of a bend.
+
+THE MOUTHS FLARE. `flare` is the arc distance over which each end opens and `taper` the scale the very mouth reaches, taken from whichever mouth is nearer, and it is applied to the two `scale` components that are NOT `axis` — the cross-section opens while the length along the path is left alone, since scaling all three would make the mouth pieces longer as well as wider and open the seams between them. With flare 6 and taper 1.6, the first arch tile sits 2.36 into its range, so its ramp is 0.606 and its scale comes out [1.364, 1.364, 1]: opened across, untouched along. A cover that starts at full section is a wall with a hole in it; the eye reads an opening from the way the section grows, and the flare is what keeps the view clear at the moment of entry, which is the moment it matters. When a mouth should do something else — lift, tilt, swap to a wider variant, fade a material — `flareAttr` writes the raw 0..1 ramp and leaves the doing to the asset.
+
+THE SEAM IS NOT A BOUNDARY. The rib range starts at 285 on a lap of 314.03 and runs 55, so it crosses the start/finish line, and on a CLOSED path that is one range whose arc is taken modulo the path's length — the same answer `pathRuns` and `runFit` give a run there. Its 28 ribs step from 285.98 through 313.48 to 1.41 and on to 24.98, 1.964 apart the whole way including across the line: no double tile, no gap. On an OPEN path that range would be REFUSED rather than clamped, because a clamped range is a shorter tunnel than the one that was planned, reported as a success. The ranges are hand-written here because the point of the graph is WHERE the decision is made, and three points make that unmistakable — but any cloud will do, and `startAttr` and `lengthAttr` default to `runStart` and `runSpan`, which are `runFit`'s own default output names: filter a fitted path down to `runIndex == 0` and each survivor is one point carrying its run's start and span, which is a ranges cloud (see `basics-fit-runs`). The output is a plain CLOUD and not a path — the tiles are placements along the curve, not the curve — so the second output is the lap itself, to read them against.
+
+**Tags:** `basics`, `path`, `tiling`, `instancing`, `closed`
+
+**Seed:** 4139
+
+**Node types:** `arcTile`, `pointLine`, `setAttribute`, `spawnInstances`, `subgraph`
+
+**Primitives:** `shape/path-loop`
+
+**Outputs:** `road` (from `loop`.`out`), `cover` (from `spawn`.`instances`)
+
+Cook it: `pcg cook graphs/basics-tile-an-arc.json --stats`
+
 ## basics-tiling-a-field.json
 
 **tile a field across the origin**
@@ -1054,6 +1146,36 @@ So: one bounds is a question asked of the world, the other is an answer a point 
 **Outputs:** `network` (from `extent`.`out`)
 
 Cook it: `pcg cook graphs/basics-two-kinds-of-bounds.json --stats`
+
+## basics-under-cover.json
+
+**measure what runs under cover, where the route passes close to itself**
+
+`pathCoverage` casts REAL RAYS IN WORLD SPACE, and this graph is built out of the mistake that makes that necessary. The cheap way to ask how much of a route runs under cover is to project each piece of cover onto the route's arc length and add the windows up — and A BOUNDS PROJECTION ONTO A FOLDED CENTRELINE CANNOT TELL `above the path here` FROM `near the path twice`. Three such proxies gave 7.9%, 32.3% and 50.3% for one circuit, no two of them estimating the same quantity; the 32.3% was published and then withdrawn, because a single object near a hairpin had claimed 78 half-widths of lap for 6 half-widths of geometry. A SPIRAL IS THAT FAILURE MADE INTO A SHAPE: three turns out to a radius of 26, so every winding runs 8.7 units from the one inside it and a whole turn — a hundred units and more — from it along the path. Cover sits on the outermost winding only. The sample at (-21.5, 0, 1.7) has all six of its rays blocked; the sample at (-13.0, 0, 0.4) has none of them blocked, and neither does anything else on the inner coils — the largest hit count anywhere inside radius 19 is zero. Those two points are 8.6 apart in the world and 108.0 apart along the path. A path-relative window wide enough to reach the first would have swallowed the second. The rays cannot, because a fold is two different places in the world and one place in arc length.
+
+THE MEASUREMENT CONVERGES, which is the property the three proxies lacked and the only reason to trust this one. 73 of the 311 evenly spaced samples are covered — 23.5% of the route — with the ceiling at 9; the same 23.5% with it at 18; the same at 40, because nothing else in this scene is overhead and raising the ceiling stops changing the answer. Halve the sample spacing and it is 23.7% over twice as many samples, so the figure is a property of the geometry rather than of how finely it was asked. But `far` IS LOAD-BEARING and has no unlimited setting: with an unbounded ray the sky is a tunnel and the answer is 100% everywhere, and set to 4 — below the canopy rather than above it — this graph reports nothing covered at all. Choose it for the scene, as the height at which something overhead has stopped being cover and started being scenery, and restate the number here rather than importing it from whatever placed the boxes: a figure whose whole value is that today's can be compared with yesterday's must not move when a placement rule is retuned.
+
+WHAT IS MEASURED IS EXACTLY WHAT IS DRAWN, and `boxSize` is how. A box's world extent is `boxSize * scale` componentwise: `boxSize` is the asset's own extent in its local frame and `scale` is the per-point multiplier `spawnInstances` puts in the matrix. The canopy spawns as `panel`, whose placeholder geometry is 0.42 by 0.3 by 0.66 and is centred on its point — which is where this node puts the box — so `boxSize` is written as exactly that triple and `scale` carries the multiplier, and the slab a ray meets is the slab on screen. GETTING THIS WRONG IS SILENT IN BOTH DIRECTIONS. Leave `boxSize` at its default [1, 1, 1], which is the honest reading for a cloud of unit cubes and the wrong one for this cloud, and every box inflates by one over the asset's own extent: the cook finishes cleanly and reports 32.8%. Forget `scale` instead and the boxes shrink and it reports no cover anywhere. Neither throws, and each leaves a plausible wrong number behind. Worth noting that `occlusionCull` reads the same three columns and has NO `boxSize` — there `scale` alone is the world extent, so the two nodes want the same cloud described two different ways.
+
+THE CANOPY TAPERS, from 5.11 world units across at the start of its run to 0.30 at the end, and that is what turns `minHits` from a threshold into a picture. Selecting it and sizing it are the same question asked twice of the same quantity, the coil's own radius: `filterByExpression` keeps the stations outside 21, and `remap` narrows the panel linearly from there out to 26. The fan is 6 rays over -1.5..+1.5 WITH BOTH EDGES INCLUDED, so they sit at ±0.3, ±0.9 and ±1.5 across the path — a panel narrower than 3.0 stops reaching the outer pair, narrower than 1.8 the middle pair, narrower than 0.6 the inner pair. The count therefore walks 6, 4, 2 and 0 down the run as the panels close: 45 samples at 6, 24 at 4, 26 at 2, 208 at 0, and eight caught between bands where the coil curves out from under a panel's centreline. `minHits` 3 — half the fan, the shipped meaning of `cover spans the corridor` — cuts between 4 and 2, so THE COVERED STRETCH ENDS WELL BEFORE THE CANOPY DOES: it stops where the cover stopped spanning, not where the cover stopped existing. Ask for `anything at all overhead` with `minHits` 1 and 33.1% is covered; ask for edge to edge with 6 and 14.5% is. The threshold IS the definition, which is why `hitsAttr` writes the raw count as well — a graph still choosing what it means can compare against several thresholds downstream without casting again, and the colour ramp here reads that column rather than the flag.
+
+`spread` is HALF the fan's lateral span, and collapsing it to 0 is exactly the mistake `rayCount`'s own description names: one ray down the middle sees the span of a narrowing gantry and calls the whole thing a tunnel, and this graph duly reports 34.7% that way. `across` is perpendicular to both the cast direction and the path's own direction of travel, derived here from the route's POLYLINE TOPOLOGY — which is why an empty `acrossAttr` refuses a bare point cloud, and why the route reaches this node straight from `pathResample` rather than through anything that rebuilds the point domain. `near` at 1.2 is the floor that stops the road's own surface, and whatever lies on it, from counting as a roof over itself; nothing lies on this road, so it changes no answer here and is set for the reason rather than for the effect.
+
+THIS NODE ADDS A COLUMN AND REMOVES NOTHING: the route goes in and the same route comes out — points, vertices, primitives, topology and every existing attribute — two columns wider. That is the opposite of the five point filters, which rebuild the point domain from the survivors and take the topology with them, so the order is MEASURE THEN FILTER. `sheltered` is a `filterByExpression` on the flag this node wrote, and it is a separate output so that the difference between measuring and cutting shows up in the counts: 311 points on the route against 73 in the cloud. The node is order-independent by construction — no point's answer depends on another's, no box's on another's, and nothing accumulates in floating point — and it is exactly cell-invariant under a partitioned cook given a halo of hypot(spread, max(|near|, |far|)) plus the largest box's bounding-sphere radius, about 12.6 units here.
+
+THE PICTURE is the argument in one frame. Three coils; the outer one roofed by twenty-two panels that narrow as they go; that coil warm where the roof spans it, amber where it half spans it, cool where it has closed to a rib. The two coils inside — never more than nine units away, always a full turn behind — blue from end to end.
+
+**Tags:** `basics`, `path`, `coverage`, `measure`, `rays`
+
+**Seed:** 4127
+
+**Node types:** `filterByExpression`, `pathCoverage`, `pathResample`, `pointsToPath`, `setAttribute`, `spawnInstances`, `subgraph`, `transformPoints`
+
+**Primitives:** `place/along-curve`, `shape/spiral`
+
+**Outputs:** `lap` (from `tint`.`out`), `sheltered` (from `sheltered`.`out`), `canopy` (from `canopy`.`instances`)
+
+Cook it: `pcg cook graphs/basics-under-cover.json --stats`
 
 ## basics-volume-scatter.json
 

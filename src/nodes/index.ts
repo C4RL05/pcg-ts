@@ -76,5 +76,8 @@ export * from "./topology.js";
 export * from "./neighborhood.js";
 export * from "./pointOps.js";
 export * from "./filtering.js";
+export * from "./visibility.js";
+export * from "./coverage.js";
+export * from "./runs.js";
 export * from "./attributes.js";
 export * from "./mathNodes.js";

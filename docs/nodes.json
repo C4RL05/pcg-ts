@@ -1,5 +1,100 @@
 [
   {
+    "type": "arcTile",
+    "description": "Lays a REPEATED PIECE over arc ranges of a path: one oriented instance point every `spacing` units between each range's start and end, ready for spawnInstances. This is the tile-a-tunnel-out-of-one-rib operation, and it is a primitive rather than a convenience because ENCLOSURE IS A PATTERN, NOT AN ASSET — on the most enclosed of twenty-two measured circuits the cover is held up by 126 separate objects and the largest single one accounts for 5.9% of it, the workhorse being one strip placed 24 times. There is no tunnel model to find and place; there is a run of repeated pieces over an arc range, which is what this builds. THE RANGES ARRIVE AS A SECOND GEOMETRY, one point per range, carrying the range's start and length as point attributes (`runStart` and `runSpan` by default, which are runFit's own defaults, so a detected run re-tiles without renaming anything). A point cloud rather than params because there are MANY ranges and each carries its own decisions — where it starts, how long it is, which piece it is made of, how wide, which variant — and a param is one value for the cook. It also makes every existing node a range producer: scatter them, filter them, snap them, reject the ones that overlap, all before a single tile exists. ATOMICITY IS THE WHOLE POINT AND IT IS STRUCTURAL. A tunnel is the SAME piece repeated; drawing a fresh piece per rib reopens the seams the overlap was there to close, and in the case this node comes from a planned 17-unit covered stretch measured back as 8 the moment poses were drawn per piece. So the choice is made ONCE, upstream, on the range point — where there is exactly one element per run to make it on — and `rangeNames` COPIES it onto every tile of that range. Copying is what makes it atomic: a per-tile draw can be uniform only by luck, and only until someone changes the seed. The tile's own `seed` is rooted in the range for a weaker but related reason — it is hashCombine(the node's seed, hashCombine(the range's own seed, the range's index), the tile's index within the range), so the tiles of one range keep their per-tile jitter when a DIFFERENT range changes its spacing, which a seed taken from the global tile index cannot offer. The range's INDEX is folded in as well as its seed because a ranges cloud that never had a seed written carries a column of zeros, and rooting on that alone would hand every range identical tiles. SPACING IS A CEILING ON THE PITCH, NOT THE PITCH. A range takes ceil(length / spacing) tiles, placed at the centres of that many EQUAL sub-intervals, so the actual step is length / count and is at most `spacing`. Rounded UP so pieces at least abut: rounding to nearest leaves the pitch wider than asked whenever a range is not a whole number of pieces long, and a gap in a tiled cover is not a near-miss but a hole — a planned 15-unit run was closing 9.6, under the 10 that counted as a long stretch at all. Nothing here knows how big your piece is: to OVERLAP, give a spacing smaller than the piece. THE MOUTHS FLARE. `flare` is the arc distance over which each end opens and `taper` the scale the very mouth reaches, applied to the two `scale` components that are not the `axis` — so the cross-section opens and the length along the path does not, which is what makes a driver see an opening rather than a wall and what keeps the entry clear at the moment it matters. `flareAttr` writes the raw 0..1 ramp instead, for everything else a mouth might do (lift, tilt, a different asset), because WHAT flares is the asset's business and not this node's. ON A CLOSED PATH RANGES WRAP: a range crossing the seam is one range, its arc taken modulo the path's length, matching what pathRuns and runFit do with a run there. On an OPEN path a range reaching past either end is REFUSED rather than clamped — a clamped range is a shorter tunnel than the one that was planned, reported as success. THE OUTPUT IS A PLAIN CLOUD, not a path: the tiles are placements along the curve, not the curve, and no polyline topology is built over them, exactly as pathSegments leaves its segment midpoints. Each tile carries P, `rot` (the `axis` turned onto the path's tangent, roll fixed by an up hint of [0, 1, 0] with orientAlongVector's deterministic fallbacks), `scale` (1, tapered at the mouths), `tangent`, `curveU`, `seed`, the standard point attributes, whatever `rangeNames` carries, and the PATH's primitive attributes — so a road's width reaches the ribs standing over it. It emits no randomness of its own.",
+    "category": "sampler",
+    "inputs": [
+      {
+        "name": "path",
+        "kind": "geometry",
+        "multi": false
+      },
+      {
+        "name": "ranges",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "startAttr": {
+        "type": "string",
+        "default": "runStart",
+        "description": "POINT attribute on the RANGES input (tuple 1, numeric) holding where each range begins, as an arc length in WORLD UNITS along the path — the same coordinate pathResample steps and pathPointAt's 'distance' mode reads. Defaults to runFit's `startAttr` suggestion so a detected run tiles without renaming; note the one conversion that pairing needs, which is that runFit may have been run against a CUSTOM arc coordinate in other units (a lap measured in half-widths), and this node reads world units. On a CLOSED path the value wraps: any real number is legal and is taken modulo the path's length. On an OPEN path a range must lie inside the path, and one that does not is refused rather than clamped."
+      },
+      "lengthAttr": {
+        "type": "string",
+        "default": "runSpan",
+        "description": "POINT attribute on the RANGES input (tuple 1, numeric) holding how much arc each range covers, in world units. Must be > 0 on every range: a range with no length is a single placement rather than a tiling, and this node refuses one instead of emitting a lone tile that looks like a very short tunnel — drop it upstream (filterByAttribute on the length) or place it with pathPointAt. On a closed path it may not exceed the path's own length, since the tiles would lap the loop and cover the same arc twice. Must differ from `startAttr`: a start and a length are two values, and one column cannot hold both."
+      },
+      "pathAttr": {
+        "type": "string",
+        "default": "",
+        "description": "POINT attribute on the RANGES input (tuple 1, numeric) naming WHICH polyline each range belongs to, as an index into the path input's PRIMITIVE domain — the same numbering every error message here uses. Empty (the default) is legal only when the path input holds exactly ONE polyline, which is the ordinary case; with several, this is REQUIRED rather than defaulted to the first, because tiling the wrong road is a cook that looks entirely fine. An index that is not a polyline of the input is refused, listing the ones that are."
+      },
+      "spacing": {
+        "type": "f32",
+        "default": 1,
+        "description": "Ceiling on the distance between consecutive tiles, in world units. A range of length L takes max(1, ceil(L / spacing)) tiles at the centres of that many equal sub-intervals, so the PITCH is L / count and is at most this value — never more. Rounded up rather than to nearest so that pieces meant to abut do: a nearest-rounded pitch is wider than asked whenever the range is not a whole number of pieces long, and a gap in tiled cover is a hole rather than a near-miss. This node does not know how big your piece is, so overlap is spelled as a spacing SMALLER than the piece — about 5% under is enough to close the wedge two pieces leave on the outside of a bend. Must be > 0. AS A FIELD IT IS ONE SPACING PER RANGE, resolved on the RANGES input's POINT domain, which is what lets the pitch follow the piece: a range that chose a 5-unit strip and one that chose a 1-unit rib tile at their own pitches in ONE cook, reading the size the range itself carries. A field is not range-checked the way a plain value is, so bound the expression with max(<expr>, <the smallest pitch you meant>); a NaN or infinite spacing is refused, naming this param, and so is the whole cook when the resolved spacings would place more than 1048576 tiles.",
+        "acceptsField": true,
+        "min": 0
+      },
+      "flare": {
+        "type": "f32",
+        "default": 0,
+        "description": "Arc distance over which each MOUTH of a range opens, in world units; 0 (the default) is no flare. Every tile gets a ramp of 1 at the very mouth falling to 0 at this distance inside, taken from whichever end is nearer, and the ramp drives `taper` and `flareAttr`. It exists because a tiled cover that starts at full section is a wall with a hole in it: the eye reads an opening from the way the section grows, and the flare is also what keeps the view clear at the moment of entry, which is the moment it matters. A flare of at least half the range's length ramps every tile (the two mouths meet in the middle) and is legal — the ramps do not add, each tile taking the nearer mouth's. One value per RANGE as a field, resolved on the ranges' POINT domain exactly as `spacing` is, so a long tunnel and a short gantry can open over different distances in one cook.",
+        "acceptsField": true,
+        "min": 0
+      },
+      "taper": {
+        "type": "f32",
+        "default": 1,
+        "description": "The `scale` a tile reaches AT the mouth, interpolated to 1 at `flare` inside; 1 (the default) is no taper, and with `flare` at 0 this is read nowhere. Applied to the two scale components that are NOT `axis` — the cross-section — so the mouth opens or pinches while the piece's length along the path is left alone; scaling all three would make the mouth pieces longer as well as wider and leave gaps between them. Above 1 opens the mouth (1.5 is a mouth half again as tall and wide), below 1 pinches it, which is what a run that should taper away to nothing at its ends wants. One value per RANGE as a field, on the ranges' POINT domain.",
+        "acceptsField": true,
+        "min": 0
+      },
+      "axis": {
+        "type": "enum",
+        "default": "+z",
+        "description": "Which local axis of the tiled asset points ALONG the path, and therefore which two `scale` components `taper` opens. Default '+z', matching orientAlongVector rather than pathSegments' '+y': this node points a piece at a heading and does not stretch it to span anything, where pathSegments puts the SEGMENT'S LENGTH on the chosen axis to draw a tube. Roll around the path is fixed by an up hint of [0, 1, 0] with the same deterministic fallbacks orientAlongVector uses ([0, 0, 1], then [1, 0, 0]) — never random, and never left to whatever a degenerate cross product produced.",
+        "enum": [
+          "+x",
+          "-x",
+          "+y",
+          "-y",
+          "+z",
+          "-z"
+        ]
+      },
+      "flareAttr": {
+        "type": "string",
+        "default": "",
+        "description": "OPT-IN: POINT attribute (f32) on the output receiving each tile's raw FLARE RAMP — 1 at the mouth, falling linearly to 0 at `flare` inside, and 0 everywhere on a range with no flare. Empty (the default) writes none and the output is byte-identical to a cook without it. It is here because WHAT a mouth does is the asset's business and not this node's: `taper` covers the common case of opening the section, and everything else — lifting the roof, tilting the pieces outward, swapping in a wider variant at the entrance, fading a material — is a field or a setAttribute reading this column. The ramp is per tile, taken from the NEARER mouth, so a range shorter than twice its flare has every tile ramped and none of them at zero."
+      },
+      "tileIndexAttr": {
+        "type": "string",
+        "default": "",
+        "description": "OPT-IN: POINT attribute (i32) receiving each tile's 0-BASED INDEX WITHIN ITS OWN RANGE, restarting at 0 for every range. Empty (the default) writes none. It is the per-range coordinate nothing else can state: this node emits NEW points, so an index written upstream with setAttribute does not survive, and `curveU` is a fraction of the whole path rather than of the range. Without it, 'every other rib' has to be spelled on the GLOBAL point index, which agrees with the per-range one only while every range emits the same, EVEN, number of tiles and reports nothing when that stops being true. Index 0 is the tile nearest the range's start in the path's walk direction, including on a range that wraps a closed path's seam."
+      },
+      "rangeIndexAttr": {
+        "type": "string",
+        "default": "",
+        "description": "OPT-IN: POINT attribute (i32) receiving the index of the RANGE a tile came from, in the ranges input's own point order. Empty (the default) writes none. This is the group key: partitionByAttribute splits one item per run, pointsToPath's `groupAttr` threads each run's tiles into a path of their own, and attributeReduce collapses per run — 'how long did this run actually come out' is a reduction over this. It also names the atomic unit for anything that must be decided once per run and is easier to write downstream than upstream."
+      },
+      "rangeNames": {
+        "type": "stringList",
+        "default": [],
+        "description": "Point attributes of the RANGES input to copy onto every tile of that range, in any order; empty (the default) carries nothing, which is not an error. THIS IS THE ATOMICITY MECHANISM. A tunnel is one piece repeated, so the piece is chosen ONCE — on the range point, where there is exactly one element per run to choose on, by whatever upstream node makes that kind of decision — and copied here, unchanged, onto every tile. A per-tile draw is uniform only by accident: the case this node comes from measured a planned 17-unit covered stretch back as 8 the moment poses were drawn per piece, because varying the shape along a run reopens the seams the overlap existed to close. Carry the asset id, the variant, the yaw, the width, the material — anything that must be the same all the way along. Each column arrives with the range's own type, tuple size and default. Three names are refused rather than resolved silently: one this node writes itself (P, rot, scale, density, boundsMin, boundsMax, color, seed, tangent, curveU, and whatever flareAttr/tileIndexAttr/rangeIndexAttr named) — copy it to another name on the ranges first with setAttribute and carry that; a name repeated in the list; and a name the ranges input does not have, which is an error listing what it does have."
+      }
+    }
+  },
+  {
     "type": "attributeReduce",
     "description": "Collapses a numeric attribute over a whole domain into a single value on the detail domain: sum, min, max, average (all f32, componentwise, keeping the source tuple size) or count (u32, the number of elements — this mode reads no attribute). NaN elements are ignored by every mode, and average divides by however many were left, so one bad element cannot destroy the statistic; this is the deliberate difference from promoteAttribute point->detail, which propagates NaN. The other difference is outName: two reductions of one attribute (a min AND a max) can coexist, which promoting cannot do because both would land on the same detail name. Over an empty domain sum and average are 0, min is Infinity, max is -Infinity, count is 0. Note that a detail attribute is NOT readable from a point-domain field (a field reads the domain it lands on), so a reduction is for hosts, inspection and cook-stat reporting — to rescale an attribute by its own observed range use attributeRemap's 'fit' mode, which measures it internally.",
     "category": "attribute",
@@ -821,6 +916,86 @@
     }
   },
   {
+    "type": "occlusionCull",
+    "description": "Removes points whose ORIENTED BOX stands in a line of sight, after first trying to move them out of it. Its subject is three things and nothing else: a cloud of EYE POSES, the TARGETS visible from each of them, and a cloud of boxes that may block the lines between — so it serves a driver who must see the road ahead, a guard who must see the gate, and a camera that must see the actor, with no knowledge of roads, gates or actors in it. The `in` pin carries the boxes: each point's `P` is the box centre, its `rot` (f32x4) the orientation and its `scale` (f32x3) the FULL extents, which are the same three columns spawnInstances reads, so what is tested is what will be drawn. The `sight` pin carries the lines: its points are the eye positions, raised by `eyeOffset`, and the path through them supplies the targets. FROM EACH EYE THE TEST IS A FAN OF CHORDS, not one chord to the far end, and that is the difference between a rule that works and one that passes vacuously: the requirement is that the next `lookAhead` of PATH be visible, and a box can leave the far point in plain view while standing in front of everything between — a single chord to the end of the run would clear it. `samples` chords are tested per eye, to points evenly spaced in ARC LENGTH along the run ahead. The test itself runs in each box's OWN frame (the slab method over its three axes), never in the world: a box turned into the sight line presents a narrower profile than its world-aligned hull, and on a straight the two agree while through a bend they do not — which is precisely where the rule matters, so testing the hull would check the one case that never fails. A blocked point is PUSHED before it is dropped: the node steps it along `pushAxis` in `pushStep` increments up to `pushMax`, away from the sight path, and keeps the first position that clears every chord. Only a point that cannot be cleared by pushing is removed. That order is the point of the node and not an optimisation — pushing PRESERVES THE POPULATION COUNT, so any rule upstream that budgeted a number of points still has that number, and the asset the author placed is still in the scene; dropping spends both. With the default `pushMax` of 0 nothing is pushed and every blocker is dropped, which is the conservative reading: this node will not silently relocate an authored point by a distance nobody chose. DETERMINISM: points are visited in an order fixed by point IDENTITY — the bits of the stored position plus the per-point `seed` attribute — and never by array index, so shuffling the input, filtering something upstream, or deriving the same points inside another cell's halo yields the identical survivor set. Order matters here only when `pushClearance` is above 0, which makes a pushed point avoid the points already settled and so makes one verdict depend on others; below that every point is decided from the sight input alone. HALO: with `pushClearance` at 0 the answer for a point depends on the eyes within roughly `lookAhead + pushMax` of it and on nothing else, so a partitioned cook is exact given a window that wide. Above 0 it is a GREEDY op, and a greedy op has no finite width — this point settled here because that one settled there, an unbounded chain no halo covers — so a per-cell cook will differ from a whole-region one, and the difference shows up as pushed points overlapping at the seams rather than as an error. OUTPUT is a point cloud of the survivors with every point attribute carried, and the input's topology is NOT preserved under any setting. There is no `topology: \"keep\"` here, unlike the five point filters, for a reason those five do not have: this node MOVES points as well as removing them, and a primitive kept over a moved point would describe a shape nobody authored — a road that follows its lamp posts sideways. Rebuild any network downstream (pointsToPath, connectPoints). One consequence worth stating because nothing else will say it: a PUSHED point comes out with a different `P`, and `P` is half of a point's identity, so anything identity-keyed downstream (filterByDensity's probabilistic mode, selfPrune's tiebreak, randomField) re-rolls for exactly the points this node moved. COST is one occlusion test per (point, nearby eye, sample), so it scales with the eye density of the sight path as well as with the cloud — resample the path to the spacing the rule actually needs rather than to the spacing it happens to have.",
+    "category": "filter",
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry",
+        "multi": false
+      },
+      {
+        "name": "sight",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "lookAhead": {
+        "type": "f32",
+        "default": 12,
+        "description": "How far along the sight path, in world units of ARC LENGTH, must be visible from each eye. The fan's targets are spread evenly over that distance, so this and `samples` together fix the resolution of the test: `lookAhead / samples` is the gap between consecutive targets, and a box narrower than that gap can slip between two chords and be kept. Size them together — halving the gap doubles the cost. As a FIELD it is evaluated on the SIGHT input's points, one look-ahead per eye, which is how a rule that varies along the route is written: attribute(\"speed\") scaled to a stopping distance asks for more sight where the observer is moving faster and less where a tight corner makes the demand impossible to satisfy anyway. A value of 0 leaves the fan with nowhere to go and collapses every chord to the eye position itself, which still asks one question — is the eye INSIDE the box — and nothing more; that is the honest reading of a zero-length line of sight, not an off switch. Negative values are read the same way as 0. A look-ahead longer than the path itself simply clamps at the far end on an open run and wraps on a closed one. This is also the HALO WIDTH a partitioned cook needs, plus `pushMax` and plus the widest box half-diagonal; as a field, use the bound the expression can reach ANYWHERE in the world rather than the largest value present in the cell, which is circular — the cell's cloud has already been clipped by the very halo you are sizing.",
+        "acceptsField": true,
+        "min": 0
+      },
+      "samples": {
+        "type": "u32",
+        "default": 8,
+        "description": "How many chords make up one eye's fan. The targets sit at `lookAhead * i / samples` for i in 1..samples, so the far end of the run is always tested and the eye's own position never is. The count exists because the rule is about a STRETCH of path rather than a point on it: with samples 1 the test is a single chord to the far end, which a box standing squarely across the middle of the run does not touch — it leaves the far point visible while hiding everything before it, and the cull would keep it. Raise this until the gap between targets is smaller than the narrowest box you care about; lowering it is the cheapest way to make the node faster and the first thing to make it wrong. The ceiling of 1024 is a guard on cost rather than a semantic limit, and the total number of chords (eyes times samples) is bounded again at cook time.",
+        "min": 1,
+        "max": 1024
+      },
+      "eyeOffset": {
+        "type": "vec3",
+        "default": [
+          0,
+          1.5,
+          0
+        ],
+        "description": "World-space offset added to each eye's position on the sight path, in world units. The default raises the eye 1.5 above the path, which is where an observer's eye is relative to the ground they stand on — the reason the param exists at all is that the path is almost always the surface and almost never the viewpoint, and testing from the surface would have every kerb and every rut block the view. The TARGETS are not offset: they stay on the path, because what must be visible is the path itself, and lifting both ends would let a low box hide under a chord that clears it. As a FIELD it is evaluated on the SIGHT input's points, one offset per eye, so a route that climbs into a vehicle and back out again can carry its own eye height; build it with vec(x, y, z), and note that a scalar FIELD broadcasts to all three axes (rarely what an eye height means) while a plain scalar is refused outright. An offset of [0, 0, 0] puts the eye exactly on the path.",
+        "acceptsField": true
+      },
+      "pushAxis": {
+        "type": "vec3",
+        "default": [
+          1,
+          0,
+          0
+        ],
+        "description": "Direction along which a blocked point is moved before the node gives up and drops it, in world units. Normalized internally, so only its direction is read; the SIGN is chosen by the node, not by the author — a point is pushed in whichever of ±axis takes it FURTHER from the nearest eye, because 'out of the way' has no other meaning when the sight line is the only thing there is to be out of the way of. That is what lets one axis serve both sides of a route without an author writing a sign per point. As a FIELD it is evaluated on the `in` points, one direction per point, which is the form this param is really for: a lateral written upstream by pathSegments or promoted off the road primitive gives every point the outward direction of the stretch it stands on, and a straight world axis stops being an approximation the moment the route turns. A ZERO axis cannot be pushed along, so such a point is dropped the moment it blocks — which is a deliberate way to spell 'this one must never move' for a piece whose whole value is being in line with its neighbours (a row of markers with one shoved out of line reads as a mistake; the same row two markers shorter still reads as a row). `pushMax` 0 says the same thing for the whole cloud.",
+        "acceptsField": true
+      },
+      "pushMax": {
+        "type": "f32",
+        "default": 0,
+        "description": "Furthest a blocked point may be moved along `pushAxis`, in world units. The default of 0 means NEVER PUSH: every blocker is dropped, and the node is a pure cull. There is deliberately no generous default distance — 6 is a long way in a corridor and nothing at all on a motorway, so a default would either do nothing or silently relocate an authored point by an amount nobody chose, and of the two failures dropping the point is the one an author notices. Set it as soon as the population count matters: pushing keeps the point, keeps the asset, and keeps whatever budget upstream counted, where dropping spends all three. As a FIELD it is evaluated on the `in` points, one allowance per point, and 0 for a point is exactly the 'drop rather than move' exception — attribute(\"locked\") driving it lets a class of props be immovable while everything around them shuffles aside. The search is a ladder of `pushStep` increments and stops at the FIRST distance that clears every chord, so the point moves the least it can rather than the most it may; a point still blocked at `pushMax` is dropped. Widening this widens the halo a partitioned cook needs by the same amount, since a point can be tested against eyes that far beyond where it started.",
+        "acceptsField": true,
+        "min": 0
+      },
+      "pushStep": {
+        "type": "f32",
+        "default": 0.5,
+        "description": "Distance between successive push attempts, in world units. Must be greater than 0 — a step of 0 is a search that never advances, and it is refused rather than silently treated as 'do not push', which is what `pushMax` 0 already says. This is a RESOLUTION knob and not a distance the author cares about: it decides how close to the minimum the found position is, so a point that would clear at 1.2 is placed at 1.5 with the default step and at 1.25 with a step of 0.25. It is deliberately not field-capable — a per-point search resolution is a knob nobody needs and would make two points that started together end up on different ladders, which is a difference in the OUTPUT that no author asked for. Every attempt costs a full sweep of the point's eyes, so the ratio pushMax / pushStep is the per-point cost multiplier and is bounded: a ratio above 4096 is refused with both numbers named.",
+        "min": 0
+      },
+      "pushClearance": {
+        "type": "f32",
+        "default": 0,
+        "description": "Room a PUSHED point needs at its new position, in world units, measured to the points already settled. It exists because pushing along a shared axis piles blockers up: a dozen props shoved aside from a dozen different eyes all come to rest at the same offset, interpenetrating, and the cull that was supposed to tidy the scene has made a heap in it. With a clearance set, a pushed point skips a rung of the ladder that would land it inside a neighbour and keeps climbing. THIS IS WHAT MAKES THE NODE GREEDY, and the trade is worth stating plainly: at 0 (the default) every point's verdict depends only on the sight input and on the point itself, so the node is embarrassingly parallel, exactly reproducible from a bounded halo, and completely indifferent to visit order. Above 0 a verdict depends on where other points settled, which depends on where THEIR neighbours settled, and no halo width covers that chain — a per-cell cook will disagree with a whole-region one at the seams. The visit order is fixed by point identity either way, so the answer is at least always the same answer. Only PUSHED points are tested: a point that never had to move stays exactly where the author put it and is never dropped for standing too close to something, which is selfPrune's job and not this node's. As a FIELD it is evaluated on the `in` points, so a large prop can demand more room than a small one; it is read on the point being PUSHED, not on the neighbour it is avoiding.",
+        "acceptsField": true,
+        "min": 0
+      }
+    }
+  },
+  {
     "type": "orientAlongVector",
     "description": "Sets the standard rot point attribute (f32 tuple 4 quaternion, [x, y, z, w]) so the chosen local axis points along `direction`, with `up` fixing the roll. The quaternion is right-handed and matches the spawner path's three.js Matrix4.compose conventions (and quatFromEulerDeg's frame), so with the default '+z' axis, spawned assets face the direction the way the spline-fence example's tangent yaw does. For axes ±x and ±z the local +Y axis turns as close to `up` as the direction allows; for axes ±y (which consume the up-like axis) local +Z takes that role. Points with a zero-length direction keep their existing rot (identity when the attribute is newly created). When direction and up are parallel or antiparallel (cross product squared length <= 1e-12, after normalizing both), the up hint deterministically falls back to [0, 0, 1], then [1, 0, 0].",
     "category": "point op",
@@ -897,6 +1072,98 @@
         "type": "string",
         "default": "name",
         "description": "Point attribute to partition by. Must be i32, u32, or string with tuple size 1."
+      }
+    }
+  },
+  {
+    "type": "pathCoverage",
+    "description": "Measures, at every point of the `path` input, whether that point is COVERED from some direction by any of the oriented boxes in the `boxes` input, and writes the answer as point attributes: coveredAttr gets a bool (did at least minHits rays hit anything), hitsAttr gets the u32 count of rays that did. The test is a FAN OF REAL RAYS IN WORLD SPACE — rayCount segments running from `near` to `far` along `direction`, offset evenly across the path over -spread..+spread — intersected against each box as an oriented box (position from P, orientation from rot, extent from boxSize times scale, the same columns spawnInstances reads), by the slab method in the BOX'S OWN frame. It casts rays rather than testing path-relative bounds because a bounds projection onto a folded centreline cannot tell 'above the path here' from 'near the path twice': that mistake put a single object near a hairpin in credit for 78 half-widths of lap on 6 half-widths of geometry, and the 32.3% figure it produced had to be withdrawn. Three cheaper proxies for the same question disagreed with each other by a factor of six; the ray cast is the one that converges as the far plane moves, because a fold is two different places in the world and one place in arc length. A FAR PLANE IS LOAD-BEARING: with no ceiling the sky is a tunnel, so `far` is a real distance and not a sentinel for infinity. Rays are counted DISTINCT, not per box — three boxes stacked over the same two rays is two hits, not six, because the question is whether cover spans the corridor and not how much of it there is. THIS NODE ADDS A COLUMN AND REMOVES NOTHING: points, vertices, primitives, the polyline topology and every existing attribute come through untouched, so a path goes in and the same path comes out one column wider. That is the opposite of the point filters (filterByAttribute, filterByExpression, filterByDensity, filterByBounds, selfPrune), which rebuild the point domain from the survivors and take the topology with it — measure first with this node, then filter on the attribute it wrote if dropping points is what you wanted. It is ORDER-INDEPENDENT by construction: no point's answer depends on any other point, no box's on any other box, and nothing is accumulated in floating point, so the output is identical whatever order the boxes arrive in and the node is EXACTLY CELL-INVARIANT under a partitioned cook given a halo of hypot(spread, max(|near|, |far|)) + the largest box's bounding-sphere radius (half the length of its boxSize*scale vector) — a cell that sees every box within that distance of it computes exactly what the whole world would. Cost is O(path points x candidate boxes): boxes are indexed in a two-tier structure, a uniform grid over the ones no larger than the ray reach (queried as a 3x3x3 block) plus a linear tier for the rest, bounded at half the cloud by splitting at the median radius.",
+    "category": "attribute",
+    "inputs": [
+      {
+        "name": "path",
+        "kind": "geometry",
+        "multi": false
+      },
+      {
+        "name": "boxes",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "direction": {
+        "type": "vec3",
+        "default": [
+          0,
+          1,
+          0
+        ],
+        "description": "World direction the rays are cast along, from each path point; need not be unit length. The default [0, 1, 0] asks the question this node was built for — what is ABOVE the path — but the axis is free: cast along -Y to ask what the path stands on, or along a horizontal axis to ask what walls it in. As a FIELD it is PER PATH POINT, resolved on the path's own point domain, which is how a banked or rolled path asks about its own local up rather than the world's: pass attribute(\"N\") or a curve frame's normal and each point casts along the surface it belongs to. A zero-length direction is REFUSED, naming the point — unlike orientAlongVector, where a zero direction has the honest reading 'leave this point alone', a coverage query with no cast direction has no answer at all, and reporting 'not covered' for it would be exactly the plausible-looking cook this library refuses to produce.",
+        "acceptsField": true
+      },
+      "near": {
+        "type": "f32",
+        "default": 0,
+        "description": "Where each ray STARTS, as a distance along `direction` from the path point. This is the floor of the test, and it is what stops the path's own surface — and anything lying on it — from counting as cover over it: on a road, set it above the tallest kerb and below the lowest thing that could ever be a roof. Negative values start the ray behind the point. As a FIELD it is per path point. Together with `far` and `spread` it fixes the ray reach hypot(spread, max(|near|, |far|)), which is the halo this node needs under a partitioned cook.",
+        "acceptsField": true
+      },
+      "far": {
+        "type": "f32",
+        "default": 10,
+        "description": "Where each ray ENDS, as a distance along `direction` from the path point. THE FAR PLANE IS LOAD-BEARING AND HAS NO 'UNLIMITED' SETTING: with an unbounded ray the sky is a tunnel and the answer is 100% everywhere, so this is a real distance chosen for the scene — the height above which something overhead has stopped being cover and started being scenery. A measurement whose value is that today's figure can be compared with yesterday's must not move when a placement rule is retuned, so prefer restating the number here to importing it from whatever placed the boxes. `far` less than `near` describes the same segment reversed and is legal; `far` equal to `near` collapses each ray to a point and asks pure containment. As a FIELD it is per path point.",
+        "acceptsField": true
+      },
+      "rayCount": {
+        "type": "i32",
+        "default": 6,
+        "description": "How many rays in the fan, spread evenly across -spread..+spread WITH BOTH EDGES INCLUDED. 1 casts a single ray straight through the point and ignores `spread`. A single centre ray is not enough for anything wider than a footpath: cover over a corridor is usually a shell with legs at the edges and a span in the middle, and one ray down the middle either sees the span and calls a bare gantry a tunnel, or sits in the gap between two panels and calls a tunnel bare. Six over three half-widths — the shipped default — puts rays at the corridor edges, where the legs are, without doubling up on the middle, where a single spanning panel already answers for everything. Cost is linear in this: each ray is one slab test per candidate box, minus the ones already hit.",
+        "min": 1
+      },
+      "spread": {
+        "type": "f32",
+        "default": 1.5,
+        "description": "HALF the lateral span of the fan, in world units: rays are placed from -spread to +spread across the path, so the full corridor tested is 2*spread wide. 'Across' is perpendicular to both the path's own direction of travel and to `direction` (see acrossAttr for where that comes from). Set it to the width you are willing to call covered — wider than the path itself if a partial overhang counts, narrower if only cover directly overhead does. 0 collapses the fan onto the centre line whatever rayCount says, which makes every ray identical and the hit count either 0 or rayCount. As a FIELD it is per path point, so a path that changes width can carry its own corridor; the ray reach, and therefore the partitioned-cook halo, is then set by the LARGEST value the field can return anywhere in the world, which is a bound to derive rather than measure.",
+        "acceptsField": true,
+        "min": 0
+      },
+      "minHits": {
+        "type": "i32",
+        "default": 3,
+        "description": "How many of the fan's rays must hit before the point counts as covered, AT LEAST this many (the test is >=, so 3 of 6 is covered). This is the knob that decides what 'under cover' means, and it is a threshold rather than a fraction so that it reads the same when rayCount changes: half the rays is the shipped default and says 'art spans the corridor', 1 says 'anything at all overhead', rayCount says 'cover edge to edge'. Refused when it exceeds rayCount, because that test can never pass and a run of all-false is not a useful way to learn so. hitsAttr writes the raw count, so a graph that wants a different threshold later can write the count once and compare it downstream instead of re-casting.",
+        "min": 1
+      },
+      "acrossAttr": {
+        "type": "string",
+        "default": "",
+        "description": "Name of a numeric point attribute (tuple 3) on the path giving the across direction directly, for paths that already carry their own frame. Empty (the default) derives it from the path's POLYLINE TOPOLOGY instead: the central-difference tangent at each point (the same one writeTangents and writeCurveFrame produce) crossed with `direction`. That derivation is why an empty acrossAttr requires real polyline primitives and refuses a bare point cloud. Prefer this param when the boxes were placed through a frame the path already stores: a second way of computing 'across' is a second chance to disagree with the geometry being measured, and the disagreement looks like a plausible number rather than like a bug. Whatever the source, the vector is made perpendicular to `direction` and normalized before use, so the fan stays a flat fan and the ray-reach bound stays exact. A point with no usable across direction — one no polyline visits, or one whose path neighbours all coincide, or a tangent parallel to `direction` — falls back to a deterministic axis perpendicular to `direction` (the same fallback orientAlongVector uses), so it is still measured and still reproducible, but its fan is not oriented by the path."
+      },
+      "boxSize": {
+        "type": "vec3",
+        "default": [
+          1,
+          1,
+          1
+        ],
+        "description": "Extent of one box along its own local X, Y and Z axes BEFORE the per-point `scale` is applied — the size of the asset the cloud stands for. The world half-extent is 0.5 * boxSize * scale componentwise, so the default [1, 1, 1] means 'the points carry unit cubes and `scale` IS the size', which is the common case. As a FIELD it is resolved ON THE BOXES CLOUD, not on the path, so attribute(\"...\") inside it reads the boxes' own columns: a cloud carrying its extents in the standard bounds attributes is subtract(attribute(\"boundsMax\"), attribute(\"boundsMin\")). GETTING THIS WRONG IS SILENT IN BOTH DIRECTIONS: scaling twice inflates every box and reports a tunnel over the whole path, forgetting `scale` shrinks them and reports no cover anywhere, and each produces a run that finishes cleanly with a wrong number in it. Boxes are centred on their points; a negative size is read as its magnitude, since a box of size -2 is the same set of points as one of size 2.",
+        "acceptsField": true
+      },
+      "coveredAttr": {
+        "type": "string",
+        "default": "covered",
+        "description": "Name of the bool point attribute receiving the covered/not decision (hits >= minHits). Empty writes no flag (then hitsAttr must be set). The shape is this node's to pick (bool, tuple 1), so a name the path already holds under a DIFFERENT shape is REFUSED, not overwritten: writing it would delete that column outright and the cook would still look fine (coveredAttr \"P\" would leave a path with no positions). An existing bool tuple-1 column of the same name IS reused and reset, so re-running this node over its own output is fine. To write over something of another shape, removeAttribute it first, or pick another name."
+      },
+      "hitsAttr": {
+        "type": "string",
+        "default": "",
+        "description": "Name of the u32 point attribute receiving how many of the fan's rays hit at least one box, 0..rayCount. Empty (the default) writes no count. Worth writing when the threshold is still being chosen, or when the interesting quantity is HOW enclosed a point is rather than whether it passed: the count is what distinguishes a bare gantry from a tunnel, and a graph can compare it against several thresholds downstream without casting again. Same rule as coveredAttr: the shape is this node's to pick (u32, tuple 1), so a name held under a different shape is refused, while a same-shape column is reused and reset."
       }
     }
   },
@@ -1601,6 +1868,96 @@
         "type": "bool",
         "default": true,
         "description": "Error when a listed name does not exist on the domain, naming the available attributes. False makes removal best-effort and skips missing names."
+      }
+    }
+  },
+  {
+    "type": "runFit",
+    "description": "Cuts every polyline into RUNS at along-arc GAPS, least-squares fits a numeric point attribute against arc position WITHIN each run, and writes the fit back onto every point of the run it belongs to. This is the node that turns 'those things line up' into numbers a filter can act on: a slope (how fast the value drifts per unit of arc), a worst-case residual (how far the furthest member sits off the fitted line) and a span (how much arc the run covers). Detection is the first use and CONSTRUCTION is the second — a run detected here has a start and a span, which are exactly what arcTile lays a repeated piece over, and the default names line up on purpose (`runStart`, `runSpan`). WHY A NODE AND NOT A FIELD: a gap is a fact about two points at once, and a field resolves each element from that element alone, so neither the grouping nor the fit has any formulation in the grammar. pathRuns cuts runs too, but at points something already FLAGGED — and nothing flags a barrier: what separates one row of posts from the next is empty arc, which is the thing no upstream column knows. IT FITS AGAINST RUN-LOCAL ARC, NOT THE PATH'S, and that is a numerical decision worth stating because it is invisible when it goes wrong. A least-squares fit only ever uses `s - mean(s)`, so fitting an O(1) quantity against an O(300) lap coordinate subtracts away every leading digit it was written with: in f64 that costs about four of seventeen digits and nobody notices, but in f32 there are seven digits and the spacing at 300 is ~3e-5, so a 40-unit run keeps about two digits of deviation — against divergence thresholds that live in the third. The detector would be reading its own quantisation. Subtracting the run's own start first is THE SAME LINE THROUGH THE SAME POINTS (a fit is translation-invariant in the abscissa; slope and residual are unchanged) computed where the numbers are small, so the fit is exactly translation-invariant here rather than approximately. It is also what makes the degenerate-run guard a plain `den > 0` rather than an epsilon: at lap arc those squared deviations were pure cancellation of the same order as any epsilon anyone would pick. THE FIT LANDS ON THE POINT DOMAIN, REPEATED ACROSS EACH RUN, and the alternative was considered and refused. A run is NOT a primitive — one path holds many runs, so the primitive domain has no element to hold one — and giving each run a primitive would mean re-topologising the path into fragments, which destroys the path to describe it. Repeated per point is also the shape the answer is USED in: every consumer is a per-point decision ('drop the middle member of every straight run longer than 4 units', filterByExpression), and a per-point decision needs the run's verdict AT the point. THE RESIDUAL IS THE WORST MEMBER, not an RMS: the rule these exist to serve is 'no member sits further than X off the line', and an RMS lets one outlier hide behind five good members, which is precisely the case that reads as a line to a human eye and passes as scatter to a mean. THE SEAM IS NOT A BREAK unless a gap makes it one. On a CLOSED path with `wrap` on, the walk starts at the first REAL break rather than at vertex zero, so a run straddling the start/finish line stays one run — the same rotation, the same fallback and the same reasoning as pathRuns, because a lap is the case this keeps meeting and one node disagreeing about where a lap begins is a bug nobody sees. A closed path with wrap on and NO gap anywhere is one cyclic run with nowhere to begin, so the seam stands in and the result is what `wrap` off gives. On an OPEN path `wrap` does nothing. TWO-POINT RUNS FIT EXACTLY AND REPORT A ZERO RESIDUAL (or the rounding noise left of one, ~1e-16 of the values' own size), which is the mistake this node most wants you to avoid: a line through two points is always perfect, so 'straight' is only evidence above three, and `countAttr` exists to be filtered on. Compare residuals against a threshold rather than against zero for the same reason every float is. NaN VALUES ARE EXCLUDED FROM THE FIT but stay members of their run (they hold their place along the arc; dropping them would join the two runs they separate), so `countAttr` reports what the line was actually fitted to. A NaN or infinite ARC is refused outright, naming the point — a point with no place along the path cannot be assigned to a run at all, and silently dropping it would merge its neighbours. Points in no polyline keep the defaults (-1 for the id and index, 0 elsewhere), and a point in several polylines takes the last in primitive order, both matching pathScan and pathRuns. TOPOLOGY SURVIVES: this node removes no points, so a path arrives a path and leaves a path — unlike anything downstream that can drop a point (filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute, mergePoints), which rebuilds the point domain and takes the primitives with it. It emits no points either, so it needs no ceiling: the output is exactly as big as the input.",
+    "category": "attribute",
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "arcAttr": {
+        "type": "string",
+        "default": "",
+        "description": "POINT attribute (tuple 1, numeric) holding each point's ALONG-ARC coordinate — the axis runs are cut on and the fit is made against. EMPTY (the default) MEASURES IT: the path's own cumulative arc length, in world units, walked from its first vertex. Name a column instead when the coordinate is not the path's own geometry, which is the usual case for detection: props threaded into a path in station order are separated along the ROAD, and the 3D chord between two of them also carries their lateral offsets, so a row alternating between two sides measures gaps longer than the road ever had and a run is cut where there is no gap. The coordinate must not DECREASE along the walk — this node refuses a decrease rather than reading it as a huge gap, because a path walked against its own coordinate produces a fit through a sequence running backwards and every number it reports is then a plausible-looking lie. Equal values are fine (two props at the same station). NaN and ±Infinity are refused, naming the point."
+      },
+      "valueAttr": {
+        "type": "string",
+        "default": "density",
+        "description": "POINT attribute (tuple 1, numeric) that is FITTED against the arc coordinate — the quantity whose drift the slope reports. Must exist. THE SIGN IS YOURS TO DECIDE, and it decides what the detector can see: a lateral offset fitted signed gives the two sides of a road opposite slopes for the same defect and halves the sensitivity of any threshold written for one of them, so fit the ABSOLUTE offset (setAttribute with an abs() field) when 'drifting away from the centre' is the question. A NaN value is EXCLUDED from the fit rather than poisoning it, and stays a member of its run — it still holds its place along the arc, and dropping it would merge the runs on either side of it. `countAttr` reports how many members survived into the fit, which is the number to filter on."
+      },
+      "gap": {
+        "type": "f32",
+        "default": 1,
+        "description": "The along-arc distance that SEPARATES runs, in the units of the arc coordinate: consecutive members closer than this belong to the same run, and a gap GREATER THAN OR EQUAL to it starts a new one. Must be > 0. The comparison is closed on the break side deliberately — 'members closer than `gap` belong together' is the sentence the number is chosen from, so an exactly-`gap` spacing is a break rather than a coincidence to argue about. AS A FIELD IT IS ONE GAP PER PATH, resolved on the input's PRIMITIVE domain, for the same reason pathResample's spacing is: each polyline is cut on its OWN arc, so there is a primitive element to read one value per, and a motorway and a footpath in one geometry can take different gaps in ONE cook. The field sees the primitive domain, so it can read a primitive attribute (setAttribute domain 'primitive', or promoteAttribute point → primitive), index(), fraction(), randomField() and nodeSeed(); a POINT attribute is not in scope there and position() has no meaning for a path. A field is not range-checked the way a plain value is — a schema's min binds a number, and a field is a recipe with no number until it lands on a domain — so bound the expression itself with max(<expr>, <the smallest gap you meant>); a NaN or infinite gap is refused, naming this param.",
+        "acceptsField": true,
+        "min": 0
+      },
+      "period": {
+        "type": "f32",
+        "default": 0,
+        "description": "The value the arc coordinate WRAPS AT on a closed path — the lap length, in the arc coordinate's own units. 0 (the default) means the path's OWN MEASURED ARC LENGTH, which is correct whenever `arcAttr` is empty or holds a measured world-unit arc. IT IS READ ONLY WHERE IT MATTERS: a closed path with `wrap` on, where the gap across the seam is `arc(first) + period - arc(last)` and nothing else can supply it. THE MISTAKE IT EXISTS TO PREVENT: `arcAttr: \"curveU\"` is a 0..1 coordinate, so its period is 1, and leaving this at 0 hands it a period of a few hundred world units — the seam gap then dwarfs every real gap, no break is ever found there, and the lap silently becomes one run. A period SMALLER than the coordinate's own extent is caught (the seam gap goes negative and the cook is refused naming this param). A period LARGER than it cannot be caught by arithmetic — which is why the combination that produces one is REFUSED instead: a wrapping closed path that reads a non-empty `arcAttr` must state its period, because 0 would hand it a world-unit length for a coordinate that is not in world units, and the run crossing the seam would split with nothing in the output to show it. Clear `arcAttr` to use the measured arc, or set `wrap` false, or say what the coordinate wraps at. One value per PATH as a field, resolved on the PRIMITIVE domain exactly as `gap` is.",
+        "acceptsField": true,
+        "min": 0
+      },
+      "wrap": {
+        "type": "bool",
+        "default": true,
+        "description": "Whether a run may cross a CLOSED path's seam. True (the default) rotates the walk onto the first REAL break — the first point whose gap-before is at least `gap`, measured the long way round through the seam — so a run straddling the start/finish line stays one run. This is pathRuns' rule and the same code shape, because a lap is the case that keeps arriving and a line of eight objects laid across the start line must not read as two lines of four, each too short to be anything. False treats the seam as a break, which is what you want when vertex order carries meaning of its own. A closed path with NO break anywhere is one cyclic run with no place to begin, so the seam stands in and the answer is identical under both settings. No effect on an open path."
+      },
+      "slopeAttr": {
+        "type": "string",
+        "default": "runSlope",
+        "description": "POINT attribute (f32) receiving the fitted SLOPE of the run each point belongs to: the change in `valueAttr` per unit of arc, signed, and the same number on every member of a run. This is the divergence figure — 'this line drifts 0.03 units of lateral per unit of lap' — and it is what separates a line running PARALLEL to the path (slope ~0, ordinary dressing) from one converging on it (a false edge a driver would steer to). A run whose members all sit at one arc position has no slope to fit and reports 0, as does a run with fewer than two fittable members. May not be empty: a runFit that writes no fit is a cook that looks like it worked. Same reporting-slot rule as the rest of the library — a column of a different shape under this name is refused rather than deleted and re-added, and a same-shape one is reset."
+      },
+      "residualAttr": {
+        "type": "string",
+        "default": "runResidual",
+        "description": "POINT attribute (f32) receiving the run's WORST residual: the largest absolute distance from any fitted member to the fitted line, in the units of `valueAttr`, repeated on every member. Worst rather than RMS on purpose — the rule this serves is 'no member sits further than X off the line', and an RMS lets one outlier hide behind five good members, which is exactly the arrangement that reads as a straight line to the eye and as scatter to a mean. THE NUMBER TO DISTRUST IS A ZERO ON A SHORT RUN: two points define a line, so a two-member run always reports 0 — or the rounding noise left of it, which is why a threshold and not an equality is what to test — and always looks perfectly assembled. Filter on `countAttr` before believing a residual. May not be empty, and the reporting-slot rule applies."
+      },
+      "spanAttr": {
+        "type": "string",
+        "default": "runSpan",
+        "description": "POINT attribute (f32) receiving the run's SPAN: the arc distance from its first member to its last, in the arc coordinate's units, repeated on every member. Zero for a single-member run. This is the length threshold every rule about runs eventually needs — a line has to be long enough to read as one — and, with `startAttr`, it is exactly the range arcTile tiles: the pair's default names (`runStart`, `runSpan`) are that node's default `startAttr` and `lengthAttr` so the two wire together without renaming. Note it is the span of the MEMBERS, not of the arc they were cut from: a run ends at its last member, not half a gap later. May not be empty, and the reporting-slot rule applies."
+      },
+      "idAttr": {
+        "type": "string",
+        "default": "",
+        "description": "OPT-IN: POINT attribute (i32) receiving a run's INDEX, numbered from 0 across the whole geometry in primitive order and then in walk order, with -1 left on every point no polyline reaches. Empty (the default) writes none and the output is byte-identical to a cook without it. It is the GROUP KEY the rest of the library takes: partitionByAttribute splits one item per run, pointsToPath's `groupAttr` builds one path per run, and attributeReduce collapses per run. Numbered across the geometry rather than per path so those nodes see distinct groups without having to combine two columns; the path a run came from is recoverable from any carried primitive attribute."
+      },
+      "indexAttr": {
+        "type": "string",
+        "default": "",
+        "description": "OPT-IN: POINT attribute (i32) receiving each point's 0-BASED POSITION WITHIN ITS OWN RUN, restarting at 0 for every run, -1 on points no polyline reaches. Empty (the default) writes none. Two things need it. ALTERNATION along a run ('every other post a different asset') has no other spelling: the global point index agrees with the per-run one only while every run has the same, even, length, and nothing reports when that stops being true. And index 0 is the FIRST MEMBER, which is how a run becomes ONE element: filterByExpression on it leaves one point per run carrying that run's start, span and fit — a ranges cloud, which is what arcTile consumes. It counts in the WALK order the runs were cut in, so on a closed path with `wrap` on, index 0 of the seam-straddling run sits before the seam."
+      },
+      "countAttr": {
+        "type": "string",
+        "default": "",
+        "description": "OPT-IN: POINT attribute (i32) receiving how many members of the run WERE FITTED — members whose `valueAttr` was finite — repeated on every member of the run, including any that were excluded. Empty (the default) writes none. FITTED rather than total because the only reason to ask is to distrust a fit made from too few points, and a run of eight whose values are six NaNs is a two-point fit however many members it has. Two is the number to watch: a line through two points is exact, so both the residual and any 'how straight is it' rule are meaningless below three, and this is the column that says so."
+      },
+      "startAttr": {
+        "type": "string",
+        "default": "",
+        "description": "OPT-IN: POINT attribute (f32) receiving the arc coordinate of the run's FIRST MEMBER, repeated on every member. Empty (the default) writes none. Reported in the path's OWN coordinate rather than the unwrapped one the fit used, so a run that began before a closed path's seam still starts where it starts — with `spanAttr` it is the range arcTile tiles, and a range that reported a start past the end of the lap would be a range no other node could read. It is also the origin `interceptAttr` is measured at: to evaluate the fitted line at an arbitrary arc a, take intercept + slope * ((a - start) wrapped into [0, period)) on a closed path, or intercept + slope * (a - start) on an open one."
+      },
+      "interceptAttr": {
+        "type": "string",
+        "default": "",
+        "description": "OPT-IN: POINT attribute (f32) receiving the fitted line's value AT THE RUN'S OWN START (arc offset zero, the position `startAttr` reports), repeated on every member. Empty (the default) writes none. This is the half of the fit that RECONSTRUCTS it: slope alone says how fast the line drifts and nothing about where it is, so anything that wants to place along the fitted line — snap a straggler onto it, continue it with fresh pieces, draw it for a debug overlay — needs this too. At the run's start rather than at the arc origin for the reason the node's description gives about cancellation: an intercept extrapolated back to lap arc zero is a number computed hundreds of units away from any data, and its error is the slope's error times that distance."
       }
     }
   },

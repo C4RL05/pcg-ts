@@ -499,8 +499,8 @@ describe("describeGraphAssets: the graph corpus", () => {
   );
 
   it("finds every spawner in the corpus, bodies included", () => {
-    expect(new Set(spawners.map((s) => s.file)).size).toBe(15);
-    expect(spawners).toHaveLength(27);
+    expect(new Set(spawners.map((s) => s.file)).size).toBe(18);
+    expect(spawners).toHaveLength(31);
     // Eight of them are inside a `write/instances-by-species` body.
     expect(spawners.filter((s) => s.node.includes(" > "))).toHaveLength(8);
   });
@@ -512,6 +512,13 @@ describe("describeGraphAssets: the graph corpus", () => {
     }
     expect(ids.slice().sort()).toEqual(
       [
+        // arch / gantry / rib arrive with `basics-tile-an-arc`, which
+        // draws one of the three per arc range and repeats it — so the
+        // ids reach the renderer through an assetAttr rather than a
+        // literal, which is the case this list exists to keep honest.
+        "arch",
+        "gantry",
+        "rib",
         "bar",
         "barn",
         "birch",
@@ -534,12 +541,30 @@ describe("describeGraphAssets: the graph corpus", () => {
     );
   });
 
-  it("closes every corpus spawner but the one behind a copyToPoints", () => {
+  it("closes every corpus spawner but the two behind a node it cannot read through", () => {
     const open = spawners.filter((s) => s.open.length > 0);
-    expect(open.map((s) => `${s.file} ${s.node}`)).toEqual(["basics-copy-to-points.json spawn"]);
-    // One offending node, named and typed — the corpus has no graph whose
-    // set is open twice over, which is what the unit test above covers.
-    expect(open[0].open.map((o) => o.type)).toEqual(["copyToPoints"]);
+    expect(open.map((s) => `${s.file} ${s.node}`)).toEqual([
+      "basics-copy-to-points.json spawn",
+      "basics-tile-an-arc.json spawn",
+    ]);
+    // Each has exactly ONE offending node, named and typed — the corpus has
+    // no graph whose set is open twice over, which is what the unit test
+    // above covers.
+    expect(open.map((s) => s.open.map((o) => o.type))).toEqual([["copyToPoints"], ["subgraph"]]);
+    // THE SECOND ONE IS A SUBGRAPH, NOT THE arcTile ABOVE IT, and the
+    // difference is worth stating because the obvious guess is wrong.
+    // `basics-tile-an-arc` finds all three of its ids — rib, arch and
+    // gantry, every one of them `from: "attribute"` — so the openness is
+    // not about what the walk FOUND. It is about what it cannot rule out:
+    // a `shape/path-loop` wrapper stands between the spawner and any
+    // writer, and the walk does not follow geometry out of a body, so it
+    // cannot promise the body writes no fourth id.
+    //
+    // Both entries are therefore the same shape of answer — "a node I
+    // cannot read through sits on this path" — and both are honest rather
+    // than incomplete. A report that quietly dropped the caveat and listed
+    // three ids as the whole set would be the exact failure this walk
+    // exists to prevent: a list that reads complete and is not.
   });
 
   it("never reports an empty id, and always gives an open set an actionable reason", () => {

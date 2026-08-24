@@ -39,8 +39,23 @@ const ROOT_SURFACE = [
   "makeGeometryItem", "makeInstancesItem", "makeValueItem", "max", "mergePoints", "mergePrimitives",
   "meshPrimitive", "min", "mod",
   "mul", "ne", "nextRev", "nodeSeed", "noiseOutputRange", "normalize",
+  // Drops points whose oriented box blocks a line of sight from a moving
+  // eye, pushing them clear first and dropping only what cannot be moved.
+  "occlusionCull",
+  // Emits a repeated piece over each of a set of arc ranges on a path —
+  // one range's tiles all drawn from one upstream choice, so a tunnel is
+  // the same rib repeated rather than a fresh draw per rib.
+  "arcTile",
+  // Groups a path's points into runs by an along-arc gap and least-squares
+  // fits an attribute against arc within each, per run.
+  "runFit",
   "orientAlongVector", "paramNamesOf", "paramSchemaError", "paramValueError", "parseFieldText",
   "partitionByAttribute",
+  // Writes, per path point, whether a fan of rays cast from it is blocked
+  // by the box cloud — "is this stretch under cover", in world space
+  // rather than by projecting bounds onto the path, which cannot tell
+  // "above the road here" from "near the road twice".
+  "pathCoverage",
   "pathPointAt", "pathResample", "pathRuns", "pathScan", "pathSegments", "perlinNoise", "pointGrid", "pointLine", "pointNeighborhood",
   "pointScatterInBounds", "pointScatterInWorld", "pointsToPath", "position", "pow",
   "primitiveTypeCounts", "printFieldSpec", "projectToPlane", "promote", "promoteAttribute", "ramp",

@@ -33,6 +33,9 @@ import { surfaceSample } from "./samplers.js";
 import { pointGrid } from "./sources.js";
 import { sweepProfile } from "./surfaces.js";
 import { connectPoints } from "./topology.js";
+import { occlusionCull } from "./visibility.js";
+import { pathCoverage } from "./coverage.js";
+import { runFit } from "./runs.js";
 
 /**
  * One value per standard-node module. Keep this list in sync with the
@@ -52,6 +55,9 @@ const MODULE_WITNESSES: readonly { readonly type: string }[] = [
   filterByDensity, // filtering.ts
   setAttribute, // attributes.ts
   valueConstant, // mathNodes.ts
+  occlusionCull, // visibility.ts
+  pathCoverage, // coverage.ts
+  runFit, // runs.ts
 ];
 
 /**
