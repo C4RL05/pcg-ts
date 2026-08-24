@@ -26,7 +26,8 @@ import {
   calibrateKeep,
 } from "../demos/racetrack/fill.js";
 
-const KIT = kitPath("street");
+const KIT_KEY = "street";
+const KIT = kitPath(KIT_KEY);
 
 interface KitAsset {
   readonly name: string;

@@ -6,7 +6,6 @@
  * was removable. Idempotence alone would pass a repair that swapped six
  * placements into one bare stretch and then halted.
  */
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
 import {
@@ -16,7 +15,7 @@ import {
   placeAsset,
 } from "../demos/racetrack/assets.js";
 import { OUTPUTS, buildRoadGraph } from "../demos/racetrack/graph.js";
-import { DEFAULT_KIT, kitPath } from "./support/kits.js";
+import { DEFAULT_KIT, kitOrAbsent, kitPath } from "./support/kits.js";
 import { type Lap, readLap } from "../demos/racetrack/lap.js";
 import {
   BRAKING,
@@ -39,10 +38,11 @@ import { type Corner, cornersOf, radiusAtW } from "../demos/racetrack/corners.js
 import { makeStations } from "../demos/racetrack/stations.js";
 import { makeTrackSpline } from "../demos/racetrack/spline.js";
 
-const KIT = kitPath(DEFAULT_KIT);
+const KIT_KEY = DEFAULT_KIT;
+const KIT = kitPath(KIT_KEY);
 
 describe.skipIf(!KIT)("L-4, landmark uniqueness", () => {
-  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as { assets: PlaceableAsset[] };
+  const kit = kitOrAbsent<{ assets: PlaceableAsset[] }>(KIT_KEY);
   const assets = kit.assets.filter((a) => a.where);
 
   let lap: Lap | undefined;
@@ -188,7 +188,7 @@ describe.skipIf(!KIT)("L-4, landmark uniqueness", () => {
  * three happen to fall there at all.
  */
 describe.skipIf(!KIT)("L-2 and L-3, the corner language", () => {
-  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as { assets: PlaceableAsset[] };
+  const kit = kitOrAbsent<{ assets: PlaceableAsset[] }>(KIT_KEY);
   const all = kit.assets.filter((a) => a.where);
 
   let cache: { lap: Lap; corners: Corner[] } | undefined;

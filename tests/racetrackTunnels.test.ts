@@ -22,7 +22,6 @@
  * 10.5%. Building to 43% would be fitting the outlier, which this demo
  * has already done once and paid a week for.
  */
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
 import { cornersOf, radiusAtW } from "../demos/racetrack/corners.js";
@@ -30,7 +29,7 @@ import { dressLap } from "../demos/racetrack/dress.js";
 import { ENCLOSURE, measureEnclosure } from "../demos/racetrack/enclosure.js";
 import { OUTPUTS, buildRoadGraph } from "../demos/racetrack/graph.js";
 import type { Kit } from "../demos/racetrack/kit.js";
-import { ENCLOSURE_KIT, KITS, kitPath } from "./support/kits.js";
+import { ENCLOSURE_KIT, KITS, kitOrAbsent, kitPath } from "./support/kits.js";
 import { type Lap, readLap } from "../demos/racetrack/lap.js";
 import { makeTrackSpline } from "../demos/racetrack/spline.js";
 import type { PlaceableAsset } from "../demos/racetrack/assets.js";
@@ -45,7 +44,8 @@ import {
   reduceEnclosure,
 } from "../demos/racetrack/tunnels.js";
 
-const KIT = kitPath(ENCLOSURE_KIT);
+const KIT_KEY = ENCLOSURE_KIT;
+const KIT = kitPath(KIT_KEY);
 
 /**
  * The length draw, checked against the quantiles it was built from.
@@ -108,7 +108,7 @@ describe("the stretch-length draw", () => {
 });
 
 describe.skipIf(!KIT)("enclosure, placed and then measured", () => {
-  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as Kit;
+  const kit = kitOrAbsent<Kit>(KIT_KEY);
 
   let lap: Lap | undefined;
   async function theLap(): Promise<Lap> {

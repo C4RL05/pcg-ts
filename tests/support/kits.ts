@@ -115,3 +115,46 @@ export function kitPath(key: KitKey): string | undefined {
   const full = m.dir && !isAbsolute(file) ? join(m.dir, file) : file;
   return existsSync(full) ? full : undefined;
 }
+
+/**
+ * A kit's parsed contents, or a stand-in that refuses to be used.
+ *
+ * WHY THIS EXISTS, and it is a real defect rather than a convenience.
+ * Every suite that needs a kit is `describe.skipIf(!kitPath(...))`, and
+ * the comment above says that a checkout without the kits simply skips.
+ * It did not. `describe.skipIf` marks a suite skipped but STILL RUNS ITS
+ * BODY to collect it, so a body opening with
+ * `JSON.parse(readFileSync(KIT!, "utf8"))` threw at COLLECTION time —
+ * `The "path" argument must be of type string ... Received undefined` —
+ * and took the whole file down, kit-free describes in it included.
+ * Measured on a checkout with no manifest: seven racetrack suites, 85
+ * tests, reporting as seven failing FILES rather than as skips. The
+ * suites that gate the placement rules were the ones dark.
+ *
+ * The fix has to keep the value EAGER, because that is what the call
+ * sites are shaped around, so absence is represented instead of thrown:
+ * a proxy that answers nothing and names the problem the moment anything
+ * touches it. A skipped suite never touches it and collects cleanly; a
+ * suite that forgot its `skipIf` gets a message that says exactly what is
+ * missing and what to do, instead of a path-type error from deep in the
+ * standard library.
+ */
+export function kitOrAbsent<T extends object>(key: KitKey): T {
+  const at = kitPath(key);
+  if (at !== undefined) return JSON.parse(readFileSync(at, "utf8")) as T;
+  // AN EMPTY KIT, NOT A REFUSAL. The first attempt here threw on any
+  // property access, on the theory that a suite reaching for an absent
+  // kit should say so — and it moved the crash rather than removing it,
+  // because a collection-time body does not merely HOLD the kit, it
+  // works on it: `kit.assets.filter(a => a.where)` runs while the suite
+  // is being collected, skipped or not. Three files still died.
+  //
+  // So absence is an empty kit: every property is an empty array, which
+  // filters and maps and lengths to nothing. A skipped suite collects
+  // and skips. A suite that forgot its `skipIf` runs against no data and
+  // fails on its own assertions — a worse message than a refusal would
+  // have given, and the price of the bodies being eager. It is bounded:
+  // `kitPath` is right there, and every suite here already calls it.
+  const empty: ProxyHandler<T> = { get: () => [] };
+  return new Proxy({} as T, empty);
+}

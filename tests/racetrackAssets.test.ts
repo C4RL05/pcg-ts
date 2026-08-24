@@ -28,7 +28,7 @@ import {
   repairIsMinimal,
   weightAt,
 } from "../demos/racetrack/assets.js";
-import { DEFAULT_KIT, kitPath } from "./support/kits.js";
+import { DEFAULT_KIT, kitOrAbsent, kitPath } from "./support/kits.js";
 import { inCorridor, resolveCorridor } from "../demos/racetrack/zones.js";
 
 /**
@@ -47,7 +47,8 @@ import { inCorridor, resolveCorridor } from "../demos/racetrack/zones.js";
  * is kept
  * beside it because the comparison is the evidence.
  */
-const KIT = kitPath(DEFAULT_KIT);
+const KIT_KEY = DEFAULT_KIT;
+const KIT = kitPath(KIT_KEY);
 const OTHER = kitPath("street");
 
 describe("drawing from three quantiles", () => {
@@ -84,11 +85,11 @@ describe("drawing from three quantiles", () => {
 });
 
 describe.skipIf(!KIT)("placing from the kit's own `where`", () => {
-  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as {
+  const kit = kitOrAbsent<{
     assets: PlaceableAsset[];
     placements: { lateral: number; height: number; size: { tall: number } }[];
     track: { curvatureShare: Record<CurvatureBucket, number> };
-  };
+  }>(KIT_KEY);
   const assets = kit.assets.filter((a) => a.where);
 
   /** One lap's worth of placements at a given curvature mix. */

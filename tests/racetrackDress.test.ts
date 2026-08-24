@@ -22,14 +22,13 @@
  * document deliberately ordered never conflict, which is not something
  * this pipeline promises or should.
  */
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
 import { mixInsideRule } from "../demos/racetrack/assets.js";
 import { dressLap, frameLookup } from "../demos/racetrack/dress.js";
 import { OUTPUTS, buildRoadGraph } from "../demos/racetrack/graph.js";
 import { type Kit, type PlacedBox, placeKit } from "../demos/racetrack/kit.js";
-import { DEFAULT_KIT, kitPath } from "./support/kits.js";
+import { DEFAULT_KIT, kitOrAbsent, kitPath } from "./support/kits.js";
 import { type Lap, readLap } from "../demos/racetrack/lap.js";
 import {
   brakingRulersSatisfied,
@@ -41,10 +40,11 @@ import { defaultEyeStations, occludes } from "../demos/racetrack/sightline.js";
 import { makeTrackSpline } from "../demos/racetrack/spline.js";
 import { COVERAGE, coverage } from "../demos/racetrack/stations.js";
 
-const KIT = kitPath(DEFAULT_KIT);
+const KIT_KEY = DEFAULT_KIT;
+const KIT = kitPath(KIT_KEY);
 
 describe.skipIf(!KIT)("the assembled pipeline", () => {
-  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as Kit;
+  const kit = kitOrAbsent<Kit>(KIT_KEY);
 
   let lap: Lap | undefined;
   async function theLap(): Promise<Lap> {
@@ -303,7 +303,7 @@ function quantile(xs: readonly number[], f: number): number {
 }
 
 describe.skipIf(!KIT)("the silhouette", () => {
-  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as Kit;
+  const kit = kitOrAbsent<Kit>(KIT_KEY);
 
   let lap: Lap | undefined;
   async function theLap(): Promise<Lap> {

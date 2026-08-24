@@ -12,7 +12,6 @@
  * whose answers are known by construction; the cull on top of it can
  * then be trusted to be asking the right question of a right answer.
  */
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
 import { OUTPUTS, buildRoadGraph } from "../demos/racetrack/graph.js";
@@ -27,7 +26,7 @@ import {
   occludes,
   segmentHitsBox,
 } from "../demos/racetrack/sightline.js";
-import { DEFAULT_KIT, kitPath } from "./support/kits.js";
+import { DEFAULT_KIT, kitOrAbsent, kitPath } from "./support/kits.js";
 import {
   type CurvatureBucket,
   type PlaceableAsset,
@@ -36,7 +35,8 @@ import {
 } from "../demos/racetrack/assets.js";
 import { makeStations } from "../demos/racetrack/stations.js";
 
-const KIT = kitPath(DEFAULT_KIT);
+const KIT_KEY = DEFAULT_KIT;
+const KIT = kitPath(KIT_KEY);
 
 const UNIT = {
   across: [1, 0, 0] as const,
@@ -100,7 +100,7 @@ describe("segment against box", () => {
 });
 
 describe.skipIf(!KIT)("the look-ahead cull", () => {
-  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as { assets: PlaceableAsset[] };
+  const kit = kitOrAbsent<{ assets: PlaceableAsset[] }>(KIT_KEY);
   const assets = kit.assets.filter((a) => a.where);
 
   let cached: { lap: Lap; frameAt: (s: number, t: number, h: number) => Frame } | undefined;

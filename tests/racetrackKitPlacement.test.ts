@@ -16,16 +16,16 @@
  * SKIPS WITHOUT THE KIT, which lives outside both repositories and is not
  * ours to commit.
  */
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
 import { OUTPUTS, buildRoadGraph } from "../demos/racetrack/graph.js";
 import { type Lap, placeAt, poseAt, readLap } from "../demos/racetrack/lap.js";
 import { makeTrackSpline } from "../demos/racetrack/spline.js";
 import { type Kit, type PlacedBox, placeKit } from "../demos/racetrack/kit.js";
-import { kitPath } from "./support/kits.js";
+import { kitOrAbsent, kitPath } from "./support/kits.js";
 
-const KIT = kitPath("street");
+const KIT_KEY = "street";
+const KIT = kitPath(KIT_KEY);
 
 function pct(values: readonly number[], p: number): number {
   const s = [...values].sort((a, b) => a - b);
@@ -53,7 +53,7 @@ function frameAt(lap: Lap) {
 }
 
 describe.skipIf(!KIT)("the kit's coordinates on our spline", () => {
-  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as Kit;
+  const kit = kitOrAbsent<Kit>(KIT_KEY);
 
   it("places every box within reach of the road", async () => {
     const lap = await readTheLap();
