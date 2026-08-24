@@ -35,6 +35,43 @@ existed, so the discipline is to let the consumer specify the mechanism
 rather than guess at it. Each entry carries the analysis, because
 re-deriving it is the expensive part.
 
+### Measured but not taken: five hot-path costs in the new nodes, 2026-08-24
+
+From a cleanup pass over the whole branch. Each was MEASURED on this box,
+which is the expensive part and the reason they are written down rather
+than left to be rediscovered. None is urgent — the paths are fast enough
+at today's sizes — and each is a few lines.
+
+- **`occlusionCull` defeats its own grid at scale.** The eye grid is built
+  at `cellSize = widestChord` (~100 units) and queried at ~220, so
+  `cellRadiusFor` asks for 3 rings, `useFullScan` fires, and every query
+  linearly scans all 900 eyes. Break-even at 900; at 10,000 eyes it is
+  3.5M distance tests per cook against ~450k. One line: size the cell at
+  the max query radius, which the pass already computes. `pathCoverage`
+  does exactly this.
+- **The chord length is computed, discarded, then recomputed 58x.** The
+  fan builder already takes a `sqrt` for all 7,200 chords to find
+  `widestChord` and throws it away; the slab test redoes it per (point,
+  eye, sample) — ~420k recomputes per cook for 7,200 distinct values.
+  Fill a `Float64Array` in the build loop.
+- **`pathCoverage`'s parallel threshold is cook-constant and computed per
+  ray.** `to - from` is `(far - near) * dir` with unit `dir`, so it is the
+  same number for all 900 points: ~270k evaluations where 900 would do.
+- **`pathCoverage` rebuilds its candidate list by copying**, 250k-855k
+  `push` calls per cook, and sizes the query radius from the binning
+  THRESHOLD rather than the largest box actually binned — inflating the
+  3x3x3 block and most of those pushes.
+- **Z-1's decision tree is evaluated three times per point per round** in
+  `dressGraph.ts`: `moved` expands to ~50 field nodes and is referenced by
+  the fire flag and both downstream selects, when the flag column already
+  holds the answer. ~70k redundant field evaluations per cook, ~420k at
+  the round cap. `writeFalseEdges` already uses the column-reading form.
+
+Ruled out by measurement, so nobody chases them: the `inside` closure in
+`assets.ts`/`zones.ts` is 0 +/- 1.2 ns/call against an inlined control (V8
+escape-analyses it away); there are no long-lived large-scope closures
+anywhere in the branch; and the demo does no repeated I/O.
+
 ### ~~Z-3's band mix does not terminate on the enclosed kit~~ — FIXED 2026-08-24
 
 Measured while surveying `dressLap`'s repair loop for the `repeatUntil`
