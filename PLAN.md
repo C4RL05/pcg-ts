@@ -1931,3 +1931,58 @@ The seam is deliberately an OPTION rather than a switch inside
 to reach a cook would ripple through a dozen synchronous callers for no
 benefit. The suites that call `dressLap` without stations keep measuring
 the fitted process, which is what their figures were fitted against.
+
+### Asset choice, decomposed — every draw now has a spelling, 2026-08-25
+
+Written down because the spellings did not exist when the slice-2 table
+above was drafted, and the conclusion would otherwise be re-derived.
+
+`placeAsset` (`demos/racetrack/assets.ts:129`) makes FOUR independent
+draws per station, each from a different salt off the same
+`rand(seed, index, salt)` — 0x11, 0x23, 0x37, 0x41. In a graph those are
+four distinct `randomField` KEYS, which the gaussian work already
+measured as independent (Pearson r 7.6e-4) with a control proving the
+estimator can report otherwise.
+
+| # | draw | what it needs | spelling |
+| --- | --- | --- | --- |
+| 1 | WHICH asset | a weighted pick over ~229 assets, weights varying by the CURVATURE BUCKET at that station | the cumulative-column bracket (corrected gap 4), or `transferByIndex` against a prefix-summed weight column |
+| 2 | lateral `t` | a quantile drawn from THAT asset's own measured lateral distribution | `transferByIndex` gathers the chosen asset's table columns, then interpolate |
+| 3 | height `h` | same, from its height distribution | as above |
+| 4 | which side | a biased coin at the asset's own `rightOfTravel` | `lt(randomField(k), gathered rightOfTravel)` |
+
+**The curvature bucket is no longer a problem.** `writeCurveFrame`'s
+`curvatureName` puts a radius column on the lap's own points, and
+`transferAlongPath` reads it AT each station's arc position — which is
+exactly the node this branch added and exactly the question it answers.
+Bucketing is then a `select` ladder over thresholds.
+
+**The pick is the only step whose COST could bite.** It materialises
+stations x assets intermediate points: ~354 x 229 = ~81,000 here, which
+gap 4 measured at well inside what a level that cooks once can pay
+(1,000 stations x 229 rows = 238 ms). If a longer track ever makes that
+false, the primitive to buy is a per-point bracket search over a grouped
+cumulative column — O(N log R) instead of N x R — and not before.
+
+**The kit has to become a cloud first.** `DataValue` has no record or
+ragged kind, so `Record<CurvatureBucket, number>` and `{median,p10,p90}`
+must be flattened to columns on a geometry item: 229 assets x ~16
+numeric columns, plus the string asset id. That is the same shape
+`poseLibrary` already builds, and `spawnInstances` already needs a string
+id column, so the id survives the whole chain as data rather than being
+re-derived.
+
+**Order dependence, stated once.** `dressLap` feeds `placeAsset` the
+station's INDEX IN SORTED ORDER, so porting this re-bases with the
+stations. Rank is now computable in-graph — `pathScan` in `exclusive`
+mode over a constant-1 column on the ring `pointsToPath(orderAttr)`
+builds — so the index exists; it just will not be the same index the
+TypeScript saw, which is the same re-baselining the station port already
+accepted.
+
+**Do NOT port `reserveMarkers` in the same pass.** L-2/L-3 reserve three
+asset ids for corner markers BEFORE anything is dressed, and the pool
+`placeAsset` draws from is what is left. That is a set difference over
+the whole kit, it is cheap, and it is the kind of lap-global bookkeeping
+that belongs with L-4's uniqueness rather than with the per-station draw.
+Keeping it in TypeScript for one more pass keeps this unit to one rule.
