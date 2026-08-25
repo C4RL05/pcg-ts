@@ -92,6 +92,19 @@ import type { StationParams, StationStats } from "./stations.js";
 export const ASSET = {
   /** Index into the pool this cloud was built from. The answer's identity. */
   ord: "assetOrd",
+  /**
+   * The kit's OWN id for the asset, carried so the answer can be checked.
+   *
+   * A CHOICE IS AN INDEX, and an index into the wrong pool is not an
+   * error — it is a different asset, silently. `reserveFor` answers a
+   * pool of the SAME LENGTH for every seed and varies only its
+   * membership, so a range check cannot see the mistake: cooking against
+   * seed 1's pool and dressing at seed 2 was measured to name a different
+   * asset at 23 of 329 placements with every index in range. The id
+   * travels with the choice so `dressLap` can compare it against the
+   * asset it is about to resolve, which turns that into a throw.
+   */
+  id: "assetId",
   /** How often the asset appeared on the circuit it was measured on. */
   instances: "assetInst",
   affStraight: "affStraight",
@@ -157,30 +170,56 @@ const ARC_ATTR = "arcW";
  * value at the other end — a straight is exactly 0, it blends, and the
  * cuts inverted are the same cuts.
  *
- * THE ONE PLACE THIS IS NOT EXACT is a frame sitting precisely on a
- * boundary: 1/40 is not representable in binary, so a radius of exactly
- * 40 W may land either side of the straight/easy cut. That is a
- * measure-zero disagreement on a lap that has already re-based, and it is
- * cheaper than the alternative — a whole nearest-sample transfer mode,
- * bought to preserve a tie.
+ * THE CUTS ARE ROUNDED TO f32, and that is not decoration. The column
+ * holds `f32(1 / f32(R))`, and comparing it against the f64 reciprocal
+ * gets the boundary itself WRONG in a stated direction rather than an
+ * arbitrary one: `f32(1/40)` is 0.02500000037, above `1/40`, so a radius
+ * of exactly 40 W fails `le` and lands in EASY where `bucketOf(40)`
+ * answers straight — measured, along with a sliver above each cut
+ * (`[40, 40.0000016]`, `[15, 15.00000045]`, `[7, 7.00000021]`) that goes
+ * one bucket tighter than it should. Rounding the constant the same way
+ * the column was rounded makes the cut itself exact and halves what is
+ * left, which is a relative width of about 4e-8 on the OTHER side.
+ *
+ * WHAT ACTUALLY MOVES TRACK IS THE TRANSFER, NOT THE LADDER, and the two
+ * should not be confused. `bucketOf(radiusAtW(lap, s))` reads the NEAREST
+ * frame; this reads an interpolation between two. On the shipped lap at
+ * seed 1 that puts 12 of 329 stations (3.6%) in a different bucket —
+ * easy/straight 5, medium/easy 3, medium/tight 4 — against histograms
+ * that are otherwise nearly identical. Interpolation is the more
+ * defensible reading of "the curvature THERE", and the port re-bases
+ * anyway, so this is a difference rather than an error. It is written
+ * down because "the cuts inverted are the same cuts" is a claim about
+ * the LADDER, and reading it as "the same stations get the same bucket"
+ * would be wrong by two orders of magnitude.
  */
 const CURVE_CUT = {
   /** At or below this, a straight: radius >= 40 W. */
-  straight: 1 / 40,
+  straight: Math.fround(1 / 40),
   /** At or below this, an easy bend: radius >= 15 W. */
-  easy: 1 / 15,
+  easy: Math.fround(1 / 15),
   /** At or below this, a medium corner: radius >= 7 W. */
-  medium: 1 / 7,
+  medium: Math.fround(1 / 7),
 } as const;
 
 /**
  * The four `randomField` keys, one per draw, replacing four hash salts.
  *
- * INDEPENDENT BECAUSE THE KEYS DIFFER, which the station port measured
- * rather than assumed: two keys off the same point identity came out at
- * Pearson r 7.6e-4, with a control proving the estimator can report
- * otherwise. Named for what they decide so a fifth draw added later
- * cannot silently reuse one.
+ * INDEPENDENT, MEASURED: pairwise |r| over 20,000 points runs 1.3e-4 to
+ * 9.5e-3 against a noise floor of 1/sqrt(n) = 7.1e-3, with controls that
+ * report r = 1 for a field against itself, -1 against its complement, and
+ * 0.035 for a deliberate 3.5% blend — so the estimator can see a
+ * correlation of the size these would have to be failing at.
+ *
+ * THE NAMES ARE NOT WHAT MAKES THEM INDEPENDENT, which is worth stating
+ * because the obvious reading is wrong. `randomField` hashes
+ * `(ctx.seed, keyHash, pointIdentity)` and `ctx.seed` is the NODE's
+ * derived seed, so these four draws are four streams because they are on
+ * four nodes — the same key written twice under two names measures
+ * r = -0.0009, not 1. The names buy readability and stability of intent:
+ * a fifth draw added later cannot silently mean the same thing as an
+ * existing one, and a graph that is re-serialised keeps saying which
+ * draw is which.
  */
 const KEY = {
   pick: "asset.pick",
@@ -216,6 +255,7 @@ export function assetCloud(pool: readonly PlaceableAsset[]): Geometry {
   const geo = createPointCloud(pool.length);
   const f32 = (name: string) => geo.attrs.point.add(name, "f32", 1);
   const ord = geo.attrs.point.add(ASSET.ord, "i32", 1);
+  const id = geo.attrs.point.add(ASSET.id, "i32", 1);
   const inst = f32(ASSET.instances);
   const aff = [
     f32(ASSET.affStraight),
@@ -231,9 +271,18 @@ export function assetCloud(pool: readonly PlaceableAsset[]): Geometry {
   for (let i = 0; i < pool.length; i++) {
     const a = pool[i];
     ord.set(i, i);
+    id.set(i, a.id);
     const w = a.where;
     if (!w) continue;
-    inst.set(i, a.instances);
+    // `instances` IS CLEANED TOO, which `weightAt` does not do — and the
+    // reason is that a graph cannot survive what a loop shrugs off. A
+    // negative count makes one weight negative, the running scan stops
+    // being monotonic, and the brackets stop tiling: a pool of
+    // [1, -0.5, 1] over 500 stations was measured to leave 182 of them
+    // holding TWO survivors. `placeAsset`'s subtraction loop merely picks
+    // oddly in the same case. A count below zero is a defect in the
+    // measured file either way, and this is the honest place to say so.
+    inst.set(i, clean(a.instances));
     aff[0].set(i, clean(w.affinity.straight));
     aff[1].set(i, clean(w.affinity.easy));
     aff[2].set(i, clean(w.affinity.medium));
@@ -561,6 +610,14 @@ export function addAssetChoiceStage(
 export interface AssetChoice {
   /** Index into that pool. `pool[assetIndex]` is the asset. */
   readonly assetIndex: number;
+  /**
+   * The kit's own id for that asset — see {@link ASSET.id}.
+   *
+   * Carried so the index can be CHECKED rather than trusted: it is what
+   * lets `dressLap` refuse a pool that is not the one this was cooked
+   * against, instead of quietly dressing the lap with different objects.
+   */
+  readonly assetId: number;
   /** Signed offset across the track, positive RIGHT of travel, in W. */
   readonly t: number;
   /** Height in W, on whatever datum the source's `where.height` used. */
@@ -659,23 +716,26 @@ export async function cookLapPlacements(opts: {
   const chosen = geoOf("chosen");
   const idx = column(chosen, CHOICE.stationIdx);
   const ord = column(chosen, ASSET.ord);
+  const ids = column(chosen, ASSET.id);
   const t = column(chosen, CHOICE.t);
   const h = column(chosen, CHOICE.h);
   for (let i = 0; i < idx.length; i++) {
-    // TWO ASSETS AT ONE STATION IS A BROKEN BRACKET, not a lap with a
-    // dense spot, and it must not be resolved by keeping the last one.
-    // The brackets tile [0, total) exactly — see the stage's header for
-    // why that needs two scans rather than a scan and an addition — so a
-    // second survivor means the tiling has a gap or an overlap, and the
-    // whole distribution is then wrong by however wide that is. Silently
-    // keeping one would leave a pick that looked right at every
-    // assertion this suite makes.
+    // TWO ASSETS AT ONE STATION MEANS THE WEIGHTS WERE NOT ALL
+    // NON-NEGATIVE, and it must not be resolved by keeping the last one.
+    // With a non-negative weight column the running scan is monotonic and
+    // the brackets tile [0, total) exactly, so this cannot fire; the one
+    // input that makes it fire is a negative weight, which turns the scan
+    // around and lets two windows cover the same draw. `assetCloud`
+    // clamps both factors for that reason, so reaching this means a
+    // column arrived from somewhere else. Named as the arithmetic it is,
+    // because "the brackets overlap" would send the reader to the scan
+    // and the scan is not what is wrong.
     if (byStation[idx[i]] !== undefined) {
       throw new Error(
-        `cookLapPlacements: station ${idx[i]} kept two assets (${byStation[idx[i]]?.assetIndex} and ${ord[i]}). The weighted pick's brackets must tile the station's whole weight range exactly once; two survivors means they overlap.`,
+        `cookLapPlacements: station ${idx[i]} kept two assets (pool index ${byStation[idx[i]]?.assetIndex} and ${ord[i]}). The weighted pick needs a non-negative weight at every asset, so that the running scan is monotonic and the brackets tile the station's range exactly once — a negative instances or affinity is what breaks it.`,
       );
     }
-    byStation[idx[i]] = { assetIndex: ord[i], t: t[i], h: h[i] };
+    byStation[idx[i]] = { assetIndex: ord[i], assetId: ids[i], t: t[i], h: h[i] };
   }
 
   // Sorted TOGETHER, because `dressLap` indexes the two lists in lockstep

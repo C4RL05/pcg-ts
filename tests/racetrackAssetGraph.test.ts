@@ -138,7 +138,14 @@ async function pick(opts: {
   seed: number;
   lengthW?: number;
   halfWidth?: number;
-}): Promise<{ ord: number[]; idx: number[]; t: number[]; h: number[]; u: number[] }> {
+}): Promise<{
+  ord: number[];
+  idx: number[];
+  t: number[];
+  h: number[];
+  uLat: number[];
+  uHgt: number[];
+}> {
   const lengthW = opts.lengthW ?? 200;
   const halfWidth = opts.halfWidth ?? 9;
   const g = new Graph(opts.seed);
@@ -168,12 +175,17 @@ async function pick(opts: {
     for (let i = 0; i < geo.attrs.point.count; i++) out.push(c.get(i) as number);
     return out;
   };
+  // BOTH UNIFORMS COME BACK, because a helper that publishes only the
+  // lateral one is how the height went untested: `h` was returned and
+  // never compared to anything, and replacing it with a constant zero
+  // changed every placement on the lap while the suite stayed green.
   return {
     ord: col(ASSET.ord),
     idx: col(CHOICE.stationIdx),
     t: col(CHOICE.t),
     h: col(CHOICE.h),
-    u: col(CHOICE.uLat),
+    uLat: col(CHOICE.uLat),
+    uHgt: col(CHOICE.uHgt),
   };
 }
 
@@ -241,21 +253,74 @@ describe("assetGraph: the weighted pick", () => {
     // the graph publishes the uniform it drew, so this is the two
     // implementations of the same inverse CDF on the same input rather
     // than two samples that happen to have similar moments.
-    const one = [asset(0, 1, [1, 1, 1, 1], { lateral: [1, 4, 10], right: 1 }), asset(1, 0, [0, 0, 0, 0])];
+    //
+    // BOTH COLUMNS, and the height is not a formality. Replacing the
+    // height with a constant zero, or reading it from the LATERAL
+    // quantiles, each changed every placement on a real lap and passed
+    // every other test in this file: `h` drives `resolveCorridor`,
+    // `fitsOverhead` and every band statistic, and nothing was looking
+    // at it.
+    const lat: [number, number, number] = [1, 4, 10];
+    const hgt: [number, number, number] = [0.2, 1.5, 6];
+    const one = [
+      asset(0, 1, [1, 1, 1, 1], { lateral: lat, height: hgt, right: 1 }),
+      asset(1, 0, [0, 0, 0, 0]),
+    ];
     const got = await pick({ pool: one, stations: 400, radiusW: 100, seed: 5 });
     expect(got.ord.every((o) => o === 0)).toBe(true);
-    let worst = 0;
+    const q = (v: [number, number, number]) => ({ p10: v[0], median: v[1], p90: v[2] });
+    let worstT = 0;
+    let worstH = 0;
     for (let i = 0; i < got.t.length; i++) {
-      worst = Math.max(
-        worst,
-        Math.abs(Math.abs(got.t[i]) - drawQuantile({ p10: 1, median: 4, p90: 10 }, got.u[i])),
-      );
+      worstT = Math.max(worstT, Math.abs(Math.abs(got.t[i]) - drawQuantile(q(lat), got.uLat[i])));
+      worstH = Math.max(worstH, Math.abs(got.h[i] - drawQuantile(q(hgt), got.uHgt[i])));
     }
     // eslint-disable-next-line no-console
-    console.log(`lateral vs drawQuantile: worst |delta| ${worst.toExponential(2)}`);
+    console.log(
+      `vs drawQuantile: lateral worst ${worstT.toExponential(2)}, height worst ${worstH.toExponential(2)}`,
+    );
     // f32 columns against f64 arithmetic on values running to ~10, where
     // f32 spacing is about 1e-6.
-    expect(worst).toBeLessThan(1e-4);
+    expect(worstT).toBeLessThan(1e-4);
+    expect(worstH).toBeLessThan(1e-4);
+    // The two draws are different draws, so the two answers must not be
+    // the same number -- which is what reading the height off the lateral
+    // columns would produce.
+    expect(got.h).not.toEqual(got.t.map(Math.abs));
+  });
+
+  it("puts every rung of the ladder where bucketOf puts it", async () => {
+    // FOUR ONE-HOT ASSETS, so each bucket has exactly one legal answer
+    // and every cut is tested from both sides. The earlier version of
+    // this suite tested only radii 5 / 39 / 41 against a pool whose
+    // bucket-sensitive asset weighed the same in easy and medium -- so
+    // SWAPPING those two rungs changed 388 of 987 placements on a real
+    // lap and passed all sixteen tests.
+    const oneHot = [
+      asset(0, 1, [1, 0, 0, 0]),
+      asset(1, 1, [0, 1, 0, 0]),
+      asset(2, 1, [0, 0, 1, 0]),
+      asset(3, 1, [0, 0, 0, 1]),
+    ];
+    // Straddling every cut, in the direction `bucketOf` cuts: the value
+    // AT the cut belongs to the looser bucket.
+    const cases: [number, number][] = [
+      [100, 0],
+      [40, 0],
+      [39.9, 1],
+      [20, 1],
+      [15, 1],
+      [14.9, 2],
+      [10, 2],
+      [7, 2],
+      [6.9, 3],
+      [3, 3],
+    ];
+    for (const [radiusW, want] of cases) {
+      const got = await pick({ pool: oneHot, stations: 64, radiusW, seed: 9 });
+      expect(bucketOf(radiusW)).toBe(["straight", "easy", "medium", "tight"][want]);
+      expect(new Set(got.ord), `radius ${radiusW} W`).toEqual(new Set([want]));
+    }
   });
 
   it("keeps each asset on the side its instances were on", async () => {
@@ -273,8 +338,27 @@ describe("assetGraph: the weighted pick", () => {
     const rightShare = e.t.filter((v) => v > 0).length / e.t.length;
     // eslint-disable-next-line no-console
     console.log(`even lean: ${(rightShare * 100).toFixed(1)}% right of travel`);
-    expect(Math.abs(rightShare - 0.5)).toBeLessThan
-      (0.04);
+    expect(Math.abs(rightShare - 0.5)).toBeLessThan(0.04);
+  });
+
+  it("takes the side from the lean even when the quantile extrapolates negative", async () => {
+    // THE `abs` IS DEAD CODE ON MOST KITS AND NOT ON ALL OF THEM, which
+    // is why it needs its own fixture. `drawQuantile` continues the outer
+    // segment's slope rather than clamping, so an asset whose lateral p10
+    // is near zero draws a NEGATIVE magnitude a few times a lap -- and
+    // then the side is decided by the sign of the draw rather than by the
+    // asset's measured lean. Dropping both `abs` calls changed nothing at
+    // all on the shipped vocabulary, so only a fixture that reaches the
+    // extrapolation can pin it.
+    const wide = [
+      asset(0, 1, [1, 1, 1, 1], { lateral: [-2, 0.5, 3], right: 1 }),
+      asset(1, 0, [0, 0, 0, 0]),
+    ];
+    const got = await pick({ pool: wide, stations: 600, radiusW: 100, seed: 6 });
+    const negatives = got.uLat.filter((u) => drawQuantile({ p10: -2, median: 0.5, p90: 3 }, u) < 0);
+    // The fixture has to REACH the case, or it is testing nothing.
+    expect(negatives.length).toBeGreaterThan(0);
+    expect(got.t.every((v) => v > 0)).toBe(true);
   });
 
   it("gives the same lap twice, from the same seed", async () => {
@@ -400,6 +484,33 @@ describe("assetGraph: the lap the page actually draws", () => {
     expect(perW).toBeGreaterThan(DENSITY.min);
     expect(perW).toBeLessThan(DENSITY.max);
     expect(dressed.boxes.length).toBeGreaterThan(0);
+  });
+
+  it("refuses choices cooked against a different pool, which no range check could see", async () => {
+    // THE HAZARD THIS EXISTS FOR. `reserveFor` answers a pool of the SAME
+    // LENGTH for every seed and varies only which three assets it held
+    // back for corner markers, so a seed mismatch leaves every index in
+    // range and produces a lap that looks entirely normal -- measured at
+    // 23 of 329 placements naming a different asset. The id the choice
+    // carries is what turns that into a throw.
+    const lap = await theLap();
+    const a = reserveFor(kit, 1).pool;
+    const b = reserveFor(kit, 2).pool;
+    expect(b.length).toBe(a.length);
+    // The premise: same size, different membership. If a future change to
+    // reserveFor made these identical the test below would pass for the
+    // wrong reason, so it is asserted rather than assumed.
+    expect(b.map((x) => x.id)).not.toEqual(a.map((x) => x.id));
+
+    const out = await cookLapPlacements({ lap, seed: 1, pool: a });
+    expect(() =>
+      dressLap(kit, lap, 2, { stations: out.stations, choices: out.choices }),
+    ).toThrow(/cooked for asset id/);
+    // And the matching pool still dresses, so the guard is not refusing
+    // everything.
+    expect(() =>
+      dressLap(kit, lap, 1, { stations: out.stations, choices: out.choices }),
+    ).not.toThrow();
   });
 
   it("refuses a lap with no corner model, naming the fix", async () => {

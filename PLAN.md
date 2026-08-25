@@ -2064,3 +2064,73 @@ Still TypeScript on the lap level, in the order it would have to move:
 2. **Landmark uniqueness (L-4) and the band mix (Z-3)**, both list
    arithmetic over the whole lap.
 3. **The frame lookup**, which `transferAlongPath` now answers.
+
+### What independent verification found in the asset choice, 2026-08-25
+
+Four things the sixteen tests missed, each found by mutating the module
+and watching the suite stay green. Recorded because the pattern is the
+one this campaign keeps hitting: a suite that measures the right
+QUANTITIES can still leave a whole factor unmeasured.
+
+| # | mutation | impact on 987 placements | caught? |
+| --- | --- | --- | --- |
+| 1 | swap the easy and medium affinity columns | 388 assets change, 181 flip side | no |
+| 2 | height becomes the constant 0 | 987 of 987 heights change | no |
+| 3 | height read from the LATERAL quantiles | 987 of 987 change | no |
+| 4 | drop both `abs` on the lateral | 0 on this kit, real on one with p10 near 0 | no |
+
+**Why 1 escaped:** the only bucket test used radii 5 / 39 / 41 against a
+pool whose bucket-sensitive asset weighed `[0, 1, 1, 1]` — easy and
+medium the same number, so the two rungs were interchangeable — and the
+"declines into bends" gate lumps tight and medium together against
+straight. Fixed with four one-hot assets and ten radii straddling every
+cut from both sides, so each bucket has exactly one legal answer.
+
+**Why 2 and 3 escaped:** the helper returned `h` and nothing ever
+compared it. `h` drives `resolveCorridor`, `fitsOverhead` and every band
+statistic, and on the shipped lap it runs -3.31 to 5.68 W, so this was
+not a rounding-scale gap. Fixed by publishing `uHgt` alongside `uLat` and
+asserting the same `drawQuantile` agreement, plus that the two answers
+are not the same number.
+
+**The pool seam had a silent-corruption hazard the range check could not
+see.** `reserveFor` answers a pool of the SAME LENGTH for every seed and
+varies only which three assets it held back, so cooking against seed 1's
+pool and dressing at seed 2 leaves every index in range and names a
+different asset at 23 of 329 placements — a normal-looking lap.
+`AssetChoice` now carries the kit's own asset id and `dressLap` compares
+it, which turns the whole class into a throw for one integer per
+placement.
+
+**Two claims in the module's own prose were wrong and are corrected.**
+
+- The f32 cut boundary is *deterministic*, not "either side": `f32(1/40)`
+  is 0.02500000037, above `1/40`, so a radius of exactly 40 W failed `le`
+  and landed in easy where `bucketOf(40)` answers straight. The cuts are
+  now `Math.fround`ed, which makes the cut itself exact and leaves a
+  sliver of relative width ~4e-8 on the other side.
+- What actually moves track is the TRANSFER, not the ladder: nearest-frame
+  against interpolated puts **12 of 329 stations (3.6%) in a different
+  bucket** on the shipped lap. Interpolation is the more defensible
+  reading and the port re-bases anyway, but "the cuts inverted are the
+  same cuts" is a claim about the ladder alone and was being read as
+  agreement two orders of magnitude stronger than the measurement.
+
+**And one about `randomField` that was true for the wrong reason.**
+`randomField` hashes `(ctx.seed, keyHash, pointIdentity)` where `ctx.seed`
+is the NODE's derived seed — so the same key written twice under two
+names measures r = -0.0009, not 1. The four draws are independent because
+they are on four nodes; the key names buy readability and stability of
+intent. Pairwise |r| over 20,000 points: 1.3e-4 to 9.5e-3 against a noise
+floor of 7.1e-3, with controls returning 1, -1 and 0.035 for a deliberate
+3.5% blend.
+
+**Corroborated, not corrected:** the `copyToPoints` -> `pointsToPath` ->
+`pathScan` ordering chain, measured three independent ways; the f32
+tiling identity `cumHi[i] === cumLo[i+1]`, 0 mismatches over fractional
+weights spanning eight orders of magnitude; and the two-line quantile
+algebra, worst 5.15e-16 relative in f64 over 1.4M points. The naive
+bracket mistiles **17.5% of boundaries** on random f32 weight tables
+spread over four orders of magnitude (38,878 gaps, 40,658 overlaps) —
+which is the evidence the earlier entry said it did not have, and it
+still changes 0 of 987 placements on this vocabulary.

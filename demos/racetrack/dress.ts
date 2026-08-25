@@ -179,11 +179,16 @@ export function reserveFor(
 /**
  * One cooked choice, resolved against the pool it indexes.
  *
- * THE RANGE CHECK IS THE POINT. A choice is an index, so a pool that is
- * not the one the cook was given produces a wrong asset rather than an
- * error — silently, and only visible as a lap that reads oddly. Naming
- * the station and the two lengths turns that into the one mistake it
- * actually is.
+ * THE ID CHECK IS THE POINT, AND THE RANGE CHECK IS NOT ENOUGH. A choice
+ * is an index, so a pool that is not the one the cook was given yields a
+ * different asset rather than an error. `reserveFor` answers a pool of
+ * the SAME LENGTH for every seed and varies only which three assets it
+ * held back, so every index stays in range and nothing looks wrong:
+ * cooking against seed 1's pool and dressing at seed 2 was measured to
+ * name a different asset at 23 of 329 placements, with a normal-looking
+ * lap coming out the other side. Comparing the id the cook carried
+ * against the id at that index is what turns the whole class into a
+ * throw, and it costs one integer per placement.
  */
 function fromChoice(
   choice: AssetChoice | undefined,
@@ -194,7 +199,12 @@ function fromChoice(
   const asset = pool[choice.assetIndex];
   if (!asset) {
     throw new Error(
-      `dressLap: opts.choices[${station}] names asset ${choice.assetIndex}, but the pool has ${pool.length}. A choice is an INDEX into the pool reserveFor answers for this kit and seed — cook the choices against that same pool.`,
+      `dressLap: opts.choices[${station}] names pool index ${choice.assetIndex}, but the pool has ${pool.length}. A choice is an INDEX into the pool reserveFor answers for this kit and seed — cook the choices against that same pool.`,
+    );
+  }
+  if (asset.id !== choice.assetId) {
+    throw new Error(
+      `dressLap: opts.choices[${station}] was cooked for asset id ${choice.assetId} but pool index ${choice.assetIndex} holds id ${asset.id}. These choices came from a different pool — reserveFor answers a DIFFERENT pool per seed at the same length, so pass the same kit and seed to both, and give the cook the pool reserveFor returned.`,
     );
   }
   return { asset, t: choice.t, h: choice.h };
