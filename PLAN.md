@@ -1986,3 +1986,81 @@ asset ids for corner markers BEFORE anything is dressed, and the pool
 the whole kit, it is cheap, and it is the kind of lap-global bookkeeping
 that belongs with L-4's uniqueness rather than with the per-station draw.
 Keeping it in TypeScript for one more pass keeps this unit to one rule.
+
+### Asset choice shipped, and what the pick actually cost, 2026-08-25
+
+`demos/racetrack/assetGraph.ts`. The four draws `placeAsset` makes are
+four `randomField` keys, and the page now cooks stations, D-4's repair
+and asset choice in ONE graph — `cookLapPlacements` — because the
+endpoint is a lap LEVEL and a level is one graph. `dressLap` gained
+`DressOptions.choices` beside `stations`, an index into the pool
+`reserveFor` answers rather than an asset object, so a caller cannot
+hand back something L-2 reserved.
+
+**The pick is four nodes, and every one of them already existed.**
+`copyToPoints` stamps the 226-row table onto every station carrying the
+station's own uniforms through `targetNames`; `pointsToPath` groups by
+`targetIndexAttr`; two `pathScan`s (exclusive and inclusive, the second
+with `totalAttr`) give a bracket per copy; `filterByExpression` keeps the
+one containing `u * total`. No new library node was needed, which is
+worth recording because the plan's decomposition expected to need one.
+
+**Measured, on the shipped vocabulary at seeds 1-3:**
+
+| | |
+| --- | --- |
+| placements | 355-358 (1.024-1.032 per W, inside D-1's 0.6-1.2) |
+| distinct assets over 6 laps | 224 of 226 |
+| pick shares vs weights (4000 draws, 3 assets + 1 zero) | 0.0975/0.2950/0.6075 against 0.1/0.3/0.6, and the zero exactly 0 |
+| lateral vs `drawQuantile` on the same uniform | worst 8.3e-7 |
+| even side lean over 2000 draws | 49.6% right |
+| mean straight-affinity of what was picked | 2.075 on straights, 0.159 in bends |
+
+**`drawQuantile` is TWO lines, not four.** The outer two branches are
+algebraically the same lines as their neighbours — below p10 it continues
+the p10-to-median slope, which IS that segment evaluated outside its
+range. The field spells it as two pieces meeting at the median, and the
+8.3e-7 agreement above is against the four-branch original, so this is
+measured rather than argued.
+
+**The curvature bucket had to become curvature, not radius.**
+`transferAlongPath` interpolates and has no nearest mode, and a straight's
+radius is Infinity, so blending it with a finite neighbour gives Infinity
+or NaN across the whole neighbourhood of every straight. The reciprocal is
+taken on the PATH, once per frame, and the cuts inverted are the same
+cuts. It is inexact only for a frame sitting precisely on 40/15/7 W,
+because 1/40 is not representable in binary.
+
+**The naive bracket passes every test, and the exact one shipped anyway.**
+`cum <= x < cum + w` reads a bracket's top from two already-rounded f32
+numbers while its successor's bottom is the f64 partial sum rounded once,
+so the brackets do not tile — they overlap at some boundaries and part at
+others. Substituting it passes all sixteen tests in
+`racetrackAssetGraph`, including a duplicate-station guard, over six laps.
+Measured honestly: the discrepancy is about 1e-7 of a station's total, so
+it decides one draw in ten million and a few thousand draws cannot see
+it. Two scans cost one extra node and make the tiling exact by
+construction; that is the whole argument, and it is not "we found a bug".
+
+**A broken fixture read exactly like a broken sampler.** The synthetic
+station cloud first wrote positions with `set(i, [x, y, z])`, whose second
+parameter is a scalar and whose third is a component index — so every x
+became NaN, every point identity became the same one, and `randomField`
+answered one constant for the whole cloud. The suite then reported a pick
+that always chose the heaviest asset and a coin that always came up
+right. Both readings were of the fixture. `setTuple` is the API, and the
+lesson is the one this file keeps re-learning: a degenerate input is
+indistinguishable from a degenerate rule at the assertion level.
+
+### Where the prelude stands after asset choice, 2026-08-25
+
+Still TypeScript on the lap level, in the order it would have to move:
+
+1. **The corner model and marker vocabulary** (L-2/L-3), which
+   `writeCurveFrame` + `pathRuns` already answer per the slice-2 table.
+   `reserveMarkers` goes with them: it is a set difference over the whole
+   kit, done before anything is dressed, and it belongs with L-4's
+   uniqueness rather than with the per-station draw.
+2. **Landmark uniqueness (L-4) and the band mix (Z-3)**, both list
+   arithmetic over the whole lap.
+3. **The frame lookup**, which `transferAlongPath` now answers.

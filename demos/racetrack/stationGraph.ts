@@ -78,6 +78,7 @@ import {
   transferByIndex,
 } from "pcg-ts";
 import { COVERAGE, FITTED, type StationParams, type StationStats } from "./stations.js";
+import { CORNER_MODEL } from "./graph.js";
 import type { Lap } from "./lap.js";
 
 /**
@@ -902,7 +903,7 @@ export function addCoverageRepair(
  * position the scatter draws means the same thing as a station the rules
  * speak in, without a conversion to get wrong.
  */
-function lapAsPath(lap: Lap): Geometry {
+export function lapAsPath(lap: Lap): Geometry {
   const geo = createPolyline(lap.p, { closed: true });
   // f32, because that is what an attribute column is. A lap runs to a few
   // thousand world units, where f32 spacing is under a thousandth, so the
@@ -911,11 +912,30 @@ function lapAsPath(lap: Lap): Geometry {
   // rounding boundary. That is one placement, on a lap of hundreds, and
   // it is a difference the port already accepts by existing at all.
   geo.attrs.primitive.add(STATION_LENGTH_ATTR, "f32", 1).set(0, lap.length);
+
+  // THE CORNER MODEL COMES ALONG WHEN THE LAP HAS ONE, and this is
+  // plumbing rather than arithmetic: `writeCornerModel` computed this
+  // column as graph nodes on the frames, `readLap` read it off the cooked
+  // geometry, and all that happens here is that it is put back on a
+  // geometry so a graph can read it again. Nothing recomputes it, which
+  // is the difference between carrying a cooked column forward and a
+  // prelude deciding something.
+  //
+  // OPTIONAL BECAUSE A LAP NEED NOT HAVE BEEN COOKED -- the station
+  // suites build synthetic laps that carry no corners, and the station
+  // process does not read this. What does read it is the asset choice,
+  // which refuses a lap without one rather than pretending the whole
+  // circuit is straight.
+  const corners = lap.corner;
+  if (corners) {
+    const col = geo.attrs.point.add(CORNER_MODEL.radius, "f32", 1);
+    for (let i = 0; i < lap.count; i++) col.set(i, corners.radiusW[i]);
+  }
   return geo;
 }
 
 /** The primitive column {@link cookStations} writes the lap's length into. */
-const STATION_LENGTH_ATTR = "lapLen";
+export const STATION_LENGTH_ATTR = "lapLen";
 
 /**
  * Run the station process and D-4's repair as a graph, and hand back what
@@ -995,7 +1015,7 @@ export async function cookStations(opts: {
 }
 
 /** The widest gap on a sorted, wrapped station ring. */
-function longestGapOf(sorted: readonly number[], lapW: number): number {
+export function longestGapOf(sorted: readonly number[], lapW: number): number {
   if (sorted.length === 0) return lapW;
   let worst = 0;
   for (let i = 0; i < sorted.length; i++) {

@@ -84,8 +84,8 @@ import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/pane
 import { attachWordmark } from "../../shared/wordmark.js";
 import { BACKGROUND } from "../../shared/scene.js";
 import { OUTPUTS, buildRoadGraph } from "./graph.js";
-import { type DressStats, type Dressing, dressLap } from "./dress.js";
-import { cookStations } from "./stationGraph.js";
+import { type DressStats, type Dressing, dressLap, reserveFor } from "./dress.js";
+import { cookLapPlacements } from "./assetGraph.js";
 import { DENSITY } from "./stations.js";
 import { type Kit, type PlacedBox, loadKit, placeKit } from "./kit.js";
 import { shippedVocabulary } from "./vocabulary.js";
@@ -944,28 +944,38 @@ async function cookAndBuild(): Promise<void> {
   {
     const next = await cookCircuit(state.seed);
     circuit = next;
-    // THE PRELUDE, NOW A ROUND SHORTER. Where the placements GO is a
-    // graph: `cookStations` runs the Neyman-Scott process and D-4's
-    // coverage repair as nodes, on the lap's own frames, and hands back
-    // exactly what the TypeScript process handed back. What each
-    // placement IS — the asset drawn from its measured behaviour, the
-    // corner language, the band mix — is still TypeScript below, and it
-    // is what has to move next before the lap level needs no prelude at
-    // all. `levels.ts`' header says the rest.
+    // THE PRELUDE, NOW TWO ROUNDS SHORTER. Where the placements GO and
+    // what each placement IS are both a graph now: `cookLapPlacements`
+    // runs the Neyman-Scott station process, D-4's coverage repair and
+    // the four weighted draws of asset choice as nodes, in ONE graph on
+    // the lap's own frames, and hands back exactly what the two
+    // TypeScript stages handed back. What is left of the prelude below is
+    // the corner language, landmark uniqueness and the band mix —
+    // lap-global list arithmetic, and the next thing to move.
+    // `levels.ts`' header says the rest.
     //
-    // THE PAGE IS THE FIRST CONSUMER ON PURPOSE. The two processes do not
-    // agree station for station and cannot, so this is the lap the demo
-    // draws now; the suites that still call `dressLap` without stations
-    // keep measuring the fitted process, which is what those figures were
-    // fitted against.
-    const stations = await cookStations({
+    // THE POOL IS DECIDED ONCE AND GIVEN TO BOTH, because a choice is an
+    // INDEX into it: `reserveFor` sets L-2 and L-3's corner vocabulary
+    // aside before anything is dressed, and the cook must draw from the
+    // same remainder `dressLap` will resolve against.
+    //
+    // THE PAGE IS THE FIRST CONSUMER ON PURPOSE. The graph and the
+    // TypeScript do not agree station for station and cannot, so this is
+    // the lap the demo draws now; the suites that still call `dressLap`
+    // with neither option keep measuring the fitted process, which is
+    // what those figures were fitted against.
+    const kit = dressingKit();
+    const { pool } = reserveFor(kit, state.seed);
+    const decided = await cookLapPlacements({
       lap: next.lap,
       seed: state.seed,
+      pool,
       densityScale: state.density,
     });
-    const dressed = dressLap(dressingKit(), next.lap, state.seed, {
+    const dressed = dressLap(kit, next.lap, state.seed, {
       density: state.density,
-      stations,
+      stations: decided.stations,
+      choices: decided.choices,
     });
     lastStats = dressed.stats;
     buildCircuit(next);

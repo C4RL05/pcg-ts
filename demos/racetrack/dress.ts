@@ -37,7 +37,7 @@
  * wrong — so each stage says how much it had to do.
  */
 import {
-  type CurvatureBucket,
+  type AssetPlacement,
   type PlaceableAsset,
   bucketOf,
   placeAsset,
@@ -45,6 +45,7 @@ import {
   Z3,
   repairBandMix,
 } from "./assets.js";
+import type { AssetChoice } from "./assetGraph.js";
 import { type Corner, cornersOf, radiusAtW } from "./corners.js";
 import type { Kit, PlacedBox } from "./kit.js";
 import type { Lap } from "./lap.js";
@@ -127,6 +128,76 @@ export interface DressOptions {
    * figure downstream of it.
    */
   readonly stations?: StationStats;
+
+  /**
+   * Which asset stands at each station, when the caller has decided.
+   *
+   * THE SECOND SEAM, and it rides on the first: entry `i` is the asset
+   * for `stations.stations[i]`, so this is only meaningful alongside a
+   * `stations` from the same cook. `assetGraph.cookLapPlacements` runs
+   * both stages in ONE graph and returns them together for exactly that
+   * reason — two cooks would give the same numbers today and would have
+   * to be undone to reach a lap LEVEL, which is one graph.
+   *
+   * AN INDEX, NOT AN ASSET, and the index is into the pool `reserveFor`
+   * answers for this kit and seed. Passing the object would let a caller
+   * hand over an asset the lap reserved for its corner markers, which L-2
+   * establishes by construction and would then quietly lose; passing an
+   * index into the pool the reservation already produced cannot express
+   * that. Call {@link reserveFor} once and give its `pool` to the cook.
+   *
+   * `undefined` at an entry is `placeAsset` answering `undefined` — every
+   * asset weighed zero at that station — and the station is skipped, as
+   * it always was.
+   *
+   * Omitted, the TypeScript draw runs as it always has. Like `stations`,
+   * passing this re-bases every figure downstream of it.
+   */
+  readonly choices?: readonly (AssetChoice | undefined)[];
+}
+
+/**
+ * The corner-marker reservation, and the pool everything else draws from.
+ *
+ * ONE DEFINITION OF "THE POOL", because an {@link AssetChoice} is an
+ * INDEX into it and two derivations that drifted apart would silently
+ * place the wrong assets rather than fail. `dressLap` calls this, and a
+ * caller cooking the choices calls it too and passes the same array to
+ * both.
+ *
+ * L-2 AND L-3 RESERVE BEFORE ANYTHING IS DRESSED. An object that also
+ * appears sixty times as scenery cannot announce a corner, so exclusivity
+ * is established by construction here rather than hoped for afterwards.
+ */
+export function reserveFor(
+  kit: Kit,
+  seed: number,
+): { readonly markers?: MarkerKit; readonly pool: PlaceableAsset[] } {
+  return reserveMarkers((kit.assets as unknown as PlaceableAsset[]).filter((a) => a.where), seed);
+}
+
+/**
+ * One cooked choice, resolved against the pool it indexes.
+ *
+ * THE RANGE CHECK IS THE POINT. A choice is an index, so a pool that is
+ * not the one the cook was given produces a wrong asset rather than an
+ * error — silently, and only visible as a lap that reads oddly. Naming
+ * the station and the two lengths turns that into the one mistake it
+ * actually is.
+ */
+function fromChoice(
+  choice: AssetChoice | undefined,
+  pool: readonly PlaceableAsset[],
+  station: number,
+): AssetPlacement | undefined {
+  if (!choice) return undefined;
+  const asset = pool[choice.assetIndex];
+  if (!asset) {
+    throw new Error(
+      `dressLap: opts.choices[${station}] names asset ${choice.assetIndex}, but the pool has ${pool.length}. A choice is an INDEX into the pool reserveFor answers for this kit and seed — cook the choices against that same pool.`,
+    );
+  }
+  return { asset, t: choice.t, h: choice.h };
 }
 
 /** What each stage had to do, so a page can show it. */
@@ -422,11 +493,10 @@ export function dressLap(
   const frameAt = frameLookup(lap);
   const corners = cornersOf(lap);
 
-  // 0. Reserve L-2 and L-3's vocabulary BEFORE anything is dressed. An
-  //    object that also appears sixty times as scenery cannot announce a
-  //    corner, so exclusivity is established by construction rather than
-  //    hoped for afterwards.
-  const { markers, pool } = reserveMarkers(all, seed);
+  // 0. Reserve L-2 and L-3's vocabulary BEFORE anything is dressed. See
+  //    `reserveFor`, which is also what a caller cooking `opts.choices`
+  //    must call to get the pool those indices are into.
+  const { markers, pool } = reserveFor(kit, seed);
   const reserved = new Set(
     markers ? [markers.sharp.id, markers.open.id, markers.brake.id] : [],
   );
@@ -443,12 +513,21 @@ export function dressLap(
     );
 
   // 2. An asset per station, from its own measured behaviour, weighted by
-  //    the curvature THERE. This is the only place curvature enters.
+  //    the curvature THERE — from the caller when it has already drawn,
+  //    and from the TypeScript draw when it has not. See
+  //    `DressOptions.choices`.
+  const chosen = opts.choices;
+  if (chosen && chosen.length !== st.stations.length) {
+    throw new Error(
+      `dressLap: opts.choices has ${chosen.length} entries but there are ${st.stations.length} stations. They are parallel lists — entry i is the asset for station i — so they must come from the same cook; see assetGraph.cookLapPlacements, which returns both.`,
+    );
+  }
   let placements: StationedPlacement[] = [];
   for (let i = 0; i < st.stations.length; i++) {
     const s = st.stations[i];
-    const bucket: CurvatureBucket = bucketOf(radiusAtW(lap, s));
-    const p = placeAsset(pool, bucket, seed, i);
+    const p = chosen
+      ? fromChoice(chosen[i], pool, i)
+      : placeAsset(pool, bucketOf(radiusAtW(lap, s)), seed, i);
     if (p) placements.push({ ...p, station: s });
   }
 
