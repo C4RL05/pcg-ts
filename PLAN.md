@@ -44,6 +44,14 @@ kilometre of track pays that whole rule pass at load instead of streaming
 it. This is what it would actually take, surveyed before starting so the
 size is not discovered halfway.
 
+**THREE OF THE FOUR GAPS BELOW WERE WRONG, and the corrections are
+inline.** They were written from a survey and from a `PLAN.md` entry six
+days old; each was then settled by building and cooking the thing. Only
+gap 1 was real, and it shipped the same day as `transferAlongPath`. The
+lesson is the one this file keeps relearning: a capability claim about
+this library is worth what its last measurement is worth, and reading the
+sources is not measuring.
+
 **The size.** The prelude is `dressLap` and everything it calls:
 `dress.ts, assets.ts, legibility.ts, stations.ts, tunnels.ts,
 enclosure.ts, zones.ts, falseEdges.ts, sightline.ts, corners.ts,
@@ -70,27 +78,95 @@ this operation in TypeScript. SHIPPED 2026-08-25 as `transferAlongPath`
 -- not "gather", because the primitive `transform/gather-on-path` already
 owns that phrase for very nearly the opposite operation.
 
-**Gap 2 -- no in-cook global reduction.** Already recorded above for
-another reason, and it bites here too: the station process wants
-`round(density * lapW)`, an EXACT budget from a lap-scale total, and every
-share, mix and budget rule wants the same shape. Nothing that normalises
-against a total can close inside one cook.
+**Gap 2 -- ~~no in-cook global reduction~~ WRONG, corrected 2026-08-25 by
+cooking it.** A global reduction DOES close inside one cook, and the older
+entry's REASON was the error: it observed correctly that a point-domain
+field cannot read a detail attribute, and concluded wrongly that the total
+was therefore unreachable. `promoteAttribute` (`from: "detail"`, `to:
+"point"`) broadcasts it straight back. Measured chain, 500 points:
 
-**Gap 3 -- no gaussian field, and no clustered point process.**
-`randomField` is uniform [0,1). The station process is Neyman-Scott
-shaped: supers uniform on the lap, clusters gaussian about each super,
-instances gaussian about a cluster drawn uniformly WITH replacement (the
-resulting size distribution is most of what the curve is made of), plus a
-uniform background fraction. There is no scatter along a path, no
-arc-length scatter, and no per-parent variable child count. Box-Muller is
-spellable in the grammar, which has `log`, `cos` and `sqrt`.
+    setAttribute weight -> attributeReduce{mode:"sum"} -> detail
+      -> promoteAttribute{detail->point} -> setAttribute share = w/total
 
-**Gap 4 -- `setAttribute.weights` carries a STATIC distribution.** The
-draw is per point; the table and its weights are graph params. There is no
-per-point weights column, so a mix cannot depend on curvature at the
-point, and the output is an interned string rather than a numeric index.
-Asset choice needs exactly the thing it does not offer: `affinity` is a
-4-key record read as `affinity[bucketOf(radius)]`.
+detail `shareTotal` came back exactly 1. `attributeReduce{mode:"count"}`
+writes an element count the same way, `pathResample.lengthAttr` writes each
+path's true arc length to the primitive domain, and `round(density *
+lapLength)` therefore composes end to end -- measured, exactly 50 survivors
+from a computed budget. Detail-domain fields read detail attributes
+NATIVELY; only detail->point needs the promote.
+
+What actually survives is two narrower limits, and they are the ones to
+carry:
+
+- **A total is per-COOK, so under a spatial partition it is the CELL's
+  total.** Measured: 12 World cells of 125 points each, every cell's
+  shares summing to 1.0 independently. Harmless for an unbounded level,
+  which is one cell -- which is exactly where the racetrack's lap-global
+  rules live. `attributeReduce`'s description says nothing about
+  partitioning at all, which is a doc gap worth closing.
+- **No `count` param anywhere is field-capable** (zero `acceptsField`
+  hits across `src/nodes/*.ts`). So a total cannot SIZE a generator; it
+  can only cut an over-generated cloud down, via `filterByExpression`
+  against a field predicate. That is the real shape of the constraint,
+  and it is much weaker than "cannot close inside one cook".
+
+Budgeting in TIME is safe: `cook(graph, { budgetMs: 0 })` gave a
+byte-identical total, because the executor yields only after `cookNode`
+returns, so a node body is atomic and `attributeReduce` always sees the
+whole geometry.
+
+**Gap 3 -- ~~no gaussian field~~ EXPRESSIBLE TODAY, corrected 2026-08-25
+by cooking it.** `mul(sqrt(mul(-2, log(randomField("u1")))), cos(mul(2*PI,
+randomField("u2"))))` is a correct standard normal. Measured over 200,000
+points: mean -0.00039, sd 1.00000, skew 0.00209, excess kurtosis 0.00765,
+matching an f64 reference to five decimals. Distinct `randomField` KEYS
+give independent streams at the same point -- Pearson r 7.6e-4, Spearman
+7.7e-4, a 16x16 joint chi2 of 279.1 at df=255 (p~0.14), and a control
+r(u1,u1) of exactly 1.0 proving the estimator can report "correlated".
+Cost 253 ns/pt over 10 field nodes; 277 ns and 12 nodes guarded.
+
+**GUARD IT.** `hashFloat` returns exactly 0 whenever the hash is < 256, so
+`randomField` is 0 with probability 2^-24 -- measured, 10 zeros in
+200,000,000 draws. `log(0)` is -Infinity and PROPAGATES SILENTLY through
+`evaluateField`; it is caught only downstream at `resolveOn`, which
+refuses a non-finite field param. So an unguarded gaussian does not draw
+garbage, it turns a 1-in-16.7M draw into a hard cook failure.
+`max(u1, 1e-7)` costs two field nodes and no measurable distortion.
+
+**What is actually missing is the GENERATIVE half.** `randomField` is
+keyed on an EXISTING point's identity, so it can only replace `gauss`
+after the placement list exists -- not during the process that decides how
+many stations there are and where. There is still no scatter along a path,
+no arc-length scatter, and no per-parent variable child count. Combined
+with the no-field-capable-`count` limit above, the shape a graph must take
+is OVER-GENERATE A FIXED CLOUD AND FILTER TO A COMPUTED BUDGET, which is
+proven to work and is how the supers and clusters would be cut.
+
+**Gap 4 -- ~~no per-point weighted draw~~ NOT A GAP AT ALL, corrected
+2026-08-25 by cooking it.** `setAttribute.weights` is indeed a static
+table producing an interned string, and its index is deliberately not
+readable (`byAttribute`/`attributeIs` are the offered escapes). But it is
+not the only route, and the one that works needs nothing new:
+
+    copyToPoints (table -> stations, targetIndexAttr)
+      -> setAttribute w  (the row's own weight, picked by the station's bucket)
+      -> pointsToPath    (groupAttr: station, orderAttr: row)
+      -> pathScan        exclusive -> cw, inclusive -> ci, plus totalAttr
+      -> promoteAttribute the total back to point
+      -> filterByExpression  le(cw, u*total) * lt(u*total, ci)
+
+`pathScan` IS the prefix sum, per group. Weights may be real-valued -- the
+racetrack's `instances * affinity` needs no integer spelling -- the
+distribution matches, and the surviving `row` column is NUMERIC, so
+`transferAttribute` then gathers that asset's size/lateral/height.
+
+The cost is the catch and it is a cost, not a capability: the pick
+materialises N x R intermediate points. Measured 4,000 stations x 229 rows
+= 916,000 points in 754 ms on one CPU cook; 1,000 stations in 238 ms. The
+racetrack's ~354 placements x 229 assets is ~81,000 points, well inside
+what a level that cooks ONCE can pay. If that ever stops being true the
+primitive to buy is a per-point bracket search over a grouped cumulative
+column -- O(N log R) instead of N x R -- and not before.
 
 **The data half.** `DataItem` is `GeometryItem | ValueItem | InstancesItem`
 and `DataValue` is `number | readonly number[] | string | boolean`. There
