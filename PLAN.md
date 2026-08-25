@@ -1732,3 +1732,123 @@ trims the art instead of moving the anchor.
 - Blockers that need a user decision are raised with the user rather than
   stalling silently — pick the most reasonable default, note it in the
   commit message, and continue.
+
+### The station port cannot be bit-identical, and why that is the design, 2026-08-25
+
+Measured by reading `stations.ts` against the field grammar, before building
+anything. It overturns the unstated assumption in the sketch above -- that a
+graph port is a refactor whose output can be diffed against the old lap.
+
+**`makeStationsDetailed` runs on ONE sequential PCG32 stream.**
+`stream(seed, 0x5741)` is created once and every stage draws from it in
+written order: the super positions, then per super one draw for the
+stochastic rounding `k = floor(clustersPerSuper + u)`, then two draws per
+cluster for its gaussian, then THREE per instance (one to pick a cluster,
+two for the gaussian), then one per background placement. Change how many
+draws any stage consumes and every station after it moves.
+
+**A graph cannot reproduce that, and the reason is structural rather than
+incidental.** `randomField` is keyed on a point's IDENTITY -- its stored
+position and `seed` column -- not on a position in a stream. That is the
+property that makes a cook order-independent and partitionable, which is
+the library's hard invariant; a node that consumed a shared sequential
+stream would be a node whose output depended on how many points some other
+node had already asked about. So the port draws `hashCombine(seed, i, ch)`
+per point and produces a DIFFERENT lap. Not a worse one -- a different one.
+
+**Therefore the port re-baselines every measured figure downstream**, and
+"verified" has to mean something other than a diff. What makes that
+tractable is that `racetrackStations.test.ts` was already written as
+DISTRIBUTIONAL gates rather than golden values, because the process was
+fitted to a published curve rather than invented:
+
+- the dispersion curve inside the source's p10-p90 at all seven windows
+- the shape gate: climbs through 4/8/16/32 W, then `at(128) < at(32)*1.15`
+- `at(1.0)` for a Poisson control, proving the instrument works
+- D-1's budget hit EXACTLY (`round(0.95 * lapW)`), which is arithmetic and
+  must survive unchanged
+- D-4's floor: 85% within 2 W, no gap over 25 W
+- the repair fires at least once across seeds 1-8 and every move it makes
+  is non-removable
+
+Those are the acceptance criteria for the port. Five of the six are
+properties of the PROCESS, not of a particular draw, so they transfer.
+
+**Two constraints the sketch above did not record:**
+
+1. **The count is exact, not Poisson**, and deliberately: "letting the
+   total float adds variance at the lap scale, which is the one place the
+   source has none". So the graph must land on exactly
+   `round(density * lapW)` placements -- which is why a field-capable
+   `count` resolved on the path's primitive domain is the right primitive
+   and a per-cell density is not.
+2. **Sorted order is load-bearing beyond the station list.** `dressLap`
+   walks the sorted stations by index and feeds that index to
+   `placeAsset(pool, bucket, seed, i)`, so the i-th station gets the i-th
+   asset stream. Reproducing a dressing needs the sorted ORDER, not just
+   the set -- and after the port the order is different, so the asset
+   choice re-baselines with it. That is one more reason asset choice
+   should move into the graph in the same pass rather than a later one.
+
+**What the port buys, stated plainly so the cost above is judged against
+something.** The lap level stops needing a TypeScript prelude, which is
+the whole point of the campaign: a game can then generate a track from a
+serialized graph and a spline, with no demo code in the loop.
+
+### Two nodes the port needs, and why each is a node rather than a recipe, 2026-08-25
+
+Both were checked against the shipped library before being written, because
+this branch has repeatedly recorded a "gap" that turned out to be a node
+nobody had read.
+
+**`pointScatterOnPath` -- scatter N points along a path by arc length.**
+Confirmed missing: every arc-length placer in the library is
+deterministic-even (`pathResample` and `splineSample` divide the length,
+`arcTile` steps a fixed spacing, `pathSegments` is one per segment). The
+composed recipe exists and the corpus already ships it as
+`graphs/basics-stations-on-a-path.json` -- `pointLine` for the count, a
+`setAttribute` writing a random station, then `transferAlongPath` sampling
+`"P"` to move the cloud onto the curve -- so this node buys no NEW
+expressive power on its own. What it buys is the COUNT.
+
+The four existing source nodes take no geometry input, and that is exactly
+why none of their params is field-capable: `fieldCapability.test.ts` clause
+2 forbids it, because a field needs an element to be read per and a source
+has none. A path-input scatter has the path's primitive domain to resolve
+on, so `count = round(superRate * length)` is expressible -- reading the
+per-primitive length column, with no TypeScript deciding the number. The
+precedent is exact: `pathResample.spacing` is field-capable and decides the
+output count, resolved per primitive. `docs/authoring.md` states the rule:
+"The question is never what the param decides. It is whether an element
+exists to read it per."
+
+Clause 1 of that same test forces the param's TYPE: only `f32`/`vec3`/`vec4`
+may be field-capable, since a field resolves to one f32 column. So `count`
+is an `f32` that rounds, not an `i32`.
+
+**`transferByIndex` -- read a source geometry's attributes at a per-point
+computed index.** Confirmed missing: `transferAttribute` offers `nearest`,
+`uv` and `raycast`, and every one asks its question in SPACE. There is no
+way to say "read source point number i, where i is a number I computed".
+This is the "pick a cluster uniformly with replacement" step, in O(N)
+rather than the N x R bracket the corrected gap 4 measured (916,000
+intermediate points for 4,000 stations x 229 rows).
+
+It is a separate node rather than a fourth mapping for the reason
+`transferAlongPath`'s header already gives about itself: an index is not a
+spatial query, and the gap between the two opens exactly where a curve
+folds. A node whose param list decided which of two incompatible questions
+was being asked would be one node in name only.
+
+**What was NOT added, and why.** `copyToPoints` makes exactly
+`source x target` copies, so a per-parent VARIABLE child count -- the
+`k = floor(clustersPerSuper + u)` step -- has no direct spelling. The
+workaround is a fixed maximum plus a cut on a per-block index, with the
+per-super `u` computed on the supers cloud and carried down by
+`targetNames` so every copy of one super agrees about its own k. At ~17
+supers and a max of 16 that is ~270 intermediate points, which is nothing.
+A field-capable per-target count on `copyToPoints` is a real capability and
+probably a good one, but it makes a central node's output size
+data-dependent, and it should be bought on a measurement rather than on a
+hunch. The cut idiom goes in first; if it proves painful, that is the
+evidence.
