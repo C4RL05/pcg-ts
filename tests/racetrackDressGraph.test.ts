@@ -745,14 +745,15 @@ describe("racetrack dressing, as a graph", () => {
       });
 
       cookMs += got.cookMs;
-      // WHAT THE BROADCAST ACTUALLY COST, in the units the finding is
-      // stated in. `copyToPoints` has no per-target source selection, so
-      // the whole pose library is stamped on every placement and the
-      // wrong copies are filtered out. The number is reported rather than
-      // argued, because "it is a product of two counts" is an argument
-      // and "it built 780,000 points to keep 1,985" is a measurement —
-      // and the second is the one that says whether a per-target selector
-      // is worth a node change.
+      // WHAT THE BOX STAGE ACTUALLY BUILT, in the units the finding was
+      // stated in. This used to be the whole pose library stamped on
+      // every placement with the wrong copies filtered out, and it read
+      // "780,000 points built to keep 1,985" — a measurement rather than
+      // an argument, and the one that said a per-target source selector
+      // was worth a node change. `copyToPoints` has that selector now, so
+      // the line below prints the copies actually emitted against the
+      // boxes kept: it should read 100%, and a ratio that drifts off it
+      // means something started stamping again.
       copies += got.stamped;
 
       // THE REFERENCE IS BUILT FROM THE LIST L-1 LEFT, NOT FROM THE ONE

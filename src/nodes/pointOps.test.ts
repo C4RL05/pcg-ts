@@ -687,6 +687,500 @@ describe("copyToPoints", () => {
       expect(info.params.topology.description).toMatch(/DETAIL domain is carried under NEITHER/);
     });
   });
+
+  /**
+   * PER-TARGET SOURCE SELECTION — `sourceGroupAttr` / `targetGroupAttr`.
+   *
+   * The measured gap these close: with one source cloud stamped on every
+   * target, a vocabulary in which each target wants a DIFFERENT subset has
+   * to stamp everything and filter the wrong copies away. The tests below
+   * check the two things that makes true — the right copies survive, and
+   * the ones that survive are IDENTICAL to the ones the broadcast would
+   * have produced.
+   */
+  describe("per-target source selection", () => {
+    /**
+     * Five source points in two groups, INTERLEAVED — 7, 9, 7, 9, 7. A
+     * library whose groups were contiguous would look correct under an
+     * implementation that copied one range per target, so it cannot tell
+     * a selection from a slice.
+     */
+    function library(): Geometry {
+      const geo = seededCloudAt([
+        [1, 0, 0],
+        [0, 1, 0],
+        [2, 0, 0],
+        [0, 2, 0],
+        [3, 0, 0],
+      ]);
+      const pose = geo.attrs.point.add("poseId", "i32", 1, -1);
+      [7, 9, 7, 9, 7].forEach((v, i) => pose.set(i, v));
+      return geo;
+    }
+
+    /** One target per key, ten units apart along +Z. */
+    function asking(keys: number[]): Geometry {
+      const geo = seededCloudAt(keys.map((_, i) => [0, 0, i * 10]));
+      const want = geo.attrs.point.add("wantPose", "i32", 1, -1);
+      keys.forEach((v, i) => want.set(i, v));
+      return geo;
+    }
+
+    const SELECT = { sourceGroupAttr: "poseId", targetGroupAttr: "wantPose" };
+
+    async function select(
+      source: Geometry,
+      target: Geometry,
+      params: Record<string, unknown> = {},
+    ): Promise<Geometry> {
+      return firstGeo(
+        (
+          await runNode(copyToPoints, { ...SELECT, ...params }, {
+            source: [makeGeometryItem(source)],
+            target: [makeGeometryItem(target)],
+          })
+        ).out,
+      );
+    }
+
+    it("gives each target only the source points its key asks for", async () => {
+      const geo = await select(library(), asking([9, 7, 9]));
+      // 2 + 3 + 2, not 5 * 3: the count is the sum of the blocks.
+      expect(geo.pointCount).toBe(7);
+      expect(positionsOf(geo)).toEqual([
+        // Target 0 wants 9: source points 1 and 3, in SOURCE order.
+        [0, 1, 0],
+        [0, 2, 0],
+        // Target 1 wants 7: source points 0, 2 and 4.
+        [1, 0, 10],
+        [2, 0, 10],
+        [3, 0, 10],
+        // Target 2 wants 9 again — the same block, on its own target.
+        [0, 1, 20],
+        [0, 2, 20],
+      ]);
+      // The key column is an ordinary source attribute and rides along.
+      const pose = geo.attrs.point.require("poseId");
+      expect([0, 1, 2, 3, 4, 5, 6].map((i) => pose.get(i))).toEqual([9, 9, 7, 7, 7, 9, 9]);
+    });
+
+    it("emits exactly the copies the broadcast-and-filter produced, seeds included", async () => {
+      // THE EQUIVALENCE THE FEATURE CLAIMS. Selection must not perturb a
+      // copy that would have existed anyway: same position bits, same
+      // seed — the two halves of a point's identity.
+      const all = firstGeo(
+        (
+          await runNode(copyToPoints, {}, {
+            source: [makeGeometryItem(library())],
+            target: [makeGeometryItem(asking([9, 7, 9]))],
+          })
+        ).out,
+      );
+      const picked = await select(library(), asking([9, 7, 9]));
+      const wanted = [9, 7, 9];
+      const keys = [7, 9, 7, 9, 7];
+      const expectedRows: number[] = [];
+      for (let t = 0; t < wanted.length; t++) {
+        for (let s = 0; s < keys.length; s++) {
+          if (keys[s] === wanted[t]) expectedRows.push(t * keys.length + s);
+        }
+      }
+      expect(expectedRows.length).toBe(picked.pointCount);
+      const allP = positionsOf(all);
+      const pickedP = positionsOf(picked);
+      const allSeed = all.attrs.point.require("seed");
+      const pickedSeed = picked.attrs.point.require("seed");
+      expectedRows.forEach((row, i) => {
+        expect(pickedP[i]).toEqual(allP[row]);
+        expect(pickedSeed.get(i)).toBe(allSeed.get(row));
+      });
+      // THE CONTROL. The equality above is worth nothing unless the
+      // comparison can report "different": selection did drop copies.
+      expect(picked.pointCount).toBeLessThan(all.pointCount);
+    });
+
+    it("gives a target that matches no source group an empty block, not an error", async () => {
+      const geo = await select(library(), asking([9, 4, 7]), {
+        targetIndexAttr: "anchor",
+      });
+      expect(geo.pointCount).toBe(5); // 2 + 0 + 3
+      // Target 1 asked for a pose the library does not carry. It
+      // contributes nothing and the targets around it are untouched —
+      // same copies, same order, as if it had never been in the input.
+      const anchor = geo.attrs.point.require("anchor");
+      const anchors = [0, 1, 2, 3, 4].map((i) => anchor.get(i));
+      // Target 1's index is MISSING from the column rather than present
+      // with an empty block — the thing selection changes about it.
+      expect(anchors).toEqual([0, 0, 2, 2, 2]);
+      // -1 is still the value no copy holds, which is what makes it mean
+      // "belongs to no target" for anything appended later.
+      expect(anchors).not.toContain(-1);
+      expect(positionsOf(geo)).toEqual([
+        [0, 1, 0],
+        [0, 2, 0],
+        [1, 0, 20],
+        [2, 0, 20],
+        [3, 0, 20],
+      ]);
+    });
+
+    it("selects on STRING keys by value, across two string tables", async () => {
+      const source = seededCloudAt([
+        [1, 0, 0],
+        [0, 1, 0],
+        [2, 0, 0],
+      ]);
+      const kit = source.attrs.point.add("kit", "string", 1, "");
+      ["arch", "pillar", "arch"].forEach((v, i) => kit.setString(i, v));
+      const target = seededCloudAt([
+        [0, 0, 0],
+        [0, 0, 10],
+      ]);
+      // Interned in the OPPOSITE order, so a table index means the other
+      // word on this side: matching by index would pick the wrong block.
+      const want = target.attrs.point.add("wantKit", "string", 1, "");
+      want.setString(0, "pillar");
+      want.setString(1, "arch");
+      const geo = await select(source, target, {
+        sourceGroupAttr: "kit",
+        targetGroupAttr: "wantKit",
+      });
+      expect(positionsOf(geo)).toEqual([
+        [0, 1, 0],
+        [1, 0, 10],
+        [2, 0, 10],
+      ]);
+      const outKit = geo.attrs.point.require("kit");
+      expect([0, 1, 2].map((i) => outKit.getString(i))).toEqual(["pillar", "arch", "arch"]);
+    });
+
+    it("carries targetNames and targetIndexAttr onto the selected copies", async () => {
+      const target = asking([7, 9]);
+      const tint = target.attrs.point.add("tint", "f32", 3, [1, 1, 1]);
+      tint.setTuple(0, [0.25, 0.5, 0.75]);
+      tint.setTuple(1, [1, 0, 0]);
+      const geo = await select(library(), target, {
+        targetNames: ["tint", "wantPose"],
+        targetIndexAttr: "anchor",
+      });
+      expect(geo.pointCount).toBe(5); // 3 + 2
+      const anchor = geo.attrs.point.require("anchor");
+      expect([0, 1, 2, 3, 4].map((i) => anchor.get(i))).toEqual([0, 0, 0, 1, 1]);
+      const outTint = geo.attrs.point.require("tint");
+      expect(outTint.getTuple(0)).toEqual([0.25, 0.5, 0.75]);
+      expect(outTint.getTuple(2)).toEqual([0.25, 0.5, 0.75]);
+      expect(outTint.getTuple(3)).toEqual([1, 0, 0]);
+      // The TARGET's key carried alongside the SOURCE's, which is how a
+      // graph checks the selection did what it was asked.
+      const asked = geo.attrs.point.require("wantPose");
+      const has = geo.attrs.point.require("poseId");
+      for (let i = 0; i < geo.pointCount; i++) expect(asked.get(i)).toBe(has.get(i));
+    });
+
+    it("is deterministic — the same inputs cook to the same output", async () => {
+      const once = snapshotGeometry(await select(library(), asking([9, 7, 9, 4])));
+      const twice = snapshotGeometry(await select(library(), asking([9, 7, 9, 4])));
+      expect(twice).toEqual(once);
+      // THE CONTROL: the same comparison must be able to say "different".
+      expect(snapshotGeometry(await select(library(), asking([7, 7, 9, 4])))).not.toEqual(once);
+    });
+
+    it("leaves the broadcast alone when both params are empty", async () => {
+      // WHAT THIS TEST DOES AND DOES NOT PROVE. Both spellings below take
+      // the same branch, so this pins the DEFAULTS — that an omitted param
+      // means "" and not "match nothing" — and it pins the broadcast's
+      // concrete shape. It is NOT the guard against a default-path
+      // regression: that job belongs to the tests above this describe
+      // block, which assert the shipped values directly and were not
+      // touched when selection landed.
+      async function stamp(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+        return snapshotGeometry(
+          firstGeo(
+            (
+              await runNode(copyToPoints, params, {
+                source: [makeGeometryItem(library())],
+                target: [makeGeometryItem(asking([9, 7, 9]))],
+              })
+            ).out,
+          ),
+        );
+      }
+      const shipped = await stamp({ targetIndexAttr: "anchor" });
+      expect(shipped.point).toMatchObject({ count: 15 }); // 5 * 3, the whole product
+      expect(
+        await stamp({ targetIndexAttr: "anchor", sourceGroupAttr: "", targetGroupAttr: "" }),
+      ).toEqual(shipped);
+      // THE CONTROL: the comparison can report "different".
+      expect(
+        snapshotGeometry(
+          await select(library(), asking([9, 7, 9]), { targetIndexAttr: "anchor" }),
+        ),
+      ).not.toEqual(shipped);
+    });
+
+    it("cooks an empty source and an empty target without special-casing either", async () => {
+      // A count that is zero on one side is the case where "the sum of the
+      // blocks" and "the product" agree, and where an off-by-one in the
+      // prefix sum would show as a throw rather than a wrong number.
+      const emptySource = seededCloudAt([]);
+      emptySource.attrs.point.add("poseId", "i32", 1, -1);
+      const bare = await select(emptySource, asking([7, 9]));
+      expect(bare.pointCount).toBe(0);
+      expect(bare.attrs.point.has("poseId")).toBe(true);
+      const noTargets = seededCloudAt([]);
+      noTargets.attrs.point.add("wantPose", "i32", 1, -1);
+      expect((await select(library(), noTargets)).pointCount).toBe(0);
+      // And the same two on the broadcast path, which must not have
+      // learned to throw either.
+      const both = firstGeo(
+        (
+          await runNode(copyToPoints, {}, {
+            source: [makeGeometryItem(emptySource)],
+            target: [makeGeometryItem(asking([7]))],
+          })
+        ).out,
+      );
+      expect(both.pointCount).toBe(0);
+    });
+
+    it("refuses one param without the other, naming both and the fix", async () => {
+      await expect(select(library(), asking([7]), { targetGroupAttr: "" })).rejects.toThrow(
+        /copyToPoints: params "sourceGroupAttr" and "targetGroupAttr" work only as a PAIR — "sourceGroupAttr" is set and "targetGroupAttr" is empty/,
+      );
+      await expect(select(library(), asking([7]), { sourceGroupAttr: "" })).rejects.toThrow(
+        /copyToPoints: params "sourceGroupAttr" and "targetGroupAttr" work only as a PAIR — "targetGroupAttr" is set and "sourceGroupAttr" is empty/,
+      );
+    });
+
+    it("refuses a fractional key on either side, naming the point", async () => {
+      const source = library();
+      const loose = source.attrs.point.add("poseF", "f32", 1, 0);
+      [7, 9, 7.5, 9, 7].forEach((v, i) => loose.set(i, v));
+      await expect(select(source, asking([7]), { sourceGroupAttr: "poseF" })).rejects.toThrow(
+        /copyToPoints: source point 2 has poseF = 7\.5, which is not a whole number; a selection key is an IDENTITY/,
+      );
+      const target = asking([7, 9]);
+      const wantF = target.attrs.point.add("wantF", "f32", 1, 0);
+      wantF.set(0, 7);
+      wantF.set(1, 9.25);
+      await expect(
+        select(source, target, { sourceGroupAttr: "poseId", targetGroupAttr: "wantF" }),
+      ).rejects.toThrow(/copyToPoints: target point 1 has wantF = 9\.25, which is not a whole number/);
+    });
+
+    it("names WHICH side is missing the key attribute", async () => {
+      await expect(select(library(), asking([7]), { sourceGroupAttr: "nope" })).rejects.toThrow(
+        /param "sourceGroupAttr" names point attribute "nope", which the source on pin "source" has no point attribute for/,
+      );
+      await expect(select(library(), asking([7]), { targetGroupAttr: "nope" })).rejects.toThrow(
+        /param "targetGroupAttr" names point attribute "nope", which the target on pin "target" has no point attribute for/,
+      );
+    });
+
+    it("refuses a non-scalar key and a string key matched against a number", async () => {
+      await expect(select(library(), asking([7]), { sourceGroupAttr: "P" })).rejects.toThrow(
+        /param "sourceGroupAttr" names source on pin "source" attribute "P" with tupleSize 3; a selection key must be scalar/,
+      );
+      const target = asking([7]);
+      const named = target.attrs.point.add("wantName", "string", 1, "");
+      named.setString(0, "7");
+      await expect(select(library(), target, { targetGroupAttr: "wantName" })).rejects.toThrow(
+        /param "targetGroupAttr" names a string attribute and "sourceGroupAttr" names a numeric one \(i32\); a string key can never equal a number/,
+      );
+    });
+
+    describe('with topology "keep"', () => {
+      /**
+       * Two polylines, each wholly inside one group, plus a third that
+       * STRADDLES them — the case only the survival rule answers.
+       */
+      function pathLibrary(withStraddler: boolean): Geometry {
+        const geo = seededCloudAt([
+          [0, 0, 0],
+          [1, 0, 0],
+          [2, 0, 0],
+          [0, 5, 0],
+          [1, 5, 0],
+        ]);
+        const kit = geo.attrs.point.add("kit", "string", 1, "");
+        ["arch", "arch", "arch", "bar", "bar"].forEach((v, i) => kit.setString(i, v));
+        if (withStraddler) {
+          setPolylineTopology(geo, [0, 1, 2, 3, 4, 2, 3], [0, 3, 5], [3, 2, 2]);
+        } else {
+          setPolylineTopology(geo, [0, 1, 2, 3, 4], [0, 3], [3, 2]);
+        }
+        const width = geo.attrs.primitive.add("width", "f32", 1, 0);
+        [0.5, 1.5, 2.5].slice(0, withStraddler ? 3 : 2).forEach((v, i) => width.set(i, v));
+        // A per-VERTEX column, valued by its own source index, so a
+        // re-emitted primitive whose vertices moved can be told from one
+        // whose vertices were copied at the offset they arrived at.
+        const uv = geo.attrs.vertex.add("uv", "f32", 1, 0);
+        for (let v = 0; v < geo.vertexCount; v++) uv.set(v, 100 + v);
+        return geo;
+      }
+
+      function kitTargets(keys: string[]): Geometry {
+        const geo = seededCloudAt(keys.map((_, i) => [0, 0, i * 10]));
+        const want = geo.attrs.point.add("wantKit", "string", 1, "");
+        keys.forEach((v, i) => want.setString(i, v));
+        return geo;
+      }
+
+      async function keep(source: Geometry, target: Geometry): Promise<Geometry> {
+        return firstGeo(
+          (
+            await runNode(
+              copyToPoints,
+              { sourceGroupAttr: "kit", targetGroupAttr: "wantKit", topology: "keep" },
+              {
+                source: [makeGeometryItem(source)],
+                target: [makeGeometryItem(target)],
+              },
+            )
+          ).out,
+        );
+      }
+
+      it("re-emits only the primitives whose points the block holds", async () => {
+        const geo = await keep(pathLibrary(false), kitTargets(["bar", "arch"]));
+        expect(geo.pointCount).toBe(5); // 2 + 3
+        expect(geo.primitiveCount).toBe(2); // NOT nTarget * nSourcePrimitives
+        expect(geo.vertexCount).toBe(5);
+        // Block 0 is the "bar" path on target 0 (points 0-1), block 1 the
+        // "arch" path on target 1 (points 2-4).
+        expect(Array.from(geo.vertexToPoint)).toEqual([0, 1, 2, 3, 4]);
+        expect(Array.from(geo.primVertexStart)).toEqual([0, 2]);
+        expect(Array.from(geo.primVertexCount)).toEqual([2, 3]);
+        expect(primitiveTypeCounts(geo)).toEqual({ polyline: 2 });
+        // And each re-emitted primitive carries its ORIGINAL's columns —
+        // the bar's width first, because the bar's target came first.
+        const width = geo.attrs.primitive.require("width");
+        expect([0, 1].map((i) => width.get(i))).toEqual([1.5, 0.5]);
+        // The VERTEX columns follow the primitives that own them, not the
+        // slots they arrived in: the bar's two vertices were 3 and 4 in
+        // the source and come out first, ahead of the arch's 0, 1 and 2.
+        const uv = geo.attrs.vertex.require("uv");
+        expect([0, 1, 2, 3, 4].map((i) => uv.get(i))).toEqual([103, 104, 100, 101, 102]);
+        expect(positionsOf(geo)).toEqual([
+          [0, 5, 0],
+          [1, 5, 0],
+          [0, 0, 10],
+          [1, 0, 10],
+          [2, 0, 10],
+        ]);
+      });
+
+      it("re-emits a primitive that straddles two keys for NEITHER block", async () => {
+        const geo = await keep(pathLibrary(true), kitTargets(["bar", "arch"]));
+        // The straddler walks points 2 ("arch") and 3 ("bar"), so neither
+        // block holds all of its points and neither re-emits it. Its two
+        // vertices go with it: the source had 7 and the output has 5, in
+        // the surviving primitives' own order.
+        expect(geo.pointCount).toBe(5);
+        expect(geo.primitiveCount).toBe(2);
+        expect(geo.vertexCount).toBe(5);
+        expect(Array.from(geo.vertexToPoint)).toEqual([0, 1, 2, 3, 4]);
+        expect(Array.from(geo.primVertexStart)).toEqual([0, 2]);
+        expect(Array.from(geo.primVertexCount)).toEqual([2, 3]);
+        const width = geo.attrs.primitive.require("width");
+        expect([0, 1].map((i) => width.get(i))).toEqual([1.5, 0.5]);
+        const uv = geo.attrs.vertex.require("uv");
+        expect([0, 1, 2, 3, 4].map((i) => uv.get(i))).toEqual([103, 104, 100, 101, 102]);
+      });
+
+      it("gives a target that matched nothing no primitives either", async () => {
+        const geo = await keep(pathLibrary(false), kitTargets(["gate", "arch"]));
+        expect(geo.pointCount).toBe(3);
+        expect(geo.primitiveCount).toBe(1);
+        expect(Array.from(geo.vertexToPoint)).toEqual([0, 1, 2]);
+        expect(Array.from(geo.primVertexStart)).toEqual([0]);
+      });
+
+      /**
+       * A source whose vertex array does NOT tile: the two polylines'
+       * ranges arrive out of order and a seventh vertex belongs to no
+       * primitive at all. This is the one input on which the selected and
+       * unselected blocks genuinely differ, which the `topology`
+       * description promises and nothing else here exercises.
+       */
+      function untiledSource(): Geometry {
+        const geo = seededCloudAt([
+          [0, 0, 0],
+          [1, 0, 0],
+          [0, 5, 0],
+          [1, 5, 0],
+        ]);
+        const kit = geo.attrs.point.add("kit", "string", 1, "");
+        ["arch", "arch", "bar", "bar"].forEach((v, i) => kit.setString(i, v));
+        // vertices:      0     1     2     3     4  (4 is referenced by
+        // nothing) and the BAR's range comes first.
+        setPolylineTopology(geo, [2, 3, 0, 1, 1], [0, 2], [2, 2]);
+        const uv = geo.attrs.vertex.add("uv", "f32", 1, 0);
+        for (let v = 0; v < geo.vertexCount; v++) uv.set(v, 100 + v);
+        return geo;
+      }
+
+      it("copies an untiled vertex layout verbatim, and compacts it under selection", async () => {
+        // WITHOUT selection: verbatim, gaps and all. Two targets, so 10
+        // vertices for 4 primitives — the unreferenced vertex is copied
+        // into both blocks because the block IS the source's array.
+        const plain = firstGeo(
+          (
+            await runNode(copyToPoints, { topology: "keep" }, {
+              source: [makeGeometryItem(untiledSource())],
+              target: [makeGeometryItem(kitTargets(["bar", "arch"]))],
+            })
+          ).out,
+        );
+        expect(plain.vertexCount).toBe(10);
+        expect(Array.from(plain.vertexToPoint)).toEqual([2, 3, 0, 1, 1, 6, 7, 4, 5, 5]);
+        expect(Array.from(plain.primVertexStart)).toEqual([0, 2, 5, 7]);
+        const plainUv = plain.attrs.vertex.require("uv");
+        expect(Array.from({ length: 10 }, (_, i) => plainUv.get(i))).toEqual([
+          100, 101, 102, 103, 104, 100, 101, 102, 103, 104,
+        ]);
+
+        // WITH selection: each block is the surviving primitives' own
+        // vertices, in primitive order. The unreferenced vertex 4 is gone
+        // from both blocks, and the bar's range no longer sits second.
+        const picked = await keep(untiledSource(), kitTargets(["bar", "arch"]));
+        expect(picked.pointCount).toBe(4); // 2 + 2
+        expect(picked.vertexCount).toBe(4);
+        expect(picked.primitiveCount).toBe(2);
+        expect(Array.from(picked.vertexToPoint)).toEqual([0, 1, 2, 3]);
+        expect(Array.from(picked.primVertexStart)).toEqual([0, 2]);
+        const uv = picked.attrs.vertex.require("uv");
+        expect([0, 1, 2, 3].map((i) => uv.get(i))).toEqual([100, 101, 102, 103]);
+      });
+
+      it("refuses a source whose vertices reference points it does not have", async () => {
+        const broken = untiledSource();
+        // Shrink the point domain BEHIND the topology, which is the only
+        // way to build a vertex reference past the cloud.
+        broken.attrs.point.resize(3);
+        await expect(keep(broken, kitTargets(["bar"]))).rejects.toThrow(
+          /copyToPoints: the source on pin "source" has vertex 1 referencing point 3, but the source has only 3 points; rebuild its topology with setTopology/,
+        );
+      });
+    });
+
+    it("registers both selection params as strings defaulting to empty", () => {
+      const info = getNodeType("copyToPoints").info;
+      for (const name of ["sourceGroupAttr", "targetGroupAttr"]) {
+        expect(info.params[name].type).toBe("string");
+        expect(info.params[name].default).toBe("");
+      }
+      expect(info.params.sourceGroupAttr.description).toMatch(
+        /two values a ULP apart would be two groups/,
+      );
+      expect(info.params.targetGroupAttr.description).toMatch(
+        /takes zero copies and that is legal/,
+      );
+      expect(info.params.topology.description).toMatch(
+        /ALL of its points are in that target's block/,
+      );
+    });
+  });
 });
 
 describe("mergePoints", () => {

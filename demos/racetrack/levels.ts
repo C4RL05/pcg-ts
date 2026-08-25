@@ -35,9 +35,14 @@
  * batches by a STRING point attribute and no field produces a string, so
  * a per-point asset id has to be written by whatever builds the cloud in
  * TypeScript. On the placement cloud that is a few hundred writes per
- * lap; on the boxes it would be one per copy of the entire pose library
- * times the entire placement list, which is the cost `writeBoxes` already
- * refuses for a single f32. So the sectors spawn placements and the asset
+ * lap; on the boxes it is one per box, which is the cost `writeBoxes`
+ * already declines to pay for a single f32. That argument used to rest on
+ * a much larger number — one per copy of the entire pose library times
+ * the entire placement list — and `copyToPoints`' per-target source
+ * selection has since cut the stage from 778,800 copies to 1,984. The
+ * conclusion is unchanged and the arithmetic behind it is not, which is
+ * why it is restated rather than left standing. So the sectors spawn
+ * placements and the asset
  * map carries each pose's boxes as one merged mesh — which is also what
  * real art wants, since a gantry is one object rather than seven slabs.
  * The boxes still exist: the lap level builds them, because L-6's

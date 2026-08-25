@@ -132,7 +132,6 @@ import {
   div,
   dot,
   eq,
-  filterByExpression,
   firstGeometry,
   floor,
   ge,
@@ -312,11 +311,13 @@ export const PLACEMENT = {
    * attribute and there is no field that produces one, so a per-point id
    * has to be WRITTEN by whatever builds the cloud in TypeScript -- and
    * this cloud is built once per lap, a few hundred points. The same
-   * column on the BOXES would be written once per copy of the whole pose
-   * library times the whole placement list, which is the cost
-   * {@link writeBoxes} already refuses for a single f32. That asymmetry
+   * column on the BOXES would be written once per BOX — five or six times
+   * as many writes, every one of them a string intern, to answer a
+   * question `placementIndex` already answers by lookup. That asymmetry
    * is the reason the streamed level spawns one instance per PLACEMENT
-   * rather than one per box.
+   * rather than one per box, and it survives per-target source selection:
+   * selection cut the number of copies, not the cost of a column that
+   * rides every one of them.
    */
   asset: "assetId",
   /**
@@ -324,12 +325,13 @@ export const PLACEMENT = {
    *
    * ON THE CLOUD BUT NOT CARRIED ONTO THE BOXES, and the restraint is
    * deliberate: every column named in `targetNames` is written once per
-   * COPY, and the copy count here is the whole pose library times the
-   * whole placement list. A column that costs a million writes to answer
-   * a question `placementIndex` already answers by lookup is a column
-   * that should not be carried. It stays here because the placement cloud
-   * is an output in its own right and a placement with no station is not
-   * a placement.
+   * COPY. That used to be the whole pose library times the whole
+   * placement list and is now the box count, which is three orders
+   * smaller and still not a reason to carry it — `placementIndex` names
+   * the placement and everything about a placement is one lookup away.
+   * The rule did not change when the cost did. It stays here because the
+   * placement cloud is an output in its own right and a placement with no
+   * station is not a placement.
    */
   station: "stationW",
   /**
@@ -432,16 +434,21 @@ export const PLACEMENT = {
 
 /** The columns the pose library carries, one point per box of one pose. */
 const BOX = {
-  /** Which pose this box belongs to, matched against `PLACEMENT.pose`. */
+  /**
+   * Which pose this box belongs to — the SOURCE half of the copy's
+   * selection key, matched against `PLACEMENT.pose` by `copyToPoints`
+   * itself rather than by a filter downstream of it.
+   */
   pose: "boxPose",
   // THE KIT'S ROLE AND THICKNESS ARE NOT CARRIED, and the omission is the
   // same economics `writeBoxes` argues for `cover`. Both were on the pose
   // cloud and nothing read either. A source column rides EVERY copy the
-  // broadcast stamps — on the shipped vocabulary that is ~776,000 per lap
-  // — and `role` was a STRING, so each of those was a fresh intern on top
-  // of the write. `spawn.ts` derives the role it needs from the kit
-  // directly, which is one lookup instead of three quarters of a million
-  // writes to throw away.
+  // node emits, and `role` was a STRING, so each of those was a fresh
+  // intern on top of the write. Selection cut the copy count from
+  // ~776,000 a lap to ~2,000, which makes the saving smaller and the
+  // argument no weaker: `spawn.ts` derives the role it needs from the kit
+  // directly, and one lookup still beats a column written per box and
+  // thrown away.
   /** Index of the placement this box decomposes, written by `copyToPoints`. */
   placement: "placementIndex",
 } as const;
@@ -512,16 +519,18 @@ export interface GraphDressing {
   readonly rounds: number;
   readonly converged: boolean;
   /**
-   * How many copies the box build stamped before the filter, which is
-   * the pose library times the placement count.
+   * How many copies the box build actually emitted.
    *
-   * REPORTED BECAUSE IT IS THE COST OF A MISSING NODE CAPABILITY rather
-   * than a property of the dressing. `writeBoxes` argues it at length:
-   * `copyToPoints` stamps one source on every target, so a vocabulary
-   * where each asset has its own decomposition has to be broadcast whole
-   * and selected from. The ratio of this to `boxes.pointCount` is what
-   * a per-target source selector would save, and a number nobody prints
-   * is a number nobody notices growing.
+   * REPORTED BECAUSE IT USED TO BE THE COST OF A MISSING NODE CAPABILITY
+   * and is now the measurement that says the capability is doing its job.
+   * It was the pose library times the placement count — one source cloud
+   * stamped on every target, with the wrong copies filtered away — and
+   * `writeBoxes` records what that cost. With `copyToPoints`'
+   * `sourceGroupAttr`/`targetGroupAttr` this is the number of boxes the
+   * lap has, so the ratio of this to `boxes.pointCount` is 1 and stays
+   * there. A ratio that drifts off 1 means something started stamping
+   * again, which is exactly what a number nobody prints is nobody's job
+   * to notice.
    */
   readonly stamped: number;
   /** The graph itself, for the page's read-only picture. */
@@ -1693,40 +1702,48 @@ function writeCopyScale(
 }
 
 /**
- * The box build: every pose stamped on every placement, then the ones
- * that belong kept.
+ * The box build: each placement takes the boxes of the pose it recorded.
  *
- * WHY IT IS A BROADCAST AND A FILTER RATHER THAN A LOOKUP, which is the
- * one thing about this file that should not be copied without reading
- * this paragraph. `copyToPoints` composes exactly the transform
- * `buildBoxes` writes by hand —
- * `P = targetP + targetRot * (targetScale * sourceP)`, `rot = targetRot *
- * sourceRot`, `scale = targetScale * sourceScale` — with the target the
- * placement and the source its boxes. What it has no way to express is
- * that DIFFERENT TARGETS TAKE DIFFERENT SOURCES: the source pin is one
- * cloud, stamped on every target. A vocabulary in which each asset has
- * its own decomposition is exactly the case that needs per-target source
- * selection, and there is none — not on this node, and not through
- * `forEach`, whose non-iterated pins broadcast, so it cannot pair the k-th
- * pose with the k-th group of placements either.
+ * WHY IT IS A SELECTION RATHER THAN A LOOKUP, which is the one thing
+ * about this file that should not be copied without reading this
+ * paragraph. `copyToPoints` composes exactly the transform `buildBoxes`
+ * writes by hand — `P = targetP + targetRot * (targetScale * sourceP)`,
+ * `rot = targetRot * sourceRot`, `scale = targetScale * sourceScale` —
+ * with the target the placement and the source its boxes. What it could
+ * not express until `sourceGroupAttr`/`targetGroupAttr` shipped is that
+ * DIFFERENT TARGETS TAKE DIFFERENT SOURCES: the source pin was one cloud,
+ * stamped on every target, and neither `forEach` (whose non-iterated pins
+ * broadcast, so it cannot pair the k-th pose with the k-th group of
+ * placements) nor a pre-trimmed library on the host could say otherwise
+ * inside the graph. So the whole vocabulary was stamped and the wrong
+ * copies were filtered away.
  *
- * So the whole library is stamped and the wrong copies are dropped. It is
- * correct, and it is the right ORDER: `copyToPoints` lays its copies out
- * in contiguous per-target blocks and the filter preserves order, so the
- * survivors come out as placement, then that placement's own boxes, which
- * is `buildBoxes`' order exactly.
+ * The pair says it directly now: `boxPose` is what each library box IS
+ * and `placementPose` is what each placement ASKED FOR, and the node
+ * emits only the copies where those agree. The ORDER is unchanged, which
+ * is what made the swap safe — the copies still come out in contiguous
+ * per-target blocks, in source order within a block, which is
+ * `buildBoxes`' order exactly, and a copy's identity (its position bits
+ * and `hashCombine(sourceSeed, targetSeed)`) does not know whether the
+ * copies beside it were emitted.
  *
- * WHAT IT COSTS, MEASURED. `poses x placements` intermediate points where
- * the answer is a couple of thousand: on the shipped vocabulary, 2200
- * library boxes times about 350 placements is 776,000 copies stamped to
- * keep 1,900 — one survivor in four hundred, at about 140ms a lap. The
- * number is stated here rather than hidden behind a pre-trimmed library,
- * because it IS the finding: trimming the library on the host is the
- * per-target selection this node is missing, done by hand and one level
- * up. A `sourceIndexAttr` on `copyToPoints` — take the source point (or
- * primitive) the target names, instead of all of them — would make this
- * stage linear in the answer. Until there is one, a cell of level 1 pays
- * for every asset in the vocabulary it does not use.
+ * WHAT IT BOUGHT, MEASURED — the same two variants cooked in ONE process
+ * over the same pose cloud and the same settled placement list, ten
+ * rounds each, interleaved A/B/A/B with a fresh graph per round so
+ * nothing was memoised. Seed 1: 2,200 library boxes, 354 placements.
+ *
+ *   broadcast + filter   778,800 intermediate points   98ms
+ *   selection                1,984 points               0.8ms
+ *
+ * Both produce the same 1,984 boxes. The broadcast built 392 copies for
+ * every one it kept; the selection builds the 1,984 and stops, at about
+ * 1/120th of the time — and the whole level-1 dress cook fell from 651ms
+ * to 193ms over four laps with nothing else changed. The stage is now
+ * LINEAR IN THE ANSWER rather than in the product of the vocabulary and
+ * the placement list, which is what a cell was paying for: every asset in
+ * the kit it does not use. The numbers stay here rather than in a commit
+ * message because the ratio is the whole argument for the node change,
+ * and a ratio nobody prints is a ratio nobody notices coming back.
  */
 function writeBoxes(
   g: Graph,
@@ -1737,42 +1754,44 @@ function writeBoxes(
   const copies = g.add(
     copyToPoints,
     {
-      // ONE CARRIED COLUMN, AND ONLY BECAUSE THE FILTER CANNOT WORK
-      // WITHOUT IT. `cover` was here too, on the reasoning that a box has
-      // to know whether it is structure or scenery before an asset map can
-      // name it — and that is true and is still not a reason to carry it,
-      // for the reason `PLACEMENT.station` is not carried either: it is a
-      // fact about the PLACEMENT, `placementIndex` names the placement, and
-      // a column written once per copy costs a write per copy. Three
-      // quarters of a million of them per lap to save a lookup is the
-      // wrong trade, and `boxAssetId` can take the same route every other
-      // per-placement fact takes.
-      targetNames: [PLACEMENT.pose],
+      // NO CARRIED COLUMNS AT ALL NOW, and dropping the last one is the
+      // second thing selection bought. `PLACEMENT.pose` was carried only
+      // because the filter's predicate needed both sides of the
+      // comparison on the same cloud; the node makes that comparison
+      // itself and writes nothing for it. `cover` was proposed here too,
+      // on the reasoning that a box has to know whether it is structure or
+      // scenery before an asset map can name it — and that is true and is
+      // still not a reason to carry it, for the reason `PLACEMENT.station`
+      // is not carried either: it is a fact about the PLACEMENT,
+      // `placementIndex` names the placement, and a column written once
+      // per copy costs a write per copy.
+      //
       // WHICH PLACEMENT A BOX BELONGS TO, written by the node that
       // already knows. `spawn.ts` argues that the placement is the
       // granularity real art binds to and the boxes are a decomposition
       // of it; a decomposition that cannot say what it decomposed is a
       // cloud. It is also what lets anything downstream regroup the boxes
       // of one object — `pointsToPath`'s `groupAttr` and
-      // `partitionByAttribute` both key on exactly this column.
+      // `partitionByAttribute` both key on exactly this column. Under
+      // selection a placement whose pose the library does not carry
+      // simply contributes no boxes and its index never appears, which is
+      // the empty block the node documents rather than a hole to guard.
       targetIndexAttr: BOX.placement,
+      // THE SELECTION. Both columns hold whole-number pose ids in f32,
+      // which the node accepts and `pointsToPath`'s `groupAttr` accepts
+      // for the same reason: ids run to a few hundred, every integer below
+      // 2^24 is exact in f32, so this is an identity test and not a
+      // tolerance. A fractional value in either column is refused by name
+      // rather than grouped.
+      sourceGroupAttr: BOX.pose,
+      targetGroupAttr: PLACEMENT.pose,
       topology: "drop",
     },
     `${tag}_stamp`,
   );
   g.connect(poses, "out", copies, "source");
   g.connect(placements, "out", copies, "target");
-
-  // Exact equality on two small integers, which is the one comparison f32
-  // makes safe: pose ids run to a few hundred and every integer below
-  // 2^24 is exact, so this is an identity test rather than a tolerance.
-  const mine = g.add(
-    filterByExpression,
-    { predicate: eq(attribute(BOX.pose), attribute(PLACEMENT.pose)) },
-    `${tag}_ownBoxes`,
-  );
-  g.connect(copies, "out", mine, "in");
-  return mine;
+  return copies;
 }
 
 /**
@@ -1900,15 +1919,18 @@ export function buildDressGraph(input: DressGraphInput): Graph {
 }
 
 /**
- * The graph, and the one number about it that is not visible from outside.
+ * The graph.
  *
- * `libraryBoxes` is how many points the copy's SOURCE carries, and it is
- * reported because the broadcast in {@link writeBoxes} costs that times
- * the placement count in intermediate points. A cost that is a product of
- * two numbers, only one of which anyone can see, is a cost nobody
- * measures — so the hidden one comes out.
+ * IT USED TO REPORT A SECOND NUMBER — `libraryBoxes`, how many points the
+ * copy's SOURCE carries — because the broadcast in {@link writeBoxes}
+ * cost that TIMES the placement count in intermediate points, and a cost
+ * that is a product of two numbers only one of which anyone can see is a
+ * cost nobody measures. Per-target source selection made the product stop
+ * being the cost, so the number stopped being worth publishing: what the
+ * stage emits is now the box count, which `GraphDressing.stamped` reports
+ * off the output itself rather than deriving from two inputs.
  */
-function assemble(input: DressGraphInput): { graph: Graph; libraryBoxes: number } {
+function assemble(input: DressGraphInput): { graph: Graph } {
   const { kit, lap, frames, placements, seed, immovable } = input;
   const g = new Graph(seed);
 
@@ -1976,13 +1998,13 @@ function assemble(input: DressGraphInput): { graph: Graph; libraryBoxes: number 
   g.output(repair, "rounds", DRESS_OUTPUTS.rounds);
   g.output(repair, "converged", DRESS_OUTPUTS.converged);
   g.output(coverage, "out", DRESS_OUTPUTS.coverage);
-  return { graph: g, libraryBoxes: library.pointCount };
+  return { graph: g };
 }
 
 /** The one async thing here: build, cook, and read the columns back. */
 export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDressing> {
   const t0 = performance.now();
-  const { graph, libraryBoxes } = assemble(input);
+  const { graph } = assemble(input);
   const out = (await cook(graph)).outputs;
 
   const boxes = requireGeo(out[DRESS_OUTPUTS.boxes], DRESS_OUTPUTS.boxes);
@@ -2047,7 +2069,7 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
     rounds: requireNumber(out[DRESS_OUTPUTS.rounds], DRESS_OUTPUTS.rounds),
     converged: requireNumber(out[DRESS_OUTPUTS.converged], DRESS_OUTPUTS.converged) !== 0,
     lowered,
-    stamped: libraryBoxes * placements.pointCount,
+    stamped: boxes.pointCount,
     graph,
     cookMs: performance.now() - t0,
   };
