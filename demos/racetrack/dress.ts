@@ -666,7 +666,18 @@ export function dressLap(
     placements = mix.placements.filter((p): p is StationedPlacement => p !== undefined);
     mixMoves += mix.moves;
 
-    if (process.env.ROAD_TRACE) {
+    // GUARDED BECAUSE THIS FILE RUNS IN A BROWSER TOO, and `process` is
+    // not defined there. The trace is a Node-side aid -- it is read when a
+    // test or a script wants the per-round repair counts -- but `dressLap`
+    // is on the page's critical path, so a bare `process.env` here is a
+    // ReferenceError that takes the demo down before it draws anything.
+    //
+    // It survived a long time because nothing that is CHECKED ever hit it:
+    // the production build rewrites `process.env` to `{}`, so the captured
+    // screenshots, the published pages and the tests all take a dead
+    // branch, and only `npm run examples` -- the dev server, which does no
+    // such rewrite -- actually evaluates the identifier.
+    if (typeof process !== "undefined" && process.env.ROAD_TRACE) {
       console.log(
         `  round ${rounds}: corridor=${fixedThisRound} cull=${cull.blocking} cover+=${addedCover} ` +
           `trim=${reduce.moves} cov=${cov.moves} L4=${marks.moves} L5=${edges.moves} mix=${mix.moves}`,
