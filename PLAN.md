@@ -177,6 +177,54 @@ already what `placementCloudInTrackFrame` and `poseLibrary` do for the
 five ported stages, and it is the pattern the rest would follow: the kit
 is 229 assets x ~16 numeric columns, which is a small cloud.
 
+### The station process as a graph -- the shape the three probes imply, 2026-08-25
+
+Not built. Written down because it FOLLOWS from the corrected gaps above
+and would otherwise be re-derived from scratch. `makeStationsDetailed`
+(`demos/racetrack/stations.ts:180-225`) is Neyman-Scott: supers uniform on
+the lap, clusters gaussian about each super, instances gaussian about a
+cluster drawn uniformly WITH REPLACEMENT, plus a uniform background
+fraction, then a coverage repair. `FITTED`: density 0.95, superRate
+0.0493, superSpreadW 14.95, clustersPerSuper 7.92, clusterSpreadW 4.99,
+background 0.117.
+
+EVERY GENERATIVE STEP TAKES THE SAME SHAPE, forced by the one thing that
+IS still missing: `randomField` is keyed on an existing point and no
+`count` param is field-capable, so nothing can size a generator from a
+computed number. Over-generate a fixed cloud, then cut it to a budget
+computed in-graph with `filterByExpression` against `index()`. That is the
+pattern gap 2's probe measured (exactly 50 survivors from a computed
+budget) and it applies three times here:
+
+1. **Supers.** Over-generate a fixed maximum, cut to
+   `round(superRate * lapLength)` -- the length coming off
+   `pathResample.lengthAttr` on the primitive domain, promoted.
+2. **Clusters.** `copyToPoints` a fixed MAX children per super, offset by
+   a guarded gaussian scaled by `superSpreadW`, then cut per parent with
+   `lt(index(), k)` where `k = floor(clustersPerSuper + u)` is the
+   stochastic rounding the TypeScript does -- this is how a per-parent
+   VARIABLE child count is spelled when the library has no such thing.
+3. **Instances.** "Pick a cluster uniformly with replacement" is gap 4's
+   recipe with equal weights: copyToPoints the cluster table onto the
+   instance cloud, `pointsToPath` + `pathScan`, bracket against `u*total`.
+   A uniform pick could also be `floor(u * clusterCount)` plus a gather,
+   which is cheaper and worth trying FIRST -- the bracket is only needed
+   when the weights are unequal.
+4. **Background** is a plain uniform draw over the lap, cut to
+   `round(total * background)`.
+5. **Wrap** is `mod lapLength`. **Sorting** is not needed as a step: what
+   wants order downstream gets it from `pointsToPath`'s `orderAttr`.
+6. **`enforceCoverage`** is an iterative move-the-donor loop and belongs
+   in a `repeatUntil`, which now exists -- but check the admission test
+   first: it moves the donor whose NEAREST NEIGHBOUR is closest anywhere
+   on the lap, which is lap-global, and lap-global is fine on the
+   unbounded level and only there.
+
+The open question is whether the fixed maxima can be chosen without making
+the over-generation dominate. Supers are ~17 on a 350W lap and clusters
+~8 each, so a max of 2x on both is ~270 intermediate points -- nothing.
+The instance pick is the only step where N x R could bite.
+
 ### What a windowed per-sector repair would cost, measured 2026-08-24
 
 The racetrack now streams its dressing on `cellMode: "path"` sectors, and
