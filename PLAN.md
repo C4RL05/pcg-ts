@@ -35,6 +35,72 @@ existed, so the discipline is to let the consumer specify the mechanism
 rather than guess at it. Each entry carries the analysis, because
 re-deriving it is the expensive part.
 
+### Killing the racetrack's TypeScript prelude: four library gaps, scoped 2026-08-25
+
+`demos/racetrack/levels.ts` records the honest limit of the streamed
+racetrack: its graph is BUILT from a cooked `Lap`, so the World cannot be
+constructed until the road has cooked and the placement list is decided. A
+kilometre of track pays that whole rule pass at load instead of streaming
+it. This is what it would actually take, surveyed before starting so the
+size is not discovered halfway.
+
+**The size.** The prelude is `dressLap` and everything it calls:
+`dress.ts, assets.ts, legibility.ts, stations.ts, tunnels.ts,
+enclosure.ts, zones.ts, falseEdges.ts, sightline.ts, corners.ts,
+tolerance.ts, rand.ts` = 5,362 lines, ~2,393 non-comment. Deducting
+test-only minimality gates leaves **~2,240 code lines** to become nodes or
+bound data. Of those, ~900 are pure arithmetic (and `dressGraph.ts`
+already ports exactly those five stages), ~700 are set/map/sort/fixed-point
+work with no node story, and ~400 are weighted draws over the measured
+kit.
+
+**AND IT ONLY PAYS OFF AT THE END.** Porting a stage shrinks the prelude
+but does not remove it: the remaining lap-global repairs operate on the
+placement list, so the structural constraint -- a graph built from cooked
+data -- survives until the LAST stage lands. The return on this work is
+the library capabilities below, not an early win in the demo.
+
+**Gap 1 -- nothing samples a path at arbitrary arc positions.**
+`pathPointAt` slides the path's OWN points: its output carries the input
+path's point count and topology, so it cannot answer "an N-point cloud of
+stations against an M-point path". `writeCurveFrame` evaluates only at a
+path's existing points, and its normal is a transported one with seam
+holonomy rather than the road's banked `up`. The demo's `frameLookup` is
+this operation in TypeScript. SHIPPED 2026-08-25 as `transferAlongPath`
+-- not "gather", because the primitive `transform/gather-on-path` already
+owns that phrase for very nearly the opposite operation.
+
+**Gap 2 -- no in-cook global reduction.** Already recorded above for
+another reason, and it bites here too: the station process wants
+`round(density * lapW)`, an EXACT budget from a lap-scale total, and every
+share, mix and budget rule wants the same shape. Nothing that normalises
+against a total can close inside one cook.
+
+**Gap 3 -- no gaussian field, and no clustered point process.**
+`randomField` is uniform [0,1). The station process is Neyman-Scott
+shaped: supers uniform on the lap, clusters gaussian about each super,
+instances gaussian about a cluster drawn uniformly WITH replacement (the
+resulting size distribution is most of what the curve is made of), plus a
+uniform background fraction. There is no scatter along a path, no
+arc-length scatter, and no per-parent variable child count. Box-Muller is
+spellable in the grammar, which has `log`, `cos` and `sqrt`.
+
+**Gap 4 -- `setAttribute.weights` carries a STATIC distribution.** The
+draw is per point; the table and its weights are graph params. There is no
+per-point weights column, so a mix cannot depend on curvature at the
+point, and the output is an interned string rather than a numeric index.
+Asset choice needs exactly the thing it does not offer: `affinity` is a
+4-key record read as `affinity[bucketOf(radius)]`.
+
+**The data half.** `DataItem` is `GeometryItem | ValueItem | InstancesItem`
+and `DataValue` is `number | readonly number[] | string | boolean`. There
+is no record, map or ragged-list item kind, so every kit structure --
+`Record<CurvatureBucket, number>`, `{median,p10,p90}`, `KitBox[][]` -- has
+to be flattened to attribute columns on a geometry item first. That is
+already what `placementCloudInTrackFrame` and `poseLibrary` do for the
+five ported stages, and it is the pattern the rest would follow: the kit
+is 229 assets x ~16 numeric columns, which is a small cloud.
+
 ### What a windowed per-sector repair would cost, measured 2026-08-24
 
 The racetrack now streams its dressing on `cellMode: "path"` sectors, and

@@ -28,7 +28,13 @@ const ROOT_SURFACE = [
   "extrudePolygon", "fbm", "fieldFromJson", "fieldToJson", "filterByAttribute",
   "filterByBounds", "filterByDensity", "filterByExpression", "filterByTag",
   "filterPrimitivesByAttribute", "filterPrimitivesByBounds", "firstGeometry", "floor", "forEachNode", "fract",
-  "fraction", "ge",
+  "fraction",
+  // Interpolates a path's point attributes onto an INDEPENDENT cloud at
+  // arbitrary arc positions — N stations against an M-point path, which
+  // pathPointAt cannot answer because its output carries the path's own
+  // count and topology.
+  "transferAlongPath",
+  "ge",
   "getFieldSpec",
   "getNodeType", "getRegisteredSubgraph", "graphParamBindings", "getSubgraphPlumbing", "getSubgraphSpec", "gt",
   "hasNodeType", "hasRegisteredSubgraph", "hashCombine", "hashFloat", "hashString",

@@ -2952,6 +2952,106 @@
         ]
       }
     },
+    "basics-stations-on-a-path.json": {
+      "outputs": {
+        "markers": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 30,
+            "batches": [
+              {
+                "assetId": "lamp",
+                "count": 30,
+                "translation": {
+                  "min": [
+                    -15.9383,
+                    0,
+                    -15.9389
+                  ],
+                  "max": [
+                    15.9553,
+                    0,
+                    14.2442
+                  ],
+                  "mean": [
+                    3.6182,
+                    0,
+                    -1.9149
+                  ]
+                },
+                "scale": {
+                  "min": [
+                    1.8005,
+                    1.8005,
+                    1.8005
+                  ],
+                  "max": [
+                    4.1966,
+                    4.1966,
+                    4.1966
+                  ],
+                  "mean": [
+                    3.21,
+                    3.21,
+                    3.21
+                  ]
+                },
+                "rotation": {
+                  "min": 0.0569,
+                  "max": 3.0629,
+                  "mean": 1.2869
+                }
+              }
+            ]
+          }
+        ],
+        "road": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 64,
+              "vertex": 65,
+              "primitive": 1,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "roadWidth:f32"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -16,
+                0,
+                -16
+              ],
+              "max": [
+                16,
+                0,
+                16
+              ]
+            }
+          }
+        ]
+      }
+    },
     "basics-subgraph-exposed-params.json": {
       "outputs": {
         "points": [
