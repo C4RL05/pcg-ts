@@ -487,6 +487,110 @@ describe("transferByIndex: a non-finite index", () => {
   });
 });
 
+/**
+ * The same refusal, asked of a PLAIN value rather than of a field.
+ *
+ * These are a separate block because they exercise a DIFFERENT GUARD. The
+ * column check `resolveOn` applies is gated on `isField`, so it only ever
+ * sees what a field produced; a plain number never becomes a field and
+ * used to reach the walk untouched. What happened then was not an error
+ * but a plausible-looking cook: `Math.trunc(NaN)` is NaN, NaN fails the
+ * `< 0` and `>= m` tests that every one of the three outOfRange settings
+ * is written in terms of, so no branch fired, the source was read at
+ * `[NaN]` — `undefined`, which stores as NaN in an f32 column and as 0 in
+ * an i32, u32 or bool one — and the point was then FLAGGED AS A HIT with
+ * a miss count of zero. Every mode is covered because every mode was
+ * wrong, and each in its own way.
+ */
+describe("transferByIndex: a plain non-finite index", () => {
+  const MODES = ["clamp", "wrap", "miss"] as const;
+
+  for (const outOfRange of MODES) {
+    it(`refuses a plain NaN under "${outOfRange}" rather than reading nothing and calling it a hit`, async () => {
+      const msg = await rejection(
+        gathering(picks([0, 1]), TABLE(), {
+          attributes: ["v"],
+          index: Number.NaN,
+          outOfRange,
+          hitAttr: "__hit",
+          missCountAttr: "__missed",
+        }),
+      );
+      expect(msg).toContain('transferByIndex: param "index" is NaN');
+      expect(msg).toContain("finite number");
+    });
+
+    it(`refuses a plain +Infinity under "${outOfRange}"`, async () => {
+      // Under 'clamp' this one used to look entirely reasonable — it read
+      // the LAST source point — which is why it is refused rather than
+      // given the reading one of the three settings happens to have for
+      // it. The three do not agree with each other, so none of them is
+      // the meaning of an infinite index.
+      const msg = await rejection(
+        gathering(picks([0, 1]), TABLE(), {
+          attributes: ["v"],
+          index: Number.POSITIVE_INFINITY,
+          outOfRange,
+        }),
+      );
+      expect(msg).toContain('transferByIndex: param "index" is Infinity');
+    });
+
+    it(`refuses a plain -Infinity under "${outOfRange}"`, async () => {
+      const msg = await rejection(
+        gathering(picks([0, 1]), TABLE(), {
+          attributes: ["v"],
+          index: Number.NEGATIVE_INFINITY,
+          outOfRange,
+        }),
+      );
+      expect(msg).toContain('transferByIndex: param "index" is -Infinity');
+    });
+  }
+
+  it("refuses a NaN written as a one-element tuple, the other plain spelling", async () => {
+    // `graph/params.ts` admits a `number[]` for a field-capable scalar, so
+    // this is a legal way to write the same broken constant and is still
+    // not a Field. A `typeof === "number"` test walks straight past it.
+    const msg = await rejection(
+      gathering(picks([0, 1]), TABLE(), { attributes: ["v"], index: [Number.NaN] }),
+    );
+    expect(msg).toContain('transferByIndex: param "index" is NaN');
+  });
+
+  it("names the offending component when a tuple index is broken in a later lane", async () => {
+    const msg = await rejection(
+      gathering(picks([0, 1]), TABLE(), { attributes: ["v"], index: [0, Number.NaN] }),
+    );
+    expect(msg).toContain('transferByIndex: param "index" (component 1) is NaN');
+  });
+
+  it("leaves a FIELD to the column guard, which answers in its own words", async () => {
+    // The plain check returns early for a Field. The two guards must both
+    // still be reachable, and the wording is what says which one answered.
+    const dst = picks([0, 0]);
+    dst.attrs.point.require("idx").set(1, Number.NaN);
+    const msg = await rejection(gathering(dst, TABLE(), { attributes: ["v"] }));
+    expect(msg).toContain('transferByIndex: param "index" resolved to NaN');
+    expect(msg).toContain("A FIELD param is not range-checked");
+    expect(msg).not.toContain("is NaN, which is not a usable value");
+  });
+
+  it("a plain FINITE index is untouched by the new check", async () => {
+    // The guard must refuse only what is not a number: the broadcast case
+    // this param documents still has to work, including a negative one the
+    // range policy is supposed to read.
+    const out = await gather(picks([9, 9]), TABLE(), { attributes: ["v"], index: -1 });
+    expect(col(out, "v")).toEqual([0, 0]);
+    const wrapped = await gather(picks([9, 9]), TABLE(), {
+      attributes: ["v"],
+      index: -1,
+      outOfRange: "wrap",
+    });
+    expect(col(wrapped, "v")).toEqual([40, 40]);
+  });
+});
+
 describe("transferByIndex: determinism", () => {
   it("gives the same answer twice", async () => {
     const a = await gather(picks([4, 0, 2, 2]), TABLE(), { attributes: ["v"] });

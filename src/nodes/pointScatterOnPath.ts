@@ -65,6 +65,7 @@ import {
   carryPrimitiveAttributes,
   locateOnArcLength,
   polylineArcTables,
+  requireFinitePlainParam,
   requireGeometry,
   requireReportSlot,
   requireScalarColumn,
@@ -116,7 +117,7 @@ export const pointScatterOnPath = standardNode<PointScatterOnPathParams>({
       type: "string",
       default: "station",
       description:
-        "Name of the f32 POINT attribute (tuple 1) each emitted point's ARC POSITION is written to, in WORLD UNITS along its own polyline — the same coordinate pathPointAt's 'distance' mode reads, arcTile's `startAttr` carries, and transferAlongPath's `arcAttr` gathers at, which is what makes this the column you hand straight to that node to read the path's other attributes here. Always written; there is no empty spelling, because a scattered point whose position along the path is unrecoverable is a point nothing downstream can ask a second question about, and recovering it from P would mean measuring the path a second time. THE UNITS ARE THE TRAP, not the name: a track measured in half-widths, a route in fractions of the whole and a scan in samples are all called a station by somebody, and this column is none of those — it is metres (or whatever unit the positions are in) from the start of that polyline. Divide by the path's own length with setAttribute for a fraction. The shape is this node's to pick (f32, tuple 1), so a name already on the OUTPUT's point domain under a different shape is REFUSED rather than deleted and re-added — \"P\" and \"seed\" are the two that reach that refusal, since the emitted cloud is a standard one — and a name of the same shape (\"density\", say) is RESET, which would overwrite a standard column with an arc length. Give it a name of its own. Must be non-empty.",
+        "Name of the f32 POINT attribute (tuple 1) each emitted point's ARC POSITION is written to, in WORLD UNITS along its own polyline — the same coordinate pathPointAt's 'distance' mode reads, arcTile's `startAttr` carries, and transferAlongPath's `arcAttr` gathers at, which is what makes this the column you hand straight to that node to read the path's other attributes here. Always written; there is no empty spelling, because a scattered point whose position along the path is unrecoverable is a point nothing downstream can ask a second question about, and recovering it from P would mean measuring the path a second time. THE UNITS ARE THE TRAP, not the name: a track measured in half-widths, a route in fractions of the whole and a scan in samples are all called a station by somebody, and this column is none of those — it is metres (or whatever unit the positions are in) from the start of that polyline. Divide by the path's own length with setAttribute for a fraction. The shape is this node's to pick (f32, tuple 1), so a name already on the OUTPUT's point domain under a different shape is REFUSED rather than deleted and re-added — SEVEN of the eight columns a standard cloud starts with reach that refusal, because their shapes differ from this one: P, scale, boundsMin and boundsMax (f32x3), rot and color (f32x4), and seed (u32). \"density\" is the eighth and the exception — it is f32 tuple 1, exactly this column's shape, so naming it passes the shape check and is RESET rather than refused, silently overwriting a standard column with an arc length. Give it a name of its own. Must be non-empty.",
     },
     seed: {
       type: "u32",
@@ -137,12 +138,14 @@ export const pointScatterOnPath = standardNode<PointScatterOnPathParams>({
     // A PLAIN count is checked here, before the geometry is even looked
     // at, the way pathResample checks a plain spacing. A FIELD has no
     // number to check yet: `resolveOn` guards its column below and names
-    // the param when it does.
-    if (typeof params.count === "number" && !Number.isFinite(params.count)) {
-      throw new Error(
-        `pointScatterOnPath: param "count" is ${params.count}, which is not a number of points; it must be a finite number >= 0 (it is rounded to nearest and clamped at 0). Write a plain count, or a field bounded with max(<expr>, 0).`,
-      );
-    }
+    // the param when it does. The shared helper is what catches the
+    // `[NaN]` tuple spelling a `typeof === "number"` test walks past.
+    requireFinitePlainParam(
+      params.count,
+      "pointScatterOnPath",
+      "count",
+      "A count must be a finite number >= 0 (it is rounded to nearest and clamped at 0). Write a plain count, or bound the expression with max(<expr>, 0).",
+    );
 
     const path = requireGeometry(inputs, "path", "pointScatterOnPath");
     // Refuses an empty input, a cloud with no topology, and a "path" of a

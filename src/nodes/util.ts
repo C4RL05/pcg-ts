@@ -1527,3 +1527,53 @@ export const TRANSFER_BOOKKEEPING: ReadonlySet<string> = new Set([
   "color",
   "seed",
 ]);
+
+
+/**
+ * Refuse a PLAIN non-finite value on a field-capable scalar param, before
+ * the node looks at its geometry.
+ *
+ * WHY THIS IS NOT ALREADY COVERED BY `resolveOn`. That guard is gated on
+ * `isField` — it checks the COLUMN a field produced, and a plain number
+ * never becomes one. So a field-capable param has two doors and only one
+ * of them was watched: `constant(NaN)` is refused and a bare `NaN` walks
+ * through to be used as a count, an index or a spacing. What arrives
+ * downstream is not an error but a plausible-looking cook — a typed array
+ * read at `[NaN]`, which is `undefined` widened to NaN, or a `resize` that
+ * throws from inside the data layer naming neither the node nor the param
+ * the author actually set.
+ *
+ * BOTH SPELLINGS OF A PLAIN VALUE ARE CHECKED, which is the part that is
+ * easy to miss: `graph/params.ts` admits a `number[]` for a field-capable
+ * scalar, so `[NaN]` is a legal way to write the same broken constant and
+ * a `typeof === "number"` test sails straight past it. Every element is
+ * checked rather than the first, because a tuple spelling of a vec param
+ * can be broken in any lane.
+ *
+ * Fields are left alone on purpose: there is no number to check yet, and
+ * `resolveOn` names the param when their column arrives.
+ *
+ * @param fix - appended to the message; say what a correct value looks
+ *   like and how to bound an expression that might produce this one.
+ */
+export function requireFinitePlainParam(
+  value: FieldLike,
+  nodeType: string,
+  param: string,
+  fix: string,
+): void {
+  if (isField(value)) return;
+  const lanes = typeof value === "number" ? [value] : Array.isArray(value) ? value : null;
+  if (lanes === null) return;
+  for (let i = 0; i < lanes.length; i++) {
+    const v = lanes[i];
+    if (typeof v === "number" && !Number.isFinite(v)) {
+      // The lane is named only when there IS more than one, so the common
+      // scalar case reads as a sentence rather than as an array index.
+      const where = lanes.length > 1 ? ` (component ${i})` : "";
+      throw new Error(
+        `${nodeType}: param "${param}"${where} is ${v}, which is not a usable value. ${fix}`,
+      );
+    }
+  }
+}

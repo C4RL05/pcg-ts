@@ -11,11 +11,12 @@
 import { describe, expect, it } from "vitest";
 import {
   Geometry,
+  PRIMTYPE_ATTR,
   createPointCloud,
   createPolyline,
   setPolylineTopology,
 } from "../data/index.js";
-import { attribute, constant, div, mul } from "../fields/index.js";
+import { attribute, constant, div, index as indexField, mul } from "../fields/index.js";
 import { makeGeometryItem } from "../graph/index.js";
 import { hashCombine } from "../random/index.js";
 import { pointScatterOnPath } from "./pointScatterOnPath.js";
@@ -181,6 +182,72 @@ function withPrimValue(geo: Geometry, name: string, values: readonly number[]): 
   return geo;
 }
 
+/**
+ * THE ONE FIXTURE WHERE A PATH'S PRIMITIVE INDEX AND ITS POSITION AMONG
+ * THE POLYLINES ARE DIFFERENT NUMBERS, and the only kind of input that
+ * can tell the two apart.
+ *
+ * `count` resolves on the input's PRIMITIVE domain, so the resolved
+ * column has one entry per PRIMITIVE — including the primitives this node
+ * skips. The arc tables, by contrast, hold only the usable polylines, so
+ * the Nth table is not in general the Nth primitive. In EVERY OTHER
+ * FIXTURE IN THIS FILE every primitive is a polyline, which makes the two
+ * numbers equal for every path and hides the difference completely: a
+ * count read at the wrong one of them passes all of those tests. This
+ * geometry is deliberately mixed so that it cannot.
+ *
+ * `skip` decides WHY primitive 0 is not a path — either it has a single
+ * vertex (the vertex-count filter) or it is tagged `poly` (the primtype
+ * filter). Both reasons must produce the same answer.
+ *
+ * Primitive 0 is not a path. Primitive 1 is a 10-unit road at z = 10 and
+ * primitive 2 a 40-unit road at z = 20, so a point's own z says which
+ * road it landed on. The per-primitive `cnt` column is [100, 3, 9]: read
+ * through the PRIMITIVE index the two roads take 3 and 9 points, and read
+ * through the polyline ordinal they would take 100 and 3.
+ */
+function stubThenTwoRoads(skip: "one-vertex" | "poly" = "one-vertex"): Geometry {
+  const oneVertex = skip === "one-vertex";
+  // The `poly` spelling needs three vertices to be a triangle rather than
+  // a degenerate one; the one-vertex spelling needs exactly one.
+  const lead = oneVertex ? 1 : 3;
+  const geo = createPointCloud(lead + 4);
+  const P = geo.attrs.point.require("P");
+  P.setTuple(0, [0, 0, 0]);
+  if (!oneVertex) {
+    P.setTuple(1, [1, 0, 0]);
+    P.setTuple(2, [0, 0, 1]);
+  }
+  P.setTuple(lead, [0, 0, 10]);
+  P.setTuple(lead + 1, [10, 0, 10]);
+  P.setTuple(lead + 2, [0, 0, 20]);
+  P.setTuple(lead + 3, [40, 0, 20]);
+  const verts = Uint32Array.from({ length: lead + 4 }, (_, k) => k);
+  geo.setTopology(
+    verts,
+    Uint32Array.of(0, lead, lead + 2),
+    Uint32Array.of(lead, 2, 2),
+  );
+  if (!oneVertex) {
+    const primType = geo.attrs.primitive.add(PRIMTYPE_ATTR, "string", 1, "polyline");
+    primType.setString(0, "poly");
+    primType.setString(1, "polyline");
+    primType.setString(2, "polyline");
+  }
+  const cnt = geo.attrs.primitive.add("cnt", "f32", 1, 0);
+  cnt.set(0, 100);
+  cnt.set(1, 3);
+  cnt.set(2, 9);
+  return geo;
+}
+
+/** Each emitted point's z, which names the road it landed on. */
+function zOf(geo: Geometry): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < geo.pointCount; i++) out.push(pointAt(geo, i)[2]);
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 
 describe("pointScatterOnPath: what comes out", () => {
@@ -324,6 +391,47 @@ describe("pointScatterOnPath: the count field", () => {
     expect(msg).toContain('pointScatterOnPath: param "count" is NaN');
   });
 
+  // A PLAIN value has two legal spellings on a field-capable scalar param —
+  // a number and a one-element tuple (`graph/params.ts` admits both) — and
+  // NEITHER is a Field, so `resolveOn`'s guard never sees them. The tuple
+  // spelling used to walk past a `typeof === "number"` check, reach
+  // `Math.round(NaN)`, defeat the cap (`NaN > cap` is false), and die in
+  // `AttributeSet.resize` with a message naming neither this node nor the
+  // param the author actually set.
+  it("refuses a NaN count written as a one-element tuple, in the NODE's own words", async () => {
+    const msg = await rejection(scatter(OPEN(), { count: [Number.NaN] }));
+    expect(msg).toContain('pointScatterOnPath: param "count" is NaN');
+    expect(msg).toContain("finite number >= 0");
+    // The data layer's own refusal, which names no node and no param.
+    expect(msg).not.toContain("resize:");
+    expect(msg).not.toContain("non-negative integer");
+  });
+
+  it("refuses an infinite count written as a one-element tuple", async () => {
+    // This one used to be caught, but by the ALLOCATION CAP further down,
+    // which reports it as a population too large rather than as a value
+    // that is not a population at all.
+    const msg = await rejection(scatter(OPEN(), { count: [Number.POSITIVE_INFINITY] }));
+    expect(msg).toContain('pointScatterOnPath: param "count" is Infinity');
+    expect(msg).not.toContain("1048576");
+  });
+
+  it("names the offending component when a tuple count is broken in a later lane", async () => {
+    // Every lane is checked rather than the first, so a tuple whose first
+    // number is fine does not hide a broken one behind it.
+    const msg = await rejection(scatter(OPEN(), { count: [4, Number.NaN, 4] }));
+    expect(msg).toContain('pointScatterOnPath: param "count" (component 1) is NaN');
+  });
+
+  it("still refuses a NaN a FIELD produced, through the field guard and not the plain one", async () => {
+    // The plain check returns early for a Field, so the column guard must
+    // still be the thing that answers here — its wording is the proof.
+    const msg = await rejection(scatter(OPEN(), { count: div(constant(0), constant(0)) }));
+    expect(msg).toContain('pointScatterOnPath: param "count" resolved to NaN');
+    expect(msg).toContain("A FIELD param is not range-checked");
+    expect(msg).not.toContain("is NaN, which is not a usable value");
+  });
+
   it("refuses a count field that resolves wider than one number per path", async () => {
     const msg = await rejection(scatter(twoRoads(), { count: constant([2, 2, 2]) }));
     expect(msg).toContain('param "count" must evaluate to ONE number per path');
@@ -334,6 +442,51 @@ describe("pointScatterOnPath: the count field", () => {
     expect(msg).toContain("pointScatterOnPath");
     expect(msg).toContain("1048576");
     expect(msg).toContain("primitive 0");
+  });
+});
+
+describe("pointScatterOnPath: which path a resolved count belongs to", () => {
+  // `count` lands on the PRIMITIVE domain, so the resolved column is
+  // indexed by primitive index — never by a path's position among the
+  // polylines, which is a different number the moment the input holds a
+  // primitive that is not a path. See `stubThenTwoRoads`: an all-polyline
+  // input makes the two numbers equal and cannot distinguish them.
+  for (const skip of ["one-vertex", "poly"] as const) {
+    it(`reads each path's count at its PRIMITIVE index, past a leading ${skip} primitive`, async () => {
+      const out = await scatter(stubThenTwoRoads(skip), { count: attribute("cnt") });
+      // 3 + 9, the counts at primitives 1 and 2. Reading the column at the
+      // polyline ORDINAL instead would take cnt[0] and cnt[1] — 100 and 3.
+      expect(out.pointCount).toBe(12);
+      expect(zOf(out)).toEqual([10, 10, 10, ...Array<number>(9).fill(20)]);
+    });
+
+    it(`carries the right primitive's own attributes past a leading ${skip} primitive`, async () => {
+      // The same indexing question asked of the carry rather than of the
+      // count: each point must hold ITS road's `cnt`, not the one belonging
+      // to the primitive that sits at its ordinal.
+      const out = await scatter(stubThenTwoRoads(skip), { count: attribute("cnt") });
+      expect(col(out, "cnt")).toEqual([3, 3, 3, ...Array<number>(9).fill(9)]);
+    });
+  }
+
+  it("resolves index() over every primitive, including the ones it skips", async () => {
+    // index() on the primitive domain numbers ALL three primitives, so the
+    // two roads take 1 and 2 points. By polyline ordinal they would take 0
+    // and 1, which is one point in total rather than three.
+    const out = await scatter(stubThenTwoRoads(), { count: indexField() });
+    expect(out.pointCount).toBe(3);
+    expect(zOf(out)).toEqual([10, 20, 20]);
+  });
+
+  it("gives a path the same points whether or not a skipped primitive precedes it", async () => {
+    // The draw is keyed on the PRIMITIVE index, so the road at primitive 1
+    // must be scattered identically whether primitive 0 is a one-vertex
+    // stub or a triangle — the two differ in vertex count and in primtype,
+    // and in neither case are they a path.
+    const a = await scatter(stubThenTwoRoads("one-vertex"), { count: attribute("cnt") });
+    const b = await scatter(stubThenTwoRoads("poly"), { count: attribute("cnt") });
+    expect(col(b, "station")).toEqual(col(a, "station"));
+    expect(col(b, "P")).toEqual(col(a, "P"));
   });
 });
 

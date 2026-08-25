@@ -51,6 +51,7 @@ import {
   requireGeometry,
   requireReportSlot,
   requireScalarColumn,
+  requireFinitePlainParam,
   resolveOn,
   TRANSFER_BOOKKEEPING,
 } from "./util.js";
@@ -270,6 +271,18 @@ export const transferByIndex = standardNode<TransferByIndexParams>({
         );
       }
     }
+
+    // A PLAIN index is checked first, because `resolveOn` below is gated
+    // on `isField` and so guards only what a FIELD produced. Without this
+    // a bare NaN reaches `srcData[NaN]`, reads `undefined`, and reports
+    // itself as a HIT — the plausible-looking cook this node's param
+    // description already promises to refuse.
+    requireFinitePlainParam(
+      params.index,
+      "transferByIndex",
+      "index",
+      'An index must be a finite number (it truncates toward zero). There is no reading of NaN that "clamp" or "wrap" could give — clamp to which end, and NaN % n is NaN — so map the broken case to a sentinel outside the source, such as -1 with select(), and set outOfRange to "miss".',
+    );
 
     // Resolved on the DESTINATION, and BEFORE the clone is mutated: a field
     // may read a column this gather is about to overwrite, and the answer
