@@ -1852,3 +1852,82 @@ probably a good one, but it makes a central node's output size
 data-dependent, and it should be bought on a measurement rather than on a
 hunch. The cut idiom goes in first; if it proves painful, that is the
 evidence.
+
+### The graph and TypeScript station processes, measured side by side, 2026-08-25
+
+Taken when an end-to-end test failed and the obvious reading -- "the
+graph process is wrong" -- turned out to be false. Both processes run on
+the same cooked lap (`lengthW` 346.8) at the shipped density.
+
+| seed | TS worst gap (W) | TS moves | graph worst gap (W) | graph moves |
+| --- | --- | --- | --- | --- |
+| 1 | 14.29 | 0 | 7.43 | 0 |
+| 2 | 13.36 | 0 | 8.78 | 0 |
+| 3 | 11.78 | 0 | 14.19 | 0 |
+| 4 | 14.68 | 0 | 9.62 | 0 |
+| 5 | **31.65** | **1** | 17.53 | 0 |
+| 6 | 7.78 | 0 | 24.56 | 0 |
+| 7 | 15.31 | 0 | 21.35 | 0 |
+| 8 | 10.05 | 0 | 12.91 | 0 |
+
+Both produce **329 placements on every seed** -- D-1's budget is exact
+arithmetic and the port reproduces it. The gap distributions overlap
+almost entirely: 7.78-31.65 against 7.43-24.56.
+
+**D-4's repair is a RARE EVENT at the shipped density, in both.** The
+fitted TypeScript process crosses the 25 W bound on one seed in eight;
+the graph process on none of the eight measured. That is a fact about
+the process -- 329 placements on a 347 W lap average 1.05 W apart, and a
+25 W hole is a long way into the tail -- not a difference between the two
+implementations.
+
+**So a test asserting "the repair fires" at density 1 is asserting a rare
+event on a small sample**, and passes or fails on which seeds it picks.
+`racetrackStations.test.ts` gets away with it over seeds 1-8 because its
+particular draw happens to include s5. That is worth knowing about the
+existing suite: the assertion is sound but it is one unlucky re-tuning
+away from being flaky, and nothing says so where it is written.
+
+The port's own suite exercises D-4 where it is REACHABLE instead:
+hand-built fixtures with a stated hole, and a sparse lap. Density sweep
+on the same lap, four seeds each:
+
+| density | worst gap before (W) | total moves |
+| --- | --- | --- |
+| 1.0 | 14.19 | 0 |
+| 0.8 | 14.19 | 0 |
+| 0.6 | 17.24 | 0 |
+| 0.4 | 35.28 | 1 |
+| 0.3 | 48.92 | 1 |
+| 0.2 | 48.92 | 6 |
+
+Density 0.2 is far outside D-1's accepted band (0.6-1.2 per W) and is not
+a lap anyone would ship. It is a lap that MAKES gaps, which is what the
+rule is for, and it is deterministic.
+
+### Where the prelude stands after the station port, 2026-08-25
+
+`main.ts` now cooks the stations as a graph and hands them to `dressLap`
+through a new `DressOptions.stations`. What is still TypeScript on the
+lap level, in the order it would have to move:
+
+1. **Asset choice** (`placeAsset` per station, weighted by the curvature
+   THERE). The big one, and it re-baselines with the stations because it
+   is indexed by SORTED station order -- the i-th station draws the i-th
+   asset stream. Rank is now computable in-graph (`pathScan` exclusive of
+   a constant over the ordered ring), so the index exists; what does not
+   is the weighted draw from a per-bucket pool, which is gap 4's
+   `pointsToPath`/`pathScan` bracket recipe, or `transferByIndex` against
+   a cumulative column.
+2. **The corner model and marker vocabulary** (L-2/L-3), which
+   `writeCurveFrame` + `pathRuns` already answer per PLAN's slice-2
+   table.
+3. **Landmark uniqueness (L-4) and the band mix (Z-3)**, both list
+   arithmetic over the whole lap.
+4. **The frame lookup**, which `transferAlongPath` now answers.
+
+The seam is deliberately an OPTION rather than a switch inside
+`dressLap`: cooking is async and `dressLap` is not, and making it async
+to reach a cook would ripple through a dozen synchronous callers for no
+benefit. The suites that call `dressLap` without stations keep measuring
+the fitted process, which is what their figures were fitted against.

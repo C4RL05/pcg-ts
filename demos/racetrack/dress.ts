@@ -63,7 +63,8 @@ import { repairFalseEdges } from "./falseEdges.js";
 import { type Frame, cullSightlines, defaultEyeStations } from "./sightline.js";
 import { LONG_QUANTILE, longCoverBudgetW, placeEnclosure, reduceEnclosure } from "./tunnels.js";
 import { measureEnclosure } from "./enclosure.js";
-import { FITTED, makeStationsDetailed, repairPlacementCoverage } from "./stations.js";
+import { FITTED, makeStationsDetailed,
+  type StationStats, repairPlacementCoverage } from "./stations.js";
 import { SAME_PLACE_W } from "./tolerance.js";
 import { resolveCorridor } from "./zones.js";
 
@@ -102,6 +103,30 @@ export interface DressOptions {
    * more cover and more repairs without anything being retuned.
    */
   readonly density?: number;
+
+  /**
+   * Where the stations come from, when the caller has already decided.
+   *
+   * PLUGGABLE BECAUSE THE PROCESS IS BEING MOVED INTO A GRAPH, one seam
+   * at a time. `stationGraph.cookStations` produces exactly this shape by
+   * running the process and D-4's repair as nodes, and the page passes
+   * its result in — which is what lets the lap level stop needing a
+   * TypeScript prelude without every caller of `dressLap` changing at
+   * once.
+   *
+   * IT IS AN OPTION RATHER THAN A SWITCH INSIDE because cooking is async
+   * and `dressLap` is not. Reaching a cook from here would make this
+   * function async and ripple through every synchronous caller and test
+   * for no benefit; taking the answer instead leaves the source the
+   * caller's to choose, which is the arrangement this campaign is
+   * heading for anyway.
+   *
+   * Omitted, the fitted TypeScript process runs as it always has. The two
+   * do NOT agree station for station and cannot — see
+   * `stationGraph`'s header for why — so passing this re-bases every
+   * figure downstream of it.
+   */
+  readonly stations?: StationStats;
 }
 
 /** What each stage had to do, so a page can show it. */
@@ -406,13 +431,16 @@ export function dressLap(
     markers ? [markers.sharp.id, markers.open.id, markers.brake.id] : [],
   );
 
-  // 1. Stations.
+  // 1. Stations, from the caller when it has already decided and from
+  //    the fitted process when it has not. See `DressOptions.stations`.
   const scale = opts.density ?? 1;
-  const st = makeStationsDetailed(
-    lap.lengthW,
-    seed,
-    scale === 1 ? FITTED : { ...FITTED, density: FITTED.density * scale },
-  );
+  const st =
+    opts.stations ??
+    makeStationsDetailed(
+      lap.lengthW,
+      seed,
+      scale === 1 ? FITTED : { ...FITTED, density: FITTED.density * scale },
+    );
 
   // 2. An asset per station, from its own measured behaviour, weighted by
   //    the curvature THERE. This is the only place curvature enters.

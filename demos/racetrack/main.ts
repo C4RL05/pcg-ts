@@ -85,6 +85,7 @@ import { attachWordmark } from "../../shared/wordmark.js";
 import { BACKGROUND } from "../../shared/scene.js";
 import { OUTPUTS, buildRoadGraph } from "./graph.js";
 import { type DressStats, type Dressing, dressLap } from "./dress.js";
+import { cookStations } from "./stationGraph.js";
 import { DENSITY } from "./stations.js";
 import { type Kit, type PlacedBox, loadKit, placeKit } from "./kit.js";
 import { shippedVocabulary } from "./vocabulary.js";
@@ -943,14 +944,28 @@ async function cookAndBuild(): Promise<void> {
   {
     const next = await cookCircuit(state.seed);
     circuit = next;
-    // THE PRELUDE, AND IT CANNOT GO YET. The lap level's graph is BUILT
-    // from a settled placement list, and settling one needs a cooked lap
-    // and a frame lookup that are still TypeScript rather than nodes — so
-    // the page pays the whole rule pass here and streams only the geometry
-    // that follows from it. `levels.ts`' header says what would have to
-    // become a node for this to move.
+    // THE PRELUDE, NOW A ROUND SHORTER. Where the placements GO is a
+    // graph: `cookStations` runs the Neyman-Scott process and D-4's
+    // coverage repair as nodes, on the lap's own frames, and hands back
+    // exactly what the TypeScript process handed back. What each
+    // placement IS — the asset drawn from its measured behaviour, the
+    // corner language, the band mix — is still TypeScript below, and it
+    // is what has to move next before the lap level needs no prelude at
+    // all. `levels.ts`' header says the rest.
+    //
+    // THE PAGE IS THE FIRST CONSUMER ON PURPOSE. The two processes do not
+    // agree station for station and cannot, so this is the lap the demo
+    // draws now; the suites that still call `dressLap` without stations
+    // keep measuring the fitted process, which is what those figures were
+    // fitted against.
+    const stations = await cookStations({
+      lap: next.lap,
+      seed: state.seed,
+      densityScale: state.density,
+    });
     const dressed = dressLap(dressingKit(), next.lap, state.seed, {
       density: state.density,
+      stations,
     });
     lastStats = dressed.stats;
     buildCircuit(next);

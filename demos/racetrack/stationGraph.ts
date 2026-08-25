@@ -38,13 +38,17 @@
  */
 import {
   type ExposedPin,
+  type Geometry,
   type Field,
   Graph,
   type NodeHandle,
   add,
   attribute,
   attributeReduce,
+  cook,
   copyToPoints,
+  createPolyline,
+  dataInput,
   cos,
   eq,
   filterByExpression,
@@ -53,6 +57,7 @@ import {
   index,
   log,
   lt,
+  makeGeometryItem,
   max,
   mergePoints,
   min,
@@ -72,7 +77,8 @@ import {
   sub,
   transferByIndex,
 } from "pcg-ts";
-import { COVERAGE, FITTED, type StationParams } from "./stations.js";
+import { COVERAGE, FITTED, type StationParams, type StationStats } from "./stations.js";
+import type { Lap } from "./lap.js";
 
 /**
  * The smallest uniform a gaussian may take the log of.
@@ -878,4 +884,124 @@ export function addCoverageRepair(
   );
   g.connect(upstream.node, upstream.pin, repair, "carry");
   return { out: repair, roundsPin: "rounds", convergedPin: "converged" };
+}
+
+/**
+ * The lap's own frames as a path the station graph can scatter on.
+ *
+ * A `Lap` is columns, not geometry, and `pointScatterOnPath` needs a real
+ * polyline. This is that polyline and nothing more: the SAME positions
+ * the lap already holds, closed, with the length written where the count
+ * fields read it. No resample, because resampling would measure a
+ * slightly different curve than the one every other rule in this demo is
+ * stated against.
+ *
+ * THE CHORD TABLES AGREE BY CONSTRUCTION. `lap.s` is the running sum of
+ * straight-line distances between consecutive frames, closing segment
+ * included, and `polylineArcTables` measures exactly that. So an arc
+ * position the scatter draws means the same thing as a station the rules
+ * speak in, without a conversion to get wrong.
+ */
+function lapAsPath(lap: Lap): Geometry {
+  const geo = createPolyline(lap.p, { closed: true });
+  // f32, because that is what an attribute column is. A lap runs to a few
+  // thousand world units, where f32 spacing is under a thousandth, so the
+  // budget this feeds -- round(density * length / halfWidth) -- lands on
+  // the same integer as the f64 arithmetic except within half a unit of a
+  // rounding boundary. That is one placement, on a lap of hundreds, and
+  // it is a difference the port already accepts by existing at all.
+  geo.attrs.primitive.add(STATION_LENGTH_ATTR, "f32", 1).set(0, lap.length);
+  return geo;
+}
+
+/** The primitive column {@link cookStations} writes the lap's length into. */
+const STATION_LENGTH_ATTR = "lapLen";
+
+/**
+ * Run the station process and D-4's repair as a graph, and hand back what
+ * `makeStationsDetailed` hands back.
+ *
+ * THE POINT OF THE SHAPE. It returns a {@link StationStats} so it is a
+ * drop-in for the TypeScript process at `dressLap`'s call site — the
+ * campaign's goal is a lap level that needs no prelude, and the way there
+ * is one seam at a time rather than one commit that moves everything.
+ *
+ * IT IS ASYNC AND `makeStationsDetailed` IS NOT, which is the whole
+ * reason `dressLap` takes stations as an OPTION rather than calling this
+ * itself. Cooking is async; `dressLap` is sync and is called from a
+ * dozen synchronous tests. Making it async to reach a cook would ripple
+ * through all of them for no benefit, whereas passing the list in leaves
+ * the source pluggable — which is what this campaign is trying to end up
+ * with anyway.
+ */
+export async function cookStations(opts: {
+  readonly lap: Lap;
+  readonly seed: number;
+  readonly params?: StationParams;
+  readonly densityScale?: number;
+}): Promise<StationStats> {
+  const { lap, seed } = opts;
+  const g = new Graph(seed);
+  const pathIn = g.add(dataInput, {}, "lapPath");
+  g.setParam(pathIn, "items", [makeGeometryItem(lapAsPath(lap))]);
+
+  const stage = addStationStage(g, { node: pathIn, pin: "out" }, {
+    halfWidth: lap.halfWidth,
+    params: opts.params,
+    densityScale: opts.densityScale,
+    lengthAttr: STATION_LENGTH_ATTR,
+  });
+  const repair = addCoverageRepair(g, { node: stage.out, pin: "out" }, {
+    halfWidth: lap.halfWidth,
+    stationAttr: stage.stationAttr,
+    lengthAttr: STATION_LENGTH_ATTR,
+  });
+
+  // BOTH SIDES OF THE REPAIR ARE PUBLISHED, because the stat line reports
+  // what the repair FOUND as well as what it did, and the widest gap
+  // before it ran is not recoverable from the lap after.
+  g.output(stage.out, "out", "raw");
+  g.output(repair.out, "carry", "fixed");
+  g.output(repair.out, repair.roundsPin, "rounds");
+  g.output(repair.out, repair.convergedPin, "converged");
+
+  const cooked = await cook(g);
+  const read = (name: string): number[] => {
+    const geo = (cooked.outputs[name][0] as { geo: Geometry }).geo;
+    const col = geo.attrs.point.require(stage.stationAttr);
+    const out: number[] = [];
+    for (let i = 0; i < geo.attrs.point.count; i++) out.push(col.get(i) as number);
+    return out.sort((a, b) => a - b);
+  };
+  const raw = read("raw");
+  const fixed = read("fixed");
+  const rounds = (cooked.outputs.rounds[0] as { value: number }).value;
+
+  // ONE MOVE PER ROUND, and the last round is the one that found nothing
+  // left to move -- so the count of moves is one fewer than the count of
+  // rounds. When the loop ran out of rounds instead of settling, every
+  // round moved something and there is no final idle pass to discount.
+  const converged = (cooked.outputs.converged[0] as { value: number }).value;
+  return {
+    stations: fixed,
+    gapRepairs: converged === 1 ? Math.max(0, rounds - 1) : rounds,
+    worstGapBeforeW: longestGapOf(raw, lap.lengthW),
+    // The per-move log `stations.ts` keeps is not reconstructible from a
+    // cooked cloud -- the graph moves a placement without recording which
+    // one it was before -- and nothing reads it off this path. An empty
+    // log is honest; a fabricated one would not be.
+    log: [],
+  };
+}
+
+/** The widest gap on a sorted, wrapped station ring. */
+function longestGapOf(sorted: readonly number[], lapW: number): number {
+  if (sorted.length === 0) return lapW;
+  let worst = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    const gap =
+      i === sorted.length - 1 ? sorted[0] + lapW - sorted[i] : sorted[i + 1] - sorted[i];
+    if (gap > worst) worst = gap;
+  }
+  return worst;
 }

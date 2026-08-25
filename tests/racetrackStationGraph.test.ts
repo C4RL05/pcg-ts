@@ -18,6 +18,7 @@ import {
   Pcg32,
   attribute,
   cook,
+  firstGeometry,
   createPointCloud,
   createPolyline,
   dataInput,
@@ -30,10 +31,22 @@ import {
   type StationStageOptions,
   addCoverageRepair,
   addStationStage,
+  cookStations,
   gaussianField,
   roundField,
 } from "../demos/racetrack/stationGraph.js";
-import { COVERAGE, FITTED } from "../demos/racetrack/stations.js";
+import {
+  COVERAGE,
+  DENSITY,
+  FITTED,
+  coverage,
+} from "../demos/racetrack/stations.js";
+import { dressLap } from "../demos/racetrack/dress.js";
+import { OUTPUTS, buildRoadGraph } from "../demos/racetrack/graph.js";
+import { makeTrackSpline } from "../demos/racetrack/spline.js";
+import { type Lap, readLap } from "../demos/racetrack/lap.js";
+import type { Kit } from "../demos/racetrack/kit.js";
+import { DEFAULT_KIT, kitOrAbsent, kitPath } from "./support/kits.js";
 
 /**
  * A cloud whose points are at distinct positions, which is what makes
@@ -529,5 +542,120 @@ describe("stationGraph: D-4's coverage repair", () => {
     // ...and the clump gave one up.
     const stillClumped = got.stations.filter((v) => v <= 3.5).length;
     expect(stillClumped).toBeLessThan(clump.length);
+  });
+});
+
+/**
+ * END TO END, THROUGH THE SEAM THE PAGE USES.
+ *
+ * `main.ts` cooks the stations as a graph and hands them to `dressLap`.
+ * These run the same two calls in the same order, because otherwise the
+ * graph process would be tested only in isolation while the SHIPPED
+ * combination went untested — which is the shape of false pass this repo
+ * has been caught by before.
+ *
+ * Gated on the measured kit like every other assembled-pipeline suite:
+ * it is derived measurement that lives outside both repositories, so a
+ * checkout without it skips rather than fails.
+ */
+const E2E_KIT = kitPath(DEFAULT_KIT);
+
+describe.skipIf(!E2E_KIT)("stationGraph: the lap the page actually draws", () => {
+  const kit = kitOrAbsent<Kit>(DEFAULT_KIT);
+  const SEEDS = [1, 2, 3];
+
+  let cached: Lap | undefined;
+  async function theLap(): Promise<Lap> {
+    if (!cached) {
+      const frames = firstGeometry(
+        (await cook(buildRoadGraph({ spline: makeTrackSpline({ seed: 1 }), seed: 1 })))
+          .outputs[OUTPUTS.frames] ?? [],
+      );
+      if (!frames) throw new Error("racetrackStationGraph: the road graph produced no frames");
+      cached = readLap(frames);
+    }
+    return cached;
+  }
+
+  it.each(SEEDS)("dresses a whole lap from graph-decided stations (seed %i)", async (seed) => {
+    const lap = await theLap();
+    const stations = await cookStations({ lap, seed });
+    const dressed = dressLap(kit, lap, seed, { stations });
+    // D-1's band in its own units. The graph decided the count, and every
+    // rule below it is a share or a threshold over that population -- so
+    // a sane count is what gives the rest something to work with.
+    const perW = dressed.stats.placed / lap.lengthW;
+    expect(perW).toBeGreaterThan(DENSITY.min);
+    expect(perW).toBeLessThan(DENSITY.max);
+    expect(dressed.stats.placed).toBeGreaterThan(100);
+    expect(dressed.boxes.length).toBeGreaterThan(0);
+  });
+
+  it.each(SEEDS)("holds D-4 on the lap the cull left behind (seed %i)", async (seed) => {
+    const lap = await theLap();
+    const stations = await cookStations({ lap, seed });
+    const dressed = dressLap(kit, lap, seed, { stations });
+    // The graph's repair runs BEFORE the sightline cull and the cull
+    // opens fresh gaps, so this is `dressLap`'s own D-4 pass working on a
+    // population the graph decided -- the interaction neither half's own
+    // tests can see.
+    const sorted = dressed.placements.map((p) => p.station).sort((a, b) => a - b);
+    expect(coverage(sorted, lap.lengthW).longestGapW).toBeLessThanOrEqual(
+      COVERAGE.maxGapW + 1e-6,
+    );
+  });
+
+  it("fires its repair, and closes what it finds, on a lap sparse enough to need it", async () => {
+    // AT THE SHIPPED DENSITY THE REPAIR ALMOST NEVER FIRES, and that is a
+    // property of the PROCESS rather than of this port. Measured on this
+    // lap over seeds 1-8: the fitted TypeScript process leaves a gap past
+    // the 25 W bound on exactly one seed (s5, 31.65 W) and the graph
+    // process on none, its worst reaching 24.56 W. The two gap
+    // distributions overlap almost entirely -- 7.78-31.65 against
+    // 7.43-24.56, at an identical count of 329 -- so this is a rare event
+    // in both, not a difference between them.
+    //
+    // A test asserting "the repair fires" at density 1 would therefore be
+    // asserting a rare event on a small sample, and would pass or fail on
+    // which seeds it happened to pick. So the rule is exercised where it
+    // is REACHABLE. Density 0.2 is far below D-1's accepted band of
+    // 0.6-1.2 per W and is not a lap anyone would ship; it is a lap that
+    // makes gaps, which is what this rule exists for. Measured there:
+    // 48.92 W before the repair, and six moves across these four seeds.
+    const lap = await theLap();
+    let fired = 0;
+    let worstBefore = 0;
+    for (let seed = 1; seed <= 4; seed++) {
+      const st = await cookStations({ lap, seed, densityScale: 0.2 });
+      fired += st.gapRepairs;
+      worstBefore = Math.max(worstBefore, st.worstGapBeforeW);
+      // ...and every one of them comes back inside the bound.
+      expect(coverage(st.stations, lap.lengthW).longestGapW).toBeLessThanOrEqual(
+        COVERAGE.maxGapW + 1e-3,
+      );
+    }
+    expect(worstBefore).toBeGreaterThan(COVERAGE.maxGapW);
+    expect(fired).toBeGreaterThan(0);
+  });
+
+  it("leaves the shipped density alone, because it has nothing to fix there", async () => {
+    // The other half of the claim above, and the reason the sparse test
+    // is not just a lowered bar: at density 1 this lap needs no repair,
+    // and the graph must therefore report none rather than move a
+    // placement it had no reason to move.
+    const lap = await theLap();
+    for (let seed = 1; seed <= 3; seed++) {
+      const st = await cookStations({ lap, seed });
+      expect(st.worstGapBeforeW).toBeLessThanOrEqual(COVERAGE.maxGapW);
+      expect(st.gapRepairs).toBe(0);
+    }
+  });
+
+  it("gives the same lap twice, cooked twice", async () => {
+    const lap = await theLap();
+    const a = await cookStations({ lap, seed: 4 });
+    const b = await cookStations({ lap, seed: 4 });
+    expect(a.stations).toEqual(b.stations);
+    expect(a.gapRepairs).toBe(b.gapRepairs);
   });
 });
