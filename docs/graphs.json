@@ -534,6 +534,42 @@
     ]
   },
   {
+    "file": "basics-gather-by-index.json",
+    "path": "graphs/basics-gather-by-index.json",
+    "title": "two hundred props each pick one of five kinds, by drawing its number",
+    "description": "A TABLE, A CLOUD, AND A NUMBER THAT JOINS THEM. Five points carry a catalog — a colour and a size per row. Two hundred scattered points carry one number each, `floor(u * 5)`, drawn independently. `transferByIndex` reads row `pick` of the catalog onto every one of them. That is a database join in a point graph, and until this node it had no spelling.\n\nWHY IT IS NOT A MAPPING ON `transferAttribute`. That node offers three mappings and every one asks its question in SPACE: which source point is nearest, which triangle contains this UV, what does this ray hit. None of them can answer \"read row three\". The distinction is not pedantic — a `nearest` gather would make the catalog's LAYOUT decide the answer, so moving a row would silently change which props got it, and two rows at the same position would be indistinguishable. An index is not a position, and a param list that decided which of two incompatible questions was being asked would be one node in name only.\n\nWHAT AN INDEX OFF THE END DOES, which is the whole of the node's edge behaviour. `outOfRange` names the reading: `clamp` pins into [0, count-1]; `wrap` takes a EUCLIDEAN modulo, so -1 is the LAST row rather than JavaScript's -1; `miss` leaves the destination's prior value and flags it through `hitAttr`. An EMPTY source misses every point under all three, because there is no row to clamp or wrap TO. The index truncates toward zero before any of that applies, so `floor` in the expression and truncation in the node agree on every non-negative draw.\n\nTHE UNIFORM PICK IS THE IDIOM. `floor(mul(randomField(key), n))` is how a point chooses one of n things with replacement, and `n` here is written literally because the catalog's size is known to the author. Where it is not, `attributeReduce` in `count` mode puts the row count on the detail domain and `promoteAttribute` brings it down to be read as a field — which is what a clustered scatter needs, since the number of clusters is itself decided by the graph.\n\nSTRINGS COME ACROSS. An empty `attributes` list gathers every point attribute of the source except the eight bookkeeping columns, and unlike `transferAlongPath` that includes STRING columns — that node interpolates and there is no value between two strings, while this one copies. Gathering an asset id by index is the case that matters, and it is why the exception exists.",
+    "tags": [
+      "basics",
+      "attributes",
+      "transfer",
+      "field",
+      "table",
+      "instancing"
+    ],
+    "seed": 9043,
+    "nodeCount": 7,
+    "nodeTypes": [
+      "pointGrid",
+      "pointScatterInBounds",
+      "setAttribute",
+      "spawnInstances",
+      "transferByIndex"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "catalog",
+        "node": "catalogSize",
+        "pin": "out"
+      },
+      {
+        "name": "props",
+        "node": "spawn",
+        "pin": "instances"
+      }
+    ]
+  },
+  {
     "file": "basics-gather-on-path.json",
     "path": "graphs/basics-gather-on-path.json",
     "title": "gather evenly spaced points into clumps along a curve",
@@ -1253,6 +1289,45 @@
         "name": "gates",
         "node": "gates",
         "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-scatter-along-a-path.json",
+    "path": "graphs/basics-scatter-along-a-path.json",
+    "title": "scatter a lap with as many markers as its own length asks for",
+    "description": "THE COUNT IS NOT IN THIS FILE. Thirty-five markers land on this loop, and nowhere does the graph say thirty-five: `pointScatterOnPath`'s `count` is the expression `0.35 * length`, resolved against the path's OWN primitive-domain length column, which `pathResample` measured at 100.4906. Stretch the loop and the marker count follows it; there is no number to keep in step by hand.\n\nWHY THAT NEEDED A NODE. Every other arc-length placer in the library is deterministic-even — `pathResample` and `splineSample` divide a length into equal steps, `arcTile` walks a fixed spacing, `pathSegments` emits one point per segment — so a RANDOM population along a curve had to be composed: a source node for the count, a `setAttribute` for a random station, then `transferAlongPath` sampling `P` to pull the cloud onto the curve. That recipe still works and `basics-stations-on-a-path` still shows it. What it cannot do is decide HOW MANY.\n\nA source node emits points from nothing, so it has no element against which to read a field, and `fieldCapability.test.ts` refuses a field-capable param on one for exactly that reason. The question is never what a param decides — `pathResample.spacing` decides an output count and is field-capable — it is whether an element exists to read the param PER. A scatter that takes the path as an input has one: the polyline itself. So the count becomes a field, and the population becomes a property of the curve rather than a constant the author maintains beside it.\n\nONE COUNT PER POLYLINE, NOT ONE PER CLOUD. The field resolves on the primitive domain, so a geometry carrying four paths gets four independent counts and each path is scattered to its own. The emitted total is always the sum of them, so no path is ever silently skipped.\n\nWHAT THE MARKERS DO NOT CARRY. This node writes three things — the position on the curve, the arc position it was drawn at (`station` here), and the per-point seed. It does not write a tangent, and that is deliberate: `writeTangents`, `writeCurveFrame` and `transferAlongPath` already answer that question against the same shared arc table, and a fourth node measuring the same curve is how two nodes come to disagree about where the halfway point is. Orient these markers by gathering the tangent, the way the sibling graph does.",
+    "tags": [
+      "basics",
+      "path",
+      "curve",
+      "closed",
+      "scatter",
+      "field",
+      "instancing"
+    ],
+    "seed": 4211,
+    "nodeCount": 5,
+    "nodeTypes": [
+      "pathResample",
+      "pointScatterOnPath",
+      "setAttribute",
+      "spawnInstances",
+      "subgraph"
+    ],
+    "primitives": [
+      "shape/path-loop"
+    ],
+    "outputs": [
+      {
+        "name": "lap",
+        "node": "measure",
+        "pin": "out"
+      },
+      {
+        "name": "markers",
+        "node": "spawn",
+        "pin": "instances"
       }
     ]
   },

@@ -34,6 +34,7 @@ const ROOT_SURFACE = [
   // pathPointAt cannot answer because its output carries the path's own
   // count and topology.
   "transferAlongPath",
+  "transferByIndex",
   "ge",
   "getFieldSpec",
   "getNodeType", "getRegisteredSubgraph", "graphParamBindings", "getSubgraphPlumbing", "getSubgraphSpec", "gt",
@@ -63,7 +64,7 @@ const ROOT_SURFACE = [
   // "above the road here" from "near the road twice".
   "pathCoverage",
   "pathPointAt", "pathResample", "pathRuns", "pathScan", "pathSegments", "perlinNoise", "pointGrid", "pointLine", "pointNeighborhood",
-  "pointScatterInBounds", "pointScatterInWorld", "pointsToPath", "position", "pow",
+  "pointScatterInBounds", "pointScatterInWorld", "pointScatterOnPath", "pointsToPath", "position", "pow",
   "primitiveTypeCounts", "printFieldSpec", "projectToPlane", "promote", "promoteAttribute", "ramp",
   "randomField", "registerSubgraph", "remap", "removeAttribute",
   // Wraps an inner graph and re-cooks it, feeding its "carry" output back

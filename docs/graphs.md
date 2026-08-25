@@ -4,7 +4,7 @@ Generated from the graphs in [`graphs`](../graphs) by `node scripts/gen-graphs.m
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-74 examples, alphabetical by file:
+76 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -24,6 +24,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-fit-runs.json](#basics-fit-runsjson) — fit a line through each row of props, and catch the row that only looks straight
 - [basics-flatten-and-remember.json](#basics-flatten-and-rememberjson) — flatten a cloud onto a plane and keep the height it lost
 - [basics-foreach-per-group.json](#basics-foreach-per-groupjson) — treat each group on its own
+- [basics-gather-by-index.json](#basics-gather-by-indexjson) — two hundred props each pick one of five kinds, by drawing its number
 - [basics-gather-on-path.json](#basics-gather-on-pathjson) — gather evenly spaced points into clumps along a curve
 - [basics-inline-field-params.json](#basics-inline-field-paramsjson) — put a field's shaping numbers on knobs without a wrapper
 - [basics-jitter-points.json](#basics-jitter-pointsjson) — break up a lattice with deterministic jitter
@@ -49,6 +50,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-report-to-the-host.json](#basics-report-to-the-hostjson) — what a graph hands back that is not geometry
 - [basics-reseed-a-noise.json](#basics-reseed-a-noisejson) — make a saved noise re-roll with the graph seed
 - [basics-runs-along-a-path.json](#basics-runs-along-a-pathjson) — measure distance since the last gate, and to the next one, around a closed lap
+- [basics-scatter-along-a-path.json](#basics-scatter-along-a-pathjson) — scatter a lap with as many markers as its own length asks for
 - [basics-scatter-in-bounds.json](#basics-scatter-in-boundsjson) — scatter points in a box
 - [basics-scatter-in-world.json](#basics-scatter-in-worldjson) — scatter points anchored to the world, not to the box
 - [basics-sightline-cull.json](#basics-sightline-culljson) — clear a line of sight by moving the props, not by deleting them
@@ -420,6 +422,32 @@ Cook it: `pcg cook graphs/basics-flatten-and-remember.json --stats`
 **Outputs:** `groups` (from `each`.`out`), `points` (from `rejoin`.`out`)
 
 Cook it: `pcg cook graphs/basics-foreach-per-group.json --stats`
+
+## basics-gather-by-index.json
+
+**two hundred props each pick one of five kinds, by drawing its number**
+
+A TABLE, A CLOUD, AND A NUMBER THAT JOINS THEM. Five points carry a catalog — a colour and a size per row. Two hundred scattered points carry one number each, `floor(u * 5)`, drawn independently. `transferByIndex` reads row `pick` of the catalog onto every one of them. That is a database join in a point graph, and until this node it had no spelling.
+
+WHY IT IS NOT A MAPPING ON `transferAttribute`. That node offers three mappings and every one asks its question in SPACE: which source point is nearest, which triangle contains this UV, what does this ray hit. None of them can answer "read row three". The distinction is not pedantic — a `nearest` gather would make the catalog's LAYOUT decide the answer, so moving a row would silently change which props got it, and two rows at the same position would be indistinguishable. An index is not a position, and a param list that decided which of two incompatible questions was being asked would be one node in name only.
+
+WHAT AN INDEX OFF THE END DOES, which is the whole of the node's edge behaviour. `outOfRange` names the reading: `clamp` pins into [0, count-1]; `wrap` takes a EUCLIDEAN modulo, so -1 is the LAST row rather than JavaScript's -1; `miss` leaves the destination's prior value and flags it through `hitAttr`. An EMPTY source misses every point under all three, because there is no row to clamp or wrap TO. The index truncates toward zero before any of that applies, so `floor` in the expression and truncation in the node agree on every non-negative draw.
+
+THE UNIFORM PICK IS THE IDIOM. `floor(mul(randomField(key), n))` is how a point chooses one of n things with replacement, and `n` here is written literally because the catalog's size is known to the author. Where it is not, `attributeReduce` in `count` mode puts the row count on the detail domain and `promoteAttribute` brings it down to be read as a field — which is what a clustered scatter needs, since the number of clusters is itself decided by the graph.
+
+STRINGS COME ACROSS. An empty `attributes` list gathers every point attribute of the source except the eight bookkeeping columns, and unlike `transferAlongPath` that includes STRING columns — that node interpolates and there is no value between two strings, while this one copies. Gathering an asset id by index is the case that matters, and it is why the exception exists.
+
+**Tags:** `basics`, `attributes`, `transfer`, `field`, `table`, `instancing`
+
+**Seed:** 9043
+
+**Node types:** `pointGrid`, `pointScatterInBounds`, `setAttribute`, `spawnInstances`, `transferByIndex`
+
+**Primitives:** *(none)*
+
+**Outputs:** `catalog` (from `catalogSize`.`out`), `props` (from `spawn`.`instances`)
+
+Cook it: `pcg cook graphs/basics-gather-by-index.json --stats`
 
 ## basics-gather-on-path.json
 
@@ -884,6 +912,32 @@ Both directions are cooked because they are different questions rather than one 
 **Outputs:** `lap` (from `tint`.`out`), `gates` (from `gates`.`out`)
 
 Cook it: `pcg cook graphs/basics-runs-along-a-path.json --stats`
+
+## basics-scatter-along-a-path.json
+
+**scatter a lap with as many markers as its own length asks for**
+
+THE COUNT IS NOT IN THIS FILE. Thirty-five markers land on this loop, and nowhere does the graph say thirty-five: `pointScatterOnPath`'s `count` is the expression `0.35 * length`, resolved against the path's OWN primitive-domain length column, which `pathResample` measured at 100.4906. Stretch the loop and the marker count follows it; there is no number to keep in step by hand.
+
+WHY THAT NEEDED A NODE. Every other arc-length placer in the library is deterministic-even — `pathResample` and `splineSample` divide a length into equal steps, `arcTile` walks a fixed spacing, `pathSegments` emits one point per segment — so a RANDOM population along a curve had to be composed: a source node for the count, a `setAttribute` for a random station, then `transferAlongPath` sampling `P` to pull the cloud onto the curve. That recipe still works and `basics-stations-on-a-path` still shows it. What it cannot do is decide HOW MANY.
+
+A source node emits points from nothing, so it has no element against which to read a field, and `fieldCapability.test.ts` refuses a field-capable param on one for exactly that reason. The question is never what a param decides — `pathResample.spacing` decides an output count and is field-capable — it is whether an element exists to read the param PER. A scatter that takes the path as an input has one: the polyline itself. So the count becomes a field, and the population becomes a property of the curve rather than a constant the author maintains beside it.
+
+ONE COUNT PER POLYLINE, NOT ONE PER CLOUD. The field resolves on the primitive domain, so a geometry carrying four paths gets four independent counts and each path is scattered to its own. The emitted total is always the sum of them, so no path is ever silently skipped.
+
+WHAT THE MARKERS DO NOT CARRY. This node writes three things — the position on the curve, the arc position it was drawn at (`station` here), and the per-point seed. It does not write a tangent, and that is deliberate: `writeTangents`, `writeCurveFrame` and `transferAlongPath` already answer that question against the same shared arc table, and a fourth node measuring the same curve is how two nodes come to disagree about where the halfway point is. Orient these markers by gathering the tangent, the way the sibling graph does.
+
+**Tags:** `basics`, `path`, `curve`, `closed`, `scatter`, `field`, `instancing`
+
+**Seed:** 4211
+
+**Node types:** `pathResample`, `pointScatterOnPath`, `setAttribute`, `spawnInstances`, `subgraph`
+
+**Primitives:** `shape/path-loop`
+
+**Outputs:** `lap` (from `measure`.`out`), `markers` (from `spawn`.`instances`)
+
+Cook it: `pcg cook graphs/basics-scatter-along-a-path.json --stats`
 
 ## basics-scatter-in-bounds.json
 

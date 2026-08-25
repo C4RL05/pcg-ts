@@ -1487,3 +1487,43 @@ export function rotateVec(
   out[2] = vz + qw * tz + qx * ty - qy * tx;
   return out;
 }
+
+
+/**
+ * The point attributes a TRANSFER's empty-`attributes` rule leaves out,
+ * and the reason such a node can state one rule rather than a list of
+ * special cases: these eight are the point domain's OWN bookkeeping — the
+ * transform, the bounds, the shading, the identity — written by
+ * `createPointCloud` on every cloud in the library before anybody has
+ * decided anything. They describe the source's POINTS. Everything else a
+ * source carries was put there on purpose by whoever built it, and
+ * describes the thing the source IS.
+ *
+ * Kept as a literal set rather than derived from `STANDARD_POINT_ATTRS`
+ * because the two lists answer different questions and must be free to
+ * differ: that one says what a fresh cloud starts with, this one says what
+ * writing onto a foreign cloud would damage. They happen to coincide
+ * today, and a ninth standard attribute would not automatically belong
+ * here — it would need the argument made again.
+ *
+ * SHARED BY THE TRANSFER NODES ON PURPOSE, which is why it lives here
+ * rather than in either of them. `transferAlongPath` and `transferByIndex`
+ * both offer "everything except the bookkeeping" as the meaning of an
+ * empty list, and that phrase has to mean the SAME eight columns in both
+ * or the two defaults quietly diverge the first time somebody edits one.
+ * What the two nodes are still free to differ about is the policy they
+ * apply ON TOP of this set — `transferAlongPath` also drops string columns,
+ * because it interpolates and there is no value between two strings, while
+ * `transferByIndex` keeps them, because it copies. That difference is
+ * stated in each node's own param description.
+ */
+export const TRANSFER_BOOKKEEPING: ReadonlySet<string> = new Set([
+  "P",
+  "rot",
+  "scale",
+  "density",
+  "boundsMin",
+  "boundsMax",
+  "color",
+  "seed",
+]);

@@ -54,25 +54,9 @@ import {
   polylineArcTables,
   requireGeometry,
   requireReportSlot,
+  TRANSFER_BOOKKEEPING,
 } from "./util.js";
 
-/**
- * The point attributes the empty-`attributes` rule leaves out, and the
- * reason it can state one rule rather than a list of special cases: these
- * eight are the point domain's OWN bookkeeping — the transform, the
- * bounds, the shading, the identity — written by `createPointCloud` on
- * every cloud in the library before anybody has decided anything. They
- * describe the path's POINTS. Everything else a path carries was put there
- * on purpose by whoever built it, and describes the CURVE.
- *
- * Kept as a literal set rather than derived from `STANDARD_POINT_ATTRS`
- * because the two lists answer different questions and must be free to
- * differ: that one says what a fresh cloud starts with, this one says what
- * blending onto a foreign cloud would damage. They happen to coincide
- * today, and a ninth standard attribute would not automatically belong
- * here — it would need the argument made again.
- */
-const BOOKKEEPING = new Set(["P", "rot", "scale", "density", "boundsMin", "boundsMax", "color", "seed"]);
 
 /** Params of {@link transferAlongPath}. */
 export interface TransferAlongPathParams {
@@ -237,12 +221,12 @@ export const transferAlongPath = standardNode<TransferAlongPathParams>({
     } else {
       for (const src of pathSet) {
         if (src.type === "string") continue;
-        if (BOOKKEEPING.has(src.name)) continue;
+        if (TRANSFER_BOOKKEEPING.has(src.name)) continue;
         sources.push(src);
       }
       if (sources.length === 0) {
         throw new Error(
-          `transferAlongPath: param "attributes" is empty, so this node samples every numeric point attribute of the path except the standard bookkeeping ones (${[...BOOKKEEPING].join(", ")}) — and the path has none left. Its point attributes are: ${pathSet.names().join(", ") || "(none)"}. Write what you want to gather onto the path first (writeTangents, writeCurveFrame, pathScan, setAttribute), or name one of the excluded columns explicitly in "attributes" — naming P is how a cloud of stations is placed onto the curve.`,
+          `transferAlongPath: param "attributes" is empty, so this node samples every numeric point attribute of the path except the standard bookkeeping ones (${[...TRANSFER_BOOKKEEPING].join(", ")}) — and the path has none left. Its point attributes are: ${pathSet.names().join(", ") || "(none)"}. Write what you want to gather onto the path first (writeTangents, writeCurveFrame, pathScan, setAttribute), or name one of the excluded columns explicitly in "attributes" — naming P is how a cloud of stations is placed onto the curve.`,
         );
       }
     }
