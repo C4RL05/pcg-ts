@@ -2753,6 +2753,105 @@
         ]
       }
     },
+    "basics-shift-along-a-path.json": {
+      "outputs": {
+        "chain": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 24,
+            "batches": [
+              {
+                "assetId": "link",
+                "count": 24,
+                "translation": {
+                  "min": [
+                    -15.9565,
+                    0,
+                    -15.6512
+                  ],
+                  "max": [
+                    15.9917,
+                    0,
+                    15.9503
+                  ],
+                  "mean": [
+                    -1.8137,
+                    0,
+                    0.5536
+                  ]
+                },
+                "scale": {
+                  "min": [
+                    0.35,
+                    0.1881,
+                    0.35
+                  ],
+                  "max": [
+                    0.35,
+                    12.632,
+                    0.35
+                  ],
+                  "mean": [
+                    0.35,
+                    4.1453,
+                    0.35
+                  ]
+                },
+                "rotation": {
+                  "min": 1.5709,
+                  "max": 2.9625,
+                  "mean": 2.0831
+                }
+              }
+            ]
+          }
+        ],
+        "loop": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 96,
+              "vertex": 97,
+              "primitive": 1,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32"
+              ],
+              "primitive": [
+                "primtype:string",
+                "lapLen:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -16,
+                0,
+                -16
+              ],
+              "max": [
+                16,
+                0,
+                16
+              ]
+            }
+          }
+        ]
+      }
+    },
     "basics-sightline-cull.json": {
       "outputs": {
         "dropped": [

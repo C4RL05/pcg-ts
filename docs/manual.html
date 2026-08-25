@@ -899,12 +899,12 @@ graph.<span class="n">setParam</span>(density, <span class="s">"value"</span>, <
     <p>There are three registries, and an agent should know all three before emitting anything: <code>listNodeTypes()</code> for node types, <code>listFieldFns()</code> for the field-expression vocabulary, and <code>listSubgraphs()</code> for the named primitives — the ready-made recipes a graph can reference by name instead of rebuilding. Each has a generated twin on disk and a <code>pcg</code> subcommand that prints the same thing from a shell.</p>
 
     <h3>listNodeTypes()</h3>
-    <p>Returns every registered node type. Each entry has exactly these keys: <code>type</code>, <code>description</code>, <code>category</code>, <code>inputs</code>, <code>outputs</code>, <code>params</code>. There are 56 types in the standard library, all categorized.</p>
+    <p>Returns every registered node type. Each entry has exactly these keys: <code>type</code>, <code>description</code>, <code>category</code>, <code>inputs</code>, <code>outputs</code>, <code>params</code>. There are 57 types in the standard library, all categorized.</p>
 
     <div class="codeblock"><pre><code><span class="k">import</span> { listNodeTypes } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
 
 <span class="k">const</span> types = <span class="n">listNodeTypes</span>();
-types.length;                                <span class="c">// 56</span>
+types.length;                                <span class="c">// 57</span>
 <span class="k">const</span> jitter = types.<span class="n">find</span>(t => t.type === <span class="s">"jitterPoints"</span>);</code></pre></div>
 
     <p class="code-label">The entry, verbatim</p>
@@ -991,7 +991,7 @@ all.<span class="n">find</span>(s => s.name === <span class="s">"fill/scatter-ev
     <h3>The same catalogs, from a shell</h3>
     <p>Two of those registries are also commands. The <code>pcg</code> CLI is the library's other front door — <code>npx pcg …</code> when the package is installed, <code>node bin/pcg.mjs …</code> from a clone — and its discovery commands read the same registries this chapter has been calling:</p>
     <div class="codeblock"><pre><code><span class="c"># the whole registry, grouped by category</span>
-pcg nodes                      <span class="c"># -> "56 node types, by category"</span>
+pcg nodes                      <span class="c"># -> "57 node types, by category"</span>
 
 <span class="c"># one type: its pins and its full param table, with ranges, enums and</span>
 <span class="c"># which params accept a field</span>
@@ -1013,9 +1013,9 @@ pcg nodes pointGrid --json</code></pre></div>
     <table>
       <thead><tr><th>Prose</th><th>Machine-readable</th><th>What it indexes</th></tr></thead>
       <tbody>
-        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a></td><td>Every node type: pins, params, defaults, ranges. The JSON is a plain top-level array of the same 56 entries in the same shape <code>listNodeTypes()</code> returns.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a></td><td>Every node type: pins, params, defaults, ranges. The JSON is a plain top-level array of the same 57 entries in the same shape <code>listNodeTypes()</code> returns.</td></tr>
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.md">docs/primitives.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.json">docs/primitives.json</a></td><td>Every named primitive: its pins, its exposed params with their derived schemas, its content hash, and a <code>pcg run</code> line to cook it standalone.</td></tr>
-        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/graphs.md">docs/graphs.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/graphs.json">docs/graphs.json</a></td><td>The example corpus: 76 graphs under <code>graphs/</code>, indexed by what each one teaches, with its tags, seed, node types and referenced primitives.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/graphs.md">docs/graphs.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/graphs.json">docs/graphs.json</a></td><td>The example corpus: 77 graphs under <code>graphs/</code>, indexed by what each one teaches, with its tags, seed, node types and referenced primitives.</td></tr>
       </tbody>
     </table>
     </div>
@@ -1503,7 +1503,7 @@ cmp a.json b.json</code></pre></div>
     <p>Look up what you are about to type rather than recalling it. From a shell that is two commands, and the answers are the same registries chapter 8 describes:</p>
     <div class="codeblock"><pre><code>pcg nodes pointScatterInBounds   <span class="c"># pins, and every param with its range</span>
 pcg fields fbm                   <span class="c"># the field fn's allowed keys and usage line</span></code></pre></div>
-    <p>Before either, though, ask whether the thing already exists. <code>docs/primitives.md</code> opens with a one-line summary of each named primitive and <code>docs/graphs.md</code> indexes 76 corpus graphs by what each one teaches — and copying the shape of a graph near your goal beats composing one from schemas. A primitive that fits collapses this whole step into one <code>ref</code> node.</p>
+    <p>Before either, though, ask whether the thing already exists. <code>docs/primitives.md</code> opens with a one-line summary of each named primitive and <code>docs/graphs.md</code> indexes 77 corpus graphs by what each one teaches — and copying the shape of a graph near your goal beats composing one from schemas. A primitive that fits collapses this whole step into one <code>ref</code> node.</p>
 
     <h3>2 · Emit</h3>
     <p>Write the document to a file. Use the chapter 9 example verbatim — four nodes, three connections, two outputs — saved as <code>g.json</code>. From here on the file on disk is the artifact; every command below reads it and none of them modifies it.</p>

@@ -28,11 +28,12 @@ import {
 } from "pcg-ts";
 import {
   type StationStageOptions,
+  addCoverageRepair,
   addStationStage,
   gaussianField,
   roundField,
 } from "../demos/racetrack/stationGraph.js";
-import { FITTED } from "../demos/racetrack/stations.js";
+import { COVERAGE, FITTED } from "../demos/racetrack/stations.js";
 
 /**
  * A cloud whose points are at distinct positions, which is what makes
@@ -139,9 +140,26 @@ describe("stationGraph: the gaussian a field can express", () => {
     // the expression's RANGE rather than a sampling test: the clamp puts
     // a hard ceiling on |value| at sqrt(-2*log(1e-7)) = 5.68.
     const v = sample(gaussianField("f.r", "f.theta"), N, 4242);
-    for (const x of v) expect(Number.isFinite(x)).toBe(true);
     const ceiling = Math.sqrt(-2 * Math.log(1e-7));
-    for (const x of v) expect(Math.abs(x)).toBeLessThanOrEqual(ceiling);
+    // Scanned into two numbers and asserted once, rather than asserting
+    // per draw: 200,000 points is 400,000 `expect` calls, which is slow
+    // enough to time the test out under a full-suite run and says no more
+    // than this does. A failure still names the offender.
+    let nonFinite = 0;
+    let worst = 0;
+    let worstAt = -1;
+    for (let i = 0; i < v.length; i++) {
+      if (!Number.isFinite(v[i])) nonFinite++;
+      const a = Math.abs(v[i]);
+      if (a > worst) {
+        worst = a;
+        worstAt = i;
+      }
+    }
+    expect(nonFinite, `${nonFinite} of ${N} draws were not finite`).toBe(0);
+    expect(worst, `draw ${worstAt} reached ${worst}, past the clamp's ${ceiling}`).toBeLessThanOrEqual(
+      ceiling,
+    );
   });
 
   it("draws independently from two keys, and identically from one", () => {
@@ -379,5 +397,137 @@ describe("stationGraph: the process as a graph", () => {
     // 1.0 because 21 bins is a small sample, which is why the bound is
     // 1.9 rather than something tighter.
     expect(variance / mean).toBeLessThan(1.9);
+  });
+});
+
+describe("stationGraph: D-4's coverage repair", () => {
+  const HALF_WIDTH = 9;
+  const LAP_W = 347;
+  /** The world-unit length the repair will divide back down to LAP_W. */
+  const LAP_LEN = LAP_W * HALF_WIDTH;
+
+  /**
+   * A station list as a bound geometry.
+   *
+   * THE REPAIR NEEDS NO PATH, which is why this fixture has none: it reads
+   * `stationW` and the lap's length off the POINT domain and does all its
+   * ring arithmetic there. Building the cloud by hand is what lets a test
+   * state the hole it wants closed instead of hunting a seed that happens
+   * to leave one.
+   */
+  function stationCloud(stations: readonly number[]): ReturnType<typeof createPointCloud> {
+    const geo = createPointCloud(stations.length);
+    const P = geo.attrs.point.require("P").data;
+    const st = geo.attrs.point.add("stationW", "f32", 1);
+    const len = geo.attrs.point.add("lapLen", "f32", 1);
+    for (let i = 0; i < stations.length; i++) {
+      // Distinct positions: nothing here reads P, but a cloud of
+      // coincident points is the fixture that hides an identity bug.
+      P[i * 3] = i;
+      st.set(i, stations[i]);
+      len.set(i, LAP_LEN);
+    }
+    return geo;
+  }
+
+  /** The gap ring, computed independently of the graph. */
+  function gapRing(stations: readonly number[]): number[] {
+    const s = [...stations].sort((a, b) => a - b);
+    const gaps: number[] = [];
+    for (let i = 0; i < s.length; i++) {
+      gaps.push(i === s.length - 1 ? s[0] + LAP_W - s[i] : s[i + 1] - s[i]);
+    }
+    return gaps;
+  }
+
+  const longestGap = (stations: readonly number[]): number => Math.max(...gapRing(stations));
+
+  async function repairOf(
+    input: readonly number[],
+  ): Promise<{ stations: number[]; rounds: number; converged: number }> {
+    const g = new Graph(5);
+    const cloud = g.add(dataInput, {}, "cloud");
+    g.setParam(cloud, "items", [makeGeometryItem(stationCloud(input))]);
+    const repair = addCoverageRepair(g, { node: cloud, pin: "out" }, { halfWidth: HALF_WIDTH });
+    g.output(repair.out, "carry", "stations");
+    g.output(repair.out, repair.roundsPin, "rounds");
+    g.output(repair.out, repair.convergedPin, "converged");
+
+    const cooked = await cook(g);
+    const geo = (cooked.outputs.stations[0] as { geo: Geometry }).geo;
+    const col = geo.attrs.point.require("stationW");
+    const out: number[] = [];
+    for (let i = 0; i < geo.attrs.point.count; i++) out.push(col.get(i) as number);
+    return {
+      stations: out,
+      rounds: (cooked.outputs.rounds[0] as { value: number }).value,
+      converged: (cooked.outputs.converged[0] as { value: number }).value,
+    };
+  }
+
+  it("closes a hole it was built to have", async () => {
+    // Every 5 W over most of the lap, then nothing: one deliberate hole,
+    // far wider than the 25 W bound.
+    const holed: number[] = [];
+    for (let s = 0; s < LAP_W - 60; s += 5) holed.push(s);
+    expect(longestGap(holed)).toBeGreaterThan(COVERAGE.maxGapW);
+
+    const got = await repairOf(holed);
+    expect(got.stations).toHaveLength(holed.length);
+    expect(longestGap(got.stations)).toBeLessThanOrEqual(COVERAGE.maxGapW + 1e-2);
+    expect(got.converged).toBe(1);
+  });
+
+  it("does nothing to a lap that already satisfies D-4", async () => {
+    const even: number[] = [];
+    for (let s = 0; s + 5 <= LAP_W; s += 5) even.push(s);
+    expect(longestGap(even)).toBeLessThanOrEqual(COVERAGE.maxGapW);
+
+    const got = await repairOf(even);
+    // Untouched, and settled on the FIRST round -- a repair that moved
+    // something and moved it back would also come out equal here, so the
+    // round count is the half of this claim that says it never fired.
+    expect([...got.stations].sort((a, b) => a - b).map((v) => Math.round(v * 1e3) / 1e3)).toEqual(
+      [...even].sort((a, b) => a - b),
+    );
+    expect(got.rounds).toBe(1);
+    expect(got.converged).toBe(1);
+  });
+
+  it("moves, and never adds or drops", async () => {
+    const holed: number[] = [];
+    for (let s = 0; s < LAP_W - 80; s += 4) holed.push(s);
+    const got = await repairOf(holed);
+    expect(got.stations).toHaveLength(holed.length);
+  });
+
+  it("reports an un-closable gap instead of spinning on it", async () => {
+    // Two placements a third of a lap apart. Both bound the widest gap,
+    // so both are excluded from donating and there is no third to take:
+    // the loop must settle saying nothing moved, rather than run to its
+    // cap or throw.
+    const got = await repairOf([0, LAP_W / 3]);
+    expect(got.stations).toHaveLength(2);
+    expect(longestGap(got.stations)).toBeGreaterThan(COVERAGE.maxGapW);
+    expect(got.converged).toBe(1);
+  });
+
+  it("takes the donor from the crowd, not from the edge of the hole", async () => {
+    // A tight clump and one wide hole. The rule says the donor is the
+    // placement whose NEAREST NEIGHBOUR is closest -- so it must come out
+    // of the clump, and the two stations bounding the hole must survive
+    // where they are.
+    const clump = [0, 0.5, 1, 1.5, 2, 2.5, 3];
+    const spread = [80, 160, 240, 320];
+    const got = await repairOf([...clump, ...spread]);
+    expect(got.stations).toHaveLength(clump.length + spread.length);
+    // Every spread station is still where it was: none of them was the
+    // most redundant placement on the lap.
+    for (const s of spread) {
+      expect(got.stations.some((v) => Math.abs(v - s) < 1e-2)).toBe(true);
+    }
+    // ...and the clump gave one up.
+    const stillClumped = got.stations.filter((v) => v <= 3.5).length;
+    expect(stillClumped).toBeLessThan(clump.length);
   });
 });

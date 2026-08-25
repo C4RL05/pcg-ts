@@ -37,34 +37,42 @@
  * `buildDressingGraph`.
  */
 import {
+  type ExposedPin,
   type Field,
-  type Graph,
+  Graph,
   type NodeHandle,
   add,
   attribute,
   attributeReduce,
   copyToPoints,
   cos,
+  eq,
   filterByExpression,
   floor,
+  gt,
   index,
   log,
   lt,
   max,
   mergePoints,
+  min,
   mod,
   mul,
+  pathShift,
   pointLine,
   pointScatterOnPath,
+  pointsToPath,
   promoteAttribute,
   randomField,
   removeAttribute,
+  repeatUntilNode,
+  select,
   setAttribute,
   sqrt,
   sub,
   transferByIndex,
 } from "pcg-ts";
-import { FITTED, type StationParams } from "./stations.js";
+import { COVERAGE, FITTED, type StationParams } from "./stations.js";
 
 /**
  * The smallest uniform a gaussian may take the log of.
@@ -484,4 +492,390 @@ export function addStationStage(
   g.connect(merged, "out", wrapped, "in");
 
   return { out: wrapped, stationAttr, slotsPerSuper: slots };
+}
+
+/**
+ * A sentinel that loses every `min` against a real candidate.
+ *
+ * NOT INFINITY, deliberately. A field param is guarded against non-finite
+ * values, so an Infinity here would be refused at the resolve rather than
+ * losing a comparison. It only has to beat an index (bounded by the point
+ * count) and a gap (bounded by the lap), and 1e9 is past both by orders
+ * of magnitude on any track anyone will build.
+ */
+const LOSES = 1e9;
+
+/**
+ * Rounds the coverage repair may take before it gives up and says so.
+ *
+ * `stations.ts` bounds its own loop at `ceil(lapW / maxGapW) + 2` — one
+ * pass can close at most one gap, and a lap cannot hold more than
+ * `lapW / 25` gaps that wide. That is 14 to 20 rounds over this demo's
+ * 286-443 W range. This is a graph-construction constant and cannot read
+ * the lap, so it is the top of that range with headroom rather than the
+ * exact bound, and being generous costs nothing: the loop stops the round
+ * it stops moving, not when it runs out.
+ */
+const REPAIR_MAX_ROUNDS = 32;
+
+/** The detail scalar `repeatUntil` reads: zero means settled. */
+const REPAIR_SETTLE_ATTR = "d4Moves";
+
+/** Euclidean remainder, spelled so it holds whichever way `mod` rounds. */
+function wrapTo(value: Field | number, modulus: Field | number): Field {
+  return mod(add(mod(value, modulus), modulus), modulus);
+}
+
+/**
+ * Reduce a point column to one number and hand it back to every point.
+ *
+ * `attributeReduce` writes to the DETAIL domain, where a point field
+ * cannot see it, so the promote is not decoration — without it the next
+ * expression fails with "attribute not found". Every use here is the same
+ * shape: take a lap-wide extremum, then let each point compare itself
+ * against it.
+ */
+function broadcast(
+  g: Graph,
+  from: NodeHandle,
+  column: string,
+  mode: "min" | "max" | "sum",
+  outName: string,
+  tag: string,
+): NodeHandle {
+  const reduced = g.add(
+    attributeReduce,
+    { name: column, domain: "point", mode, outName },
+    `${tag}Reduce`,
+  );
+  g.connect(from, "out", reduced, "in");
+  const promoted = g.add(
+    promoteAttribute,
+    { name: outName, from: "detail", to: "point", mode: "first" },
+    `${tag}Bcast`,
+  );
+  g.connect(reduced, "out", promoted, "in");
+  return promoted;
+}
+
+/** Write one scalar column and return the node, to keep the chain flat. */
+function put(
+  g: Graph,
+  from: NodeHandle,
+  name: string,
+  value: Field | number,
+  id: string,
+): NodeHandle {
+  const n = g.add(setAttribute, { name, tupleSize: 1, value }, id);
+  g.connect(from, "out", n, "in");
+  return n;
+}
+
+/**
+ * ONE ROUND of D-4: close the widest gap by moving the most redundant
+ * placement into it.
+ *
+ * THE RULE, TRANSCRIBED FROM `repairPlacementCoverage` RATHER THAN
+ * REINVENTED. Sort the stations round the lap and take the gap ring —
+ * every gap between neighbours, the wrap included, because a lap has no
+ * end for a gap to fall off. While the widest gap exceeds
+ * `COVERAGE.maxGapW`, find the DONOR: the placement whose nearest
+ * neighbour is closest, anywhere on the lap, excluding the two placements
+ * that bound the gap being filled. Move it to the gap's midpoint. Never
+ * add, never drop — the count is D-1's and this rule does not get to
+ * spend it.
+ *
+ * WHY THE DONOR IS LAP-GLOBAL AND WHY THAT IS FINE HERE. It reads the
+ * whole ring to find one point, so it is exactly the kind of rule a cell
+ * cannot run. It lives on the unbounded level, which has one cell, and
+ * `dressGraph`'s own note says the same thing about why D-4 was left out
+ * of the per-cell repair loop.
+ *
+ * THE RING IS ARITHMETIC, NOT GEOMETRY, and that distinction is load-
+ * bearing. `pointsToPath` orders the stations and `pathShift` reads each
+ * one's successor, so a gap is a subtraction of two arc positions. The
+ * tempting alternative — build the ordered polyline and let
+ * `pathSegments` measure it — returns CHORDS, which on a 350 W lap run
+ * about 0.8% short of the arc at a 25 W threshold. A rule stated as an
+ * exact bound cannot be tested with a measurement that is quietly 0.8%
+ * optimistic.
+ *
+ * TIES BREAK TO THE LOWEST POINT INDEX, everywhere, and are resolved by a
+ * second reduction rather than by hoping floats differ: the first pass
+ * finds the extreme VALUE, the second finds the smallest index holding
+ * it. Two gaps of identical width, or two placements equally redundant,
+ * are ordinary on a lap built from f32 columns, and a rule that picked
+ * "whichever the reduction happened to see first" would not be
+ * reproducible across cook orders.
+ */
+function buildCoverageBody(opts: {
+  readonly stationAttr: string;
+  readonly lengthAttr: string;
+  readonly halfWidth: number;
+  readonly maxGapW: number;
+}): { graph: Graph; inputs: ExposedPin[]; outputs: ExposedPin[] } {
+  const { stationAttr, lengthAttr, halfWidth, maxGapW } = opts;
+  const g = new Graph(1);
+
+  const lapW = mul(1 / halfWidth, attribute(lengthAttr));
+  const station = attribute(stationAttr);
+
+  // The ring. `closed: true` is what makes the wrap gap a gap like any
+  // other rather than a special case bolted on afterwards.
+  // `shortGroups: "skip"` IS THE DEGENERATE-LAP EXIT. A closed ring needs
+  // three points; with fewer, `pointsToPath` would refuse and fail the
+  // whole cook. Skipping leaves those points in the cloud with no path
+  // over them, every shift below MISSES, nothing becomes eligible, and
+  // the round settles having moved nothing -- which is exactly what
+  // `repairPlacementCoverage` does at `out.length < 3`: report an
+  // un-closable gap rather than spin on it or throw.
+  const ring = g.add(
+    pointsToPath,
+    { closed: true, orderAttr: stationAttr, shortGroups: "skip" },
+    "ring",
+  );
+  // No dataInput here: `repeatUntil` feeds the carry straight into the
+  // body's HEAD pin, the way `buildRepairBody` wires its own.
+
+  // Each station learns its successor's arc position, then its own gap.
+  const withNext = g.add(
+    pathShift,
+    {
+      attributes: [stationAttr],
+      outNames: ["__next"],
+      offset: 1,
+      outOfRange: "wrap",
+      hitAttr: "__hasNext",
+    },
+    "shiftNext",
+  );
+  g.connect(ring, "out", withNext, "in");
+
+  // WRAPPED, because the last station's successor is the first and the
+  // raw difference is then negative by a lap.
+  const gaps = put(
+    g,
+    withNext,
+    "__gap",
+    select(attribute("__hasNext"), wrapTo(sub(attribute("__next"), station), lapW), 0),
+    "gap",
+  );
+
+  // ...and its predecessor's gap, which is what makes "nearest neighbour"
+  // a two-sided question.
+  const withPrev = g.add(
+    pathShift,
+    { attributes: ["__gap"], outNames: ["__prevGap"], offset: -1, outOfRange: "wrap" },
+    "shiftPrev",
+  );
+  g.connect(gaps, "out", withPrev, "in");
+
+  const nearest = put(
+    g,
+    withPrev,
+    "__near",
+    min(attribute("__gap"), attribute("__prevGap")),
+    "near",
+  );
+
+  // ---- the gap to fill -------------------------------------------------
+  const worstGap = broadcast(g, nearest, "__gap", "max", "__worstGap", "worst");
+  // Is there anything to do at all? Every point agrees, since the widest
+  // gap is a lap-wide number.
+  const needs = put(g, worstGap, "__needs", gt(attribute("__worstGap"), maxGapW), "needs");
+
+  const worstKey = put(
+    g,
+    needs,
+    "__worstKey",
+    select(eq(attribute("__gap"), attribute("__worstGap")), index(), LOSES),
+    "worstKey",
+  );
+  const worstIdx = broadcast(g, worstKey, "__worstKey", "min", "__worstIdx", "worstIdx");
+  const isWorst = put(g, worstIdx, "__isWorst", eq(index(), attribute("__worstIdx")), "isWorst");
+
+  // The midpoint of that gap, broadcast off the one point that owns it.
+  // `max` picks it out because every other point contributes -1, and a
+  // station is never negative.
+  const midKey = put(
+    g,
+    isWorst,
+    "__midKey",
+    select(
+      attribute("__isWorst"),
+      wrapTo(add(attribute(stationAttr), mul(0.5, attribute("__gap"))), lapW),
+      -1,
+    ),
+    "midKey",
+  );
+  const mid = broadcast(g, midKey, "__midKey", "max", "__mid", "mid");
+
+  // ---- the donor -------------------------------------------------------
+  // The gap is bounded by the worst point and the one AFTER it, and
+  // neither may be the donor: moving either would not close the gap, it
+  // would move one of its walls. "The point after the worst" is the worst
+  // flag read backwards by one.
+  const afterWorst = g.add(
+    pathShift,
+    { attributes: ["__isWorst"], outNames: ["__isAfterWorst"], offset: -1, outOfRange: "wrap" },
+    "shiftWorst",
+  );
+  g.connect(mid, "out", afterWorst, "in");
+
+  const eligible = put(
+    g,
+    afterWorst,
+    "__ok",
+    mul(
+      mul(attribute("__needs"), attribute("__hasNext")),
+      sub(1, max(attribute("__isWorst"), attribute("__isAfterWorst"))),
+    ),
+    "ok",
+  );
+
+  const donorKey = put(
+    g,
+    eligible,
+    "__donorKey",
+    select(attribute("__ok"), attribute("__near"), LOSES),
+    "donorKey",
+  );
+  const bestNear = broadcast(g, donorKey, "__donorKey", "min", "__bestNear", "bestNear");
+
+  const donorIdxKey = put(
+    g,
+    bestNear,
+    "__donorIdxKey",
+    select(
+      mul(attribute("__ok"), eq(attribute("__near"), attribute("__bestNear"))),
+      index(),
+      LOSES,
+    ),
+    "donorIdxKey",
+  );
+  const donorIdx = broadcast(g, donorIdxKey, "__donorIdxKey", "min", "__donorIdx", "donorIdx");
+
+  // NOTHING ELIGIBLE LEAVES `__donorIdx` AT THE SENTINEL, which no real
+  // index equals, so the move below is a no-op and the round reports zero
+  // moves and settles. That is the graph's spelling of
+  // `repairPlacementCoverage`'s "donor < 0" exit: an un-closable gap is
+  // REPORTED by the loop's `converged` output, never thrown.
+  const isDonor = put(g, donorIdx, "__isDonor", eq(index(), attribute("__donorIdx")), "isDonor");
+
+  const moved = put(
+    g,
+    isDonor,
+    stationAttr,
+    select(attribute("__isDonor"), attribute("__mid"), attribute(stationAttr)),
+    "apply",
+  );
+
+  // Drop this round's scratch columns AND the ring's topology. The carry
+  // re-enters the body next round, where `pointsToPath` builds the order
+  // again from the stations as they now are -- a repair that moved a
+  // placement changed the order, so the ring has to be rebuilt rather
+  // than reused. `filterByExpression` with a constant-true predicate is
+  // the library's way to say "keep every point, keep no topology".
+  const cleaned = g.add(
+    removeAttribute,
+    {
+      names: [
+        "__next",
+        "__hasNext",
+        "__gap",
+        "__prevGap",
+        "__near",
+        "__worstGap",
+        "__needs",
+        "__worstKey",
+        "__worstIdx",
+        "__isWorst",
+        "__midKey",
+        "__mid",
+        "__isAfterWorst",
+        "__ok",
+        "__donorKey",
+        "__bestNear",
+        "__donorIdxKey",
+        "__donorIdx",
+      ],
+      domain: "point",
+      strict: false,
+    },
+    "clean",
+  );
+  g.connect(moved, "out", cleaned, "in");
+
+  const untangled = g.add(filterByExpression, { predicate: 1, topology: "drop" }, "untangle");
+  g.connect(cleaned, "out", untangled, "in");
+
+  // THE SETTLE SIGNAL IS WRITTEN LAST, AND THE ORDER IS THE POINT. It
+  // lands on the DETAIL domain, and every node after it is free to hand
+  // back a geometry without that domain's columns -- at which point
+  // `repeatUntil` refuses, because an absent signal is deliberately not
+  // read as "settled". Reducing after the cleanup means the body's output
+  // node is the one that wrote it.
+  //
+  // `__isDonor` is therefore the one scratch column the cleanup above
+  // leaves alone: this reads it. It is overwritten every round, so the
+  // carry gains one column rather than accumulating any, and it says
+  // which placement the last round moved -- which is worth keeping.
+  const settle = g.add(
+    attributeReduce,
+    { name: "__isDonor", domain: "point", mode: "sum", outName: REPAIR_SETTLE_ATTR },
+    "settle",
+  );
+  g.connect(untangled, "out", settle, "in");
+
+  return {
+    graph: g,
+    // The name `repeatUntil` reserves for the pin it feeds back.
+    inputs: [{ name: "carry", node: ring, pin: "in" }],
+    outputs: [{ name: "carry", node: settle, pin: "out" }],
+  };
+}
+
+/** What {@link addCoverageRepair} appends. */
+export interface CoverageRepair {
+  /** The node whose "carry" pin carries the repaired station cloud. */
+  readonly out: NodeHandle;
+  /** Its "rounds" pin: how many rounds the loop actually cooked. */
+  readonly roundsPin: string;
+  /** Its "converged" pin: 1 when it settled, 0 when it ran out of rounds. */
+  readonly convergedPin: string;
+}
+
+/**
+ * Append D-4's coverage repair to a graph, after the station process.
+ *
+ * The loop is bounded and REPORTS rather than throws when it cannot
+ * close a gap — two placements 50 W apart on a lap have no repair, and
+ * `stations.ts` answers that by recomputing the worst gap and handing it
+ * back rather than spinning on it. Read `converged` to tell the two
+ * apart.
+ */
+export function addCoverageRepair(
+  g: Graph,
+  upstream: { readonly node: NodeHandle; readonly pin: string },
+  opts: {
+    readonly stationAttr?: string;
+    readonly lengthAttr?: string;
+    readonly halfWidth: number;
+    readonly maxGapW?: number;
+    readonly prefix?: string;
+  },
+): CoverageRepair {
+  const body = buildCoverageBody({
+    stationAttr: opts.stationAttr ?? "stationW",
+    lengthAttr: opts.lengthAttr ?? "lapLen",
+    halfWidth: opts.halfWidth,
+    maxGapW: opts.maxGapW ?? COVERAGE.maxGapW,
+  });
+  const repair = g.add(
+    repeatUntilNode(body.graph, body.inputs, body.outputs),
+    { maxRounds: REPAIR_MAX_ROUNDS, settleAttr: REPAIR_SETTLE_ATTR },
+    `${opts.prefix ?? "d4"}Repair`,
+  );
+  g.connect(upstream.node, upstream.pin, repair, "carry");
+  return { out: repair, roundsPin: "rounds", convergedPin: "converged" };
 }

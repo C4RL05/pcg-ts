@@ -34,6 +34,7 @@ const ROOT_SURFACE = [
   // pathPointAt cannot answer because its output carries the path's own
   // count and topology.
   "transferAlongPath",
+  "pathShift",
   "transferByIndex",
   "ge",
   "getFieldSpec",

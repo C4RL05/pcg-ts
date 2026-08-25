@@ -76,6 +76,7 @@ export * from "./meshes.js";
 export * from "./surfaces.js";
 export * from "./samplers.js";
 export * from "./paths.js";
+export * from "./pathShift.js";
 export * from "./pointScatterOnPath.js";
 export * from "./transferAlongPath.js";
 export * from "./transferByIndex.js";

@@ -1113,7 +1113,11 @@ export interface PolylineWalk {
  * live here, so the two entry points cannot disagree about what counts as
  * a polyline.
  */
-export function polylineWalks(geo: Geometry, nodeType: string): PolylineWalk[] {
+export function polylineWalks(
+  geo: Geometry,
+  nodeType: string,
+  onEmpty: "throw" | "none" = "throw",
+): PolylineWalk[] {
   const v2p = geo.vertexToPoint;
   const starts = geo.primVertexStart;
   const counts = geo.primVertexCount;
@@ -1128,7 +1132,19 @@ export function polylineWalks(geo: Geometry, nodeType: string): PolylineWalk[] {
     for (let k = 0; k < nv; k++) points[k] = v2p[v0 + k];
     walks.push({ prim: p, points, closed: v2p[v0] === v2p[v0 + nv - 1] });
   }
-  if (walks.length === 0) throw noPolylines(geo, nodeType);
+  // `onEmpty: "none"` IS FOR THE NODES THAT HAVE AN ANSWER WITHOUT A PATH,
+  // and there are few of them. Most path nodes have nothing to say to a
+  // cloud with no polyline in it -- `pathScan` has nothing to scan,
+  // `pathResample` nothing to resample -- so the throw is the right
+  // report and stays the default. `pathShift` is the exception: its
+  // per-point rule already says a point in no polyline MISSES, so a
+  // geometry with no polyline at all is that same rule applied to every
+  // point rather than a new situation. Letting it ask costs one argument
+  // and keeps the selection rule above -- two vertices, and `primtype`
+  // when the geometry declares one -- in one place. A caller that
+  // mirrored those two clauses locally would be a second copy free to
+  // drift from this one.
+  if (walks.length === 0 && onEmpty === "throw") throw noPolylines(geo, nodeType);
   return walks;
 }
 

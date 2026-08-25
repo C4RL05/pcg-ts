@@ -443,6 +443,7 @@ describe("category metadata", () => {
       attributeReduce: "attribute",
       pathRuns: "attribute",
       pathScan: "attribute",
+      pathShift: "attribute",
       pathCoverage: "attribute",
       runFit: "attribute",
       attributeRemap: "attribute",
