@@ -2940,3 +2940,47 @@ matter and stays on the critical path, as the entry above says.
 generation is the one substantial rule left, the nodes it needs all ship,
 and the loop question it used to raise has already been decided and
 priced.
+
+### L-6's planner is a real rejection sampler, and `randomFrom` is what ports it, 2026-08-26
+
+MEASURED ON THE SHIPPED VOCABULARY, which matters because the scoping pass
+above reported different numbers from a different catalogue:
+
+  - **2 cover candidates out of 229 assets.** The asset draw inside a plan
+    is very nearly binary.
+  - **1, 1, 2, 1, 4, 3, 1, 1 stretches** across seeds 1-8, at **16 to 26
+    pieces** per lap. Not "up to 132": that figure is a bigger budget on a
+    catalogue this demo does not ship. The list is short by a couple of
+    dozen entries, which is still the largest edit any rule makes.
+  - **The clash test IS exercised.** Forced to budgets that want several
+    stretches, overlap rejections run 0-2 at realistic budgets and 33 at
+    160W. It is not dead code, which is what I was hoping to find.
+
+**So this is NOT Z-3 again.** Z-3's greedy search turned out to be a
+closed-form quota fill once the pairs were traced. This one does not
+collapse: `planEnclosure` accepts or rejects each candidate against the
+set it has already accepted, and that set is what the predicate reads.
+
+**It is still portable, and by the node this session added for something
+else.** The obstacle looked structural -- a rejection sampler needs a
+fresh draw per attempt, `repeatUntil` deliberately does not rotate its
+body's seed, and a body cannot see its own iteration index. But it does
+not need to: THE CARRY CAN COUNT. A detail attribute incremented once per
+round is an iteration index, and `randomFrom` keyed on it draws a fresh
+uniform per round without the seed moving at all. That is exactly what
+`randomFrom` is for -- a draw keyed on a VALUE the graph computes -- and
+the pose was only the case that found it.
+
+The rest is existing vocabulary: `attributeReduce` over the accepted cloud
+answers "does this candidate clash", `mergePoints` appends the one that
+does not, `transferAlongPath` reads the radius and the corner columns at
+the candidate's start, and `arcTile` tiles the accepted stretch into
+pieces.
+
+**What will NOT match, and the precedent for accepting it.** `rand(seed,
+k, salt)` and `randomFrom(k, salt)` are different hashes, so the graph
+plans different stretches from the same seed. Z-3's redraw made the same
+trade for the same reason and is checked on its POSTCONDITION instead:
+here that is no two stretches within `separationW`, none starting inside a
+tight corner or within `flareW` before one, and covered length within one
+draw of the budget.
