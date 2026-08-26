@@ -2726,3 +2726,80 @@ the rule cannot be checked against it, and `quotaRebalance` takes the
 order as a param so that changing it later is one expression rather than
 a new node. Worth measuring what a hashed priority does to the picture
 before deciding.
+
+### Z-3 is a graph, both halves, 2026-08-26
+
+The mix's decision and its redraw are both nodes now. On a settled lap the
+band shares come out inside Z-3 on all six bands -- over 0.106, verge
+0.043, near 0.328, mid 0.398, far 0.125, distant 0.000 -- through the cull
+that spends the loop undoing them, and all twenty seeds measured settle in
+at most five rounds.
+
+**What that leaves.** Of the repair loop's eight terms, five are graph
+stages (Z-1, L-1, L-5, and now both halves of Z-3), two never fire on this
+vocabulary (D-4's second pass, L-4), one never fires and is ported anyway
+(L-5), and exactly one FIRES and is not ported: **L-6's cover top-up**, at
++1 to +2 a round. `dressGraph.ts` argued it out on its merits long ago and
+the argument still holds -- it reads a measurement the previous repair
+invalidated, and it draws from `seed + rounds`, so both halves of the
+admission test fail.
+
+**So the rules are done and the ARCHITECTURE is what is left.** This is
+worth stating plainly because the rule list has been the plan for weeks
+and is now finished. What stops a game generating a track from a
+serialized graph and a spline is no longer a missing rule. It is that the
+lap level's graph is BUILT from a cooked `Lap`: `placementCloudInTrackFrame`
+turns a placement list into a cloud in TypeScript, through the lap's own
+frame lookup, so the level cannot be constructed until the road has been
+cooked and the list decided. `levels.ts` has said so from the day it was
+written, and names the way out -- make the station process and the frame
+lookup nodes. The station process IS a graph (`stationGraph.ts`). The
+frame lookup is what `transferAlongPath` answers.
+
+**The next unit is therefore the assembly**, not another rule: joining the
+stages that already exist -- spline, road, stations, corner language,
+asset choice, the repair body, the boxes -- into ONE graph with no
+TypeScript between them. Every piece has shipped and been checked against
+its rule; what has never been done is running them end to end without a
+`cook` in the middle.
+
+### What verification found in the redraw, and what it says about the suite, 2026-08-26
+
+Five defects, and the suite was green through all of them. The lesson is
+about the SUITE rather than about any of the five:
+
+  - every `buildDressGraph` case in the rule-comparison suite switches Z-3
+    off, because those cases measure the other three rules;
+  - the band-mix suite cooked the stage standalone, with no lift and no
+    loop;
+  - the streamed-level suite feeds it a list `dressLap` has already
+    balanced, so the quota marks nothing.
+
+Nothing cooked an unmixed list through the loop with the mix on. Three of
+the five defects were invisible for that reason alone, and the test that
+closes the gap found all three in one run.
+
+**P and `scale` were stale on every redrawn placement** -- both derived,
+both computed before the mix rewrote what they derive from, measured at up
+to 113 world units. Inside a loop that is worse than a plain bug: the next
+round repairs it, so it only escapes on the round the loop STOPS.
+
+**The settle signal could not see the mix**, which was an edit of mine that
+failed silently -- a string replace with the wrong indentation and no
+assertion that it matched anything. Every mechanical edit in this campaign
+now asserts its match count; this is the one that did not.
+
+**And the loop did not terminate on two seeds of twenty where `dressLap`
+does.** The mix refills a band, the next round's cull pushes the
+replacement off the racing line, the push changes its band, and the quota
+marks it again -- it is still the first eligible member of that band in
+station order. `repairBandMix` does not have this problem because it
+remembers the pairs it has tried. `PLACEMENT.mixTried` is that memory, and
+it bounds the mix by the population exactly as the reference's own pass
+loop is bounded.
+
+**Two tests were measuring nothing**, which is the same lesson one level
+down. One walked only the placements the stage does not write and compared
+`poseFor` to `poseFor`; the other could not reach the `cover:` half of a
+table it claimed to check, because no lap produces a cover placement for
+the mix to touch.
