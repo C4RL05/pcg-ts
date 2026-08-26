@@ -51,6 +51,7 @@ import type { Kit, PlacedBox } from "./kit.js";
 import type { Lap } from "./lap.js";
 import { placeAt } from "./lap.js";
 import {
+  type CornerBookkeepingResult,
   type DrawnCornerLanguage,
   type MarkerKit,
   type StationedPlacement,
@@ -203,6 +204,24 @@ export interface DressOptions {
     readonly markers?: MarkerKit;
     readonly pool: PlaceableAsset[];
   };
+
+  /**
+   * Which placement each corner converts, and which ones each ruler
+   * displaces, when a graph has decided.
+   *
+   * THE FIFTH SEAM, and the only one that is checkable EXACTLY. Nothing
+   * here is drawn -- a victim is chosen by counting and comparing -- so
+   * `cornerGraph.cookCornerBookkeeping` and the TypeScript search must
+   * agree placement for placement, and the suite asserts that rather than
+   * a distribution.
+   *
+   * ITS INDICES NAME THE LIST AS IT REACHES STEP 4, which is after the
+   * stations, the asset choice and Z-1 and before anything is converted.
+   * Cook it against exactly that list.
+   *
+   * Omitted, the TypeScript search runs as it always has.
+   */
+  readonly bookkeeping?: CornerBookkeepingResult;
 }
 
 /**
@@ -535,6 +554,68 @@ function legibilityHealth(
 }
 
 /**
+ * The lap as it reaches the corner language: stations, assets, Z-1.
+ *
+ * EXPORTED BECAUSE THE BOOKKEEPING'S INDICES NAME THIS LIST. A caller
+ * cooking `DressOptions.bookkeeping` has to hand the graph exactly the
+ * placements step 4 will see, and reproducing steps 1 to 3 on its own
+ * would be a second spelling of Z-1 -- the kind of duplication that
+ * agrees until the day it does not. `dressLap` calls this too, so there
+ * is one definition and a caller re-running it gets the same list rather
+ * than a similar one.
+ *
+ * CHEAP TO RE-RUN, which is what makes that arrangement honest rather
+ * than merely tidy: it is a draw the caller already has plus one pure
+ * function per placement, so the caller cooking it and `dressLap`
+ * computing it again cost the same twice and cannot disagree.
+ */
+export function placementsBeforeLanguage(
+  lap: Lap,
+  seed: number,
+  pool: readonly PlaceableAsset[],
+  opts: DressOptions = {},
+): { placements: StationedPlacement[]; corridorFixes: number } {
+  const scale = opts.density ?? 1;
+  const st =
+    opts.stations ??
+    makeStationsDetailed(
+      lap.lengthW,
+      seed,
+      scale === 1 ? FITTED : { ...FITTED, density: FITTED.density * scale },
+    );
+  const chosen = opts.choices;
+  if (chosen && chosen.length !== st.stations.length) {
+    throw new Error(
+      `dressLap: opts.choices has ${chosen.length} entries but there are ${st.stations.length} stations. They are parallel lists — entry i is the asset for station i — so they must come from the same cook; see assetGraph.cookLapPlacements, which returns both.`,
+    );
+  }
+  let placements: StationedPlacement[] = [];
+  for (let i = 0; i < st.stations.length; i++) {
+    const s = st.stations[i];
+    const p = chosen
+      ? fromChoice(chosen[i], pool, i)
+      : placeAsset(pool, bucketOf(radiusAtW(lap, s)), seed, i);
+    if (p) placements.push({ ...p, station: s });
+  }
+
+  // Z-1, by size. The asset's own lateral distribution reaches inside the
+  // corridor for some assets, which is what makes this reachable.
+  let corridorFixes = 0;
+  placements = placements.map((p) => {
+    // Cover is placed clear of the corridor by construction — see
+    // `coverPlacements`. Standing a tunnel rib off to the corridor edge
+    // puts a hole in the roof over the racing line.
+    if (p.cover) return p;
+    const baseH = p.h - p.asset.size.tall / 2;
+    const fixed = resolveCorridor(p.t, baseH, p.asset.size.across, p.asset.size.tall);
+    if (!moved(fixed, p.t, baseH)) return p;
+    corridorFixes++;
+    return { ...p, t: fixed.t, h: fixed.baseH + p.asset.size.tall / 2 };
+  });
+  return { placements, corridorFixes };
+}
+
+/**
  * Dress a lap from a measured kit.
  *
  * The output is the same `PlacedBox` shape the reference log produces, so
@@ -560,50 +641,21 @@ export function dressLap(
     markers ? [markers.sharp.id, markers.open.id, markers.brake.id] : [],
   );
 
-  // 1. Stations, from the caller when it has already decided and from
-  //    the fitted process when it has not. See `DressOptions.stations`.
-  const scale = opts.density ?? 1;
+  // 1, 2 and 3: stations, assets and Z-1, all in one place because a
+  //    caller cooking `opts.bookkeeping` needs exactly this list and must
+  //    not have to build it a second way. See `placementsBeforeLanguage`.
+  const staged = placementsBeforeLanguage(lap, seed, pool, opts);
   const st =
     opts.stations ??
     makeStationsDetailed(
       lap.lengthW,
       seed,
-      scale === 1 ? FITTED : { ...FITTED, density: FITTED.density * scale },
+      (opts.density ?? 1) === 1
+        ? FITTED
+        : { ...FITTED, density: FITTED.density * (opts.density ?? 1) },
     );
-
-  // 2. An asset per station, from its own measured behaviour, weighted by
-  //    the curvature THERE — from the caller when it has already drawn,
-  //    and from the TypeScript draw when it has not. See
-  //    `DressOptions.choices`.
-  const chosen = opts.choices;
-  if (chosen && chosen.length !== st.stations.length) {
-    throw new Error(
-      `dressLap: opts.choices has ${chosen.length} entries but there are ${st.stations.length} stations. They are parallel lists — entry i is the asset for station i — so they must come from the same cook; see assetGraph.cookLapPlacements, which returns both.`,
-    );
-  }
-  let placements: StationedPlacement[] = [];
-  for (let i = 0; i < st.stations.length; i++) {
-    const s = st.stations[i];
-    const p = chosen
-      ? fromChoice(chosen[i], pool, i)
-      : placeAsset(pool, bucketOf(radiusAtW(lap, s)), seed, i);
-    if (p) placements.push({ ...p, station: s });
-  }
-
-  // 3. Z-1, by size. The asset's own lateral distribution reaches inside
-  //    the corridor for some assets, which is what makes this reachable.
-  let corridorFixes = 0;
-  placements = placements.map((p) => {
-    // Cover is placed clear of the corridor by construction — see
-    // `coverPlacements`. Standing a tunnel rib off to the corridor edge
-    // puts a hole in the roof over the racing line.
-    if (p.cover) return p;
-    const baseH = p.h - p.asset.size.tall / 2;
-    const fixed = resolveCorridor(p.t, baseH, p.asset.size.across, p.asset.size.tall);
-    if (!moved(fixed, p.t, baseH)) return p;
-    corridorFixes++;
-    return { ...p, t: fixed.t, h: fixed.baseH + p.asset.size.tall / 2 };
-  });
+  let placements: StationedPlacement[] = staged.placements;
+  let corridorFixes = staged.corridorFixes;
 
   // 4. L-2 and L-3. Markers land outside the corridor by construction, so
   //    they do not need step 3 run again over them. Where each marker and
@@ -616,6 +668,7 @@ export function dressLap(
     lap.lengthW,
     seed,
     opts.language,
+    opts.bookkeeping,
   );
   placements = lang.placements;
 

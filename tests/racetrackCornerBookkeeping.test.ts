@@ -31,7 +31,8 @@ import {
   placeCornerLanguage,
 } from "../demos/racetrack/legibility.js";
 import type { PlaceableAsset } from "../demos/racetrack/assets.js";
-import { reserveFor } from "../demos/racetrack/dress.js";
+import { dressLap, reserveFor } from "../demos/racetrack/dress.js";
+import { resolveCorridor } from "../demos/racetrack/zones.js";
 import { cookLapPlacements } from "../demos/racetrack/assetGraph.js";
 import { shippedVocabulary } from "../demos/racetrack/vocabulary.js";
 import { lapFor } from "./support/lap.js";
@@ -265,5 +266,70 @@ describe("cornerBookkeeping: against the shipped function", () => {
     expect(converted).toBe(lang.converted);
     expect(got.added.length).toBe(lang.added);
     expect(displaced).toBe(lang.brakeDisplaced);
+  });
+});
+
+describe("cornerBookkeeping: through dressLap", () => {
+  it.each([1, 2, 3])("dresses the same lap either way (seed %i)", async (seed) => {
+    // THE CLAIM THAT MATTERS, and the one only a seam can make: handing
+    // `dressLap` the graph's bookkeeping must produce the SAME lap as
+    // letting it search for itself. Nothing here is drawn, so this is an
+    // equality rather than a range -- and it exercises the removal path,
+    // which the graph does by marking and `dressLap` does by filtering
+    // once, where the TypeScript splices as it goes.
+    const { lap } = await lapFor(1);
+    const reservation = reserveFor(KIT, seed);
+    const { markers, pool } = reservation;
+    if (!markers) throw new Error("racetrackCornerBookkeeping: no markers reserved");
+    const decided = await cookLapPlacements({ lap, seed, pool, markers });
+
+    const plain = dressLap(KIT, lap, seed, {
+      reservation,
+      stations: decided.stations,
+      choices: decided.choices,
+      language: decided.language,
+    });
+
+    // The list as it reaches step 4, which is what the bookkeeping's
+    // indices name: stations, assets and Z-1, and nothing after.
+    const victims: VictimPlacement[] = [];
+    for (let i = 0; i < decided.stations.stations.length; i++) {
+      const ch = decided.choices[i];
+      if (!ch) continue;
+      const asset = pool[ch.assetIndex];
+      const baseH = ch.h - asset.size.tall / 2;
+      const fixed = resolveCorridor(ch.t, baseH, asset.size.across, asset.size.tall);
+      victims.push({
+        assetOrd: ch.assetIndex,
+        station: decided.stations.stations[i],
+        t: fixed.t,
+      });
+    }
+    const corners = await cookCorners({ lap });
+    const booked = await cookCornerBookkeeping({
+      placements: victims,
+      corners,
+      lapW: lap.lengthW,
+    });
+    const viaGraph = dressLap(KIT, lap, seed, {
+      reservation,
+      stations: decided.stations,
+      choices: decided.choices,
+      language: decided.language,
+      bookkeeping: booked,
+    });
+
+    // eslint-disable-next-line no-console
+    console.log(
+      `seed ${seed}: plain ${plain.stats.placed} placed L-2 ${plain.stats.markersConverted}+${plain.stats.markersAdded}, graph ${viaGraph.stats.placed} placed L-2 ${viaGraph.stats.markersConverted}+${viaGraph.stats.markersAdded}`,
+    );
+    expect(viaGraph.stats.markersConverted).toBe(plain.stats.markersConverted);
+    expect(viaGraph.stats.markersAdded).toBe(plain.stats.markersAdded);
+    expect(viaGraph.stats.brakeMarks).toBe(plain.stats.brakeMarks);
+    expect(viaGraph.stats.placed).toBe(plain.stats.placed);
+    // THE WHOLE LAP, not just the counts: the boxes are what the page
+    // draws, and two laps with the same counts and different contents
+    // would pass everything above.
+    expect(JSON.stringify(viaGraph.boxes)).toBe(JSON.stringify(plain.boxes));
   });
 });

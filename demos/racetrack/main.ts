@@ -84,9 +84,14 @@ import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/pane
 import { attachWordmark } from "../../shared/wordmark.js";
 import { BACKGROUND } from "../../shared/scene.js";
 import { OUTPUTS, buildRoadGraph } from "./graph.js";
-import { type DressStats, type Dressing, dressLap } from "./dress.js";
+import {
+  type DressStats,
+  type Dressing,
+  dressLap,
+  placementsBeforeLanguage,
+} from "./dress.js";
 import type { PlaceableAsset } from "./assets.js";
-import { cookReserveMarkers } from "./cornerGraph.js";
+import { cookCornerBookkeeping, cookCorners, cookReserveMarkers } from "./cornerGraph.js";
 import { cookLapPlacements } from "./assetGraph.js";
 import { DENSITY } from "./stations.js";
 import { type Kit, type PlacedBox, loadKit, placeKit } from "./kit.js";
@@ -987,13 +992,35 @@ async function cookAndBuild(): Promise<void> {
       markers: reservation.markers,
       densityScale: state.density,
     });
-    const dressed = dressLap(kit, next.lap, state.seed, {
+    // AND THE BOOKKEEPING, which needs the lap as it reaches step 4 --
+    // stations, assets and Z-1 and nothing after. `dressLap` exports the
+    // one definition of that list rather than the page building a second
+    // one, and re-running it below costs a draw the page already has plus
+    // one pure function per placement.
+    const dressOpts = {
       density: state.density,
       reservation,
       stations: decided.stations,
       choices: decided.choices,
       language: decided.language,
+    };
+    const staged = placementsBeforeLanguage(next.lap, state.seed, reservation.pool, dressOpts);
+    // BY ID, NOT BY OBJECT IDENTITY. The placements do carry the very
+    // objects the pool holds today -- `fromChoice` returns `pool[i]` and
+    // Z-1 spreads it -- so `indexOf` would work and would stop working
+    // the first time anything downstream cloned a placement, silently,
+    // as an ord of -1.
+    const ordOfId = new Map(reservation.pool.map((a, i) => [a.id, i]));
+    const bookkeeping = await cookCornerBookkeeping({
+      placements: staged.placements.map((p) => ({
+        assetOrd: ordOfId.get(p.asset.id) ?? -1,
+        station: p.station,
+        t: p.t,
+      })),
+      corners: await cookCorners({ lap: next.lap }),
+      lapW: next.lap.lengthW,
     });
+    const dressed = dressLap(kit, next.lap, state.seed, { ...dressOpts, bookkeeping });
     lastStats = dressed.stats;
     buildCircuit(next);
     const graphs = buildStreamedDressing(next, dressed);

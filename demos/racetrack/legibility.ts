@@ -491,6 +491,25 @@ export interface DrawnCornerLanguage {
   readonly rulers: readonly { readonly station: number; readonly t: number; readonly h: number }[];
 }
 
+/**
+ * What `cornerGraph.cookCornerBookkeeping` decides, in the shape this
+ * function consumes.
+ *
+ * DECLARED HERE RATHER THAN IMPORTED, so that `legibility.ts` -- which is
+ * the statement of the rules and owes nothing to any graph -- does not
+ * depend on a module that exists to port it. The graph's own type
+ * structurally satisfies this one.
+ */
+export interface CornerBookkeepingResult {
+  /** Which corner converted placement `i`, or -1. Parallel to the input. */
+  readonly claimedBy: readonly number[];
+  /** Which tight corner's ruler displaced placement `i`, or -1. */
+  readonly displacedBy: readonly number[];
+}
+
+/** Stands in for the histogram on the path that does not compute one. */
+const NO_COUNTS = new Map<number, number>();
+
 export function placeCornerLanguage(
   placements: readonly StationedPlacement[],
   corners: readonly Corner[],
@@ -498,6 +517,7 @@ export function placeCornerLanguage(
   lapW: number,
   seed: number,
   drawn?: DrawnCornerLanguage,
+  booked?: CornerBookkeepingResult,
 ): CornerLanguage {
   const tight = corners.filter((c) => c.tightestW < BRAKING.tighterThanW);
   const verticalsBefore = countVerticalsInBrakingWindows(placements, tight, lapW);
@@ -515,6 +535,18 @@ export function placeCornerLanguage(
   }
 
   const out = [...placements];
+  /**
+   * What a graph-decided ruler displaced, by index into `out` AS IT
+   * ARRIVED.
+   *
+   * MARKED NOW AND REMOVED ONCE, rather than spliced as it is found. The
+   * bookkeeping names every victim by its index in the incoming list, so
+   * a splice partway through would renumber every later index and make
+   * the second half of the answer refer to placements that had moved.
+   * The TypeScript path splices because it recomputes its own indices
+   * each time; this one cannot.
+   */
+  const displaced = new Set<number>();
   let converted = 0;
   let added = 0;
   let brakeAdded = 0;
@@ -556,10 +588,14 @@ export function placeCornerLanguage(
     // on the outside, if there is one. Its station is kept: the station
     // process put it there and L-2 only asks that the marker be in the
     // window, which that station already is.
-    const counts = repeats();
-    let victim = -1;
+    // WHICH PLACEMENT IT TAKES: from the caller when a graph decided, and
+    // from the search below when it did not. The bookkeeping's indices
+    // name the list AS IT ARRIVED, which is why nothing is removed until
+    // every corner has been handled -- see the removal after this loop.
+    const counts = booked ? NO_COUNTS : repeats();
+    let victim = booked ? booked.claimedBy.indexOf(ci) : -1;
     let victimCount = 1;
-    for (let i = 0; i < out.length; i++) {
+    for (let i = 0; booked === undefined && i < out.length; i++) {
       const p = out[i];
       // NEVER CONVERT A MARKER. On a real circuit two corners can be
       // close enough that one's marker sits inside the next one's
@@ -604,8 +640,22 @@ export function placeCornerLanguage(
 
     // Pay first, so the displaced placements cannot be the marks just
     // added — and so a window with nothing to give still gets its ruler.
-    const counts = repeats();
-    for (let k = 0; k < BRAKING.count; k++) {
+    //
+    // FROM THE CALLER WHEN A GRAPH DECIDED. The graph marks what each
+    // ruler displaces without removing it, because every index it hands
+    // back names the list as it arrived; the removal happens once, after
+    // both loops, so no earlier splice can renumber a later corner's
+    // answer out from under it.
+    if (booked) {
+      for (let i = 0; i < out.length; i++) {
+        if (booked.displacedBy[i] === ti) {
+          displaced.add(i);
+          brakeDisplaced++;
+        }
+      }
+    }
+    const counts = booked ? NO_COUNTS : repeats();
+    for (let k = 0; booked === undefined && k < BRAKING.count; k++) {
       let victim = -1;
       let victimCount = 1;
       for (let i = 0; i < out.length; i++) {
@@ -651,7 +701,9 @@ export function placeCornerLanguage(
   }
 
   return {
-    placements: out,
+    // ONE REMOVAL, AFTER EVERYTHING. Empty unless a graph decided the
+    // bookkeeping, because the TypeScript path has already spliced.
+    placements: displaced.size === 0 ? out : out.filter((_, i) => !displaced.has(i)),
     converted,
     added,
     brakeAdded,
