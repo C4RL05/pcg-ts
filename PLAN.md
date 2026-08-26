@@ -2505,3 +2505,54 @@ callers. Neither is a seam; both are the architecture.
 
 **So the prelude is finished** except Z-1, which is a pure per-placement
 function and belongs with the asset choice rather than with the repairs.
+
+### The repair loop is not a fixed point, measured, 2026-08-26
+
+Per-round repair counts through `ROAD_TRACE`, six seeds, every stage
+graph-decided up to and including Z-1:
+
+| seed | round 1 | round 2 | round 3 | round 4 |
+| --- | --- | --- | --- | --- |
+| 1 | cull 42, cover +1, mix 25 | all zero | — | — |
+| 2 | cull 47, cover +1, mix 28 | all zero | — | — |
+| 3 | cull 58, cover +1, mix 39 | cull 1, cover +1, mix 1 | cull 1, mix 1 | all zero |
+| 4 | cull 46, cover +1, mix 37 | cull 1, mix 1 | cull 1, mix 1 | all zero |
+| 5 | cull 67, cover +1, mix 27 | cover +1 | cover +2 | all zero |
+| 6 | cull 37, cover +2, mix 28 | cover +1 | all zero | — |
+
+**Round one does essentially everything.** After it, the whole lap needs
+at most two cull moves, two mix moves and three cover pieces -- and on two
+seeds of six, nothing at all. This is one pass with a settling tail, not a
+fixed point that iterates to a solution.
+
+**Five of the eight rules in the loop never fire on this vocabulary.**
+`corridor` is 0 in every round now that Z-1 runs in the cook, which is the
+port confirming itself; `trim`, `cov` (D-4's second pass), `L4` and `L5`
+are 0 in every round of every seed. That is a fact about THIS kit and this
+lap length, not a licence to delete them -- D-4 exists because the cull
+opens gaps, and a kit with taller art would drop more than the 0 to 14 it
+drops here. But for porting ORDER it settles the question: the rules that
+matter are the CULL, the mix, and L-6's top-up.
+
+**And it settles the architecture question the entries above left open.**
+The slice-2 plan proposed splitting the cull onto the per-cell level and
+accepting that its outcome can no longer feed back into the lap-level mix
+-- "the cull wins and the damage is counted" -- as a design decision taken
+without evidence. The evidence is now here: **that feedback is worth one
+mix move and one cull move per lap, on two seeds of six.** The coupling
+the split destroys is real and is close to nothing.
+
+So the recommendation is not "make `dressLap` async" and not "port the
+whole tail as one `repeatUntil`". It is:
+
+1. **`occlusionCull` as a library node, and the cull onto the per-cell
+   level.** It is 37 to 67 moves a lap -- more than everything else
+   together -- it is the only rule in the loop whose halo is LOCAL (a 12 W
+   cone), and it is what makes a track drivable rather than merely
+   dressed. This is the one that pays.
+2. **Leave the lap-global tail in TypeScript for now.** The mix at 25 to
+   39 cooks once at level 0 where it is cheap, and the feedback it loses
+   is the single move measured above. Porting it buys the architecture
+   nothing until the cull has moved.
+3. **Do not port L-4, L-5 or D-4's second pass** until a kit exists that
+   makes them fire. A port of a rule that never runs cannot be checked.
