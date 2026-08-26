@@ -3091,4 +3091,208 @@ describe("pathRuns", () => {
     const run = async () => snapshotGeometry(await runs(P, src));
     expect(await run()).toEqual(await run());
   });
+
+  it("leaves reduce 'sum' exactly where it was, named or defaulted", async () => {
+    // The byte-identity claim, pinned against a hand-computed column
+    // rather than against another cook: two runs of three, exclusive, so
+    // the marker is at zero from itself and 1+2 and 4+5 are what the
+    // last point of each run has behind it.
+    const src = () => flagged([1, 2, 3, 4, 5, 6], [1, 0, 0, 1, 0, 0]);
+    expect(col(await runs({ ...P, reduce: "sum" }, src()), "r")).toEqual([0, 1, 3, 0, 4, 9]);
+    // And the default is that same value, so no serialized graph written
+    // before this param existed changes meaning.
+    expect(snapshotGeometry(await runs({ ...P, reduce: "sum" }, src()))).toEqual(
+      snapshotGeometry(await runs(P, src())),
+    );
+  });
+
+  it("keeps a run's smallest or largest value under reduce min and max", async () => {
+    // Two runs of three: [5, 2, 8] and [9, 1, 7]. A sum here would say
+    // 15 and 17, which answers a different question entirely.
+    const src = () => flagged([5, 2, 8, 9, 1, 7], [1, 0, 0, 1, 0, 0]);
+    const M = { ...P, mode: "inclusive" };
+    expect(col(await runs({ ...M, reduce: "min" }, src()), "r")).toEqual([5, 2, 2, 9, 1, 1]);
+    expect(col(await runs({ ...M, reduce: "max" }, src()), "r")).toEqual([5, 5, 8, 9, 9, 9]);
+    // The running value only ever moves one way and then stays, which is
+    // the property that makes a min a staircase and a sum a ramp.
+    const mins = col(await runs({ ...M, reduce: "min" }, src()), "r");
+    for (let i = 1; i < mins.length; i++) {
+      if (i === 3) continue; // the run boundary, where it resets
+      expect(mins[i]).toBeLessThanOrEqual(mins[i - 1]);
+    }
+  });
+
+  it("opens each run at the fold's identity, which is what exclusive reads first", async () => {
+    // THE SHARP END. Exclusive means a point's own value is not in its
+    // own total, so a run's first point has folded in nothing — and the
+    // minimum of nothing is +Infinity, exactly as attributeReduce
+    // answers an empty domain. Not a sentinel: it is the only value x
+    // with min(x, v) = v, f32 carries it exactly, and unlike a sum's 0
+    // it can never be mistaken for a measurement.
+    const src = () => flagged([5, 2, 8, 9, 1, 7], [1, 0, 0, 1, 0, 0]);
+    expect(col(await runs({ ...P, reduce: "min" }, src()), "r")).toEqual([
+      Number.POSITIVE_INFINITY,
+      5,
+      2,
+      Number.POSITIVE_INFINITY,
+      9,
+      1,
+    ]);
+    expect(col(await runs({ ...P, reduce: "max" }, src()), "r")).toEqual([
+      Number.NEGATIVE_INFINITY,
+      5,
+      5,
+      Number.NEGATIVE_INFINITY,
+      9,
+      9,
+    ]);
+    // And it survives the f32 column, so a caller really can test the
+    // column with isFinite rather than remembering a magic number.
+    const first = col(await runs({ ...P, reduce: "min" }, src()), "r")[0];
+    expect(Number.isFinite(first)).toBe(false);
+    expect(first).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it("differs between the two modes only where a record is set", async () => {
+    // The mode/reduce interaction worth stating: a sum's inclusive and
+    // exclusive columns differ at EVERY point, by that point's own
+    // value; an extreme's differ only where the point beat the record,
+    // because min and max are idempotent.
+    const src = () => flagged([5, 2, 8, 3], [1, 0, 0, 0]);
+    const excl = col(await runs({ ...P, reduce: "min" }, src()), "r");
+    const incl = col(await runs({ ...P, reduce: "min", mode: "inclusive" }, src()), "r");
+    const values = [5, 2, 8, 3];
+    expect(excl).toEqual([Number.POSITIVE_INFINITY, 5, 2, 2]);
+    expect(incl).toEqual([5, 2, 2, 2]);
+    for (let i = 0; i < values.length; i++) expect(incl[i]).toBe(Math.min(excl[i], values[i]));
+  });
+
+  it("reduces a signed comparison rather than a magnitude", async () => {
+    // A max over negatives is the LEAST negative. Getting this wrong is
+    // invisible on any all-positive fixture, which most of them are.
+    const src = () => flagged([-5, -1, -9], [1, 0, 0]);
+    const M = { ...P, mode: "inclusive" };
+    expect(col(await runs({ ...M, reduce: "max" }, src()), "r")).toEqual([-5, -1, -1]);
+    expect(col(await runs({ ...M, reduce: "min" }, src()), "r")).toEqual([-5, -5, -9]);
+  });
+
+  it("orients an extreme the same way a sum is oriented", async () => {
+    // Forward, a flagged point OPENS its run: the runs are {0,1} and
+    // {2,3}. Backward it CLOSES one: the runs are {3} and {2,1,0}. So
+    // the two directions do not partition the path the same way, which
+    // is true of every fold and is not something reduce changes.
+    const src = () => flagged([7, 2, 9, 4], [0, 0, 1, 0]);
+    const M = { ...P, mode: "inclusive", reduce: "min" };
+    expect(col(await runs(M, src()), "r")).toEqual([7, 2, 9, 4]);
+    expect(col(await runs({ ...M, direction: "backward" }, src()), "r")).toEqual([2, 2, 9, 4]);
+  });
+
+  it("carries an extreme across a closed path's seam", async () => {
+    // One marker at point 2 on a closed square. Wrapped there is ONE run
+    // 2 -> 3 -> 0 -> 1, so the 2 at point 3 is the lap's tightest and
+    // every later point holds it. Unwrapped the seam cuts it and points
+    // 0 and 1 never see the 2 at all.
+    const square = () =>
+      withAttr(
+        withAttr(
+          createPolyline([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], { closed: true }),
+          "w",
+          [9, 8, 5, 2],
+        ),
+        "b",
+        [0, 0, 1, 0],
+      );
+    const M = { ...P, mode: "inclusive", reduce: "min" };
+    expect(col(await runs(M, square()), "r")).toEqual([2, 2, 5, 2]);
+    expect(col(await runs({ ...M, wrap: false }, square()), "r")).toEqual([9, 8, 5, 2]);
+  });
+
+  it("reduces each component of a tuple independently and resets them together", async () => {
+    const pos: number[] = [];
+    for (let i = 0; i < 4; i++) pos.push(i, 0, 0);
+    const geo = withAttr(createPolyline(pos), "b", [0, 0, 1, 0]);
+    const w = geo.attrs.point.add("w", "f32", 2, [0, 0]);
+    w.setTuple(0, [5, 50]);
+    w.setTuple(1, [2, 90]);
+    w.setTuple(2, [8, 10]);
+    w.setTuple(3, [1, 70]);
+    // Component 0's record falls at point 1 and component 1's does not;
+    // both nevertheless start over at the boundary on point 2.
+    const out = await runs({ ...P, mode: "inclusive", reduce: "min" }, geo);
+    expect(col(out, "r")).toEqual([5, 50, 2, 50, 8, 10, 1, 10]);
+  });
+
+  it("lets a NaN fail to be a record instead of poisoning its run", async () => {
+    const M = { ...P, mode: "inclusive", reduce: "min" };
+    expect(col(await runs(M, flagged([3, NaN, 1, 5], [1, 0, 0, 0])), "r")).toEqual([3, 3, 1, 1]);
+    // A run whose every value was unmeasurable folded in nothing, and
+    // says so with the identity rather than inventing a number.
+    expect(col(await runs(M, flagged([NaN, NaN], [1, 0])), "r")).toEqual([
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+    ]);
+    expect(col(await runs({ ...M, reduce: "max" }, flagged([NaN, NaN], [1, 0])), "r")).toEqual([
+      Number.NEGATIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    ]);
+  });
+
+  it("answers a run of one point the same way in every fold", async () => {
+    // Every point flagged, so every run is one point long: inclusive
+    // reads the point's own value in all three folds, and exclusive
+    // reads the identity in all three. A run of NO points is not
+    // observable — a run is opened by a point.
+    const src = () => flagged([4, 7], [1, 1]);
+    for (const reduce of ["sum", "min", "max"]) {
+      expect(col(await runs({ ...P, reduce, mode: "inclusive" }, src()), "r")).toEqual([4, 7]);
+    }
+    expect(col(await runs({ ...P, reduce: "sum" }, src()), "r")).toEqual([0, 0]);
+    expect(col(await runs({ ...P, reduce: "min" }, src()), "r")).toEqual([
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+    ]);
+    expect(col(await runs({ ...P, reduce: "max" }, src()), "r")).toEqual([
+      Number.NEGATIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    ]);
+  });
+
+  it("leaves a point in no polyline holding the fold's identity", async () => {
+    // 'Left at zero' was always 'left at the reduction over no values',
+    // and for a min that is +Infinity. Zero would compare TIGHTER than
+    // every real measurement, which is the false positive a threshold
+    // rule cannot survive.
+    const make = (): Geometry => {
+      const geo = createPointCloud(4);
+      const pos = geo.attrs.point.require("P");
+      pos.setTuple(0, [0, 0, 0]);
+      pos.setTuple(1, [1, 0, 0]);
+      pos.setTuple(2, [2, 0, 0]);
+      pos.setTuple(3, [9, 9, 9]); // in no polyline
+      setPolylineTopology(geo, [0, 1, 2], [0], [3]);
+      withAttr(withAttr(geo, "w", [5, 5, 5, 5]), "b", [0, 0, 0, 0]);
+      return geo;
+    };
+    const M = { ...P, mode: "inclusive" };
+    expect(col(await runs({ ...M, reduce: "min" }, make()), "r")).toEqual([
+      5,
+      5,
+      5,
+      Number.POSITIVE_INFINITY,
+    ]);
+    expect(col(await runs({ ...M, reduce: "max" }, make()), "r")).toEqual([
+      5,
+      5,
+      5,
+      Number.NEGATIVE_INFINITY,
+    ]);
+    // And the sum still reads zero there, which is the same rule.
+    expect(col(await runs({ ...M, reduce: "sum" }, make()), "r")).toEqual([5, 10, 15, 0]);
+  });
+
+  it("is deterministic under min across fresh runs", async () => {
+    const src = flagged([5, 2, 8, 9, 1], [1, 0, 1, 0, 0]);
+    const run = async () => snapshotGeometry(await runs({ ...P, reduce: "min" }, src));
+    expect(await run()).toEqual(await run());
+  });
 });

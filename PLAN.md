@@ -2134,3 +2134,81 @@ bracket mistiles **17.5% of boundaries** on random f32 weight tables
 spread over four orders of magnitude (38,878 gaps, 40,658 overlaps) —
 which is the evidence the earlier entry said it did not have, and it
 still changes 0 of 987 placements on this vocabulary.
+
+### The corner model, and the first port that does not re-base, 2026-08-26
+
+`pathRuns` gained `reduce: "sum" | "min" | "max"` and
+`demos/racetrack/cornerGraph.ts` derives the corners as nodes.
+
+**The library gap was named in this repo's own prose.** `corners.ts`'
+header says the corner model is the graph's *except* that "the tightest
+radius in a run is a MINIMUM, and a segmented running total is a sum", so
+that one quantity stayed a hand-written loop. A segmented minimum is the
+same walk with a different fold; `attributeReduce` cannot help, because it
+collapses a whole domain to the detail domain and cannot group.
+
+**This one is checkable EXACTLY, and that is new.** The station process
+and the asset choice both draw from `randomField`, which keys on point
+identity rather than on a stream position, so neither could reproduce its
+TypeScript lap and both had to be judged distributionally. A corner is
+geometry -- same frames, same threshold, same arithmetic, no draw
+anywhere -- so `racetrackCornerGraph` asserts EQUALITY, corner for corner,
+on the generated circuit at four seeds plus a stadium, a seam-straddling
+bend and a circle.
+
+**Three falsifications, and the third found a real defect.**
+
+| mutation | caught |
+| --- | --- |
+| `reduce: "min"` -> `"max"` | yes -- the sentinel lands in every tightest radius |
+| drop the `anyStraight` guard | yes -- the circle grows a corner nothing turned into |
+| mirror the `outside` sign | **NO** |
+
+The mirrored sign is the failure `corners.ts` warns about by name: "a
+mirrored turn direction produces a lap where every marker is on the wrong
+side while every count, share and distance still passes". It escaped
+because `cookCorners` re-derived `outside` from the turn in TypeScript, so
+the graph's own `cornerOutside` column was written and never read. **A
+column nothing reads is a column nothing tests.** The bridge reads the
+column now, and the suite checks it twice -- against the loop, and against
+the relation `outside === -turn`, so both sides flipping together still
+fails.
+
+**And one claim of mine was wrong.** I wrote that masked frames are never
+in a corner's run. They are: a BACKWARD run ends at its flag INCLUSIVE, so
+the first straight frame after a corner is in the run that holds it. It
+survives a minimum harmlessly -- a straight's radius is at or above 12 W
+and every corner frame's is below -- so the mask buys nothing for the fold
+this stage uses, and the comment says that now instead of the opposite.
+
+**What the library change cost, and what it was checked with.** 12 new
+tests; `reduce: "sum"` byte-identical over a 1920-case differential fuzz
+against an independent transcription of the previous loop (240 randomised
+paths x inclusive/exclusive x forward/backward x wrap on/off, compared as
+raw bytes so NaN counts), **with a negative control** proving the
+comparison can report a difference. The identity is `attributeReduce`'s --
+0 for a sum, +/-Infinity for a min or a max -- and it was extended to the
+output column's DEFAULT, so a point in no polyline reads the fold over no
+values rather than a zero that would compare tighter than every real
+radius.
+
+**A false premise in my own brief, corrected by the agent.** I wrote that
+forward-inclusive and backward-inclusive give the same run total. They do
+not, and not because of `reduce`: forward a flagged point OPENS its run
+and backward it CLOSES one, so the two directions do not partition the
+path into the same runs at all -- they sit one point apart. `direction`'s
+description says so outright now.
+
+### Where the prelude stands after the corner model, 2026-08-26
+
+1. **The marker vocabulary** (L-2/L-3's placements, and `reserveMarkers`).
+   Where each marker GOES is four independent draws per corner and ports
+   like the asset choice did. What does not is `placeCornerLanguage`'s
+   convert-or-add: an order-dependent greedy walk over a mutable list that
+   recomputes which asset is most repeated after every change, and can
+   DELETE. That is D-4's class of rule and wants D-4's treatment -- one
+   move per `repeatUntil` round. `reserveMarkers` is three weighted draws
+   WITHOUT replacement, which is its own small problem.
+2. **Landmark uniqueness (L-4) and the band mix (Z-3)**, both list
+   arithmetic over the whole lap.
+3. **The frame lookup**, which `transferAlongPath` now answers.

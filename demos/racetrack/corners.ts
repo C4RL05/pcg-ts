@@ -204,8 +204,15 @@ function scanRuns(radiusW: Float64Array, turnK: Float64Array, out: Float64Array,
 /**
  * The corner columns for a lap: the graph's when it has them, and the
  * same rule restated here when it does not. See this module's header.
+ *
+ * EXPORTED FOR THE SUITES, and for one reason: `cornerGraph` derives the
+ * corners from these columns rather than from the frames, so testing it
+ * on a hand-built lap means attaching them first. That keeps the
+ * comparison honest -- both sides then read the SAME columns, so a
+ * disagreement is about the assembly this port replaced and not about
+ * two different measurements of the same bend.
  */
-function cornerColumnsOf(lap: Lap): CornerColumns {
+export function cornerColumnsOf(lap: Lap): CornerColumns {
   if (lap.corner) return lap.corner;
   const n = lap.count;
   const radiusW = new Float64Array(n);

@@ -914,25 +914,67 @@ export function lapAsPath(lap: Lap): Geometry {
   geo.attrs.primitive.add(STATION_LENGTH_ATTR, "f32", 1).set(0, lap.length);
 
   // THE CORNER MODEL COMES ALONG WHEN THE LAP HAS ONE, and this is
-  // plumbing rather than arithmetic: `writeCornerModel` computed this
-  // column as graph nodes on the frames, `readLap` read it off the cooked
-  // geometry, and all that happens here is that it is put back on a
-  // geometry so a graph can read it again. Nothing recomputes it, which
-  // is the difference between carrying a cooked column forward and a
-  // prelude deciding something.
+  // plumbing rather than arithmetic: `writeCornerModel` computed these
+  // columns as graph nodes on the frames, `readLap` read them off the
+  // cooked geometry, and all that happens here is that they are put back
+  // on a geometry so a graph can read them again. Nothing recomputes
+  // anything, which is the difference between carrying a cooked column
+  // forward and a prelude deciding something.
+  //
+  // ALL FOUR, NOT JUST THE RADIUS. The asset choice needs only the
+  // radius, and carrying the rest for its sake alone would be waste --
+  // but `cornerGraph` derives the corners themselves from the two
+  // segmented scans, and re-running `pathRuns` here to rebuild columns
+  // the road graph already built is precisely the second definition this
+  // demo has spent two files arguing against.
   //
   // OPTIONAL BECAUSE A LAP NEED NOT HAVE BEEN COOKED -- the station
   // suites build synthetic laps that carry no corners, and the station
-  // process does not read this. What does read it is the asset choice,
-  // which refuses a lap without one rather than pretending the whole
-  // circuit is straight.
+  // process does not read this. What does read it is the asset choice
+  // and the corner language, both of which refuse a lap without one
+  // rather than pretending the whole circuit is straight.
   const corners = lap.corner;
   if (corners) {
-    const col = geo.attrs.point.add(CORNER_MODEL.radius, "f32", 1);
-    for (let i = 0; i < lap.count; i++) col.set(i, corners.radiusW[i]);
+    const scalar = (name: string, from: Float64Array) => {
+      const col = geo.attrs.point.add(name, "f32", 1);
+      for (let i = 0; i < lap.count; i++) col.set(i, from[i]);
+    };
+    scalar(CORNER_MODEL.radius, corners.radiusW);
+    scalar(CORNER_MODEL.turn, corners.turnK);
+    // The two run columns are xy tuples -- [frames, turn so far] -- which
+    // is how `writeCornerModel` wrote them, so that one segmented scan
+    // answers both questions and the two answers cannot come from
+    // different runs.
+    const pair = (name: string, from: Float64Array) => {
+      const col = geo.attrs.point.add(name, "f32", 2);
+      for (let i = 0; i < lap.count; i++) col.setTuple(i, [from[i * 2], from[i * 2 + 1]]);
+    };
+    pair(CORNER_MODEL.behind, corners.behind);
+    pair(CORNER_MODEL.ahead, corners.ahead);
+
+    // EACH FRAME'S OWN ARC POSITION, which is the one thing the corner
+    // stage cannot recover for itself. A corner's entry and exit are
+    // stations, and a station is NOT a linear function of a frame index
+    // on a resampled curve -- `pathResample` puts the frames at equal arc
+    // spacing by construction, but the closing segment of a loop is
+    // whatever is left over, so multiplying an index by an average is
+    // wrong by up to that remainder at every frame after it. `lap.s` is
+    // the running distance the resample actually produced.
+    const arc = geo.attrs.point.add(FRAME_ARC_ATTR, "f32", 1);
+    for (let i = 0; i < lap.count; i++) arc.set(i, lap.s[i]);
   }
   return geo;
 }
+
+/**
+ * The world-unit arc column {@link lapAsPath} writes on the FRAMES.
+ *
+ * The same name `pointScatterOnPath` writes on the stations it draws, and
+ * that is not a collision: the two live on different clouds, and both
+ * mean "how far along the lap is this point". One name for one quantity
+ * is the reason to reuse it rather than a reason to worry.
+ */
+export const FRAME_ARC_ATTR = "arcW";
 
 /** The primitive column {@link cookStations} writes the lap's length into. */
 export const STATION_LENGTH_ATTR = "lapLen";
