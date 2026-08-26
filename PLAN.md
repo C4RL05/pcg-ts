@@ -2352,3 +2352,55 @@ is over eight candidates and costs nothing measurable.
    `totalAttr`), and the sequential part wants D-4's `repeatUntil`.
 2. **Landmark uniqueness (L-4) and the band mix (Z-3)**, the same shape.
 3. **The frame lookup**, which `transferAlongPath` now answers.
+
+### The convert-or-add, measured before it is built, 2026-08-26
+
+The next unit is L-2's convert-or-add and L-3's displacement. Both are
+greedy walks over a mutable list that recompute a lap-wide histogram of
+"which asset is most repeated" after every change, and the design turns
+on one question: **does the drift actually matter?** Measured rather than
+assumed, on the shipped vocabulary at six seeds, comparing the victim each
+corner picks under a LIVE histogram (what `placeCornerLanguage` does)
+against a FROZEN one (what a parallel graph could do):
+
+| seed | corners | converted | victims the drift moves | collisions under frozen |
+| --- | --- | --- | --- | --- |
+| 1 | 19 | 9 | 1 | 0 |
+| 2 | 19 | 13 | 2 | 1 |
+| 3 | 19 | 13 | 3 | 1 |
+| 4 | 19 | 10 | 0 | 0 |
+| 5 | 19 | 13 | 1 | 1 |
+| 6 | 19 | 7 | 0 | 0 |
+
+**Two different things, and only one of them is optional.**
+
+The DRIFT moves which victim a corner takes, on 0-3 corners of 19. Every
+one of those is still a legal victim -- in the window, on the outside, not
+reserved, with more than one copy on the lap -- so a frozen histogram
+picks differently rather than wrongly. That is a stateable approximation,
+and `selfPrune` is the precedent for accepting a bounded one and saying
+so.
+
+The COLLISION is not optional. Under a frozen histogram two corners whose
+windows overlap can name the SAME placement, and converting it twice
+means one corner silently ends up with no marker at all -- with
+`markersConverted + markersAdded` still summing to the corner count,
+because both corners think they converted. It happens on 0 or 1 victims
+per lap, which is exactly often enough to ship broken and rare enough
+never to be noticed. Any parallel pick has to arbitrate it: lowest corner
+index keeps the victim, the loser re-picks or adds.
+
+**So the shape is a `repeatUntil` that converges in a round or two**, not
+one that walks nineteen corners one at a time: pick in parallel against a
+frozen histogram, arbitrate collisions, repeat while any corner is still
+contending. The histogram itself is now expressible -- `pointsToPath` by
+asset ord, `pathScan` with `reduce: "sum"` and a `totalAttr`, then
+`promoteAttribute` primitive to point -- which is the grouped reduction
+`pathScan`'s `reduce` was added for.
+
+**The ADD case needs the carried geometry to GROW**, which no rule ported
+so far has needed: a corner with no victim pushes a new placement rather
+than replacing one. Expressible as a one-point cloud filtered by "no
+victim was found" and merged, but it is the part to build first, because
+it is the part that decides whether the whole thing fits in a
+`repeatUntil` body at all.
