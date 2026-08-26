@@ -333,7 +333,7 @@ export function assetCloud(pool: readonly PlaceableAsset[]): Geometry {
  * promises visible instead of merely stated: there is no clamp here
  * because there is no third case to clamp.
  */
-function quantileField(p10: Field, median: Field, p90: Field, u: Field): Field {
+export function quantileField(p10: Field, median: Field, p90: Field, u: Field): Field {
   // 1/0.4 is 2.5 exactly, so neither slope carries a division.
   const lower = add(p10, mul(mul(sub(u, 0.1), 2.5), sub(median, p10)));
   const upper = add(median, mul(mul(sub(u, 0.5), 2.5), sub(p90, median)));

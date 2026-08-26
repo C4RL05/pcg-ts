@@ -126,6 +126,7 @@ import {
   add,
   attribute,
   attributeReduce,
+  clamp,
   copyToPoints,
   cook,
   createPointCloud,
@@ -133,23 +134,31 @@ import {
   div,
   dot,
   eq,
+  filterByExpression,
   firstGeometry,
   floor,
   ge,
+  index,
   gt,
   le,
   lt,
   makeGeometryItem,
   max,
+  min,
   mul,
   occlusionCull,
   orientAlongVector,
   pathCoverage,
+  pathScan,
   pointsToPath,
+  promoteAttribute,
   quotaRebalance,
+  randomField,
+  removeAttribute,
   repeatUntilNode,
   runFit,
   select,
+  transferByIndex,
   setAttribute,
   sub,
   vec,
@@ -163,8 +172,10 @@ import type { StationedPlacement } from "./legibility.js";
 import { FALSE_EDGE } from "./falseEdges.js";
 import { SIGHTLINE } from "./sightline.js";
 import { SAME_PLACE_W } from "./tolerance.js";
-import { Z3, type Band } from "./assets.js";
-import { CORRIDOR } from "./zones.js";
+import { BAND_T, Z3, lateralReach, type Band } from "./assets.js";
+import { ASSET, assetCloud, quantileField } from "./assetGraph.js";
+import type { PlaceableAsset } from "./assets.js";
+import { CORRIDOR, OVERHEAD, fitsOverhead } from "./zones.js";
 
 /** The named outputs a cook of this graph produces. */
 export const DRESS_OUTPUTS = {
@@ -433,6 +444,20 @@ export const PLACEMENT = {
   /** 1 on the one placement per qualifying run that L-5 lowers. */
   drop: "edgeDrop",
   /**
+   * The uniform `poseFor` draws its pose with, carried rather than redrawn.
+   *
+   * THE ONE PART OF THE REDRAW THAT IS EXACT, and it is exact because of
+   * what `poseFor` keys on: `rand(seed, round(station * 97), 0x7053)`,
+   * which is a function of the STATION and nothing else. Z-3 never moves a
+   * placement along the lap, so this number is known when the cloud is
+   * built and does not have to be a field -- which matters, because it is
+   * an integer hash rather than `randomField` and no field computes it. A
+   * placement that keeps its asset therefore keeps its pose to the bit,
+   * and one that changes asset takes the same uniform into a different
+   * pose list, which is what the rule does.
+   */
+  poseU: "posePick",
+  /**
    * Which of Z-3's six bands this placement is in, as an INDEX into
    * {@link MIX_BANDS} — the ladder `bandOfPlacement` walks, transcribed.
    *
@@ -627,6 +652,17 @@ export interface DressGraphInput {
    * answer to a question they were not going to ask.
    */
   readonly mixPinned: ReadonlySet<number>;
+  /**
+   * The pool Z-3's redraw picks out of — the kit's placeable assets with
+   * L-2 and L-3's reserved vocabulary already removed.
+   *
+   * HANDED IN RATHER THAN DERIVED, for `Dressing.pool`'s reason:
+   * `reserveFor` answers a pool of the same LENGTH for every seed and
+   * varies only its membership, so deriving it again here would name a
+   * different asset at a couple of dozen placements with every index in
+   * range and nothing to see it.
+   */
+  readonly pool: readonly PlaceableAsset[];
 }
 
 /**
@@ -872,6 +908,7 @@ function placementCloudInTrackFrame(
   const id = pts.add(PLACEMENT.id, "f32", 1);
   const locked = pts.add(PLACEMENT.locked, "f32", 1);
   const mixPinned = pts.add(PLACEMENT.mixPinned, "f32", 1);
+  const poseU = pts.add(PLACEMENT.poseU, "f32", 1);
   const asset = pts.add(PLACEMENT.asset, "string", 1);
 
   // The lap's own lookup, not a second one. `frameLookup` is exactly what
@@ -914,8 +951,92 @@ function placementCloudInTrackFrame(
     id.set(i, i);
     locked.set(i, immovable.has(p.asset.id) ? 1 : 0);
     mixPinned.set(i, mixPinnedIds.has(p.asset.id) ? 1 : 0);
+    // `poseFor`'s own draw, taken here so the graph can spend it on a
+    // different asset's pose list. Same expression, one place.
+    poseU.set(i, rand(seed, Math.round(p.station * 97), 0x7053));
   }
   return geo;
+}
+
+/**
+ * Z-1's arithmetic, as field expressions, with no node in it.
+ *
+ * ONE SPELLING FOR TWO CALLERS, which is the whole reason it is a function
+ * rather than two blocks. {@link writeCorridor} applies the rule to the
+ * lap once a round; Z-3's redraw applies it to a placement it is about to
+ * emit, because `settleIntoBand` does -- "a repair must not emit something
+ * another repair has to undo", measured at 56 mix moves against 23
+ * corridor fixes over twelve rounds on a lap every rule had already
+ * settled. Written twice, the two would agree until one was edited, and
+ * `zones.ts` counts three spellings of this rule already.
+ *
+ * `exempt` is 1 where the rule must not fire at all. L-6's cover is the
+ * case: its pieces are placed clear by construction, and standing a tunnel
+ * rib off to the corridor edge puts a hole in the roof over the racing
+ * line. The redraw passes 0 -- a replacement has no such exemption.
+ */
+function corridorFields(
+  t: Field,
+  baseH: Field,
+  acrossW: Field,
+  tall: Field,
+  exempt: Field | number,
+): { readonly wantT: Field; readonly wantBase: Field } {
+  // EVERY EDGE OF THE VOLUME CARRIES `SAME_PLACE_W`, AND THAT IS A REAL
+  // DIFFERENCE FROM `inCorridor`, NOT A TRANSCRIPTION SLIP.
+  //
+  // `inCorridor` tests `|t| < 1`, `h >= 0` and `h < 1.2` with no
+  // tolerance at all, and it is the one boundary test in this demo's
+  // ladder without one — its sibling `bandOf`, which asks the same
+  // question of an already-placed lateral, spells every rung as
+  // `a < limit - SAME_PLACE_W`. `tolerance.ts` states the intent this
+  // file is applying: the boundaries here are hit EXACTLY, by
+  // construction rather than by luck, and a rule whose own placer lands
+  // on its own boundary has to agree with itself.
+  //
+  // WITHOUT IT THIS GRAPH MOVES EVERY GANTRY OFF THE ROAD, and that is
+  // measured rather than feared. Z-3's `over` band takes its height from
+  // the band, so an overhead placement's base is EXACTLY the corridor
+  // ceiling and it is stored as a centre: `h = 1.2 + tall/2`. Recovering
+  // the base as `h - tall/2` in f64 returns 1.2 and `1.2 < 1.2` is false,
+  // so the rule correctly leaves a gantry spanning the corridor. In f32
+  // the same round trip lands a few parts in ten million BELOW 1.2, the
+  // test passes, and the piece is stood off to the verge — on seed 1 that
+  // was two placements and six boxes, one of them a 9.6W span moved 5.8W
+  // sideways. `moved` cannot catch it, because this is not a phantom
+  // no-op fix: it is a phantom REAL one.
+  //
+  // Each rung is slacked in the direction that keeps the f64 answer for a
+  // value sitting exactly on it — `1.2 < 1.2 - eps` is false as `1.2 <
+  // 1.2` is, `0 >= -eps` is true as `0 >= 0` is — so on any population
+  // where nothing sits INSIDE the slack the two statements agree, and
+  // `SAME_PLACE_W` is sized so that nothing does.
+  const inCorridor = mul(
+    mul(
+      lt(abs(t), CORRIDOR.halfWidthW - SAME_PLACE_W),
+      ge(baseH, CORRIDOR.floorW - SAME_PLACE_W),
+    ),
+    lt(baseH, CORRIDOR.ceilingW - SAME_PLACE_W),
+  );
+  // L-6's cover is placed clear by construction; standing a tunnel rib off
+  // to the corridor edge puts a hole in the roof over the racing line.
+  const fires = mul(inCorridor, sub(1, exempt));
+  // THE SIZE CUT TAKES NO TOLERANCE, and the asymmetry with the volume
+  // above is the point rather than an oversight. A height reaches its
+  // comparison through `h - tall/2`, a subtraction of two stored values
+  // that is not the number either of them started as; an EXTENT is read
+  // off the catalogue and stored once, so the only error it carries is
+  // the f32 rounding of a single value, six parts in a hundred million.
+  // Slack applied where there is no round trip is slack in the rule, and
+  // `tolerance.ts` is explicit that these are not that.
+  const small = mul(lt(acrossW, 1), lt(tall, 1.5));
+
+  const signT = sub(1, mul(2, lt(t, 0)));
+  const standOff = mul(signT, add(CORRIDOR.halfWidthW, div(acrossW, 2)));
+
+  const wantT = select(mul(fires, sub(1, small)), standOff, t);
+  const wantBase = select(mul(fires, small), CORRIDOR.ceilingW, baseH);
+  return { wantT, wantBase };
 }
 
 /**
@@ -967,60 +1088,13 @@ function writeCorridor(g: Graph, tag: string): { head: NodeHandle; tail: NodeHan
   // why the no-op gate below is not optional here.
   const baseH = sub(h, div(tall, 2));
 
-  // EVERY EDGE OF THE VOLUME CARRIES `SAME_PLACE_W`, AND THAT IS A REAL
-  // DIFFERENCE FROM `inCorridor`, NOT A TRANSCRIPTION SLIP.
-  //
-  // `inCorridor` tests `|t| < 1`, `h >= 0` and `h < 1.2` with no
-  // tolerance at all, and it is the one boundary test in this demo's
-  // ladder without one — its sibling `bandOf`, which asks the same
-  // question of an already-placed lateral, spells every rung as
-  // `a < limit - SAME_PLACE_W`. `tolerance.ts` states the intent this
-  // file is applying: the boundaries here are hit EXACTLY, by
-  // construction rather than by luck, and a rule whose own placer lands
-  // on its own boundary has to agree with itself.
-  //
-  // WITHOUT IT THIS GRAPH MOVES EVERY GANTRY OFF THE ROAD, and that is
-  // measured rather than feared. Z-3's `over` band takes its height from
-  // the band, so an overhead placement's base is EXACTLY the corridor
-  // ceiling and it is stored as a centre: `h = 1.2 + tall/2`. Recovering
-  // the base as `h - tall/2` in f64 returns 1.2 and `1.2 < 1.2` is false,
-  // so the rule correctly leaves a gantry spanning the corridor. In f32
-  // the same round trip lands a few parts in ten million BELOW 1.2, the
-  // test passes, and the piece is stood off to the verge — on seed 1 that
-  // was two placements and six boxes, one of them a 9.6W span moved 5.8W
-  // sideways. `moved` cannot catch it, because this is not a phantom
-  // no-op fix: it is a phantom REAL one.
-  //
-  // Each rung is slacked in the direction that keeps the f64 answer for a
-  // value sitting exactly on it — `1.2 < 1.2 - eps` is false as `1.2 <
-  // 1.2` is, `0 >= -eps` is true as `0 >= 0` is — so on any population
-  // where nothing sits INSIDE the slack the two statements agree, and
-  // `SAME_PLACE_W` is sized so that nothing does.
-  const inCorridor = mul(
-    mul(
-      lt(abs(t), CORRIDOR.halfWidthW - SAME_PLACE_W),
-      ge(baseH, CORRIDOR.floorW - SAME_PLACE_W),
-    ),
-    lt(baseH, CORRIDOR.ceilingW - SAME_PLACE_W),
+  const { wantT, wantBase } = corridorFields(
+    t,
+    baseH,
+    acrossW,
+    tall,
+    attribute(PLACEMENT.cover),
   );
-  // L-6's cover is placed clear by construction; standing a tunnel rib off
-  // to the corridor edge puts a hole in the roof over the racing line.
-  const fires = mul(inCorridor, sub(1, attribute(PLACEMENT.cover)));
-  // THE SIZE CUT TAKES NO TOLERANCE, and the asymmetry with the volume
-  // above is the point rather than an oversight. A height reaches its
-  // comparison through `h - tall/2`, a subtraction of two stored values
-  // that is not the number either of them started as; an EXTENT is read
-  // off the catalogue and stored once, so the only error it carries is
-  // the f32 rounding of a single value, six parts in a hundred million.
-  // Slack applied where there is no round trip is slack in the rule, and
-  // `tolerance.ts` is explicit that these are not that.
-  const small = mul(lt(acrossW, 1), lt(tall, 1.5));
-
-  const signT = sub(1, mul(2, lt(t, 0)));
-  const standOff = mul(signT, add(CORRIDOR.halfWidthW, div(acrossW, 2)));
-
-  const wantT = select(mul(fires, sub(1, small)), standOff, t);
-  const wantBase = select(mul(fires, small), CORRIDOR.ceilingW, baseH);
 
   // THE NO-OP GATE, and it is a rule about the REPAIR LOOP rather than
   // about the corridor. `dressLap` runs Z-1 once a round and stops when
@@ -1619,9 +1693,9 @@ const MIX_STAYS = -1;
  * than ~1e-16, so the toss would be between COOKS rather than between
  * assets, and Z-3's shares, this repair and its move count all follow it.
  */
-function bandField(): Field {
-  const a = abs(attribute(PLACEMENT.t));
-  const h = attribute(PLACEMENT.h);
+function bandField(tW: Field, hW: Field): Field {
+  const a = abs(tW);
+  const h = hW;
   const inside = (limit: number): Field => lt(a, limit - SAME_PLACE_W);
   const pushedOut = max(
     gt(h, CORRIDOR.ceilingW + SAME_PLACE_W),
@@ -1636,6 +1710,531 @@ function bandField(): Field {
       select(inside(2.5), 2, select(inside(5), 3, select(inside(13), 4, 5))),
     ),
   );
+}
+
+/**
+ * What the mix's redraw needs on the pool that a choice does not.
+ *
+ * A CHOICE PICKS FOR A STATION AND A REDRAW PICKS FOR A BAND, which is a
+ * different question of the same pool. `assetCloud` answers the first: the
+ * affinities a curvature bucket weighs by, and the quantiles a lateral is
+ * drawn from. The second also has to know whether an asset can REACH the
+ * band being filled, whether the corner language reserved it, and which
+ * recorded poses it has — none of which a station cares about, and all of
+ * which are properties of the POOL rather than of any placement, so they
+ * are computed once here and never in the graph.
+ */
+export const MIX_ASSET = {
+  /** The |t| range this asset's own instances actually reach. */
+  reachLo: "mixReachLo",
+  reachHi: "mixReachHi",
+  /** Its along-track extent, which a choice never needed and a swap does. */
+  along: "mixAlong",
+  /** Where its poses start in the flat table, and how many there are. */
+  poseOff: "mixPoseOff",
+  poseCount: "mixPoseCount",
+  /** 0 where the corner language reserved this asset, or it has no `where`. */
+  free: "mixAssetFree",
+} as const;
+
+/** The flat pose table: one point per (asset, pose), in pool order. */
+const MIX_POSE = { id: "mixPoseId" } as const;
+
+/** Scratch the redraw writes on the copies, the survivors and the carry. */
+const MIX = {
+  targetIdx: "mixTargetIdx",
+  uPick: "mixUPick",
+  uLat: "mixULat",
+  uHgt: "mixUHgt",
+  uSide: "mixUSide",
+  weight: "mixWeight",
+  cumLo: "mixCumLo",
+  cumHi: "mixCumHi",
+  total: "mixTotal",
+  draw: "mixDraw",
+  newT: "mixNewT",
+  newH: "mixNewH",
+  newAcross: "mixNewAcross",
+  newAlong: "mixNewAlong",
+  newTall: "mixNewTall",
+  newPose: "mixNewPose",
+  commit: "mixCommit",
+} as const;
+
+/**
+ * The pool as the redraw reads it: {@link assetCloud} plus the six columns
+ * above, and a position so the points have distinct identities.
+ *
+ * THE POSITION IS NOT DECORATION. `assetCloud` leaves `P` at the origin for
+ * every asset, which makes the whole cloud ONE identity as far as this
+ * library is concerned — harmless there, because every uniform that stage
+ * draws is drawn on the STATION and carried onto the copies. This cloud is
+ * broadcast into a repair body where a later author might reasonably reach
+ * for `randomField` on it, and a cloud whose points cannot be told apart
+ * answers one number for all of them. `cornerGraph.ts` sets `P = [i, 0, 0]`
+ * on its own draw cloud for exactly this reason.
+ */
+export function mixAssetCloud(
+  pool: readonly PlaceableAsset[],
+  lib: PoseLibrary,
+  protect: ReadonlySet<number>,
+): Geometry {
+  const geo = assetCloud(pool);
+  const pts = geo.attrs.point;
+  const P = pts.require("P");
+  const reachLo = pts.add(MIX_ASSET.reachLo, "f32", 1);
+  const reachHi = pts.add(MIX_ASSET.reachHi, "f32", 1);
+  const along = pts.add(MIX_ASSET.along, "f32", 1);
+  const poseOff = pts.add(MIX_ASSET.poseOff, "f32", 1);
+  const poseCount = pts.add(MIX_ASSET.poseCount, "f32", 1);
+  const free = pts.add(MIX_ASSET.free, "f32", 1);
+
+  let flat = 0;
+  for (let i = 0; i < pool.length; i++) {
+    const a = pool[i] as PlaceableAsset;
+    P.setTuple(i, [i, 0, 0]);
+    along.set(i, a.size.along);
+    const poses = lib.posesOf.get(a.id) ?? [];
+    poseOff.set(i, flat);
+    poseCount.set(i, poses.length);
+    flat += poses.length;
+    const w = a.where;
+    if (!w) continue;
+    const reach = lateralReach(w);
+    reachLo.set(i, reach[0]);
+    reachHi.set(i, reach[1]);
+    free.set(i, protect.has(a.id) ? 0 : 1);
+  }
+  return geo;
+}
+
+/** The flat pose table {@link MIX_ASSET.poseOff} indexes into. */
+export function mixPoseCloud(
+  pool: readonly PlaceableAsset[],
+  lib: PoseLibrary,
+): Geometry {
+  const ids: number[] = [];
+  for (const a of pool) for (const id of lib.posesOf.get(a.id) ?? []) ids.push(id);
+  // A pool with no recorded pose anywhere still needs a row: over an EMPTY
+  // source `transferByIndex` misses every point under all three settings,
+  // and a miss leaves the destination's PRIOR value — which here would be
+  // a pose belonging to the asset the placement is no longer using.
+  const geo = createPointCloud(Math.max(1, ids.length));
+  const P = geo.attrs.point.require("P");
+  const col = geo.attrs.point.add(MIX_POSE.id, "f32", 1);
+  for (let i = 0; i < geo.attrs.point.count; i++) {
+    P.setTuple(i, [i, 0, 0]);
+    // -1 is what `poseFor` answers for an asset the vocabulary has nothing
+    // for, and it is what the commit gate refuses on.
+    col.set(i, ids.length === 0 ? -1 : (ids[i] as number));
+  }
+  return geo;
+}
+
+/**
+ * Which bands this pool can actually refill, decided once.
+ *
+ * THE GRAPH CANNOT DISCOVER AN EMPTY POOL IN TIME, and that is the whole
+ * reason this is a TypeScript function. The bracket that picks an asset
+ * keeps the one copy whose cumulative range contains the draw, so a
+ * placement whose entire candidate pool weighs zero keeps NO copy — and the
+ * survivor cloud is then SHORTER than the cloud it is written back onto,
+ * which does not fail: it silently lines every later placement up against
+ * somebody else's asset. The candidate pool is a pure function of the pool,
+ * the protect set and the band, so the six answers are computed here and
+ * baked into the stage as literals. A band with nothing to offer simply
+ * does not mark, and its placements are left where they are.
+ */
+export function mixBandPools(
+  pool: readonly PlaceableAsset[],
+  lib: PoseLibrary,
+  protect: ReadonlySet<number>,
+): boolean[] {
+  return MIX_BANDS.map((band) => {
+    const [blo, bhi] = BAND_T[band];
+    return pool.some((a) => {
+      if (protect.has(a.id)) return false;
+      const w = a.where;
+      if (!w) return false;
+      if ((lib.posesOf.get(a.id) ?? []).length === 0) return false;
+      if (band === "over" && !fitsOverhead(a.size.tall)) return false;
+      const [rlo, rhi] = lateralReach(w);
+      if (!(rhi >= blo && rlo < bhi)) return false;
+      return Math.max(0, a.instances) * Math.max(0, w.affinity.straight) > 0;
+    });
+  });
+}
+
+/**
+ * A six-way `select` on the band index, for anything `BAND_T` keys.
+ *
+ * The grammar has no table lookup and six is small, so the table becomes a
+ * ladder of comparisons — one per band, the last of which is unconditional
+ * because a band index outside 0..5 cannot reach here (`quotaRebalance`
+ * writes -1 or a valid index, and -1 is gated out upstream of every use).
+ */
+function perBand(dst: Field, of: (band: Band) => number): Field {
+  const at = (i: number): Field | number =>
+    i === MIX_BANDS.length - 1
+      ? of(MIX_BANDS[i] as Band)
+      : select(eq(dst, i), of(MIX_BANDS[i] as Band), at(i + 1));
+  return at(0) as Field;
+}
+
+/**
+ * Z-3's redraw: what a placement BECOMES in the band it was sent to.
+ *
+ * THE HALF `quotaRebalance` DELIBERATELY DOES NOT DO. The quota names the
+ * placements that must change band; this draws each of them a new asset
+ * from the pool, a lateral and a height from that asset's own measured
+ * distribution, and a recorded pose to give it a shape. Every one of those
+ * is a pure function of one placement and the pool, which is why it can be
+ * a chain of nodes at all — and why it had to wait for the decision, which
+ * is a fact about the whole lap and could not.
+ *
+ * IT IS NOT BIT-IDENTICAL TO `repairBandMix` AND CANNOT BE, which is the
+ * one thing to know before comparing them. The reference draws from
+ * `rand(seed, index, salt)`, keyed on the donor's ARRAY INDEX and on the
+ * pass number of a greedy loop; a field draws from `randomField`, keyed on
+ * point IDENTITY. Neither is available to the other — an array index is not
+ * a property of a point, and a pass number does not exist here at all,
+ * because the quota decides every move in one pass. So the two draw
+ * different assets, and what can be compared is the POSTCONDITION they
+ * share: every redrawn placement lands in the band it was sent to, holding
+ * an asset whose own instances reach there. `PLAN.md` reaches the same
+ * conclusion about the station port, for the same reason.
+ *
+ * THE POSE IS THE EXCEPTION AND IT IS EXACT. `poseFor` keys its draw on the
+ * STATION, and a redraw never moves a placement along the lap, so that
+ * uniform rides in as a column (see {@link PLACEMENT.poseU}). What the
+ * graph does with it is the same arithmetic against a different asset's
+ * pose list.
+ *
+ * EVERY TARGET GETS EXACTLY ONE SURVIVOR, INCLUDING THE ONES NOT MOVING,
+ * and that is what lets the answer be written back by ordinal. The stamp
+ * would otherwise drop the unmarked placements — they have no band to draw
+ * for — and the survivor cloud would be shorter than the carry, so
+ * `index()` would line every later placement up against somebody else's
+ * asset. An unmarked target draws from the whole pool instead, at the cost
+ * of a pick nobody reads, and the commit gate throws it away.
+ *
+ * THE ONE DRAW IS NOT A SIMPLIFICATION OF THE REFERENCE'S EIGHT. Measured
+ * across eight seeds, all 224 committed mix moves landed on the FIRST of
+ * `MIX_DRAW_ATTEMPTS`, so the other seven are unexercised on this
+ * vocabulary. Where a draw does miss its band the commit gate refuses it,
+ * the placement stays where it was, and the next round of the repair loop
+ * draws again — with different numbers, because the lift has rewritten its
+ * position and a point's identity is its position. That is the retry, one
+ * round later instead of one iteration later.
+ */
+function writeBandRedraw(
+  g: Graph,
+  target: NodeHandle,
+  bandPools: readonly boolean[],
+  poseIds: readonly string[],
+  tag: string,
+): { readonly tail: NodeHandle; readonly assets: NodeHandle; readonly poses: NodeHandle } {
+  // FOUR NODES FOR FOUR DRAWS, not one node and four keys. `randomField`
+  // hashes (the NODE's derived seed, the key, the point's identity), so two
+  // keys on one node share a seed; `assetGraph.ts` draws its four this way
+  // and measured them at r = -0.0009.
+  let chain = target;
+  for (const [name, key] of [
+    [MIX.uPick, "mix.pick"],
+    [MIX.uLat, "mix.lateral"],
+    [MIX.uHgt, "mix.height"],
+    [MIX.uSide, "mix.side"],
+  ] as const) {
+    const n = g.add(setAttribute, { name, tupleSize: 1, value: randomField(key) }, `${tag}_${name}`);
+    g.connect(chain, "out", n, "in");
+    chain = n;
+  }
+
+  const stamped = g.add(
+    copyToPoints,
+    {
+      targetNames: [PLACEMENT.mixTarget, PLACEMENT.poseU, MIX.uPick, MIX.uLat, MIX.uHgt, MIX.uSide],
+      targetIndexAttr: MIX.targetIdx,
+      topology: "drop",
+    },
+    `${tag}_stamp`,
+  );
+  // `source` IS LEFT DANGLING ON PURPOSE and exposed as a body input, the
+  // way `writeSightlineCull` leaves its `sight` pin: the pool is one cloud
+  // broadcast whole to every round, not something a round computes.
+  g.connect(chain, "out", stamped, "target");
+
+  const dst = attribute(PLACEMENT.mixTarget);
+  const blo = perBand(dst, (b) => BAND_T[b][0]);
+  const bhi = perBand(dst, (b) => BAND_T[b][1]);
+  // Marked, and its band has something to offer. See {@link mixBandPools}.
+  const usable = mul(ge(dst, 0), perBand(dst, (b) => (bandPools[MIX_BANDS.indexOf(b)] ? 1 : 0)));
+
+  // The candidate pool, transcribed: reserved assets are out, an asset with
+  // no recorded pose is out, `over` additionally refuses anything that
+  // would not fit under the overhead ceiling, and what is left has to REACH
+  // the band — its measured laterals must overlap it, or the clamp below
+  // would put the piece where its own instances never sat.
+  const reachLo = attribute(MIX_ASSET.reachLo);
+  const reachHi = attribute(MIX_ASSET.reachHi);
+  const overhead = le(
+    add(CORRIDOR.ceilingW, attribute(ASSET.tall)),
+    OVERHEAD.ceilingW + SAME_PLACE_W,
+  );
+  const eligible = mul(
+    mul(attribute(MIX_ASSET.free), gt(attribute(MIX_ASSET.poseCount), 0)),
+    mul(mul(ge(reachHi, blo), lt(reachLo, bhi)), select(eq(dst, 0), overhead, 1)),
+  );
+  // `weightAt` at the STRAIGHT bucket, which is what the reference asks
+  // for: the mix is refilling a band rather than dressing a corner, so it
+  // draws with the curvature bucket hard-coded.
+  const natural = mul(attribute(ASSET.instances), attribute(ASSET.affStraight));
+  const weighed = g.add(
+    setAttribute,
+    { name: MIX.weight, tupleSize: 1, value: select(usable, mul(natural, eligible), natural) },
+    `${tag}_weight`,
+  );
+  g.connect(stamped, "out", weighed, "in");
+
+  // The inverse-CDF bracket, spelled as the asset choice spells it: two
+  // scans, so every bracket's top IS its successor's bottom bit for bit and
+  // no draw falls between two of them.
+  const grouped = g.add(
+    pointsToPath,
+    { groupAttr: MIX.targetIdx, closed: false, shortGroups: "skip" },
+    `${tag}_perPlacement`,
+  );
+  g.connect(weighed, "out", grouped, "in");
+  const below = g.add(
+    pathScan,
+    { name: MIX.weight, outName: MIX.cumLo, mode: "exclusive" },
+    `${tag}_cumLo`,
+  );
+  g.connect(grouped, "out", below, "in");
+  const through = g.add(
+    pathScan,
+    { name: MIX.weight, outName: MIX.cumHi, mode: "inclusive", totalAttr: MIX.total },
+    `${tag}_cumHi`,
+  );
+  g.connect(below, "out", through, "in");
+  const total = g.add(
+    promoteAttribute,
+    { name: MIX.total, from: "primitive", to: "point", mode: "first" },
+    `${tag}_total`,
+  );
+  g.connect(through, "out", total, "in");
+  const drawn = g.add(
+    setAttribute,
+    { name: MIX.draw, tupleSize: 1, value: mul(attribute(MIX.uPick), attribute(MIX.total)) },
+    `${tag}_draw`,
+  );
+  g.connect(total, "out", drawn, "in");
+  const x = attribute(MIX.draw);
+  const picked = g.add(
+    filterByExpression,
+    {
+      predicate: mul(le(attribute(MIX.cumLo), x), lt(x, attribute(MIX.cumHi))),
+      topology: "drop",
+    },
+    `${tag}_pick`,
+  );
+  g.connect(drawn, "out", picked, "in");
+
+  // ---- one survivor per placement, in placement order: what it becomes --
+
+  const tall = attribute(ASSET.tall);
+  const acrossW = attribute(ASSET.across);
+  const tMag = quantileField(
+    attribute(ASSET.latP10),
+    attribute(ASSET.latMed),
+    attribute(ASSET.latP90),
+    attribute(MIX.uLat),
+  );
+  const rightward = lt(attribute(MIX.uSide), attribute(ASSET.right));
+  const drawnT = select(rightward, abs(tMag), mul(-1, abs(tMag)));
+  const drawnH = quantileField(
+    attribute(ASSET.hgtP10),
+    attribute(ASSET.hgtMed),
+    attribute(ASSET.hgtP90),
+    attribute(MIX.uHgt),
+  );
+
+  // THE BAND DECIDES THE LATERAL, WITHIN WHAT THE ASSET REACHES. The draw
+  // comes from the asset's whole distribution and the band is a slice of
+  // it, so most draws miss — arithmetic rather than bad luck. What the rule
+  // wants is a placement of THIS asset in THAT band, and the asset was
+  // chosen because its own instances are observed there, so the lateral is
+  // clamped into the intersection. The band's top belongs to the band ABOVE
+  // it, so the ceiling is approached and never touched.
+  const clampLo = max(blo, reachLo);
+  const clampHi = min(sub(bhi, 2 * SAME_PLACE_W), reachHi);
+  const signT = sub(1, mul(2, lt(drawnT, 0)));
+  const settledT = select(
+    ge(clampHi, clampLo),
+    mul(signT, clamp(abs(drawnT), clampLo, clampHi)),
+    drawnT,
+  );
+
+  // AN `over` PLACEMENT SPANS THE CORRIDOR; IT DOES NOT SIT IN IT, so its
+  // height comes from the BAND. Every other band gets Z-1 applied at the
+  // point of drawing, because a repair must not emit something another
+  // repair has to undo — measured at 56 mix moves against 23 corridor fixes
+  // over twelve rounds on a lap every rule had already settled.
+  const fixed = corridorFields(settledT, sub(drawnH, div(tall, 2)), acrossW, tall, 0);
+  const isOver = eq(dst, 0);
+  const finalT = select(isOver, settledT, fixed.wantT);
+  const finalH = select(isOver, add(CORRIDOR.ceilingW, div(tall, 2)), add(fixed.wantBase, div(tall, 2)));
+
+  // The pose, from the same uniform `poseFor` would have spent, against
+  // this asset's own list. `u` is in [0, 1) so the floor is below the
+  // count and the reference's `% ids.length` is a no-op.
+  const poseSlot = add(
+    attribute(MIX_ASSET.poseOff),
+    floor(mul(attribute(PLACEMENT.poseU), attribute(MIX_ASSET.poseCount))),
+  );
+  const posed = g.add(
+    transferByIndex,
+    { index: poseSlot, attributes: [MIX_POSE.id], outOfRange: "clamp" },
+    `${tag}_pose`,
+  );
+  g.connect(picked, "out", posed, "in");
+
+  // WHERE IT LANDED, WHICH IS THE COMMIT GATE. The reference draws up to
+  // eight times and commits only a draw whose settled band IS the band it
+  // was drawn for; anything else leaves the donor alone and is not counted
+  // as a move. The same test, once — see the header for why once.
+  let answer: NodeHandle = posed;
+  for (const [name, value] of [
+    [MIX.newT, finalT],
+    [MIX.newH, finalH],
+    [MIX.newAcross, acrossW],
+    [MIX.newAlong, attribute(MIX_ASSET.along)],
+    [MIX.newTall, tall],
+    [MIX.newPose, attribute(MIX_POSE.id)],
+    [
+      MIX.commit,
+      mul(
+        mul(usable, eq(bandField(finalT, finalH), dst)),
+        ge(attribute(MIX_POSE.id), 0),
+      ),
+    ],
+  ] as const) {
+    const n = g.add(setAttribute, { name, tupleSize: 1, value }, `${tag}_${name}`);
+    g.connect(answer, "out", n, "in");
+    answer = n;
+  }
+
+  // ---- back onto the carry, by ordinal ---------------------------------
+
+  const gathered = g.add(
+    transferByIndex,
+    {
+      index: index(),
+      attributes: [
+        MIX.newT,
+        MIX.newH,
+        MIX.newAcross,
+        MIX.newAlong,
+        MIX.newTall,
+        MIX.newPose,
+        MIX.commit,
+      ],
+      outOfRange: "clamp",
+    },
+    `${tag}_gather`,
+  );
+  g.connect(chain, "out", gathered, "in");
+  g.connect(answer, "out", gathered, "source");
+
+  const apply = attribute(MIX.commit);
+  let out: NodeHandle = gathered;
+  for (const [name, next, prev] of [
+    [PLACEMENT.t, MIX.newT, PLACEMENT.t],
+    [PLACEMENT.h, MIX.newH, PLACEMENT.h],
+    [PLACEMENT.sizeAcross, MIX.newAcross, PLACEMENT.sizeAcross],
+    [PLACEMENT.sizeAlong, MIX.newAlong, PLACEMENT.sizeAlong],
+    [PLACEMENT.sizeTall, MIX.newTall, PLACEMENT.sizeTall],
+    [PLACEMENT.pose, MIX.newPose, PLACEMENT.pose],
+  ] as const) {
+    const n = g.add(
+      setAttribute,
+      { name, tupleSize: 1, value: select(apply, attribute(next), attribute(prev)) },
+      `${tag}_apply_${name}`,
+    );
+    g.connect(out, "out", n, "in");
+    out = n;
+  }
+
+  // THE ASSET ID, WHICH IS A STRING AND IS WRITTEN BY A FIELD, and this is
+  // the node this file's own comment said did not exist. `setAttribute`
+  // takes a table of strings and a field-capable INDEX into it, so the id
+  // is re-derived from the pose column every round rather than transferred
+  // — which also means it cannot drift from the pose, because there is
+  // nowhere for the two to disagree. Cover pieces never move (the mix
+  // excludes them), so their half of the table is written from the same
+  // pose it always had.
+  const half = poseIds.length / 2;
+  const idIndex = add(
+    add(attribute(PLACEMENT.pose), 1),
+    mul(attribute(PLACEMENT.cover), half),
+  );
+  const named = g.add(
+    setAttribute,
+    {
+      name: PLACEMENT.asset,
+      tupleSize: 1,
+      type: "string",
+      values: poseIds as string[],
+      value: idIndex,
+    },
+    `${tag}_assetId`,
+  );
+  g.connect(out, "out", named, "in");
+
+  // The scratch goes home. `stationGraph.ts` strips its own for the same
+  // reason: every column here rides the carry into the next round, where
+  // the stage that wrote it writes it again.
+  const cleaned = g.add(
+    removeAttribute,
+    {
+      names: [
+        MIX.uPick,
+        MIX.uLat,
+        MIX.uHgt,
+        MIX.uSide,
+        MIX.newT,
+        MIX.newH,
+        MIX.newAcross,
+        MIX.newAlong,
+        MIX.newTall,
+        MIX.newPose,
+      ],
+      strict: false,
+    },
+    `${tag}_scratch`,
+  );
+  g.connect(named, "out", cleaned, "in");
+  return { tail: cleaned, assets: stamped, poses: posed };
+}
+
+/**
+ * Every asset id a pose can name, in the order {@link writeBandRedraw}
+ * indexes them: `pose:-1` first, then one per pose, then the same again
+ * under the `cover:` prefix.
+ *
+ * A TABLE RATHER THAN A FORMULA because a string is not a number and no
+ * field concatenates one. -1 leads because it is a real answer — `poseFor`
+ * returns it for an asset the vocabulary has nothing for — and putting it
+ * at index 0 makes the index a plain `pose + 1` with no branch.
+ */
+export function mixPoseIds(lib: PoseLibrary): string[] {
+  const plain: string[] = [];
+  const cover: string[] = [];
+  for (let pose = -1; pose < lib.boxes.length; pose++) {
+    plain.push(poseAssetId(pose, false));
+    cover.push(poseAssetId(pose, true));
+  }
+  return [...plain, ...cover];
 }
 
 /**
@@ -1673,7 +2272,11 @@ function bandField(): Field {
 function writeBandMix(g: Graph, target: NodeHandle, tag: string): NodeHandle {
   const band = g.add(
     setAttribute,
-    { name: PLACEMENT.mixBand, tupleSize: 1, value: bandField() },
+    {
+      name: PLACEMENT.mixBand,
+      tupleSize: 1,
+      value: bandField(attribute(PLACEMENT.t), attribute(PLACEMENT.h)),
+    },
     `${tag}_band`,
   );
   g.connect(target, "out", band, "in");
@@ -1806,7 +2409,10 @@ function writeSettleCount(g: Graph, target: NodeHandle, tag: string): NodeHandle
  * is the same argument `dressLap` makes for having one, which is that a
  * single pass CANNOT be shown to be enough without running the second.
  */
-export function buildRepairBody(lap: Lap): {
+export function buildRepairBody(
+  lap: Lap,
+  mix: { readonly bandPools: readonly boolean[]; readonly poseIds: readonly string[] },
+): {
   graph: Graph;
   inputs: ExposedPin[];
   outputs: ExposedPin[];
@@ -1828,7 +2434,8 @@ export function buildRepairBody(lap: Lap): {
   // lowers a placement out of the verge band, so the shares the mix reads
   // are only the lap's once both have run.
   const mixed = writeBandMix(b, settled, "z3");
-  const counted = writeSettleCount(b, mixed, "round");
+  const redrawn = writeBandRedraw(b, mixed, mix.bandPools, mix.poseIds, "z3");
+  const counted = writeSettleCount(b, redrawn.tail, "round");
 
   return {
     graph: b,
@@ -1837,6 +2444,9 @@ export function buildRepairBody(lap: Lap): {
       { name: "carry", node: z1.head, pin: "in" },
       // Broadcast whole to every round: the lap's frames never change.
       { name: "sight", node: seen.sight, pin: "sight" },
+      // Nor does the pool Z-3 redraws out of, nor its pose table.
+      { name: "mixAssets", node: redrawn.assets, pin: "source" },
+      { name: "mixPoses", node: redrawn.poses, pin: "source" },
     ],
     // THE TWO INTERMEDIATES ARE PUBLISHED AS WELL AS THE CARRY, and that
     // is what keeps the individual rules testable once they are inside a
@@ -2067,9 +2677,12 @@ export function buildRoundGraph(input: DressGraphInput): Graph {
   // which is the machinery telling the truth: a body belongs to one
   // wrapper, and running it bare is a different graph rather than the same
   // graph with the loop switched off.
-  const { kit, lap, placements, seed, immovable, mixPinned } = input;
+  const { kit, lap, placements, seed, immovable, mixPinned, pool } = input;
   const lib = poseLibrary(kit);
-  const body = buildRepairBody(lap);
+  const body = buildRepairBody(lap, {
+    bandPools: mixBandPools(pool, lib, mixPinned),
+    poseIds: mixPoseIds(lib),
+  });
   const g = body.graph;
 
   // The portals `repeatUntil` would have injected, added by hand — which
@@ -2080,9 +2693,29 @@ export function buildRoundGraph(input: DressGraphInput): Graph {
   ]);
   const sight = g.add(dataInput, {}, "roundSight");
   g.setParam(sight, "items", [makeGeometryItem(input.frames)]);
+  const mixAssets = g.add(dataInput, {}, "roundMixAssets");
+  g.setParam(mixAssets, "items", [makeGeometryItem(mixAssetCloud(pool, lib, mixPinned))]);
+  const mixPoses = g.add(dataInput, {}, "roundMixPoses");
+  g.setParam(mixPoses, "items", [makeGeometryItem(mixPoseCloud(pool, lib))]);
 
+  // NAMED RATHER THAN POSITIONAL, and it is worth the four lines: the
+  // ternary this replaced sent every pin that was not "carry" to the sight
+  // path, so adding an input to the body wired it to the frames and the
+  // failure arrived as a missing column three nodes later.
+  const portals: Record<string, NodeHandle> = {
+    carry,
+    sight,
+    mixAssets,
+    mixPoses,
+  };
   for (const pin of body.inputs) {
-    g.connect(pin.name === "carry" ? carry : sight, "out", pin.node, pin.pin);
+    const from = portals[pin.name];
+    if (from === undefined) {
+      throw new Error(
+        `buildRoundGraph: the repair body exposes an input "${pin.name}" that this function has no portal for; add a dataInput for it beside the others`,
+      );
+    }
+    g.connect(from, "out", pin.node, pin.pin);
   }
   for (const pin of body.outputs) {
     g.output(pin.node, pin.pin, pin.name === "carry" ? DRESS_OUTPUTS.placements : pin.name);
@@ -2118,7 +2751,7 @@ export function buildDressGraph(input: DressGraphInput): Graph {
  * off the output itself rather than deriving from two inputs.
  */
 function assemble(input: DressGraphInput): { graph: Graph } {
-  const { kit, lap, frames, placements, seed, immovable, mixPinned } = input;
+  const { kit, lap, frames, placements, seed, immovable, mixPinned, pool } = input;
   const g = new Graph(seed);
 
   const lib = poseLibrary(kit);
@@ -2152,7 +2785,17 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   //
   // The order inside the body is `dressLap`'s and is load-bearing twice
   // over. See {@link buildRepairBody}.
-  const body = buildRepairBody(lap);
+  const mixAssetsIn = g.add(dataInput, {}, "mixAssets");
+  g.setParam(mixAssetsIn, "items", [
+    makeGeometryItem(mixAssetCloud(pool, lib, mixPinned)),
+  ]);
+  const mixPosesIn = g.add(dataInput, {}, "mixPoses");
+  g.setParam(mixPosesIn, "items", [makeGeometryItem(mixPoseCloud(pool, lib))]);
+
+  const body = buildRepairBody(lap, {
+    bandPools: mixBandPools(pool, lib, mixPinned),
+    poseIds: mixPoseIds(lib),
+  });
   const repair = g.add(
     repeatUntilNode(body.graph, body.inputs, body.outputs),
     { maxRounds: MAX_ROUNDS, settleAttr: SETTLE_ATTR },
@@ -2160,6 +2803,8 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   );
   g.connect(placementsIn, "out", repair, "carry");
   g.connect(framesIn, "out", repair, "sight");
+  g.connect(mixAssetsIn, "out", repair, "mixAssets");
+  g.connect(mixPosesIn, "out", repair, "mixPoses");
 
   const boxes = writeBoxes(
     g,
@@ -2236,6 +2881,85 @@ export async function cookBandMix(input: DressGraphInput): Promise<BandMixDecisi
     target.push(t >= 0 ? (MIX_BANDS[t] as Band) : undefined);
   }
   return { band, target };
+}
+
+/** What {@link cookBandRedraw} reads back, one entry per placement. */
+export interface BandRedrawResult extends BandMixDecision {
+  /** True where the redraw committed — the draw landed in the band asked for. */
+  readonly applied: boolean[];
+  /** The lateral, height, extents, pose and asset id each placement ended with. */
+  readonly t: number[];
+  readonly h: number[];
+  readonly tall: number[];
+  readonly pose: number[];
+  readonly asset: string[];
+}
+
+/**
+ * Cook the decision AND the redraw over one placement list.
+ *
+ * SEPARATE FROM {@link cookBandMix} BECAUSE THEY ANSWER DIFFERENT
+ * QUESTIONS, and the decision's is the one that can be compared against
+ * `repairBandMix` exactly. The redraw draws from `randomField` where the
+ * reference draws from an integer hash of an array index, so the two pick
+ * different assets by construction; what this exists to read back is the
+ * POSTCONDITION — that every placement the quota marked came out of the
+ * stage in the band it was sent to, holding an asset that reaches there.
+ */
+export async function cookBandRedraw(input: DressGraphInput): Promise<BandRedrawResult> {
+  const { kit, lap, placements, seed, immovable, mixPinned, pool } = input;
+  const lib = poseLibrary(kit);
+  const g = new Graph(seed);
+  const cloud = g.add(dataInput, {}, "placements");
+  g.setParam(cloud, "items", [
+    makeGeometryItem(placementCloudInTrackFrame(lap, placements, lib, seed, immovable, mixPinned)),
+  ]);
+  const mixed = writeBandMix(g, cloud, "z3");
+  const redraw = writeBandRedraw(
+    g,
+    mixed,
+    mixBandPools(pool, lib, mixPinned),
+    mixPoseIds(lib),
+    "z3",
+  );
+  const assetsIn = g.add(dataInput, {}, "mixAssets");
+  g.setParam(assetsIn, "items", [makeGeometryItem(mixAssetCloud(pool, lib, mixPinned))]);
+  g.connect(assetsIn, "out", redraw.assets, "source");
+  const posesIn = g.add(dataInput, {}, "mixPoses");
+  g.setParam(posesIn, "items", [makeGeometryItem(mixPoseCloud(pool, lib))]);
+  g.connect(posesIn, "out", redraw.poses, "source");
+  g.output(redraw.tail, "out", "mix");
+
+  const geo = requireGeo((await cook(g)).outputs["mix"], "mix");
+  const pts = geo.attrs.point;
+  const bandCol = pts.require(PLACEMENT.mixBand);
+  const targetCol = pts.require(PLACEMENT.mixTarget);
+  const commit = pts.require(MIX.commit);
+  const tCol = pts.require(PLACEMENT.t);
+  const hCol = pts.require(PLACEMENT.h);
+  const tallCol = pts.require(PLACEMENT.sizeTall);
+  const poseCol = pts.require(PLACEMENT.pose);
+  const assetCol = pts.require(PLACEMENT.asset);
+  const band: Band[] = [];
+  const target: (Band | undefined)[] = [];
+  const applied: boolean[] = [];
+  const t: number[] = [];
+  const h: number[] = [];
+  const tall: number[] = [];
+  const pose: number[] = [];
+  const asset: string[] = [];
+  for (let i = 0; i < placements.length; i++) {
+    band.push(MIX_BANDS[bandCol.get(i)] as Band);
+    const d = targetCol.get(i);
+    target.push(d >= 0 ? (MIX_BANDS[d] as Band) : undefined);
+    applied.push(commit.get(i) !== 0);
+    t.push(tCol.get(i));
+    h.push(hCol.get(i));
+    tall.push(tallCol.get(i));
+    pose.push(poseCol.get(i));
+    asset.push(assetCol.getString(i));
+  }
+  return { band, target, applied, t, h, tall, pose, asset };
 }
 
 /** The one async thing here: build, cook, and read the columns back. */

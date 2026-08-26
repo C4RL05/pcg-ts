@@ -23,9 +23,16 @@
  * runs on the list as it reaches step 8 for the FIRST time.
  */
 import { describe, expect, it } from "vitest";
-import { bandOfPlacement, repairBandMix, type Band } from "../demos/racetrack/assets.js";
+import { Z3, bandOfPlacement, repairBandMix, type Band } from "../demos/racetrack/assets.js";
 import { placementsBeforeLanguage, reserveFor } from "../demos/racetrack/dress.js";
-import { MIX_BANDS, cookBandMix } from "../demos/racetrack/dressGraph.js";
+import {
+  MIX_BANDS,
+  cookBandMix,
+  cookBandRedraw,
+  poseAssetId,
+  poseLibrary,
+} from "../demos/racetrack/dressGraph.js";
+import { rand } from "../demos/racetrack/rand.js";
 import { landmarkAssets } from "../demos/racetrack/legibility.js";
 import type { StationedPlacement } from "../demos/racetrack/legibility.js";
 import { shippedVocabulary } from "../demos/racetrack/vocabulary.js";
@@ -69,7 +76,7 @@ async function unmixedLap(seed: number): Promise<{
 
 describe("bandMix: the ladder", () => {
   it.each(SEEDS)("puts every placement in the band bandOfPlacement does (seed %i)", async (seed) => {
-    const { placements, lap, frames } = await unmixedLap(seed);
+    const { placements, pool, lap, frames } = await unmixedLap(seed);
     const got = await cookBandMix({
       kit: KIT,
       lap,
@@ -78,6 +85,7 @@ describe("bandMix: the ladder", () => {
       seed,
       immovable: new Set<number>(),
       mixPinned: new Set<number>(),
+      pool,
     });
 
     const counts = new Map<Band, number>();
@@ -126,6 +134,7 @@ describe("bandMix: the decision", () => {
       seed,
       immovable: new Set<number>(),
       mixPinned: pinned,
+      pool,
     });
 
     // The reference, on the identical list, with the identical exclusions.
@@ -163,7 +172,7 @@ describe("bandMix: the decision", () => {
   });
 
   it.each(SEEDS)("never marks a pinned placement (seed %i)", async (seed) => {
-    const { placements, pinned, lap, frames } = await unmixedLap(seed);
+    const { placements, pool, pinned, lap, frames } = await unmixedLap(seed);
     const graph = await cookBandMix({
       kit: KIT,
       lap,
@@ -172,6 +181,7 @@ describe("bandMix: the decision", () => {
       seed,
       immovable: new Set<number>(),
       mixPinned: pinned,
+      pool,
     });
     let pinnedSeen = 0;
     for (let i = 0; i < placements.length; i++) {
@@ -191,7 +201,7 @@ describe("bandMix: the decision", () => {
     // difference between the two runs is exactly the placements the
     // corner language and L-4 hold back.
     const seed = 1;
-    const { placements, pinned, lap, frames } = await unmixedLap(seed);
+    const { placements, pool, pinned, lap, frames } = await unmixedLap(seed);
     const base = {
       kit: KIT,
       lap,
@@ -199,6 +209,7 @@ describe("bandMix: the decision", () => {
       placements,
       seed,
       immovable: new Set<number>(),
+      pool,
     };
     const withPins = await cookBandMix({ ...base, mixPinned: pinned });
     const without = await cookBandMix({ ...base, mixPinned: new Set<number>() });
@@ -211,5 +222,164 @@ describe("bandMix: the decision", () => {
     // a pinned donor is replaced by the next eligible member of its band.
     const differing = withPins.target.filter((x, i) => x !== without.target[i]);
     expect(differing.length).toBeGreaterThan(0);
+  });
+});
+
+describe("bandMix: the redraw", () => {
+  it.each(SEEDS)("lands every redrawn placement in the band it was sent to (seed %i)", async (seed) => {
+    const { placements, pool, pinned, lap, frames } = await unmixedLap(seed);
+    const got = await cookBandRedraw({
+      kit: KIT,
+      lap,
+      frames,
+      placements,
+      seed,
+      immovable: new Set<number>(),
+      mixPinned: pinned,
+      pool,
+    });
+
+    let marked = 0;
+    let applied = 0;
+    let unchanged = 0;
+    for (let i = 0; i < placements.length; i++) {
+      const dst = got.target[i];
+      if (dst === undefined) {
+        // NOT MARKED, SO NOT TOUCHED. This half of the loop is what says
+        // the stage is a repair and not a redressing: the stamp draws an
+        // asset for every placement, including the ones staying put, and
+        // the commit gate has to throw all of those away.
+        expect(got.applied[i]).toBe(false);
+        const p = placements[i] as StationedPlacement;
+        expect(got.t[i]).toBeCloseTo(p.t, 5);
+        expect(got.h[i]).toBeCloseTo(p.h, 5);
+        unchanged++;
+        continue;
+      }
+      marked++;
+      if (!got.applied[i]) continue;
+      applied++;
+      // THE POSTCONDITION, and the only exact claim available: a redrawn
+      // placement is IN the band it was drawn for. `settleIntoBand` clamps
+      // the lateral into the band and the asset's own reach, and Z-1 is
+      // applied at the point of drawing, so a commit means both held.
+      expect(bandOfPlacement(got.t[i], got.h[i], got.tall[i], "centre")).toBe(dst);
+    }
+    // eslint-disable-next-line no-console
+    console.log(
+      `seed ${seed}: ${marked} marked, ${applied} redrawn, ${unchanged} left alone`,
+    );
+    expect(marked).toBeGreaterThan(10);
+    // NON-VACUITY. A gate that refused everything would satisfy every line
+    // above; the measurement behind the single draw says most land.
+    expect(applied).toBeGreaterThan(marked / 2);
+  });
+
+  it.each(SEEDS)("keeps the asset id and the pose in step (seed %i)", async (seed) => {
+    const { placements, pool, pinned, lap, frames } = await unmixedLap(seed);
+    const got = await cookBandRedraw({
+      kit: KIT,
+      lap,
+      frames,
+      placements,
+      seed,
+      immovable: new Set<number>(),
+      mixPinned: pinned,
+      pool,
+    });
+    // THE STRING IS WRITTEN BY A FIELD, out of a table, and this is what
+    // says it lines up: every placement's asset id must be exactly what
+    // `poseAssetId` answers for the pose column beside it — including the
+    // ones the mix never touched, whose ids the stage re-derives rather
+    // than carries.
+    for (let i = 0; i < placements.length; i++) {
+      expect(got.asset[i]).toBe(poseAssetId(got.pose[i], false));
+    }
+    // And a redrawn placement takes a pose that exists.
+    const lib = poseLibrary(KIT);
+    for (let i = 0; i < placements.length; i++) {
+      if (!got.applied[i]) continue;
+      expect(got.pose[i]).toBeGreaterThanOrEqual(0);
+      expect(got.pose[i]).toBeLessThan(lib.boxes.length);
+    }
+  });
+
+  it("leaves a placement alone when its asset is the one it already had", async () => {
+    // THE POSE IS THE EXACT HALF OF THIS PORT, and this is where that is
+    // visible: `poseFor` keys on the STATION, which a redraw never moves,
+    // so a placement whose asset does not change keeps the pose it had —
+    // to the bit, not to a tolerance. Every unmarked placement is that
+    // case, and the stage re-derives their poses rather than copying them.
+    const seed = 1;
+    const { placements, pool, pinned, lap, frames } = await unmixedLap(seed);
+    const got = await cookBandRedraw({
+      kit: KIT,
+      lap,
+      frames,
+      placements,
+      seed,
+      immovable: new Set<number>(),
+      mixPinned: pinned,
+      pool,
+    });
+    const lib = poseLibrary(KIT);
+    let checked = 0;
+    for (let i = 0; i < placements.length; i++) {
+      if (got.target[i] !== undefined) continue;
+      const p = placements[i] as StationedPlacement;
+      const ids = lib.posesOf.get(p.asset.id) ?? [];
+      if (ids.length === 0) continue;
+      const u = rand(seed, Math.round(p.station * 97), 0x7053);
+      expect(got.pose[i]).toBe(ids[Math.floor(u * ids.length) % ids.length]);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(100);
+  });
+
+  it("moves the shares toward Z-3, which is what the whole rule is for", async () => {
+    const seed = 1;
+    const { placements, pool, pinned, lap, frames } = await unmixedLap(seed);
+    const got = await cookBandRedraw({
+      kit: KIT,
+      lap,
+      frames,
+      placements,
+      seed,
+      immovable: new Set<number>(),
+      mixPinned: pinned,
+      pool,
+    });
+    const live = placements.filter((p) => p.cover !== true).length;
+    const before = new Map<Band, number>();
+    const after = new Map<Band, number>();
+    for (let i = 0; i < placements.length; i++) {
+      const p = placements[i] as StationedPlacement;
+      if (p.cover === true) continue;
+      const b0 = bandOfPlacement(p.t, p.h, p.asset.size.tall, "centre");
+      const b1 = bandOfPlacement(got.t[i] as number, got.h[i] as number, got.tall[i] as number, "centre");
+      before.set(b0, (before.get(b0) ?? 0) + 1);
+      after.set(b1, (after.get(b1) ?? 0) + 1);
+    }
+    const miss = (counts: Map<Band, number>): number => {
+      let total = 0;
+      for (const b of MIX_BANDS) {
+        const share = (counts.get(b) ?? 0) / live;
+        const [lo, hi] = Z3[b].rule;
+        total += Math.max(0, lo - share) + Math.max(0, share - hi);
+      }
+      return total;
+    };
+    const m0 = miss(before);
+    const m1 = miss(after);
+    // eslint-disable-next-line no-console
+    console.log(
+      `seed ${seed}: total share miss ${m0.toFixed(4)} -> ${m1.toFixed(4)} over ${live} live placements`,
+    );
+    // THE DIRECTION IS THE CLAIM, not a threshold. One pass of a rule that
+    // `dressLap` runs to a fixed point does not have to satisfy Z-3; it
+    // has to make the lap less wrong, and by most of the way, or the
+    // decision and the redraw disagree about what they are doing.
+    expect(m0).toBeGreaterThan(0.05);
+    expect(m1).toBeLessThan(m0 * 0.5);
   });
 });

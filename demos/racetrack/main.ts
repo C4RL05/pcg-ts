@@ -708,6 +708,7 @@ function buildStreamedDressing(circuit: Circuit, dressed: Dressing): {
     // than reconstructed: it holds L-4's landmarks, which are a property
     // of this lap's finished list and not of the kit.
     mixPinned: dressed.mixPinned,
+    pool: dressed.pool,
   });
 
   const group = new Group();

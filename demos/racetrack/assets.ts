@@ -283,7 +283,7 @@ export function bandOfPlacement(
  *
  * A distribution straddling the centreline reaches 0, because |t| does.
  */
-function lateralReach(w: AssetWhere): readonly [number, number] {
+export function lateralReach(w: AssetWhere): readonly [number, number] {
   const { p10, p90 } = w.lateral;
   const a = Math.abs(p10);
   const b = Math.abs(p90);
@@ -291,7 +291,7 @@ function lateralReach(w: AssetWhere): readonly [number, number] {
 }
 
 /** The |t| span each band occupies, for choosing an asset that lands in it. */
-const BAND_T: Record<Band, readonly [number, number]> = {
+export const BAND_T: Record<Band, readonly [number, number]> = {
   over: [0, 1.5],
   // FROM 1W, NOT FROM 0. The verge is 1-1.5W, and drawing from 0 let the
   // repair pick an asset whose own lateral sits at 0.4W, place it there,

@@ -378,6 +378,32 @@ function brakeOf(seed: number): Set<number> {
   return id === undefined ? new Set() : new Set([id]);
 }
 
+/**
+ * Every asset id in the pool — which is how these cases switch Z-3 OFF.
+ *
+ * THROUGH THE RULE'S OWN PARAMETER AND NOT A MODE FLAG. The repair body
+ * runs Z-1, L-1, L-5 and now Z-3, and every claim in this suite is about
+ * the first three: a mix that redraws a placement mid-comparison is not
+ * noise, it is a different lap. `mixPinned` is the set Z-3 may not take a
+ * donor from, so pinning the whole pool leaves it with nothing to move and
+ * the body reduces to exactly the three rules being measured. A second
+ * spelling — a boolean on the body — would be a second thing to keep true.
+ */
+function noMix(seed: number): Set<number> {
+  return new Set(dressingPool(seed).map((a) => a.id));
+}
+
+/**
+ * The pool the dressing at this seed drew from — the same one `dressLap`
+ * reserves, since `reserveFor` varies its MEMBERSHIP by seed and not its
+ * length, so a pool from the wrong seed passes every range check.
+ */
+function dressingPool(seed: number): PlaceableAsset[] {
+  const kit = shippedVocabulary();
+  const all = (kit.assets as unknown as PlaceableAsset[]).filter((a) => a.where);
+  return reserveMarkers(all, seed).pool;
+}
+
 /** `cullSightlines` over the graph's eye set — the reference for every L-1 claim here. */
 function cullReference(
   lap: Lap,
@@ -610,10 +636,11 @@ describe("racetrack dressing, as a graph", () => {
         placements: src,
         seed,
         immovable,
-        // Z-3's protect set. Empty here: these cases measure Z-1, L-1 and
-        // L-5, and an empty set is the strongest input for the mix, not a
-        // placeholder -- every placement is eligible to be moved.
-        mixPinned: new Set<number>(),
+        // Z-3 is switched off here: these cases measure Z-1, L-1 and
+        // L-5, and a mix that redraws a placement mid-comparison is a
+        // different lap rather than noise. See `noMix`.
+        mixPinned: noMix(seed),
+        pool: dressingPool(seed),
       });
       const out = (
         await cook(g, {
@@ -744,11 +771,11 @@ describe("racetrack dressing, as a graph", () => {
         lap,
         frames,
         placements: dressing.placements,
-        // The set `dressLap` itself was holding, so the two paths differ in
-        // nothing the mix can see.
-        mixPinned: dressing.mixPinned,
+        // Z-3 switched off: this compares the other three rules. See `noMix`.
+        mixPinned: noMix(seed),
         seed,
         immovable,
+        pool: dressingPool(seed),
       });
 
       cookMs += got.cookMs;
@@ -895,10 +922,11 @@ describe("racetrack dressing, as a graph", () => {
         // which L-1 has not touched. Stated rather than omitted, which is
         // what the param being required is for.
         immovable: new Set(),
-        // Z-3's protect set. Empty here: these cases measure Z-1, L-1 and
-        // L-5, and an empty set is the strongest input for the mix, not a
-        // placeholder -- every placement is eligible to be moved.
-        mixPinned: new Set<number>(),
+        // Z-3 is switched off here: these cases measure Z-1, L-1 and
+        // L-5, and a mix that redraws a placement mid-comparison is a
+        // different lap rather than noise. See `noMix`.
+        mixPinned: noMix(seed),
+        pool: dressingPool(seed),
       });
       // THE PRE-CULL CLOUD, WHICH IS THE ONLY ONE THAT CAN ANSWER THIS.
       // Z-1's verdict is "what did the corridor rule do to the list it was
@@ -1002,10 +1030,11 @@ describe("racetrack dressing, as a graph", () => {
         placements: src,
         seed,
         immovable,
-        // Z-3's protect set. Empty here: these cases measure Z-1, L-1 and
-        // L-5, and an empty set is the strongest input for the mix, not a
-        // placeholder -- every placement is eligible to be moved.
-        mixPinned: new Set<number>(),
+        // Z-3 is switched off here: these cases measure Z-1, L-1 and
+        // L-5, and a mix that redraws a placement mid-comparison is a
+        // different lap rather than noise. See `noMix`.
+        mixPinned: noMix(seed),
+        pool: dressingPool(seed),
       });
       const t0 = performance.now();
       const out = (await cook(g, { outputs: [DRESS_OUTPUTS.placed, DRESS_OUTPUTS.placements] }))
@@ -1115,10 +1144,11 @@ describe("racetrack dressing, as a graph", () => {
         placements: src,
         seed,
         immovable,
-        // Z-3's protect set. Empty here: these cases measure Z-1, L-1 and
-        // L-5, and an empty set is the strongest input for the mix, not a
-        // placeholder -- every placement is eligible to be moved.
-        mixPinned: new Set<number>(),
+        // Z-3 is switched off here: these cases measure Z-1, L-1 and
+        // L-5, and a mix that redraws a placement mid-comparison is a
+        // different lap rather than noise. See `noMix`.
+        mixPinned: noMix(seed),
+        pool: dressingPool(seed),
       });
       const out = (
         await cook(g, {
@@ -1325,10 +1355,11 @@ describe("racetrack dressing, as a graph", () => {
         placements: c.list,
         seed,
         immovable: new Set(),
-        // Z-3's protect set. Empty here: these cases measure Z-1, L-1 and
-        // L-5, and an empty set is the strongest input for the mix, not a
-        // placeholder -- every placement is eligible to be moved.
-        mixPinned: new Set<number>(),
+        // Z-3 is switched off here: these cases measure Z-1, L-1 and
+        // L-5, and a mix that redraws a placement mid-comparison is a
+        // different lap rather than noise. See `noMix`.
+        mixPinned: noMix(seed),
+        pool: dressingPool(seed),
       });
       const out = (
         await cook(g, { outputs: [DRESS_OUTPUTS.culled, DRESS_OUTPUTS.placements] })
@@ -1439,10 +1470,11 @@ describe("racetrack dressing, as a graph", () => {
         placements: src,
         seed,
         immovable,
-        // Z-3's protect set. Empty here: these cases measure Z-1, L-1 and
-        // L-5, and an empty set is the strongest input for the mix, not a
-        // placeholder -- every placement is eligible to be moved.
-        mixPinned: new Set<number>(),
+        // Z-3 is switched off here: these cases measure Z-1, L-1 and
+        // L-5, and a mix that redraws a placement mid-comparison is a
+        // different lap rather than noise. See `noMix`.
+        mixPinned: noMix(seed),
+        pool: dressingPool(seed),
       });
       const out = (await cook(g, { outputs: [DRESS_OUTPUTS.placed, DRESS_OUTPUTS.placements] }))
         .outputs;
@@ -1497,7 +1529,8 @@ describe("racetrack dressing, as a graph", () => {
         placements: src,
         seed,
         immovable,
-        mixPinned: new Set<number>(),
+        mixPinned: noMix(seed),
+        pool: dressingPool(seed),
       });
 
     const open0 = (await cook(build(new Set()), { outputs: [DRESS_OUTPUTS.placed] })).outputs;
@@ -1641,7 +1674,8 @@ describe("racetrack dressing, as a graph", () => {
       placements: dressing.placements,
       seed,
       immovable: brakeOf(seed),
-      mixPinned: dressing.mixPinned,
+      mixPinned: noMix(seed),
+      pool: dressing.pool,
     };
 
     const alone = (await cook(buildDressGraph(input), { outputs: [DRESS_OUTPUTS.boxes] })).outputs;
@@ -1683,9 +1717,10 @@ describe("racetrack dressing, as a graph", () => {
         lap,
         frames: cookedLap.frames,
         placements: dressing.placements,
-        mixPinned: dressing.mixPinned,
+        mixPinned: noMix(seed),
         seed,
         immovable,
+        pool: dressingPool(seed),
       });
 
       // The reference runs over the TypeScript's OWN boxes, not the

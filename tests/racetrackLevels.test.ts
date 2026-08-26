@@ -127,6 +127,7 @@ async function settledFor(
     mixPinned: dressing.mixPinned,
     seed,
     immovable: new Set<number>(),
+    pool: dressing.pool,
   });
   const out = (await cook(g, { outputs: [DRESS_OUTPUTS.placements] })).outputs;
   const settled = firstGeometry(out[DRESS_OUTPUTS.placements] ?? []);
@@ -159,6 +160,7 @@ async function driveLap(
     seed,
     immovable: new Set<number>(),
     mixPinned: dressing.mixPinned,
+    pool: dressing.pool,
   });
 
   const bySector = new Map<number, Instance[]>();

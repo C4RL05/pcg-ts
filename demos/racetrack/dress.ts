@@ -365,6 +365,18 @@ export interface Dressing {
    * is given.
    */
   readonly mixPinned: Set<number>;
+  /**
+   * The pool every draw on this lap came out of — the kit's placeable
+   * assets with L-2 and L-3's reserved vocabulary already removed.
+   *
+   * HANDED ON FOR `reservation`'s REASON. `reserveFor` answers a pool of
+   * the same LENGTH for every seed and varies only its membership, so a
+   * second derivation cannot be caught by a length check: cooking against
+   * one seed's pool and dressing at another was measured to name a
+   * different asset at 23 of 329 placements with every index in range.
+   * Z-3's redraw picks out of this pool, so it has to be THIS pool.
+   */
+  readonly pool: PlaceableAsset[];
 }
 
 /** The lap's own frame lookup, shared by every stage that needs one. */
@@ -957,6 +969,7 @@ export function dressLap(
     corners,
     markers,
     mixPinned,
+    pool,
     stats: {
       placed: placements.length,
       perW: placements.length / lap.lengthW,
