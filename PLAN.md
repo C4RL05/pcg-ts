@@ -2658,3 +2658,71 @@ spawn one instance per placement rather than per box -- survives on its
 other argument, which is that a gantry is one object rather than seven
 slabs; but a mix that redraws a placement's asset can write the new id in
 the graph, and without that it could not be ported at all.
+
+### Where the prelude stands after Z-3's decision, 2026-08-26
+
+Z-3 split in two and only one half moved, which is the finding rather
+than a compromise. `repairBandMix` is a lap-wide SEARCH for which
+placements must change band and a per-placement REDRAW of one of them.
+The search is `quotaRebalance` in the repair body now; the redraw is
+still `dressLap`'s.
+
+**The decision is exact.** Four seeds, on the list as it reaches step 8
+for the first time: the graph marks the same placements for the same
+destination bands as the reference chooses -- 17, 28, 14 and 22 moves,
+nothing missing and nothing extra -- and the band ladder agrees with
+`bandOfPlacement` on all 329, 312, 328 and 331 placements. That holds
+because `quotaRebalance` takes the visit order as a param and this passes
+it the station: the reference finds its donor with a linear `find` over a
+station-ordered list, so "the first k eligible members of this band" is
+the same k either way.
+
+**What is left of the lap prelude, in the order the measurements put it:**
+
+1. **Z-3's REDRAW.** Blocked on ONE thing, and it is not the one the code
+   said. `dressGraph.ts` claimed no field can produce a string attribute,
+   so the asset id had to be written in TypeScript; that was false when it
+   was written and is corrected in place. The real blocker is the POSE:
+   `poseFor` draws which recorded instance of an asset to use, from a
+   library the repair body is never handed, and a redraw that changes the
+   asset must change the pose. The way through is the one the asset choice
+   already uses -- hand the pose cloud in as a second broadcast input and
+   pick with the same group/scan/bracket recipe, then write the id from a
+   `values` table. Two measurements narrow it: the eight draw attempts the
+   reference walks are unexercised here (all 224 committed moves across
+   eight seeds landed on the FIRST draw, so one stream suffices for this
+   vocabulary, and `assets.ts` records that the enclosed kit needs more),
+   and Z-3's band table admits a whole-number arrangement at every lap
+   population from 200 to 460, so `quotaRebalance` cannot refuse a real
+   lap.
+2. **L-6's cover top-up and tiler.** Argued out on its merits long ago and
+   the argument still holds: it reads a measurement the previous repair
+   invalidated and draws from `seed + rounds`.
+3. **L-4 landmarks, L-5 false edges, D-4's second pass.** Never fire on
+   this vocabulary. A port of a rule that does not run has nothing
+   end-to-end to check it with.
+4. **The assembly of the placement list itself**, which is what would let
+   the page stop calling `dressLap` at all.
+
+**And a node was corrected by a fixture, which is worth recording.**
+`quotaRebalance` refused bands no whole number of points could satisfy,
+and a deliberately minimal five-point false-edge fixture cannot satisfy a
+band of [0.04, 0.12] -- the floor needs one point, the ceiling allows
+zero. Throwing killed a cook that had nothing to do with Z-3. Unreachable
+bands are REPORTED now: no arrangement is right, so none is made, and
+`unmetAttr` says so. The distinction the node draws is the one to keep:
+a band list no population could satisfy is an authoring error and is
+still refused outright by the two sum checks, while a band list THIS
+population cannot satisfy is data, and a node that throws on data cannot
+sit inside the loop it exists for.
+
+**A defect the port surfaced and did not fix.** The reference takes the
+first eligible member of an over-full band in station order, and a band's
+members are spread over the whole circuit -- so "the first k" is a
+CONTIGUOUS STRETCH of track. Every replacement the mix makes lands in the
+first tenth of the lap, and every share still comes out exactly right. It
+is transcribed rather than improved because a port that quietly changes
+the rule cannot be checked against it, and `quotaRebalance` takes the
+order as a param so that changing it later is one expression rather than
+a new node. Worth measuring what a hashed priority does to the picture
+before deciding.
