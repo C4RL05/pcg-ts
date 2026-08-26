@@ -598,6 +598,36 @@ HANDLERS.set("randomField", (spec, path, ctx) => {
   return ctx.emit(`pcg_hash_float(pcg_hash3(params.seed, ${wgslHexU32(keyHash)}, ${ident}))`, 1);
 });
 
+// randomFrom keys on a VALUE the graph computes rather than on the
+// element's identity, which is what makes it compile here at all: the
+// identity `randomField` needs is a gather over P and the `seed` column
+// on a domain a layout does not carry, while a key is just another
+// elementwise expression. So this handler has none of that one's
+// fallthroughs — it lowers on any domain, and the only thing it insists
+// on is that the key be a scalar, for the CPU's reason: folding a tuple
+// into one key would let two different keys share a stream.
+HANDLERS.set("randomFrom", (spec, path, ctx) => {
+  const key = spec.key;
+  const keyHash = typeof key === "string" ? hashString(key) : ((key as number | undefined) ?? 0) >>> 0;
+  const args = specArgs(spec);
+  const val = compileArg(args[0], `${path}.args[0]`, ctx);
+  if (val.size !== 1) {
+    throw new GpuCompileError(
+      `${path}: randomFrom's key must be ONE number per element, got width ${val.size}; reduce it first, e.g. component(<expr>, 0)`,
+    );
+  }
+  ctx.usesSeed = true;
+  ctx.libRoots.add("pcg_hash3");
+  ctx.libRoots.add("pcg_hash_float");
+  // Bits, never the value, exactly as `randomField` hashes a position:
+  // `hashCombine` truncates toward zero, so a whole interval of keys
+  // would collapse onto one stream.
+  return ctx.emit(
+    `pcg_hash_float(pcg_hash3(params.seed, ${wgslHexU32(keyHash)}, bitcast<u32>(${splat(val, 1)})))`,
+    1,
+  );
+});
+
 // -- elementwise combinators ------------------------------------------------
 
 /**

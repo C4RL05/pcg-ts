@@ -284,6 +284,10 @@ describe("domain-constant folding, differentially", () => {
   const UNIFORM_CASES: Record<string, FieldSpec> = {
     constant: { fn: "constant", value: 3 },
     nodeSeed: { fn: "nodeSeed" },
+    // A hash of a domain-constant key is domain-constant, which is the
+    // whole difference from `randomField`: that one varies with nothing
+    // but the element, this one varies with exactly what it is given.
+    randomFrom: { fn: "randomFrom", args: [{ fn: "nodeSeed" }], key: 0 },
     vec: { fn: "vec", args: [{ fn: "nodeSeed" }, 1, 2] },
     component: { fn: "component", args: [{ fn: "vec", args: [{ fn: "nodeSeed" }, 1, 2] }], index: 2 },
     ramp: { fn: "ramp", args: [{ fn: "nodeSeed" }], stops: [[0, 0.25], [1e9, -3]] },
@@ -342,7 +346,16 @@ describe("domain-constant folding, differentially", () => {
     }
     // And the per-element leaves this is the complement of really do vary,
     // so the geometry above is not accidentally uniform.
-    for (const spec of [scalar, triple, { fn: "index" }, { fn: "fraction" }, { fn: "randomField" }]) {
+    for (const spec of [
+      scalar,
+      triple,
+      { fn: "index" },
+      { fn: "fraction" },
+      { fn: "randomField" },
+      // Keyed on a VALUE, so it varies exactly when its key does — and a
+      // per-element key is the case that belongs in this half.
+      { fn: "randomFrom", args: [{ fn: "index" }], key: 0 },
+    ]) {
       const col = evaluateField(fieldFromJson(spec as FieldSpec), variedCtx(5, "point", SEED));
       const ts = col.tupleSize;
       expect(Array.from(col.data.slice(0, ts))).not.toEqual(Array.from(col.data.slice(ts, ts * 2)));

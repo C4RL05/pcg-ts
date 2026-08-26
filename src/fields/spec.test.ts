@@ -59,6 +59,7 @@ import {
   sub,
   tan,
   vec,
+  randomFrom,
 } from "./combinators.js";
 import {
   attribute,
@@ -287,6 +288,8 @@ const CASES: Case[] = [
   { name: "fraction", make: () => fraction() },
   { name: "nodeSeed", make: () => nodeSeed() },
   { name: "randomField default key", make: () => randomField() },
+  { name: "randomFrom default key", make: () => randomFrom(component(position(), 0)) },
+  { name: "randomFrom salted", make: () => randomFrom(index(), "pose") },
   { name: "randomField numeric key", make: () => randomField(7) },
   { name: "randomField negative key", make: () => randomField(-3) },
   { name: "randomField string key", make: () => randomField("species") },

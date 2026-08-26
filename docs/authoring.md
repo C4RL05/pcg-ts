@@ -398,7 +398,7 @@ Field-capable params (marked "Field" in [nodes.md](./nodes.md), or
 of a constant: `{ "fn": <name>, ... }`. Wherever a spec takes arguments
 (`args` entries, noise `position`), a finite number or number array is
 also accepted and wraps into `constant`. Specs nest arbitrarily (up to
-256 levels). `listFieldFns()` returns all 57 names at runtime.
+256 levels). `listFieldFns()` returns all 58 names at runtime.
 
 ### Which params accept one
 

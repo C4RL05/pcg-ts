@@ -254,6 +254,7 @@ describe("grammar coverage", () => {
     fraction: { fn: "fraction" },
     nodeSeed: { fn: "nodeSeed" },
     randomField: { fn: "randomField" },
+    randomFrom: { fn: "randomFrom", args: [{ fn: "attribute", name: "density" }], key: 0 },
     // Unbound on purpose: compiling a `param` needs its name and nothing
     // else, which is exactly why it lowers to a uniform slot.
     param: { fn: "param", name: "amplitude" },

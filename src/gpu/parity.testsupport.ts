@@ -120,6 +120,11 @@ export const MINIMAL_SPECS: Record<string, FieldSpecArg> = {
   fraction: { fn: "fraction" },
   nodeSeed: { fn: "nodeSeed" },
   randomField: { fn: "randomField" },
+  // Keyed on a VALUE, so unlike `randomField` above it needs no identity
+  // and lowers on any domain. The key is an attribute rather than a
+  // literal so the case exercises a real per-element hash rather than a
+  // constant the fold could swallow.
+  randomFrom: { fn: "randomFrom", args: [{ fn: "attribute", name: "density" }], key: 0 },
   // Unbound: the front end must accept the uniform-slot lowering on the
   // name alone (a bound one produces the same kernel — the value never
   // reaches the WGSL text).

@@ -31,6 +31,7 @@
  *   `opts.position`; the fold is what older graphs contain (see
  *   {@link nodeSeed})
  * - `{ fn: "randomField", key?: 0 | "salt" }`
+ * - `{ fn: "randomFrom", args: [keyField], key?: 0 | "salt" }`
  * - `{ fn: "param", name: "amplitude", value?: 0.5, min?: 0, max?: 4,
  *   description?: "..." }` — the value bound to that name, substituted at
  *   build time as if the literal had been written; a binding may also be a
@@ -120,6 +121,7 @@ import {
   pow,
   ramp,
   randomField,
+  randomFrom,
   remap,
   select,
   sin,
@@ -1505,6 +1507,39 @@ register(
   (spec, path) => {
     const args = requireArgs(spec, path, "variadic");
     return vec(...args.map((a, i) => buildArg(a, `${path}.args[${i}]`)));
+  },
+);
+
+register(
+  "randomFrom",
+  "uniform",
+  ["args", "key"],
+  `{ fn: "randomFrom", args: [keyField], key?: 0 | "salt" }`,
+  {
+    description:
+      "A uniform draw in [0, 1) keyed on a VALUE the graph computes, rather than on where the " +
+      "element is. `randomField` keys on a point's IDENTITY, so a point that MOVES draws a " +
+      "different number — right when the question is 'give this point a number', wrong when it is " +
+      "'give whatever is at this station a number'. Anything that must keep its draw while it is " +
+      "being repaired needs a key that does not move with it: an arc coordinate, a lane, an id, a " +
+      "cell index. THE KEY IS HASHED AS BITS, NOT AS A NUMBER, so two values differing anywhere in " +
+      "their f32 representation are independent draws and no interval maps to one stream — which " +
+      "is the trap as much as the point: `div(s, 3)` names a VALUE and `floor(div(s, 3))` names a " +
+      "BUCKET, so quantise deliberately when you mean buckets. A whole number is exact to 2^24 and " +
+      "needs no rounding. `key` salts the stream exactly as `randomField`'s does and the cooking " +
+      "node's seed folds in the same way, so two nodes hashing the same value draw differently. A " +
+      "tuple-valued key is refused: a key is one number, and folding a tuple into one would let " +
+      "two different keys share a stream.",
+    args: [arg("keyField", "The scalar field whose value keys the draw.")],
+    outputRange: [{ min: 0, max: 1, note: "half-open — 0 occurs, 1 never does" }],
+  },
+  (spec, path) => {
+    const args = requireArgs(spec, path, 1);
+    const key = spec.key;
+    const built = buildArg(args[0], `${path}.args[0]`);
+    if (key === undefined) return randomFrom(built);
+    if (typeof key === "number" || typeof key === "string") return randomFrom(built, key);
+    fail(`${path}.key`, "key must be a number or string");
   },
 );
 

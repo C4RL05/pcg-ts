@@ -1,3 +1,4 @@
+import { hashCombine, hashFloat, hashString } from "../random/index.js";
 import { resolveField } from "./inputs.js";
 import { attachArgsSpec, isSpecNumber, recordWithheld } from "./spec.js";
 import {
@@ -631,6 +632,81 @@ export function component(a: FieldLike, componentIndex: number): Field<1> {
   });
   // `componentIndex` was already validated exactly as the grammar does.
   return attachArgsSpec(field, "component", [fa], { index: componentIndex });
+}
+
+/**
+ * A uniform draw in [0, 1) keyed on a VALUE the graph computes, rather
+ * than on where the element happens to be.
+ *
+ * THE DIFFERENCE FROM `randomField` IS THE WHOLE POINT, and it is about
+ * what survives. `randomField` keys on a point's IDENTITY — the bits of
+ * its stored position together with its `seed` attribute — so a point that
+ * MOVES draws a different number, which is the right answer when the
+ * question is "give this point a number" and the wrong one when the
+ * question is "give whatever is at this STATION a number". Anything that
+ * has to keep its draw while it is being repaired needs a key that does
+ * not move with it: an arc coordinate, a lane, an id, a cell index, the
+ * bucket a value falls in. This takes that key as a field and hashes it.
+ *
+ * The case it was built for is a racetrack's pose: a placement draws one
+ * of its asset's recorded shapes, and a repair loop nudges placements
+ * sideways every round. Keyed on identity the shape would change every
+ * time the piece was nudged; keyed on the station it does not.
+ *
+ * THE KEY IS HASHED AS BITS, NOT AS A NUMBER, so two values that differ
+ * anywhere in their f32 representation are independent draws and there is
+ * no interval that maps to one stream. That is what makes it a hash rather
+ * than a quantiser, and it is also the trap: a key computed as `s / 3` is
+ * a different key on either side of a rounding difference, so QUANTISE
+ * DELIBERATELY when you mean buckets — `floor(div(s, 3))` names a bucket,
+ * `div(s, 3)` names a value. A key that is already a whole number is exact
+ * to at least 2^24 and needs no rounding.
+ *
+ * `key` salts the stream exactly as `randomField`'s does, and the cooking
+ * node's seed is folded in the same way, so two nodes hashing the same
+ * value draw differently and one node hashing it under two keys draws
+ * twice. A tuple-valued input is refused: a key is one number, and folding
+ * three into one silently is how two different keys come to share a
+ * stream.
+ */
+export function randomFrom(value: FieldLike, key: number | string = 0): Field<1> {
+  const keyHash = typeof key === "string" ? hashString(key) : key >>> 0;
+  const fa = resolveField(value);
+  const field = makeField<1>(`randomFrom(${keyRef(fa.key)},${keyHash})`, 1, (ctx) => {
+    const ca = evaluateField(fa, ctx);
+    if (ca.tupleSize !== 1) {
+      throw new Error(
+        `randomFrom: the key must be ONE number per element (tupleSize 1), got tupleSize ${ca.tupleSize}; a key is a single value, and folding a tuple into one would let two different keys share a stream — reduce it first, e.g. component(<expr>, 0)`,
+      );
+    }
+    const n = elementCount(ctx);
+    const out = new Float32Array(n);
+    // BITS, NEVER THE VALUE, for `randomField`'s reason at the same line:
+    // `hashCombine` truncates a float toward zero, so every key inside a
+    // unit interval would hash identically and a station of 12.1 would
+    // draw with 12.9.
+    const bits = new Float32Array(1);
+    const asU32 = new Uint32Array(bits.buffer);
+    for (let i = 0; i < n; i++) {
+      bits[0] = ca.data[i] as number;
+      out[i] = hashFloat(hashCombine(ctx.seed, keyHash, asU32[0] as number));
+    }
+    return { data: out, tupleSize: 1 };
+  });
+  // THE KEY IS ALWAYS CARRIED, even at its default, and always as the
+  // author WROTE it rather than as its hash — `randomField` argues both at
+  // length. Omitting it at 0 would print a call the parser then refuses,
+  // so the two ends would disagree about a spec instead of both rejecting
+  // it. A non-finite numeric key survives `fieldFromJson` but not JSON, so
+  // it derives no spec at all.
+  if (typeof key === "string" || isSpecNumber(key)) {
+    return attachArgsSpec(field, "randomFrom", [fa], { key });
+  }
+  recordWithheld(field, {
+    kind: "ungrammatical",
+    detail: "randomFrom's numeric `key` must be finite, and not -0",
+  });
+  return field;
 }
 
 /**
