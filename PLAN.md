@@ -2556,3 +2556,105 @@ whole tail as one `repeatUntil`". It is:
    nothing until the cull has moved.
 3. **Do not port L-4, L-5 or D-4's second pass** until a kit exists that
    makes them fire. A port of a rule that never runs cannot be checked.
+
+### The band mix is a quota fill, and a recommendation that was already built, 2026-08-26
+
+**FIRST, A CORRECTION TO THE ENTRY ABOVE.** Its recommendation reads
+"`occlusionCull` as a library node, and the cull onto the per-cell level."
+Both halves were already settled when it was written and it should not
+have been written:
+
+- `occlusionCull` has been in the standard library since `4014fc6`
+  (`src/nodes/visibility.ts`, its own module, 789 lines), and
+  `dressGraph.ts`'s `writeSightlineCull` has been calling it from inside
+  the graph's `repeatUntil` repair body since `48d2543`.
+- The per-cell cull is DECIDED AGAINST, on purpose and in writing.
+  `levels.ts` puts the whole repair on the unbounded lap level so that a
+  sector reads no neighbour: "no sector repairs anything, and there is
+  therefore NO HALO AT ALL: the union of the sectors is the whole lap, box
+  for box, not to a tolerance but by construction." Moving the cull down
+  would trade that for a windowed approximation, which is the opposite of
+  what the measurement in that entry was for.
+
+The measurement in that entry stands. The recommendation drawn from it was
+written against the slice-2 plan rather than against the shipped code, and
+this is what should have been drawn instead.
+
+**WHAT IS ACTUALLY LEFT IN `dressLap`'s LOOP.** The trace line has eight
+terms. Three are in the graph already (`corridor`, `cull`, `L5`). Three
+never fire on this vocabulary (`trim`, `cov`, `L4`). That leaves two that
+fire and are not ported: L-6's cover top-up, which `dressGraph.ts` has
+already argued out on its merits -- it reads a measurement the previous
+repair invalidated and draws from `seed + rounds`, so both halves of the
+admission test fail -- and **Z-3's band mix**, which nothing has argued
+about. So the mix is the whole of the remaining question.
+
+**AND THE MIX IS NOT THE SEARCH IT LOOKS LIKE.** `repairBandMix` recomputes
+all six band shares after every single move, picks the worst-over and
+worst-under bands, takes the first eligible donor and draws up to eight
+times -- a greedy sequential loop with a `failed` set, which is the shape
+that does not become a graph. Measured over six seeds, shipped vocabulary,
+by deriving each move's (source band, destination band) from the repair's
+own log:
+
+| seed | moves | distinct pairs | runs | into `over` |
+| --- | --- | --- | --- | --- |
+| 1 | 27 | 3 | 25 | 25 |
+| 2 | 28 | 3 | 4 | 26 |
+| 3 | 30 | 3 | 23 | 28 |
+| 4 | 34 | 5 | 15 | 26 |
+| 5 | 23 | 2 | 9 | 23 |
+| 6 | 25 | 3 | 20 | 22 |
+
+**One destination, two sources, and the counts are the deficits.** On every
+seed `over` enters at 2.7-4.2% against a floor of 10% and `near` and `mid`
+enter above their ceilings; the mix moves placements out of those two into
+`over` and stops. Seed 1 is the whole story in three numbers: `near` is
+0.3935 against a ceiling of 0.35, `mid` is 0.4349 against 0.40, and on 362
+placements those excesses are 15 and 12 -- against 27 moves.
+
+**The per-move recompute only INTERLEAVES the sources.** The long
+`near>over mid>over near>over mid>over` runs are the greedy loop
+alternating because each move makes the other band the worst-over one. It
+never changes the destination, and it cannot change WHICH placements a band
+gives up, because the donor scan is a linear `find` and always takes the
+first eligible member of that band. So the set moved out of `near` is its
+first k1 eligible members and the set moved out of `mid` is its first k2 --
+the same two sets a closed-form quota fill would take, arrived at in a
+different order.
+
+**And it converges in one round.** `mix=0` in round 2 on all six seeds,
+which is stronger than the whole-loop table above suggested: the settling
+tail those rounds show is L-6's cover top-up, not the mix.
+
+**So Z-3 is a quota fill and it is expressible.** Per-band shares are the
+grouped reduction the corner language already uses -- `pointsToPath` by
+band, `pathScan` with a `totalAttr`, `promoteAttribute` back with mode
+`first`. Per-band excess and deficit are arithmetic on those. The donor
+choice is "the first k eligible members of this band in arc order", which
+is an exclusive scan of an eligibility flag compared against k. The redraw
+is `placeAsset`, which the asset choice stage already spells as fields.
+
+**The library gap it names is `quotaRebalance`** -- the node the slice-2
+plan predicted, and the measurement narrows what it has to be. Not a
+transportation solver and not a greedy search: given a category per
+element, a per-category `[lo, hi]` share band and a per-element
+eligibility, mark the minimum set of elements that must leave an over-full
+category and name the under-full category each should join. Nearest edge,
+never centre, for the reason `assets.ts` gives -- driving every lap to the
+middle of each band would make generated laps markedly more uniform than
+the originals, which vary by a factor of five on `over`.
+
+**AND ONE CLAIM IN THE DEMO IS SIMPLY WRONG, which this port needs.**
+`dressGraph.ts` says a per-point asset id "has to be WRITTEN by whatever
+builds the cloud in TypeScript" because "`spawnInstances` groups by a
+string point attribute and there is no field that produces one." There is:
+`setAttribute` with `type: "string"` takes a field-capable INDEX selector
+into a `values` table (`35d1a4b`, 2026-08-05) and a weighted FRACTION
+selector beside it (`14e409e`, 2026-08-16), and
+`graphs/basics-spawn-by-species.json` ships exactly that pattern into
+`spawnInstances`. The comment postdates both. The conclusion it supports --
+spawn one instance per placement rather than per box -- survives on its
+other argument, which is that a gantry is one object rather than seven
+slabs; but a mix that redraws a placement's asset can write the new id in
+the graph, and without that it could not be ported at all.
