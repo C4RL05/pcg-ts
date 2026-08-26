@@ -2884,3 +2884,59 @@ list with one column missing, it is a list sixteen entries short. L-2 and
 L-3 add entries too. That is the honest shape of what is left: the
 remaining rules do not annotate the list, they EDIT it, and a list a graph
 owns has to own those edits.
+
+### The map, measured, 2026-08-26
+
+Scoping the node-built list turned up three corrections and one finding
+that changes what the remaining work IS.
+
+**"Sixteen entries short" was wrong by an order.** One L-6 plan tiles into
+`ceil(lengthW/alongW)+1 x columns` pieces: measured at 49, 108 and 132 from
+a SINGLE plan. A lap takes 0 or 1 stretches, so the list is short by
+nothing or by up to 132 -- and the 16 in the demo's stat line is pieces
+per RUN, not per lap. That is the difference between a rounding error and
+the largest single edit any rule makes.
+
+**`placements` is not the only derived `dataInput`, which is what I have
+been telling myself for two sessions.** `mixPinned` is a statistic over
+the FINISHED list and it reaches the graph in three separate places: the
+per-point column, `mixAssets.free`, and the `mixBandPools` literal. So two
+of the five inputs are derived, not one, and removing `placements` alone
+would still leave a graph that cannot be built until a lap has been
+dressed.
+
+**The stages are already joined; the page is what is not.**
+`cookLapPlacements` puts the station stage, the coverage repair, the asset
+choice, Z-1 AND the corner language into one graph with ONE cook. The four
+cooks the page runs are a property of `main.ts`, not of the stages. Two of
+them could merge today. `cookReserveMarkers` cannot join them, and the
+reason is sound rather than incidental: a choice is an INDEX INTO THE POOL
+that reservation produces, so it cannot be a stage inside the graph that
+consumes its answer.
+
+**And the finding: essentially no new library nodes are needed.** `arcTile`
+already IS L-6's tiler -- its own description says "the tile-a-tunnel-out-
+of-one-rib operation... ENCLOSURE IS A PATTERN, NOT AN ASSET" -- and
+`pathCoverage` is already wired as `writeCoverage`, doing `measureEnclosure`'s
+job in nodes. `runFit` and `pathRuns` find the stretches. The L-2/L-3 edits
+are `setAttribute` under a predicate, `filterByExpression` and
+`mergePoints`, with the indices already handed over by the bookkeeping.
+
+**What blocks L-6 is the LOOP, and that argument is already settled here.**
+`placeEnclosure` draws from `seed + rounds`, and a body whose seed varies
+per round has no fixed point -- which is why `buildRepairBody` already
+excludes it, in writing. The cost of running it ONCE instead was measured
+above: one mix move and one cull move per lap, on two seeds of six. So
+L-6 outside the loop is not a compromise forced by the port; it is the
+arrangement the graph already has, at a price already paid.
+
+**L-4's repair confirmed idle: 0 moves on 8 of 8 seeds** of the shipped
+vocabulary, 64-85 unique assets per lap against a guard that needs a tenth
+with none. `tests/racetrackDress.test.ts:199` lists the stages a lap must
+exercise and L-4 is deliberately not among them. Its SET is another
+matter and stays on the critical path, as the entry above says.
+
+**So the assembly is finite and its shape is known**: L-6's list
+generation is the one substantial rule left, the nodes it needs all ship,
+and the loop question it used to raise has already been decided and
+priced.
