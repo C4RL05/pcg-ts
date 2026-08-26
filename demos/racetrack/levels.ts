@@ -23,20 +23,34 @@
  *
  * WHAT THE LAP LEVEL CANNOT DO, stated because it is the honest limit of
  * this arrangement. Its graph is BUILT from a cooked `Lap` — `dressGraph`
- * turns the placement list into a cloud in TypeScript, through the lap's
- * own frame lookup — so the level cannot be constructed before the road
- * has been cooked and the list decided. The page therefore cooks the road
- * first and hands the result in. A track measured in kilometres would pay
- * that whole prelude at load rather than streaming it, and the way out is
- * to make the station process and the frame lookup nodes, not to move
- * this cut.
+ * turns the placement LIST into a cloud in TypeScript — so the level
+ * cannot be constructed before the list is decided, and the page cooks
+ * the road first and hands the result in. A track measured in kilometres
+ * would pay that whole prelude at load rather than streaming it.
+ *
+ * THE FRAME LOOKUP USED TO BE HALF OF THAT SENTENCE AND IS NOT ANY MORE.
+ * The cloud was built THROUGH the lap's own frame lookup, which made it a
+ * picture of one lap rather than a list; `dressGraph`'s `sampleTrackFrame`
+ * is that lookup as a stage now, so a placement carries a station and the
+ * graph resolves it. What is left of the limit is the LIST, which is the
+ * smaller half and the one this file has always named: make the station
+ * process a node — it already is, in `stationGraph.ts` — and join it up,
+ * rather than moving this cut.
  *
  * ONE INSTANCE PER PLACEMENT, NOT PER BOX. `spawnInstances` groups
- * batches by a STRING point attribute and no field produces a string, so
- * a per-point asset id has to be written by whatever builds the cloud in
- * TypeScript. On the placement cloud that is a few hundred writes per
- * lap; on the boxes it is one per box, which is the cost `writeBoxes`
- * already declines to pay for a single f32. That argument used to rest on
+ * batches by a STRING point attribute, and the cheapest way to fill one
+ * is per placement rather than per box: on the placement cloud that is a
+ * few hundred entries per lap, on the boxes one per box, which is the
+ * cost `writeBoxes` already declines to pay for a single f32.
+ *
+ * THIS USED TO SAY "no field produces a string", WHICH IS NOT TRUE and was
+ * the reason given here for writing the id in TypeScript at all.
+ * `setAttribute` takes a `values` table and a field-capable INDEX into it,
+ * which is exactly how `dressGraph`'s Z-3 redraw re-derives an asset id
+ * from a pose column every round. What a graph still needs handed to it is
+ * the TABLE — the strings themselves — and that is a fact about the kit
+ * rather than about fields. The conclusion below is unchanged; the reason
+ * for it was wrong. That argument used to rest on
  * a much larger number — one per copy of the entire pose library times
  * the entire placement list — and `copyToPoints`' per-target source
  * selection has since cut the stage from 778,800 copies to 1,984. The

@@ -61,6 +61,7 @@ import {
   buildDressGraph,
   buildRoundGraph,
   dressLapByGraph,
+  PLACEMENT,
   type GraphDressing,
 } from "../demos/racetrack/dressGraph.js";
 import { buildBoxes, dressLap, frameLookup } from "../demos/racetrack/dress.js";
@@ -132,6 +133,94 @@ const MAX_FRAME_SKEW = 5e-4;
 const ulp = (v: number): number => Math.max(Math.abs(v), 1) * 2 ** -23;
 
 /**
+ * The TRUE f32 spacing at a magnitude, which {@link ulp} is not.
+ *
+ * That one is RELATIVE — `|v| * 2^-23` — which is up to twice the real
+ * spacing anywhere inside a binade, and that slack is wanted everywhere it
+ * is used: those are bounds on accumulated arithmetic. This one is used
+ * for the single claim in the suite that is EXACT rather than bounded —
+ * that a column holds the f32 nearest its double — and a bound of "half a
+ * spacing" stated in a unit that is sometimes two spacings would not be
+ * that claim.
+ */
+const trueUlp = (v: number): number => {
+  const a = Math.abs(v);
+  if (a === 0) return 2 ** -149;
+  const e = Math.floor(Math.log2(a));
+  return Math.max(2 ** (e - 23), 2 ** -149);
+};
+
+/**
+ * How far the two versions of a station may slide APART ALONG THE TRACK,
+ * in f32 spacings of the arc.
+ *
+ * THE TWO ARE SAMPLING AT DIFFERENT STATIONS, and that is the finding
+ * rather than the tolerance. `sampleTrackFrame` gathers at the station the
+ * placement CLOUD holds, which is an f32 column; `buildBoxes` gathers at
+ * the station the placement OBJECT holds, which is a double. The column
+ * costs one rounding when it is written and a second when it is scaled to
+ * the world arc `transferAlongPath` gathers in.
+ *
+ * WHERE THE NUMBER COMES FROM, since a term added to make a test pass is a
+ * fitted tolerance unless its value is derived. The two roundings are not
+ * the same size:
+ *
+ *   - the STATION column, at most half a spacing of the station, which
+ *     reaches the world arc multiplied by the half-width. A spacing scales
+ *     with its value, so that would be half a spacing of the arc — except
+ *     that the station and the arc need not sit in the same binade, and at
+ *     worst the multiplication lands just above a power of two, where the
+ *     spacing has just doubled. So: at most ONE spacing of the arc.
+ *   - the ARC column itself, at most half a spacing of the arc.
+ *
+ * One and a half, and that is the constant. It was 2 in the first draft —
+ * 1.5 rounded up, and the value the box comparison happened to need. A
+ * derivation that produces a different number from the one written above
+ * it is worth nothing, so the derivation wins; the box comparison runs at
+ * a third of its bound with the tighter value. Measured at 0.67, 0.68,
+ * 0.68 and 0.71 spacings across the four seeds.
+ *
+ * The station half of that chain is not left to the derivation: the test
+ * below pins it directly at half a spacing, which is the only part of this
+ * a measurement can reach with no geometry in the way.
+ *
+ * `tolerance.ts` already has a name for a gap this size: `SAME_STATION_W`
+ * calls two stations the same point on the lap at 1e-3W, and this slide is
+ * 2.8e-5W — thirty-five times inside it. So neither side is wrong, and
+ * {@link ARC_SLIDE_ULPS} is the term that says so rather than a budget for error.
+ */
+const ARC_SLIDE_ULPS = 1.5;
+
+/**
+ * How far the two versions of an AXIS may sit apart at the same station.
+ *
+ * NOT A STORAGE BOUND, WHICH IS WHY IT IS NOT SIZED LIKE ONE. One f32
+ * spacing of a unit vector is 1.2e-7 and the measured figure is 2.7e-6 —
+ * twenty times that, and not a defect: the two sides gather at arcs half a
+ * spacing apart, and an arc offset turns the frame through the track's own
+ * curvature. 3.7e-4 world units at the tightest corner this vocabulary
+ * produces is a few microradians, which is the size seen.
+ *
+ * So the bound is sized to sit BETWEEN the truth and the nearest mistake,
+ * and both ends were measured rather than argued:
+ *
+ *   - the truth is 2.7e-6, the worst component over four seeds and about
+ *     1400 placements. Reported on every run, as everything here is.
+ *   - a blend left UN-NORMALIZED first breaks at 1.0e-4. That is the most
+ *     plausible way to get this stage subtly wrong — drop
+ *     `transferAlongPath`'s `normalize` and nothing about a POSITION looks
+ *     different — and it was injected and measured, not predicted.
+ *   - a SWAPPED or MIRRORED axis is 0.90, four orders clear. Also injected.
+ *
+ * 2e-5 is seven times the truth and five times under the fault. The first
+ * draft said 1e-4, which is thirty-seven times the truth and inside ONE
+ * PERCENT of the un-normalized failure — a bound that would have caught
+ * that fault on this lap and missed it on a gentler one, which is the
+ * same as not having it.
+ */
+const AXIS_AT_STATION_TOL = 2e-5;
+
+/**
  * How far one box centre may sit from the other — PER BOX, not one number.
  *
  * A SINGLE CONSTANT WOULD HAVE TO BE THE WORST CASE EVERYWHERE, and the
@@ -156,14 +245,24 @@ const ulp = (v: number): number => Math.max(Math.abs(v), 1) * 2 ** -23;
  *   - `arm * MAX_FRAME_SKEW` — the shear the quaternion projects away,
  *     acting on the lever it is turned through. This is the whole
  *     difference for any box more than a few units off its placement.
+ *   - `ARC_SLIDE_ULPS * ulp(arc)` — the two sides sampling the lap at
+ *     stations an f32 spacing apart, which is a SLIDE ALONG THE TRACK and
+ *     not an error in either. It appeared when the frame moved into the
+ *     graph, and it is the term that does not scale with the box: a box
+ *     with no arm at all still carries it, which is why the first failure
+ *     was a 0.2-unit arm at 1.4× the old bound. `arc` is the placement's
+ *     own, so a station near the line carries less of it than one three
+ *     quarters of the way round.
  *
- * Nothing in it was fitted: both terms are properties of the storage and
- * of `poseAt`, and the test reports how much of the bound was actually
- * used so that a change which starts eating the margin is visible before
- * it fails.
+ * Nothing in it was fitted: all three terms are properties of the storage,
+ * of `poseAt` and of where the two sides keep their station, and the test
+ * reports how much of the bound was actually used so that a change which
+ * starts eating the margin is visible before it fails.
  */
-const centreBound = (centre: number, placement: number, arm: number): number =>
-  4 * ulp(Math.max(Math.abs(centre), Math.abs(placement))) + arm * MAX_FRAME_SKEW;
+const centreBound = (centre: number, placement: number, arm: number, arc: number): number =>
+  4 * ulp(Math.max(Math.abs(centre), Math.abs(placement))) +
+  arm * MAX_FRAME_SKEW +
+  ARC_SLIDE_ULPS * ulp(arc);
 
 /**
  * How far apart two world extents may be.
@@ -833,6 +932,11 @@ describe("racetrack dressing, as a graph", () => {
       // bound, so it has to be read before the centre is checked.
       const pp = got.placements.attrs.point.require("P");
       const owner = got.boxes.attrs.point.require("placementIndex");
+      // THE ARC THE SLIDE IS MEASURED IN, per placement rather than per
+      // lap: the term is an f32 spacing of the station's WORLD position,
+      // and f32 spacing is relative, so a placement at 40W carries a
+      // seventieth of what one at 340W does.
+      const stationOf = got.placements.attrs.point.require(PLACEMENT.station);
 
       for (let i = 0; i < want.length; i++) {
         const b = want[i];
@@ -847,7 +951,12 @@ describe("racetrack dressing, as a graph", () => {
 
         for (let c = 0; c < 3; c++) {
           const d = Math.abs(P.get(i, c) - b.centre[c]);
-          const allowed = centreBound(b.centre[c], pp.get(t, c), arm);
+          const allowed = centreBound(
+            b.centre[c],
+            pp.get(t, c),
+            arm,
+            stationOf.get(t) * lap.halfWidth,
+          );
           worstCentre = Math.max(worstCentre, d);
           worstMargin = Math.max(worstMargin, d / allowed);
           expect(
@@ -899,6 +1008,213 @@ describe("racetrack dressing, as a graph", () => {
     // asserted rather than only printed.
     expect(worstSkew).toBeGreaterThan(0);
     expect(worstSkew).toBeLessThan(MAX_FRAME_SKEW);
+  }, FOUR_LAP_MS);
+
+  /**
+   * `sampleTrackFrame` IS `poseAt`, and the difference between them is a
+   * SLIDE ALONG THE TRACK rather than an error in either.
+   *
+   * WHY THIS TEST EXISTS AND NOT JUST A WIDER BOUND. Moving the frame into
+   * the graph made `builds the same boxes buildBoxes does` fail by 1.4x on
+   * a box with almost no arm — the one place neither existing term could
+   * reach. A third term in `centreBound` makes that pass, and a term added
+   * to make a test pass is a fitted tolerance unless the thing it stands
+   * for is stated somewhere as a claim. This is that claim.
+   *
+   * THE TWO SIDES SAMPLE AT DIFFERENT STATIONS. The graph gathers at the
+   * station its cloud holds, which is an f32 column scaled to a world arc
+   * in a second f32 column; `frameLookup` gathers at the double the
+   * placement object holds. So the honest comparison is against the
+   * station AS THE COLUMN HOLDS IT, and against the double the residue
+   * should be a displacement along the lap and nothing else.
+   *
+   * Both bounds are the storage and not a budget:
+   *
+   *   - PERPENDICULAR to the tangent, at most four spacings of the
+   *     POSITION — the f32 the answer is stored in, which has nothing to
+   *     do with the arc.
+   *   - ALONG it, that same storage PLUS {@link ARC_SLIDE_ULPS} spacings
+   *     of the arc. Both terms, because the slide does not replace the
+   *     storage: at the start line the arc is 1.7 world units and its
+   *     spacing is a five-hundredth of the position's, so a bound of the
+   *     arc term alone fails on the first placement of the lap and fails
+   *     for the right reason.
+   *
+   * THE SHAPE IS ASSERTED WHERE IT IS VISIBLE, which is not per placement.
+   * The arc term only dominates once the arc is large, so what the suite
+   * pins is the two worsts over four whole laps: the along-track figure
+   * comes out several times the perpendicular one, and taken against the
+   * largest arc it lands inside {@link ARC_SLIDE_ULPS} — which is the
+   * measurement `centreBound`'s third term is derived from, restated as a
+   * check rather than left in a comment.
+   */
+  it("samples the lap where poseAt does, one f32 station apart", async () => {
+    let worstPar = 0;
+    let worstPerp = 0;
+    let worstAtSameStation = 0;
+    let worstAxis32 = 0;
+    let worstArc = 0;
+    let worstStationUlps = 0;
+    let total = 0;
+
+    for (const seed of SEEDS) {
+      const { lap, frames, dressing } = await cookLap(seed);
+      const got = await dressLapByGraph({
+        kit: shippedVocabulary(),
+        lap,
+        frames,
+        placements: dressing.placements,
+        mixPinned: noMix(seed),
+        seed,
+        immovable: brakeOf(seed),
+        pool: dressingPool(seed),
+      });
+
+      const pts = got.placements.attrs.point;
+      const framePos = pts.require(PLACEMENT.framePos);
+      const across = pts.require(PLACEMENT.across);
+      const along = pts.require(PLACEMENT.along);
+      const up = pts.require(PLACEMENT.up);
+      const stationOf = pts.require(PLACEMENT.station);
+      // THE DOUBLE THE COLUMN WAS ROUNDED FROM. The cull removes points,
+      // so the i-th survivor is not the i-th placement — but every point
+      // carries the index it entered as, which is what that column is
+      // for, and it is exact in f32 for any list under 16.7 million.
+      const idOf = pts.require(PLACEMENT.id);
+      const frameAt = frameLookup(lap);
+
+      // THE CULL REMOVES PLACEMENTS, so the cloud is not the list. The
+      // frame is a function of the station alone, though, so every
+      // surviving point can be checked against its OWN station without
+      // needing to know which entry of the list it came from.
+      expect(pts.count, `seed ${seed}: nothing survived to compare`).toBeGreaterThan(100);
+
+      for (let i = 0; i < pts.count; i++) {
+        const s32 = stationOf.get(i);
+        const arc = s32 * lap.halfWidth;
+        const f = frameAt(s32, 0, 0);
+
+        // The axes first: at the SAME station the two agree to f32, and
+        // this is the part `transferAlongPath`'s `normalize` is doing —
+        // an interpolated direction is short, and the shortfall is worst
+        // exactly where the track turns hardest.
+        for (let c = 0; c < 3; c++) {
+          const da = Math.abs(across.get(i, c) - f.across[c]);
+          const du = Math.abs(up.get(i, c) - f.up[c]);
+          const dl = Math.abs(along.get(i, c) - f.dir[c]);
+          worstAxis32 = Math.max(worstAxis32, da, du, dl);
+          // EACH AXIS AGAINST ITS OWN, which is what makes a SWAP fail
+          // here rather than somewhere downstream: the three are checked
+          // against the three `poseAt` returns in the order the rename
+          // pairs them, so exchanging two of those pairs in
+          // `sampleTrackFrame` moves this from 2.7e-6 to order 1.
+          expect(da, `seed ${seed} placement ${i} across ${c}`).toBeLessThan(AXIS_AT_STATION_TOL);
+          expect(du, `seed ${seed} placement ${i} up ${c}`).toBeLessThan(AXIS_AT_STATION_TOL);
+          expect(dl, `seed ${seed} placement ${i} along ${c}`).toBeLessThan(AXIS_AT_STATION_TOL);
+        }
+        // AND THAT THEY ARE UNIT, which the comparison above cannot see.
+        // An un-normalized blend is short by the same fraction on all
+        // three components, and the REFERENCE would be short by very
+        // nearly the same amount at the same station — so the two agree
+        // while both are wrong, and only the length says so.
+        for (const v of [across, up, along]) {
+          const len = Math.hypot(v.get(i, 0), v.get(i, 1), v.get(i, 2));
+          expect(Math.abs(len - 1), `seed ${seed} placement ${i}: axis length`).toBeLessThan(
+            AXIS_AT_STATION_TOL,
+          );
+        }
+
+        const g = [framePos.get(i, 0), framePos.get(i, 1), framePos.get(i, 2)];
+        const coord = Math.max(Math.abs(g[0]), Math.abs(g[1]), Math.abs(g[2]));
+        for (let c = 0; c < 3; c++) {
+          const d = Math.abs(g[c] - f.p[c]);
+          worstAtSameStation = Math.max(worstAtSameStation, d);
+          expect(
+            d,
+            `seed ${seed} placement ${i} component ${c}: at its OWN station`,
+          ).toBeLessThan(4 * ulp(coord) + ulp(arc));
+        }
+
+        // And now the residue against the DOUBLE, decomposed. The claim is
+        // not that it is small — it is that it points along the track.
+        const entered = dressing.placements[idOf.get(i)];
+        expect(entered, `seed ${seed} placement ${i}: no entry ${idOf.get(i)}`).toBeDefined();
+
+        // THE CHAIN'S FIRST LINK, PINNED WITHOUT THE GEOMETRY. Everything
+        // else here is a position, so every bound on it carries the
+        // position's own storage as well — which at this lap's scale is
+        // the same order as the term being checked and swallows it below
+        // arc 300. The STATIONS carry none of that: the column holds the
+        // f32 nearest the double, and half a spacing is the whole claim.
+        const dStation = Math.abs(s32 - entered.station);
+        worstStationUlps = Math.max(worstStationUlps, dStation / trueUlp(entered.station));
+        expect(
+          dStation,
+          `seed ${seed} placement ${i}: the station column is not the nearest f32`,
+        ).toBeLessThanOrEqual(0.5 * trueUlp(entered.station));
+
+        const ref = frameAt(entered.station, 0, 0);
+        const dv = [g[0] - ref.p[0], g[1] - ref.p[1], g[2] - ref.p[2]];
+        const par = dv[0] * ref.dir[0] + dv[1] * ref.dir[1] + dv[2] * ref.dir[2];
+        const perp = Math.hypot(
+          dv[0] - par * ref.dir[0],
+          dv[1] - par * ref.dir[1],
+          dv[2] - par * ref.dir[2],
+        );
+        worstPar = Math.max(worstPar, Math.abs(par));
+        worstPerp = Math.max(worstPerp, perp);
+        worstArc = Math.max(worstArc, arc);
+        expect(
+          Math.abs(par),
+          `seed ${seed} placement ${i}: slide along the track`,
+        ).toBeLessThan(ARC_SLIDE_ULPS * ulp(arc) + 4 * ulp(coord));
+        expect(
+          perp,
+          `seed ${seed} placement ${i}: displacement OFF the centreline`,
+        ).toBeLessThan(4 * ulp(coord));
+        total++;
+      }
+    }
+
+    // THE SHAPE OF THE CLAIM, ASSERTED. A slide that is not much bigger
+    // than the wobble is not a slide, and the whole argument for
+    // `centreBound`'s third term is that this ratio is large.
+    expect(
+      worstPar / Math.max(worstPerp, Number.MIN_VALUE),
+      "the residue is not dominated by the along-track component",
+    ).toBeGreaterThan(4);
+
+    // AND ITS SIZE — but NOT as `worstPar / ulp(worstArc)`, which is what
+    // this was and which is not a quantity. Those two maxima come from
+    // different placements and different seeds, so a placement at arc 40
+    // sliding a hundred of its own spacings would divide by the spacing at
+    // arc 3100 and report a comfortable number. The per-placement bound
+    // above is where the slide is actually checked; what is left to assert
+    // globally is the STATION, whose half-spacing claim is exact and which
+    // is the only rounding in the chain a measurement can isolate.
+    expect(
+      worstStationUlps,
+      `the station column sits ${worstStationUlps.toFixed(3)} spacings from the double it was rounded from, not the 0.5 a round-to-nearest gives`,
+    ).toBeLessThanOrEqual(0.5);
+
+    // THE MARGIN, ASSERTED RATHER THAN ONLY PRINTED. The bound sits
+    // between a measured truth and a measured fault, so a change that
+    // starts eating it is a change that is walking toward the fault.
+    expect(
+      worstAxis32,
+      `the axes are ${(worstAxis32 / AXIS_AT_STATION_TOL) * 100}% of their bound`,
+    ).toBeLessThan(AXIS_AT_STATION_TOL);
+
+    console.log(
+      `dress graph frame: ${total} placements over ${SEEDS.length} seeds — ` +
+        `at its own station ${worstAtSameStation.toExponential(2)}, ` +
+        `axes ${worstAxis32.toExponential(2)} ` +
+        `(${((worstAxis32 / AXIS_AT_STATION_TOL) * 100).toFixed(0)}% of bound); ` +
+        `against the f64 station, ` +
+        `along ${worstPar.toExponential(2)} vs perpendicular ${worstPerp.toExponential(2)}` +
+        `; the station itself is ${worstStationUlps.toFixed(3)} spacings out, ` +
+        `worst arc ${worstArc.toFixed(0)}`,
+    );
   }, FOUR_LAP_MS);
 
   it("resolves the corridor the way resolveCorridor does, on both branches", async () => {

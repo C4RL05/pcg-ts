@@ -100,20 +100,22 @@
  *   - {@link dressLapByGraph} is the only async thing here: it builds,
  *     cooks, and reads the columns back into plain arrays.
  *
- * Nothing in `dress.ts` is imported except `frameLookup`, and that one on
- * purpose: the pose at a station is level 0's coordinate system, and a
- * second derivation of it here is a second chance to disagree with the
- * geometry being compared against.
+ * NOTHING IN `dress.ts` IS IMPORTED AT ALL, which was not true until the
+ * frame moved. This file used to reach into it for `frameLookup`, and the
+ * paragraph that stood here explained why: each placement arrived already
+ * carrying the lap's pose at its own station, because "there is no node
+ * that samples a path's frame at a per-point arc length for a foreign
+ * cloud, so the interpolation `poseAt` does cannot be stated here", and it
+ * was reported rather than worked around.
  *
- * WHAT THE HOST STILL HAS TO HAND IN, AND WHY IT IS NOT A SHORTCUT. Each
- * placement arrives carrying the lap's pose at its own station — the
- * centreline point and the three axes. That is not the rule being dodged;
- * it is a capability the node library does not have. `pathPointAt`
- * evaluates a polyline at an arbitrary parameter, but only for points
- * that are ALREADY ON that polyline, and it writes only `tangent` and
- * `curveU`. There is no node that samples a path's frame at a per-point
- * arc length for a foreign cloud, so the interpolation `poseAt` does
- * cannot be stated here. It is reported rather than worked around.
+ * THE REPORT WAS ACTED ON. `transferAlongPath` is that node — its own
+ * description opens by naming the operation "the library had no node for"
+ * — and {@link sampleTrackFrame} is the demo finally using it. So the pose
+ * at a station is no longer a TypeScript loop run at BUILD time over a
+ * cooked lap; it is a stage, and a placement now arrives holding track
+ * coordinates and nothing else. That is the difference between a graph
+ * handed a list of world positions and a graph handed a list of stations,
+ * which is the only one of the two a caller could serialize.
  */
 import {
   Graph,
@@ -158,13 +160,13 @@ import {
   repeatUntilNode,
   runFit,
   select,
+  transferAlongPath,
   transferByIndex,
   setAttribute,
   sub,
   vec,
 } from "pcg-ts";
 import { rand } from "./rand.js";
-import { frameLookup } from "./dress.js";
 import { TRACK_FRAME } from "./graph.js";
 import type { Kit } from "./kit.js";
 import type { Lap } from "./lap.js";
@@ -176,6 +178,13 @@ import { BAND_T, Z3, lateralReach, type Band } from "./assets.js";
 import { ASSET, assetCloud, quantileField } from "./assetGraph.js";
 import type { PlaceableAsset } from "./assets.js";
 import { CORRIDOR, OVERHEAD, fitsOverhead } from "./zones.js";
+
+/**
+ * The station in WORLD units, which is the only unit `transferAlongPath`
+ * gathers in — see {@link sampleTrackFrame}. Scratch: written just before
+ * the gather and stripped just after, so it never rides the carry.
+ */
+const FRAME_ARC_WORLD = "frameArcWorld";
 
 /** The named outputs a cook of this graph produces. */
 export const DRESS_OUTPUTS = {
@@ -896,16 +905,22 @@ function poseCloud(lib: PoseLibrary, halfWidth: number): Geometry {
 /**
  * The placement list as a point cloud — the TARGET of the copy.
  *
- * TRACK COORDINATES AND THE FRAME, SIDE BY SIDE. `trackT` and `trackH`
- * are what Z-1 resolves; the four frame columns are what the resolved
- * pair is then lifted through. They are named apart from `TRACK_FRAME`'s
- * `across`/`up` deliberately: those columns are a fact about a point OF
- * the lap, and these are the lap's frame carried to a point that is not
- * on it. One name for both would make a cloud that had been lifted
- * indistinguishable from the path it was lifted off.
+ * TRACK COORDINATES AND NOTHING ELSE, which is the whole claim this cloud
+ * makes. `stationW`, `trackT` and `trackH` locate a placement on any lap
+ * of the right shape; the four frame columns that used to sit beside them
+ * located it on ONE, and were a TypeScript lookup per placement run when
+ * the graph was BUILT rather than when it was cooked. {@link
+ * sampleTrackFrame} is that lookup now, as a stage, so this function no
+ * longer takes a `Lap` at all — the sizes it does write are the kit's own
+ * half-width-relative extents, which need no lap to state.
+ *
+ * WHAT THAT BUYS IS THE DIFFERENCE BETWEEN A LIST AND A PICTURE OF ONE. A
+ * cloud carrying a frame is an answer about the lap it was built against;
+ * a cloud carrying stations is the question, and the graph resolves it
+ * against whatever path it is handed. Only the second survives being
+ * written to a file.
  */
-function placementCloudInTrackFrame(
-  lap: Lap,
+function placementCloudInTrackCoords(
   placements: readonly StationedPlacement[],
   lib: PoseLibrary,
   seed: number,
@@ -914,11 +929,6 @@ function placementCloudInTrackFrame(
 ): Geometry {
   const geo = createPointCloud(placements.length);
   const pts = geo.attrs.point;
-  const P = pts.require("P");
-  const framePos = pts.add(PLACEMENT.framePos, "f32", 3);
-  const across = pts.add(PLACEMENT.across, "f32", 3);
-  const along = pts.add(PLACEMENT.along, "f32", 3);
-  const up = pts.add(PLACEMENT.up, "f32", 3);
   const t = pts.add(PLACEMENT.t, "f32", 1);
   const h = pts.add(PLACEMENT.h, "f32", 1);
   const sizeAcross = pts.add(PLACEMENT.sizeAcross, "f32", 1);
@@ -936,25 +946,8 @@ function placementCloudInTrackFrame(
   pts.add(PLACEMENT.mixTried, "f32", 1);
   const asset = pts.add(PLACEMENT.asset, "string", 1);
 
-  // The lap's own lookup, not a second one. `frameLookup` is exactly what
-  // `buildBoxes` calls, so the frame a box is built in here is the frame
-  // it is built in there, to the bit.
-  const frameAt = frameLookup(lap);
   for (let i = 0; i < placements.length; i++) {
     const p = placements[i];
-    // At the placement's station and at LATERAL AND HEIGHT ZERO: the
-    // frame is a property of the station alone, and asking for it at the
-    // placement's own offsets would bake in the very numbers Z-1 is about
-    // to change.
-    const f = frameAt(p.station, 0, 0);
-    // P starts on the centreline. The lift writes the real one; until it
-    // does, a placement is where its station is, which is a truthful
-    // intermediate rather than a placeholder.
-    P.setTuple(i, f.p);
-    framePos.setTuple(i, f.p);
-    across.setTuple(i, f.across);
-    along.setTuple(i, f.dir);
-    up.setTuple(i, f.up);
     t.set(i, p.t);
     h.set(i, p.h);
     sizeAcross.set(i, p.asset.size.across);
@@ -981,6 +974,114 @@ function placementCloudInTrackFrame(
     poseU.set(i, rand(seed, Math.round(p.station * 97), 0x7053));
   }
   return geo;
+}
+
+/**
+ * The lap's frame at each placement's station, sampled in the graph.
+ *
+ * NAMED `sample` RATHER THAN `write` BECAUSE `graph.ts` ALREADY HAS A
+ * `writeTrackFrame`, and the two mean different things in one demo: that
+ * one writes a path's OWN frame onto its own points, and this one carries
+ * an existing frame onto a cloud that is not on the path. A shared name
+ * made every `{@link}` in both files ambiguous.
+ *
+ * THIS IS `poseAt`, AS A STAGE. `dress.ts` answers "where is the lap at
+ * station s" with a binary search over the frame table, a componentwise
+ * blend of the two straddling samples, and a renormalise of each axis
+ * afterwards. `transferAlongPath` is that operation exactly, including
+ * the renormalise, which is what its `normalize` param is for and which
+ * `lap.ts` argues for in nearly the same words — two unit vectors
+ * averaged are not a unit vector, and the shortfall is worst exactly
+ * where the track turns hardest.
+ *
+ * THE UNITS ARE THE TRAP AND THE NODE SAYS SO. A station here is in
+ * HALF-WIDTHS, because every rule in this demo is; the node gathers on a
+ * WORLD arc length, the chord table its own description pins to the one
+ * `pathResample` steps. `placeAt` does this multiplication for the same
+ * reason and in the same place — at the boundary, so no rule has to
+ * remember which of the two units it is holding.
+ *
+ * THE AXES ARE RENAMED ON THE PATH, NOT ON THE CLOUD, and that is the
+ * only reason this needs three nodes rather than none. A lifted frame is
+ * named apart from `TRACK_FRAME`'s deliberately: those columns are a fact
+ * about a point OF the lap, and these are the lap's frame carried to a
+ * point that is not on it, so one name for both would make a cloud that
+ * had been lifted indistinguishable from the path it was lifted off.
+ * `transferAlongPath` writes under the SOURCE's names and has no rename
+ * of its own — unlike `pathShift`, which needs one because it writes a
+ * shifted value that must sit beside the original on the SAME cloud.
+ * Here the two clouds are different by construction, so either side can
+ * be renamed with `setAttribute` and the library needs no new param. The
+ * cost is three nodes over the frames, cooked once and memoized, against
+ * a few hundred placements.
+ *
+ * P LANDS ON THE CENTRELINE, which is a truthful intermediate rather than
+ * a placeholder: until the lift runs, a placement is where its station
+ * is. `framePos` keeps that value after the lift has moved `P`, because
+ * the lift is re-derived from it every round.
+ */
+function sampleTrackFrame(
+  g: Graph,
+  frames: NodeHandle,
+  cloud: NodeHandle,
+  halfWidth: number,
+  tag: string,
+): NodeHandle {
+  let path = frames;
+  for (const [src, dst] of [
+    [TRACK_FRAME.across, PLACEMENT.across],
+    [TRACK_FRAME.up, PLACEMENT.up],
+    [TRACK_FRAME.along, PLACEMENT.along],
+  ] as const) {
+    const n = g.add(
+      setAttribute,
+      { name: dst, tupleSize: 3, value: attribute(src, 3) },
+      `${tag}_frameAs_${dst}`,
+    );
+    g.connect(path, "out", n, "in");
+    path = n;
+  }
+
+  const arc = g.add(
+    setAttribute,
+    { name: FRAME_ARC_WORLD, tupleSize: 1, value: mul(attribute(PLACEMENT.station), halfWidth) },
+    `${tag}_frameArc`,
+  );
+  g.connect(cloud, "out", arc, "in");
+
+  const at = g.add(
+    transferAlongPath,
+    {
+      arcAttr: FRAME_ARC_WORLD,
+      // NAMED RATHER THAN LEFT EMPTY, and P is why: the empty list skips
+      // the eight bookkeeping columns, and naming one lifts that — which
+      // is the whole placement idiom, since sampling P is what puts a
+      // station on the road. An empty list here would also drag every
+      // other column the frames carry (the corner model's four, the
+      // half-width) onto every placement.
+      attributes: ["P", PLACEMENT.across, PLACEMENT.up, PLACEMENT.along],
+      normalize: [PLACEMENT.across, PLACEMENT.up, PLACEMENT.along],
+    },
+    `${tag}_frameAt`,
+  );
+  g.connect(path, "out", at, "path");
+  g.connect(arc, "out", at, "at");
+
+  const kept = g.add(
+    setAttribute,
+    { name: PLACEMENT.framePos, tupleSize: 3, value: attribute("P", 3) },
+    `${tag}_framePos`,
+  );
+  g.connect(at, "out", kept, "in");
+
+  // The scratch goes home. NOT for the reason the other stages strip
+  // theirs -- those columns are rewritten every round and this stage runs
+  // once, outside the loop -- but because a column nothing reads would
+  // otherwise ride every round of the carry and land on all four outputs,
+  // where the only thing it could do is be mistaken for a station.
+  const cleaned = g.add(removeAttribute, { names: [FRAME_ARC_WORLD] }, `${tag}_frameArcOff`);
+  g.connect(kept, "out", cleaned, "in");
+  return cleaned;
 }
 
 /**
@@ -2802,10 +2903,16 @@ export function buildRoundGraph(input: DressGraphInput): Graph {
   // is all a wrapper does to an input pin, minus the loop.
   const carry = g.add(dataInput, {}, "roundCarry");
   g.setParam(carry, "items", [
-    makeGeometryItem(placementCloudInTrackFrame(lap, placements, lib, seed, immovable, mixPinned)),
+    makeGeometryItem(placementCloudInTrackCoords(placements, lib, seed, immovable, mixPinned)),
   ]);
   const sight = g.add(dataInput, {}, "roundSight");
   g.setParam(sight, "items", [makeGeometryItem(input.frames)]);
+  // The frame, before the body rather than inside it: it is a function of
+  // the STATION alone and a repair never moves a placement along the lap,
+  // so lifting it per round would recompute a constant. `assemble` puts it
+  // in the same place for the same reason -- outside `repeatUntil`, on the
+  // cloud that becomes the first round's carry.
+  const carried = sampleTrackFrame(g, sight, carry, lap.halfWidth, "round");
   const mixAssets = g.add(dataInput, {}, "roundMixAssets");
   g.setParam(mixAssets, "items", [makeGeometryItem(mixAssetCloud(pool, lib, mixPinned))]);
   const mixPoses = g.add(dataInput, {}, "roundMixPoses");
@@ -2816,7 +2923,7 @@ export function buildRoundGraph(input: DressGraphInput): Graph {
   // path, so adding an input to the body wired it to the frames and the
   // failure arrived as a missing column three nodes later.
   const portals: Record<string, NodeHandle> = {
-    carry,
+    carry: carried,
     sight,
     mixAssets,
     mixPoses,
@@ -2841,11 +2948,14 @@ export function buildRoundGraph(input: DressGraphInput): Graph {
  *
  * A GRAPH WITH ITS DATA IN IT COSTS WHAT THE DATA COSTS, which is worth
  * knowing before this is called to draw a picture. `dataInput` binds real
- * geometry, so building carries the whole pose library into a cloud and
- * takes one frame lookup per placement whether or not anything is ever
- * cooked. That is a few milliseconds and it is not free, so a page that
- * wants the picture beside the result should build once and keep it
- * rather than rebuild per frame.
+ * geometry, so building carries the whole pose library into a cloud
+ * whether or not anything is ever cooked. It no longer takes a frame
+ * lookup per placement -- that was the other half of this paragraph until
+ * {@link sampleTrackFrame} made it a stage, and a lookup that happens when
+ * the graph is COOKED is a lookup a budget can interrupt and a cache can
+ * skip, which is not true of one that happens when the graph is BUILT.
+ * The pose library is still real, so a page that wants the picture beside
+ * the result should build once and keep it rather than rebuild per frame.
  */
 export function buildDressGraph(input: DressGraphInput): Graph {
   return assemble(input).graph;
@@ -2876,7 +2986,7 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   const placementsIn = g.add(dataInput, {}, "placements");
   g.setParam(placementsIn, "items", [
     makeGeometryItem(
-      placementCloudInTrackFrame(lap, placements, lib, seed, immovable, input.mixPinned),
+      placementCloudInTrackCoords(placements, lib, seed, immovable, input.mixPinned),
     ),
   ]);
 
@@ -2914,7 +3024,11 @@ function assemble(input: DressGraphInput): { graph: Graph } {
     { maxRounds: MAX_ROUNDS, settleAttr: SETTLE_ATTR },
     "repair",
   );
-  g.connect(placementsIn, "out", repair, "carry");
+  // THE FRAME IS LIFTED ONCE, OUTSIDE THE LOOP, because it is a function
+  // of the station and no repair moves a placement along the lap. Inside
+  // the body it would be a constant recomputed a dozen times over a
+  // thousand-frame path.
+  g.connect(sampleTrackFrame(g, framesIn, placementsIn, lap.halfWidth, "dress"), "out", repair, "carry");
   g.connect(framesIn, "out", repair, "sight");
   g.connect(mixAssetsIn, "out", repair, "mixAssets");
   g.connect(mixPosesIn, "out", repair, "mixPoses");
@@ -2957,6 +3071,19 @@ export interface BandMixDecision {
 }
 
 /**
+ * The lap's frames as a graph input, for the two stage cookers.
+ *
+ * They cook ONE stage rather than the whole graph, so neither has an
+ * `assemble` to have added the frames already — and both need them, for
+ * {@link sampleTrackFrame}'s reason rather than for their own.
+ */
+function framesOf(g: Graph, input: DressGraphInput): NodeHandle {
+  const n = g.add(dataInput, {}, "lap");
+  g.setParam(n, "items", [makeGeometryItem(input.frames)]);
+  return n;
+}
+
+/**
  * Cook {@link writeBandMix} on its own, over one placement list.
  *
  * THE STAGE RUNS INSIDE A `repeatUntil` BODY AND SO CANNOT BE READ THERE,
@@ -2977,10 +3104,23 @@ export async function cookBandMix(input: DressGraphInput): Promise<BandMixDecisi
   const cloud = g.add(dataInput, {}, "placements");
   g.setParam(cloud, "items", [
     makeGeometryItem(
-      placementCloudInTrackFrame(lap, placements, poseLibrary(kit), seed, immovable, mixPinned),
+      placementCloudInTrackCoords(placements, poseLibrary(kit), seed, immovable, mixPinned),
     ),
   ]);
-  const mix = writeBandMix(g, cloud, "z3");
+  // THE DECISION READS NO FRAME -- a band is a fact about a lateral and a
+  // height -- and the lift runs anyway so that this cloud has the same
+  // COLUMNS the loop's does, and so that its points have distinct
+  // identities rather than all sitting at the origin.
+  //
+  // IT IS NOT THE SAME CLOUD THE LOOP SEES, and the difference is worth
+  // naming rather than implying: in the body `P` has been through the
+  // lift twice by the time the mix reads it, so it holds a world position
+  // and not a centreline one. Nothing here depends on which -- the
+  // decision is a function of `trackT` and `trackH` -- but any draw keyed
+  // on identity would differ, which is exactly what {@link cookBandRedraw}
+  // says about its own.
+  const cloud2 = sampleTrackFrame(g, framesOf(g, input), cloud, lap.halfWidth, "z3");
+  const mix = writeBandMix(g, cloud2, "z3");
   g.output(mix, "out", "mix");
   const out = (await cook(g)).outputs;
   const geo = requireGeo(out["mix"], "mix");
@@ -3025,9 +3165,13 @@ export async function cookBandRedraw(input: DressGraphInput): Promise<BandRedraw
   const g = new Graph(seed);
   const cloud = g.add(dataInput, {}, "placements");
   g.setParam(cloud, "items", [
-    makeGeometryItem(placementCloudInTrackFrame(lap, placements, lib, seed, immovable, mixPinned)),
+    makeGeometryItem(placementCloudInTrackCoords(placements, lib, seed, immovable, mixPinned)),
   ]);
-  const mixed = writeBandMix(g, cloud, "z3");
+  // NOT OPTIONAL HERE. The redraw's four uniforms are `randomField`, which
+  // keys on a point's IDENTITY -- its position -- so over a cloud that has
+  // never been lifted every placement draws the same asset.
+  const cloud2 = sampleTrackFrame(g, framesOf(g, input), cloud, lap.halfWidth, "z3");
+  const mixed = writeBandMix(g, cloud2, "z3");
   const redraw = writeBandRedraw(
     g,
     mixed,

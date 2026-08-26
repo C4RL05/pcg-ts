@@ -2803,3 +2803,60 @@ down. One walked only the placements the stage does not write and compared
 `poseFor` to `poseFor`; the other could not reach the `cover:` half of a
 table it claimed to check, because no lap produces a cover placement for
 the mix to touch.
+
+### The frame lookup is a stage, and what that leaves, 2026-08-26
+
+`dressGraph.ts` carried a paragraph saying the pose at a station could not
+be stated in a graph -- "there is no node that samples a path's frame at a
+per-point arc length for a foreign cloud, so the interpolation `poseAt`
+does cannot be stated here. It is reported rather than worked around."
+`transferAlongPath` is that node, and its own description opens by naming
+the operation "the library had no node for". The gap had been closed and
+the demo never came back to it; `sampleTrackFrame` is the demo using it.
+
+**A placement now arrives holding track coordinates and nothing else** --
+`stationW`, `trackT`, `trackH`, its asset's extents -- where it used to
+arrive carrying the lap's own frame at its station, four columns baked in
+by a TypeScript lookup per placement run when the graph was BUILT. That is
+the difference between a list and a picture of one: a cloud carrying a
+frame is an answer about the lap it was built against, and only the other
+one survives being written to a file. `dressGraph.ts` no longer imports
+`dress.ts` at all.
+
+**The two sides now sample the lap at different stations, and that is a
+finding rather than a tolerance.** The graph gathers at the station its
+COLUMN holds, which is f32; `buildBoxes` gathers at the double the
+placement OBJECT holds. Measured, the whole disagreement is a slide ALONG
+the track of 0.67-0.71 f32 spacings of the arc -- 2.8e-5W, which
+`tolerance.ts` already calls the same point on the lap by a factor of
+thirty-five -- with the perpendicular component an order below it. Two
+roundings at half a spacing each is the derivation and 1.5 spacings is the
+bound; the first draft said 2, which was 1.5 rounded up to what the box
+comparison needed, and a derivation that produces a different number from
+the one written above it is worth nothing.
+
+**What the assembly still cannot do, which is now the whole of it.** Three
+columns on that cloud are not derivable in a graph today, and each is the
+output of a rule that is still TypeScript: `cover` is L-6's, `locked` is
+L-2/L-3's marker vocabulary, `mixPinned` is L-4's landmarks. So
+`placements` cannot leave the `dataInput` list without those. L-4 NEVER
+FIRES on the shipped kit and L-6's cover top-up was argued out on its
+merits above, so porting either one to satisfy a structural goal would be
+the tail wagging the dog. **That is a decision to take deliberately rather
+than a unit to pick up**: either the remaining rules get ported because a
+serialized track is worth it, or the placement list stays something a
+caller hands in and the demo stops claiming otherwise.
+
+**Verification found four real defects in the test I wrote to prove this,
+and the pattern is the same one as last time.** The test asserted
+positions and printed the axes -- so swapping `up` and `across`, or
+dropping the `normalize` that is the only reason an interpolated frame is
+unit, both passed it. The axis bound was then sized at 1e-4, thirty-seven
+times the truth and inside one percent of the un-normalized failure: a
+bound that catches that fault on this lap and misses it on a gentler one.
+Both faults were injected and measured before the bound was moved to sit
+between them, and the margin is asserted rather than only printed. The
+global slide check divided one placement's worst by another's arc, which
+is not a quantity; the exact claim -- that the station column holds the
+f32 nearest its double, to half a spacing -- has no geometry in it and is
+what the suite pins now.
