@@ -704,6 +704,10 @@ function buildStreamedDressing(circuit: Circuit, dressed: Dressing): {
     // reserved, so taking the id from there is the two paths agreeing by
     // construction rather than by both reserving markers the same way.
     immovable: new Set(dressed.markers ? [dressed.markers.brake.id] : []),
+    // Z-3's protect set, likewise taken from the path that built it rather
+    // than reconstructed: it holds L-4's landmarks, which are a property
+    // of this lap's finished list and not of the kit.
+    mixPinned: dressed.mixPinned,
   });
 
   const group = new Group();

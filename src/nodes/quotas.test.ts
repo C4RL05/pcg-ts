@@ -318,30 +318,43 @@ describe("quotaRebalance: determinism", () => {
   });
 });
 
-describe("quotaRebalance: reachable bands", () => {
-  it("refuses bands no whole number of points can land in", async () => {
+describe("quotaRebalance: bands this population cannot reach", () => {
+  it("makes no move when no whole number of points can satisfy the bands", async () => {
     // Two categories banded [0, 0.1] and [0, 0.9] over 13 points. The
     // SUMS are legal — 0 <= 1 and 1.0 >= 1 — and no arrangement works:
     // 1/13 is 0.077, under the first ceiling, and 12/13 is 0.923, over
     // the second, so each state makes the other look like the repair.
     // This is the input the node used to ping-pong on until its budget
     // ran out, emitting moves a caller would have redrawn assets for.
-    const m = await refusal(population(Array<number>(13).fill(1)), {
-      min: [0, 0],
-      max: [0.1, 0.9],
-    });
-    expect(m).toContain("13 counted points cannot satisfy these bands");
+    const geo = population(Array<number>(13).fill(1));
+    const out = await runNode(
+      quotaRebalance,
+      {
+        category: attribute("band"),
+        min: [0, 0],
+        max: [0.1, 0.9],
+        unmetAttr: "quotaUnmet",
+      },
+      { in: [makeGeometryItem(geo)] },
+    );
+    const g = firstGeo(out.out);
+    const t = g.attrs.point.require("quotaTarget");
+    expect(Array.from({ length: 13 }, (_, i) => t.get(i)).every((v) => v === -1)).toBe(true);
+    // AND IT SAYS SO. A silent no-op here is the failure this reports its
+    // way out of: category 1 is at 1.0 against a 0.9 ceiling.
+    expect(g.attrs.detail.require("quotaUnmet").get(0)).toBe(1);
   });
 
-  it("refuses a band narrower than one point of the population", async () => {
+  it("makes no move for a band narrower than one point of the population", async () => {
     // 7 points, and a band of [0.2, 0.28]: 1 point is 0.143 and 2 is
     // 0.286, so the band falls between two counts and is unreachable
-    // however the rest of the population is arranged.
-    const m = await refusal(population([0, 0, 0, 1, 1, 1, 1]), {
+    // however the rest of the population is arranged. This is the shape
+    // a small synthetic fixture takes, which is why it must not throw.
+    const target = await rebalance(population([0, 0, 0, 1, 1, 1, 1]), {
       min: [0.2, 0],
       max: [0.28, 1],
     });
-    expect(m).toContain("no whole number of points lands there");
+    expect(target.every((t) => t === -1)).toBe(true);
   });
 
   it("accepts the same band on a population that can reach it", async () => {
@@ -412,6 +425,7 @@ describe("quotaRebalance: over many populations", () => {
     const rand = lcg(20260826);
     let checked = 0;
     let refused = 0;
+    let unreachable = 0;
     let moves = 0;
     for (let trial = 0; trial < 400; trial++) {
       const k = 2 + Math.floor(rand() * 4);
@@ -431,31 +445,53 @@ describe("quotaRebalance: over many populations", () => {
         refused++;
         continue;
       }
-      checked++;
       const before = new Array<number>(k).fill(0);
       cats.forEach((c) => (before[c] = (before[c] as number) + 1));
       const after = finalCounts(cats, target, k);
+      const made = target.filter((t) => t >= 0).length;
+
+      // REACHABILITY IS PART OF THE PROPERTY, not a filter applied to make
+      // it pass. A band the population cannot hit has no right answer, and
+      // the node's contract there is to make NO move — so that case is
+      // asserted rather than skipped.
+      let loSum = 0;
+      let hiSum = 0;
+      let empty = false;
       let excess = 0;
       let deficit = 0;
       for (let c = 0; c < k; c++) {
         const [lo, hi] = window(min[c] as number, max[c] as number, n);
-        // The band holds afterwards. This is the claim, and nothing in
-        // the 24 cases above states it in general.
-        expect(after[c]).toBeGreaterThanOrEqual(lo);
-        expect(after[c]).toBeLessThanOrEqual(hi);
+        if (lo > hi) empty = true;
+        loSum += lo;
+        hiSum += hi;
         excess += Math.max(0, (before[c] as number) - hi);
         deficit += Math.max(0, lo - (before[c] as number));
       }
-      const made = target.filter((t) => t >= 0).length;
+      if (empty || loSum > n || hiSum < n) {
+        unreachable++;
+        expect(made).toBe(0);
+        continue;
+      }
+      checked++;
+      for (let c = 0; c < k; c++) {
+        const [lo, hi] = window(min[c] as number, max[c] as number, n);
+        // The band holds afterwards. This is the claim, and nothing in
+        // the cases above states it in general.
+        expect(after[c]).toBeGreaterThanOrEqual(lo);
+        expect(after[c]).toBeLessThanOrEqual(hi);
+      }
       expect(made).toBe(Math.max(excess, deficit));
       moves += made;
     }
     // Non-vacuity, twice over: the sweep has to REACH the node, and it
     // has to reach populations that need work.
     // eslint-disable-next-line no-console
-    console.log(`quotaRebalance sweep: ${checked} cooked, ${refused} refused, ${moves} moves`);
+    console.log(`quotaRebalance sweep: ${checked} reachable, ${unreachable} unreachable, ${refused} refused, ${moves} moves`);
     expect(checked).toBeGreaterThan(100);
     expect(moves).toBeGreaterThan(100);
+    // And the unreachable branch is reached, so its zero-move claim is a
+    // measurement rather than a sentence nothing executes.
+    expect(unreachable).toBeGreaterThan(10);
   });
 });
 

@@ -610,6 +610,10 @@ describe("racetrack dressing, as a graph", () => {
         placements: src,
         seed,
         immovable,
+        // Z-3's protect set. Empty here: these cases measure Z-1, L-1 and
+        // L-5, and an empty set is the strongest input for the mix, not a
+        // placeholder -- every placement is eligible to be moved.
+        mixPinned: new Set<number>(),
       });
       const out = (
         await cook(g, {
@@ -740,6 +744,9 @@ describe("racetrack dressing, as a graph", () => {
         lap,
         frames,
         placements: dressing.placements,
+        // The set `dressLap` itself was holding, so the two paths differ in
+        // nothing the mix can see.
+        mixPinned: dressing.mixPinned,
         seed,
         immovable,
       });
@@ -888,6 +895,10 @@ describe("racetrack dressing, as a graph", () => {
         // which L-1 has not touched. Stated rather than omitted, which is
         // what the param being required is for.
         immovable: new Set(),
+        // Z-3's protect set. Empty here: these cases measure Z-1, L-1 and
+        // L-5, and an empty set is the strongest input for the mix, not a
+        // placeholder -- every placement is eligible to be moved.
+        mixPinned: new Set<number>(),
       });
       // THE PRE-CULL CLOUD, WHICH IS THE ONLY ONE THAT CAN ANSWER THIS.
       // Z-1's verdict is "what did the corridor rule do to the list it was
@@ -991,6 +1002,10 @@ describe("racetrack dressing, as a graph", () => {
         placements: src,
         seed,
         immovable,
+        // Z-3's protect set. Empty here: these cases measure Z-1, L-1 and
+        // L-5, and an empty set is the strongest input for the mix, not a
+        // placeholder -- every placement is eligible to be moved.
+        mixPinned: new Set<number>(),
       });
       const t0 = performance.now();
       const out = (await cook(g, { outputs: [DRESS_OUTPUTS.placed, DRESS_OUTPUTS.placements] }))
@@ -1100,6 +1115,10 @@ describe("racetrack dressing, as a graph", () => {
         placements: src,
         seed,
         immovable,
+        // Z-3's protect set. Empty here: these cases measure Z-1, L-1 and
+        // L-5, and an empty set is the strongest input for the mix, not a
+        // placeholder -- every placement is eligible to be moved.
+        mixPinned: new Set<number>(),
       });
       const out = (
         await cook(g, {
@@ -1306,6 +1325,10 @@ describe("racetrack dressing, as a graph", () => {
         placements: c.list,
         seed,
         immovable: new Set(),
+        // Z-3's protect set. Empty here: these cases measure Z-1, L-1 and
+        // L-5, and an empty set is the strongest input for the mix, not a
+        // placeholder -- every placement is eligible to be moved.
+        mixPinned: new Set<number>(),
       });
       const out = (
         await cook(g, { outputs: [DRESS_OUTPUTS.culled, DRESS_OUTPUTS.placements] })
@@ -1416,6 +1439,10 @@ describe("racetrack dressing, as a graph", () => {
         placements: src,
         seed,
         immovable,
+        // Z-3's protect set. Empty here: these cases measure Z-1, L-1 and
+        // L-5, and an empty set is the strongest input for the mix, not a
+        // placeholder -- every placement is eligible to be moved.
+        mixPinned: new Set<number>(),
       });
       const out = (await cook(g, { outputs: [DRESS_OUTPUTS.placed, DRESS_OUTPUTS.placements] }))
         .outputs;
@@ -1463,7 +1490,15 @@ describe("racetrack dressing, as a graph", () => {
     const { lap, frames } = await cookLap(seed);
     const src = beforeCorridor(lap, seed);
     const build = (immovable: ReadonlySet<number>): Graph =>
-      buildRoundGraph({ kit: shippedVocabulary(), lap, frames, placements: src, seed, immovable });
+      buildRoundGraph({
+        kit: shippedVocabulary(),
+        lap,
+        frames,
+        placements: src,
+        seed,
+        immovable,
+        mixPinned: new Set<number>(),
+      });
 
     const open0 = (await cook(build(new Set()), { outputs: [DRESS_OUTPUTS.placed] })).outputs;
     const before = firstGeometry(open0[DRESS_OUTPUTS.placed] ?? []);
@@ -1606,6 +1641,7 @@ describe("racetrack dressing, as a graph", () => {
       placements: dressing.placements,
       seed,
       immovable: brakeOf(seed),
+      mixPinned: dressing.mixPinned,
     };
 
     const alone = (await cook(buildDressGraph(input), { outputs: [DRESS_OUTPUTS.boxes] })).outputs;
@@ -1647,6 +1683,7 @@ describe("racetrack dressing, as a graph", () => {
         lap,
         frames: cookedLap.frames,
         placements: dressing.placements,
+        mixPinned: dressing.mixPinned,
         seed,
         immovable,
       });

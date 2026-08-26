@@ -124,6 +124,7 @@ async function settledFor(
     lap,
     frames,
     placements: override ?? dressing.placements,
+    mixPinned: dressing.mixPinned,
     seed,
     immovable: new Set<number>(),
   });
@@ -157,6 +158,7 @@ async function driveLap(
     placements: opts.placements ?? dressing.placements,
     seed,
     immovable: new Set<number>(),
+    mixPinned: dressing.mixPinned,
   });
 
   const bySector = new Map<number, Instance[]>();

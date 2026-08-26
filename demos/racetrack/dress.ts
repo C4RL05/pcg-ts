@@ -349,6 +349,22 @@ export interface Dressing {
   readonly placements: StationedPlacement[];
   readonly corners: Corner[];
   readonly markers?: MarkerKit;
+  /**
+   * The asset ids Z-3 was forbidden to move, on the lap as it finished.
+   *
+   * RETURNED SO THE GRAPH IS TOLD RATHER THAN ASKED TO RE-DERIVE. The set
+   * is L-2 and L-3's reserved corner vocabulary plus L-4's landmarks, and
+   * re-deriving the second half is re-deriving L-4 — a rule the graph does
+   * not run, over a list it would have to walk to find out which asset is
+   * unique in which tenth of the lap. Handing the answer over is the two
+   * paths agreeing by construction, which is the same argument
+   * `immovable` already makes for L-3's braking mark.
+   *
+   * ON THE FINAL PLACEMENTS, not on the ones any particular round saw:
+   * this describes the lap being handed on, and that is the lap the graph
+   * is given.
+   */
+  readonly mixPinned: Set<number>;
 }
 
 /** The lap's own frame lookup, shared by every stage that needs one. */
@@ -930,11 +946,17 @@ export function dressLap(
 
   const boxes = buildBoxes(kit, lap, placements, seed);
 
+  // The same two halves the loop's own `protectIds` is built from, over
+  // the list as it finished. See `Dressing.mixPinned`.
+  const mixPinned = new Set(reserved);
+  for (const id of landmarkAssets(placements, lap.lengthW)) mixPinned.add(id);
+
   return {
     boxes,
     placements,
     corners,
     markers,
+    mixPinned,
     stats: {
       placed: placements.length,
       perW: placements.length / lap.lengthW,

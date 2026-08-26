@@ -125,7 +125,7 @@ export const quotaRebalance = standardNode<QuotaRebalanceParams>({
   type: NODE,
   category: "attribute",
   description:
-    "Reads a CATEGORY per point and a stated SHARE BAND per category, and writes down the minimum set of points that must change category for every share to land inside its band — which category each should join, and nothing else. This is the node for 'these six kinds, in these proportions', where the proportions are a REQUIREMENT rather than a hope: drawing each element from a weighted table gives the mix in expectation, and any particular population still misses, which is exactly what a stated proportion exists to rule out. `min` and `max` are two lists of the same length, one entry per category, in shares of the counted population (0.1 is a tenth); the list length IS the number of categories, so there is no second param to disagree with them. IT MOVES TO THE NEAREST EDGE AND STOPS, never to the middle of a band, and that is the whole of its restraint: a category a tenth below its floor is lifted to its floor and left there. Driving every category to the centre of its range would make a generated population markedly more uniform than a real one — populations reach a stated aggregate through variation between them, not by every one of them hitting the same number, so a generator that lands on the middle every time scores better against the rule and is worse. IT DECIDES AND DOES NOT ACT. Nothing here knows what an element of a different category looks like: whatever turns a 'mid' into an 'over' is a redraw only the caller can perform. So the output is a per-point DESTINATION, and a setAttribute, copyToPoints or transferByIndex downstream does the changing — usually inside a repeatUntil, so that a redraw which lands in the wrong category is simply seen again on the next round. WHICH ELEMENTS GO is `priority` ascending: the lowest-priority eligible member of an over-full category leaves first. That param is the one worth thinking about, because the obvious choice is usually wrong — priority by a POSITION coordinate takes the first members along that axis and concentrates every change in one stretch, which reads as a patch of different-looking work rather than as a mix. A hash (randomField) spreads them; a measure of how badly each element fits where it is concentrates them where they were least right. `include` and `eligible` are two different exclusions and both are needed: an element with `include` off is not counted in any share and cannot move (it is not part of the scheme being stated), while an element with `eligible` off still COUNTS toward its category's share but is never chosen to leave (it is part of the population and is pinned where it is — a landmark, a reserved marker, anything a stronger rule already placed). DETERMINISM: ties in `priority` are broken by point IDENTITY — the bits of the stored position plus the per-point `seed` attribute — never by array index, so shuffling the input or filtering something upstream yields the identical decision. HALO: none, and unlike the rest of the library that is not a number but an absence. A share is a fact about the WHOLE population, so this node has no partitioned form at all: cooked over half the points it reads half the denominator and decides a different set. It belongs on an unbounded level, or before a split. OUTPUT is the input geometry with one i32 point attribute added, `targetAttr`: the category index each moving point should join, and -1 on every point that stays — including every point `include` switched off, whose category is therefore never even read. No point is added, removed or moved, and topology survives untouched. A SHARE IS A RATIO OF WHOLE POINTS, and that is checked rather than hoped for: a category can only hold ceil(min*n) to floor(max*n) of n points, so bands that are legal as real numbers can still be unreachable — two categories banded [0, 0.1] and [0, 0.9] over 13 points admit no arrangement at all, since 1/13 is under the first ceiling and 12/13 is over the second. Measured over 312,581 band lists that pass the two SUM checks, better than one in five are unreachable this way, and every one of them used to drive this node into a ping-pong that spent its whole budget and emitted moves a caller would have redrawn assets for. They are refused instead, naming the population, because the fix is a wider band or a bigger population and neither is something this node can choose. IT CAN STILL STOP EARLY, legally and quietly: a category whose members are all ineligible has nothing to give up. `unmetAttr` is how a caller hears about it. COST is one pass over the points per move, and on a reachable set of bands every point that moves moves exactly once — so the pass count IS the move count, the move count is the minimum, and a mix put right by moving a tenth of the population costs a tenth of the passes.",
+    "Reads a CATEGORY per point and a stated SHARE BAND per category, and writes down the minimum set of points that must change category for every share to land inside its band — which category each should join, and nothing else. This is the node for 'these six kinds, in these proportions', where the proportions are a REQUIREMENT rather than a hope: drawing each element from a weighted table gives the mix in expectation, and any particular population still misses, which is exactly what a stated proportion exists to rule out. `min` and `max` are two lists of the same length, one entry per category, in shares of the counted population (0.1 is a tenth); the list length IS the number of categories, so there is no second param to disagree with them. IT MOVES TO THE NEAREST EDGE AND STOPS, never to the middle of a band, and that is the whole of its restraint: a category a tenth below its floor is lifted to its floor and left there. Driving every category to the centre of its range would make a generated population markedly more uniform than a real one — populations reach a stated aggregate through variation between them, not by every one of them hitting the same number, so a generator that lands on the middle every time scores better against the rule and is worse. IT DECIDES AND DOES NOT ACT. Nothing here knows what an element of a different category looks like: whatever turns a 'mid' into an 'over' is a redraw only the caller can perform. So the output is a per-point DESTINATION, and a setAttribute, copyToPoints or transferByIndex downstream does the changing — usually inside a repeatUntil, so that a redraw which lands in the wrong category is simply seen again on the next round. WHICH ELEMENTS GO is `priority` ascending: the lowest-priority eligible member of an over-full category leaves first. That param is the one worth thinking about, because the obvious choice is usually wrong — priority by a POSITION coordinate takes the first members along that axis and concentrates every change in one stretch, which reads as a patch of different-looking work rather than as a mix. A hash (randomField) spreads them; a measure of how badly each element fits where it is concentrates them where they were least right. `include` and `eligible` are two different exclusions and both are needed: an element with `include` off is not counted in any share and cannot move (it is not part of the scheme being stated), while an element with `eligible` off still COUNTS toward its category's share but is never chosen to leave (it is part of the population and is pinned where it is — a landmark, a reserved marker, anything a stronger rule already placed). DETERMINISM: ties in `priority` are broken by point IDENTITY — the bits of the stored position plus the per-point `seed` attribute — never by array index, so shuffling the input or filtering something upstream yields the identical decision. HALO: none, and unlike the rest of the library that is not a number but an absence. A share is a fact about the WHOLE population, so this node has no partitioned form at all: cooked over half the points it reads half the denominator and decides a different set. It belongs on an unbounded level, or before a split. OUTPUT is the input geometry with one i32 point attribute added, `targetAttr`: the category index each moving point should join, and -1 on every point that stays — including every point `include` switched off, whose category is therefore never even read. No point is added, removed or moved, and topology survives untouched. A SHARE IS A RATIO OF WHOLE POINTS, and that is checked rather than hoped for. A category can only hold ceil(min*n) to floor(max*n) of n counted points, so bands that are legal as real numbers can still be unreachable by this particular population: five points against a band of [0.04, 0.12] need at least 1 and allow at most 0, and two categories banded [0, 0.1] and [0, 0.9] over 13 points admit no arrangement at all, since 1/13 is under the first ceiling and 12/13 is over the second. Measured over 312,581 band lists that pass the two SUM checks, better than one in five are unreachable this way, and every one of them used to drive this node into a ping-pong that spent its whole budget and emitted moves a caller would have redrawn assets for. WHEN THE BANDS ARE UNREACHABLE NO MOVE IS MADE — no arrangement is right, so none is chosen, and a best effort would be a different node, since 'minimum change' has no meaning once the target cannot be hit. That is reported and not thrown, and the distinction is deliberate: a band list no population could satisfy is an authoring error and the two SUM checks refuse it outright, while a band list this population cannot satisfy is DATA — a cell holding five points, a lap a cull has thinned — and a node that throws on data cannot sit inside the repair loop it exists for. IT CAN ALSO STOP EARLY for a second reason: a category whose members are all ineligible has nothing to give up. `unmetAttr` is how a caller hears about either. COST is one pass over the points per move, and on a reachable set of bands every point that moves moves exactly once — so the pass count IS the move count, the move count is the minimum, and a mix put right by moving a tenth of the population costs a tenth of the passes.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -333,34 +333,47 @@ export const quotaRebalance = standardNode<QuotaRebalanceParams>({
     }
     if (counted === 0) return { out: [makeGeometryItem(geo)] };
 
-    // INTEGER FEASIBILITY, AND IT CANNOT BE CHECKED WITH THE PARAMS.
+    // INTEGER FEASIBILITY, AND IT IS A FACT ABOUT THE POPULATION RATHER
+    // THAN ABOUT THE PARAMS — which is why it is answered here, and why it
+    // is ANSWERED rather than refused.
     //
     // The two sum checks above are exactly right for the REAL-VALUED
-    // problem — a box [min, max] meets the probability simplex iff the
-    // floors sum to at most 1 and the ceilings to at least 1 — and a share
-    // is not a real number. It is `m / counted` for a whole m, so what a
+    // problem: a box [min, max] meets the probability simplex iff the
+    // floors sum to at most 1 and the ceilings to at least 1. A share is
+    // not a real number. It is `m / counted` for a whole m, so what a
     // category can actually hold is the integer window [ceil(min*counted),
     // floor(max*counted)], and those windows can be empty, or fail to
     // admit `counted` between them, while the sums are perfectly legal.
+    // Five points against a band of [0.04, 0.12] is the whole thing in one
+    // line: the floor needs 1 point and the ceiling allows 0.
     //
-    // MEASURED, BECAUSE THE SIZE OF THIS IS THE ARGUMENT FOR CHECKING IT:
-    // over 312,581 band lists and populations that pass the two sum checks,
-    // 66,141 — better than one in five — are integer-infeasible, and every
-    // single one of them drove the loop below into a ping-pong that spent
-    // the whole pass budget and emitted moves the caller would have redrawn
-    // assets for. Two categories with bands [0, 0.1] and [0, 0.9] over 13
-    // points is the whole failure in miniature: 1/13 is under the first
-    // ceiling and 12/13 is over the second, so each arrangement makes the
-    // other look like the repair. On the same sweep, every integer-FEASIBLE
+    // MEASURED, BECAUSE THE SIZE OF IT IS THE ARGUMENT FOR CHECKING AT
+    // ALL: over 312,581 band lists and populations that pass the two sum
+    // checks, 66,141 -- better than one in five -- are integer-infeasible,
+    // and every single one of them drove the loop below into a ping-pong
+    // that spent the whole pass budget and emitted moves the caller would
+    // have redrawn assets for. On the same sweep every integer-FEASIBLE
     // input finished inside the budget with every band met and no move to
-    // spare — so this predicate is not a heuristic guard, it is the exact
-    // line between the inputs this node answers and the inputs it cannot.
+    // spare, so this predicate is not a heuristic guard: it is the exact
+    // line between the inputs this node can answer and the ones it cannot.
+    //
+    // AND IT MAKES NO MOVES RATHER THAN THROWING, which is a correction to
+    // what this file did first. A band list that cannot be satisfied by
+    // ANY population is an authoring error and the two sum checks above
+    // refuse it. A band list that cannot be satisfied by THIS population
+    // is data — a cell holding five points, a lap the cull has thinned —
+    // and a node that throws on data cannot sit inside a repair loop,
+    // which is the one place this node is for. So: no arrangement is
+    // right, therefore none is made, and `unmetAttr` is how a caller hears
+    // about it. The alternative, a best effort, would be a different node:
+    // "minimum change" has no meaning once the target is unreachable.
     //
     // DERIVED WITH THE LOOP'S OWN COMPARISONS rather than with ceil and
     // floor, so that a predicate and a loop which disagree by one ulp is
     // not a thing that can happen: `lo` is the least whole count the loop
     // would not call under its floor, `hi` the greatest it would not call
     // over its ceiling.
+    let reachable = true;
     let loSum = 0;
     let hiSum = 0;
     for (let c = 0; c < k; c++) {
@@ -370,23 +383,11 @@ export const quotaRebalance = standardNode<QuotaRebalanceParams>({
       let hi = Math.floor((max[c] as number) * counted);
       while (hi < counted && !((hi + 1) / counted - (max[c] as number) > 0)) hi++;
       while (hi > 0 && hi / counted - (max[c] as number) > 0) hi--;
-      if (lo > hi) {
-        throw new Error(
-          `${NODE}: category ${c} wants a share in [${min[c]}, ${max[c]}] of ${counted} counted points, and no whole number of points lands there — ${lo} points is ${lo / counted} and ${hi} is ${hi / counted}, so the band falls between two counts. A share is a ratio of whole points, so a band narrower than 1/${counted} can be unreachable however the population is arranged; widen it, or state it against a population this node can hit`,
-        );
-      }
+      if (lo > hi) reachable = false;
       loSum += lo;
       hiSum += hi;
     }
-    if (loSum > counted || hiSum < counted) {
-      const why =
-        loSum > counted
-          ? `the floors together need at least ${loSum} of them`
-          : `the ceilings together hold at most ${hiSum} of them`;
-      throw new Error(
-        `${NODE}: ${counted} counted points cannot satisfy these bands — ${why}. The sums of "min" and "max" are legal as REAL numbers and this is the whole-point arithmetic they round to, so the fix is usually a wider band rather than a different one; a larger population also reaches bands a small one cannot`,
-      );
-    }
+    if (loSum > counted || hiSum < counted) reachable = false;
 
     // Visit order: priority ascending, ties by point identity. The ranks
     // are built unconditionally even where every priority differs, for
@@ -429,7 +430,7 @@ export const quotaRebalance = standardNode<QuotaRebalanceParams>({
     // is exactly how one category becomes a source in one pass and a
     // destination in the next. What actually stops the undo is feasibility,
     // enforced up there and not down here.
-    for (let pass = 0; pass < counted; pass++) {
+    for (let pass = 0; reachable && pass < counted; pass++) {
       if ((pass & (CANCEL_STRIDE - 1)) === 0) checkCancelled();
       let from = -1;
       let over = 0;

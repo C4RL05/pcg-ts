@@ -119,6 +119,7 @@ import {
   Graph,
   type DataCollection,
   type ExposedPin,
+  type Field,
   type Geometry,
   type NodeHandle,
   abs,
@@ -145,6 +146,7 @@ import {
   orientAlongVector,
   pathCoverage,
   pointsToPath,
+  quotaRebalance,
   repeatUntilNode,
   runFit,
   select,
@@ -161,6 +163,7 @@ import type { StationedPlacement } from "./legibility.js";
 import { FALSE_EDGE } from "./falseEdges.js";
 import { SIGHTLINE } from "./sightline.js";
 import { SAME_PLACE_W } from "./tolerance.js";
+import { Z3, type Band } from "./assets.js";
 import { CORRIDOR } from "./zones.js";
 
 /** The named outputs a cook of this graph produces. */
@@ -308,9 +311,20 @@ export const PLACEMENT = {
    *
    * A STRING, AND THE ONLY ONE ON THIS CLOUD, which is affordable here
    * and nowhere downstream. `spawnInstances` groups by a string point
-   * attribute and there is no field that produces one, so a per-point id
-   * has to be WRITTEN by whatever builds the cloud in TypeScript -- and
-   * this cloud is built once per lap, a few hundred points. The same
+   * attribute, so a per-point id has to be written from a TABLE of them,
+   * and this cloud is built once per lap, a few hundred points.
+   *
+   * THIS USED TO SAY "there is no field that produces one" AND THAT WAS
+   * FALSE WHEN IT WAS WRITTEN, which matters because it is the sentence
+   * anyone porting the band mix into the repair body will read first.
+   * `setAttribute` with `type: "string"` has taken a field-capable INDEX
+   * selector into a `values` list since well before this file existed, and
+   * `graphs/basics-spawn-by-species.json` ships exactly that straight into
+   * `spawnInstances`. So a graph stage CAN rewrite this column, given the
+   * kit's ids as a table -- the reason the redraw is still TypeScript is
+   * the pose, which is drawn from a library the repair body is not
+   * handed, not the string. The conclusion below is unaffected: it rests
+   * on the second argument, which is about cost per BOX. The same
    * column on the BOXES would be written once per BOX — five or six times
    * as many writes, every one of them a string intern, to answer a
    * question `placementIndex` already answers by lookup. That asymmetry
@@ -418,6 +432,32 @@ export const PLACEMENT = {
   runCount: "edgeCount",
   /** 1 on the one placement per qualifying run that L-5 lowers. */
   drop: "edgeDrop",
+  /**
+   * Which of Z-3's six bands this placement is in, as an INDEX into
+   * {@link MIX_BANDS} — the ladder `bandOfPlacement` walks, transcribed.
+   *
+   * NAMED APART FROM {@link PLACEMENT.band}, which is L-5's edge band and
+   * is a 0/1 membership flag rather than a six-valued index. Two rules,
+   * two meanings of the word, and one column each.
+   */
+  mixBand: "mixBand",
+  /**
+   * 1 on a placement Z-3 may not move: a corner marker or a landmark.
+   *
+   * AN INPUT COLUMN AND NOT A DERIVED ONE, because what it stands for is
+   * a decision two OTHER rules already took. L-2 and L-3 reserve asset
+   * ids for the corner language and L-4 holds one asset unique per tenth
+   * of the lap; both outrank a distribution, for the reason `dress.ts`
+   * gives — a marker moved to balance a band is a corner that no longer
+   * announces itself. The graph is told which those are rather than
+   * re-deriving them, since re-deriving L-4's set is re-deriving L-4.
+   */
+  mixPinned: "mixPinned",
+  /**
+   * Z-3's answer: the band this placement should be redrawn into, or -1
+   * where it stays. See {@link writeBandMix}.
+   */
+  mixTarget: "mixTarget",
   /** 1 where Z-1 moved this placement this round. See {@link writeCorridor}. */
   corridorMoved: "corridorMoved",
   /**
@@ -573,6 +613,20 @@ export interface DressGraphInput {
    * about it.
    */
   readonly immovable: ReadonlySet<number>;
+  /**
+   * Asset ids Z-3 may not move: L-2 and L-3's reserved corner vocabulary,
+   * and L-4's landmarks.
+   *
+   * REQUIRED FOR `immovable`'s REASON — an omitted set does not fail, it
+   * quietly produces a different mix — and it is a SNAPSHOT, which is the
+   * one place this port is not the rule. `dressLap` rebuilds its protect
+   * set every round, because L-4 re-draws landmarks as the loop runs; the
+   * graph is handed one set and holds it for every round. Round one does
+   * essentially all of the mix's work (measured: `mix` is 0 in round two
+   * on every seed of six), so what the later rounds hold is round one's
+   * answer to a question they were not going to ask.
+   */
+  readonly mixPinned: ReadonlySet<number>;
 }
 
 /**
@@ -798,6 +852,7 @@ function placementCloudInTrackFrame(
   lib: PoseLibrary,
   seed: number,
   immovable: ReadonlySet<number>,
+  mixPinnedIds: ReadonlySet<number>,
 ): Geometry {
   const geo = createPointCloud(placements.length);
   const pts = geo.attrs.point;
@@ -816,6 +871,7 @@ function placementCloudInTrackFrame(
   const station = pts.add(PLACEMENT.station, "f32", 1);
   const id = pts.add(PLACEMENT.id, "f32", 1);
   const locked = pts.add(PLACEMENT.locked, "f32", 1);
+  const mixPinned = pts.add(PLACEMENT.mixPinned, "f32", 1);
   const asset = pts.add(PLACEMENT.asset, "string", 1);
 
   // The lap's own lookup, not a second one. `frameLookup` is exactly what
@@ -857,6 +913,7 @@ function placementCloudInTrackFrame(
     // carries a few hundred.
     id.set(i, i);
     locked.set(i, immovable.has(p.asset.id) ? 1 : 0);
+    mixPinned.set(i, mixPinnedIds.has(p.asset.id) ? 1 : 0);
   }
   return geo;
 }
@@ -1525,6 +1582,130 @@ function writeFalseEdges(g: Graph, target: NodeHandle, lapW: number, tag: string
 }
 
 /**
+ * Z-3's six bands, in the order `quotaRebalance` indexes them.
+ *
+ * THE ORDER IS THE API. A share band list is positional — entry 3 of
+ * `min` is the floor of whatever category 3 means — so this array is the
+ * only statement of what an index stands for, and the ladder below and
+ * the reader in `cookBandMix` both take it from here. `Object.keys(Z3)`
+ * would give the same six today and would move the day someone reorders
+ * a literal.
+ */
+export const MIX_BANDS: readonly Band[] = ["over", "verge", "near", "mid", "far", "distant"];
+
+/** What {@link MIX_BANDS} says a placement outside every band index is. */
+const MIX_STAYS = -1;
+
+/**
+ * `bandOfPlacement`'s ladder, as a field, on the CENTRE datum.
+ *
+ * A SELECT CHAIN AND NOT SIX COMPARISONS, because the ladder is ordered
+ * and the first match wins: `|t| < 1` is `over` whatever its height, and
+ * only a placement that got past that line is asked about the verge. The
+ * grammar has no `or`, so the two-sided height test is spelled as a
+ * `max` of two comparisons — both are 0 or 1, so their max is their
+ * disjunction.
+ *
+ * THE TOLERANCES POINT IN OPPOSITE DIRECTIONS AND THAT IS THE RULE, not
+ * a symmetry someone forgot. Every lateral edge is pulled IN by
+ * `SAME_PLACE_W` so that a placement landing exactly on a boundary
+ * belongs to the OUTER band, and both height edges are pushed OUT by it
+ * so that a base sitting exactly on the corridor ceiling is not "above"
+ * it. `assets.ts` measured what happens without them: the mix sets an
+ * `over` replacement to exactly `1.2 + tall/2`, the round trip back to a
+ * base misses 1.2 for 96 of 229 assets, and a strict comparison then
+ * split one situation two ways on which direction the last bit rounded.
+ * In f32 — which is what these columns are — that sliver is ~1e-7 rather
+ * than ~1e-16, so the toss would be between COOKS rather than between
+ * assets, and Z-3's shares, this repair and its move count all follow it.
+ */
+function bandField(): Field {
+  const a = abs(attribute(PLACEMENT.t));
+  const h = attribute(PLACEMENT.h);
+  const inside = (limit: number): Field => lt(a, limit - SAME_PLACE_W);
+  const pushedOut = max(
+    gt(h, CORRIDOR.ceilingW + SAME_PLACE_W),
+    lt(h, CORRIDOR.floorW - SAME_PLACE_W),
+  );
+  return select(
+    inside(CORRIDOR.halfWidthW),
+    0,
+    select(
+      inside(1.5),
+      select(pushedOut, 0, 1),
+      select(inside(2.5), 2, select(inside(5), 3, select(inside(13), 4, 5))),
+    ),
+  );
+}
+
+/**
+ * Z-3's band mix, as far as a graph can take it: the DECISION.
+ *
+ * WHAT IT DOES AND WHAT IT POINTEDLY DOES NOT. `quotaRebalance` reads
+ * every placement's band and Z-3's six share bands and writes down the
+ * smallest set of placements that must change band, and which band each
+ * should join. It does not redraw anything — the asset, the lateral and
+ * the height a placement would take in its new band come from a draw over
+ * the pool, and the pool, the pose library and the asset id STRING are
+ * all outside this body. So the column this leaves is an instruction and
+ * `dressLap` is still the one that carries it out.
+ *
+ * WHY THAT SPLIT IS THE RIGHT ONE AND NOT A HALF-MEASURE. The half of
+ * Z-3 that cannot be done per cell is the SHARES: a share is a fact about
+ * the whole lap, and a sector holding thirty placements cannot even
+ * represent a band aimed at 0.005 with a 0.03 ceiling. That half is now
+ * a node. The half that is left is a pure per-placement function of one
+ * placement and a pool, which is the shape every stage in this file
+ * already is — so what remains is portable and what has moved is the part
+ * that never could be.
+ *
+ * THE PRIORITY IS THE STATION, WHICH IS THE REFERENCE'S ORDER AND NOT A
+ * GOOD ONE. `repairBandMix` finds its donor with a linear `find` over a
+ * list held in station order, so it always takes the first eligible
+ * member of the over-full band — and since a band's members are spread
+ * over the whole circuit, "the first k" is a CONTIGUOUS STRETCH of track.
+ * Every replacement lands in the first tenth of the lap and the shares
+ * come out exactly right. It is transcribed here because a port that
+ * quietly improves the rule cannot be checked against it; `quotaRebalance`
+ * takes the order as a param precisely so that changing it later is one
+ * expression rather than a new node.
+ */
+function writeBandMix(g: Graph, target: NodeHandle, tag: string): NodeHandle {
+  const band = g.add(
+    setAttribute,
+    { name: PLACEMENT.mixBand, tupleSize: 1, value: bandField() },
+    `${tag}_band`,
+  );
+  g.connect(target, "out", band, "in");
+
+  const mix = g.add(
+    quotaRebalance,
+    {
+      category: attribute(PLACEMENT.mixBand),
+      min: MIX_BANDS.map((b) => Z3[b].rule[0] as number),
+      max: MIX_BANDS.map((b) => Z3[b].rule[1] as number),
+      // L-6's cover is STRUCTURE AND NOT DRESSING, so it leaves the
+      // denominator as well as the pool. A lap can carry forty cover
+      // pieces, all `over` by geometry, which would take that band from a
+      // tenth of the population to a quarter and make Z-3 unsatisfiable on
+      // any circuit that has a tunnel — and the share Z-3 states was
+      // measured on dressing.
+      include: sub(1, attribute(PLACEMENT.cover)),
+      // A marker or a landmark STAYS IN THE DENOMINATOR and off the
+      // table, which is the other exclusion and the opposite arithmetic:
+      // it is part of the population the mix is stated over, and no
+      // rebalance may move it.
+      eligible: sub(1, attribute(PLACEMENT.mixPinned)),
+      priority: attribute(PLACEMENT.station),
+      targetAttr: PLACEMENT.mixTarget,
+    },
+    `${tag}_mix`,
+  );
+  g.connect(band, "out", mix, "in");
+  return mix;
+}
+
+/**
  * THE SETTLE SIGNAL: how many placements this round moved.
  *
  * `repeatUntil` re-cooks its body until a named DETAIL attribute reads
@@ -1641,7 +1822,13 @@ export function buildRepairBody(lap: Lap): {
   const seen = writeSightlineCull(b, oriented, lap.halfWidth, "l1");
   const edged = writeFalseEdges(b, seen.tail, lap.lengthW, "l5");
   const settled = writeLift(b, edged, lap.halfWidth, "l5");
-  const counted = writeSettleCount(b, settled, "round");
+  // Z-3 LAST, WHICH IS `dressLap`'s ORDER AND IS LOAD-BEARING. The mix has
+  // to see the lap the other repairs left: a mix balanced before the cull
+  // is balanced against a population the cull is about to change, and L-5
+  // lowers a placement out of the verge band, so the shares the mix reads
+  // are only the lap's once both have run.
+  const mixed = writeBandMix(b, settled, "z3");
+  const counted = writeSettleCount(b, mixed, "round");
 
   return {
     graph: b,
@@ -1880,7 +2067,7 @@ export function buildRoundGraph(input: DressGraphInput): Graph {
   // which is the machinery telling the truth: a body belongs to one
   // wrapper, and running it bare is a different graph rather than the same
   // graph with the loop switched off.
-  const { kit, lap, placements, seed, immovable } = input;
+  const { kit, lap, placements, seed, immovable, mixPinned } = input;
   const lib = poseLibrary(kit);
   const body = buildRepairBody(lap);
   const g = body.graph;
@@ -1889,7 +2076,7 @@ export function buildRoundGraph(input: DressGraphInput): Graph {
   // is all a wrapper does to an input pin, minus the loop.
   const carry = g.add(dataInput, {}, "roundCarry");
   g.setParam(carry, "items", [
-    makeGeometryItem(placementCloudInTrackFrame(lap, placements, lib, seed, immovable)),
+    makeGeometryItem(placementCloudInTrackFrame(lap, placements, lib, seed, immovable, mixPinned)),
   ]);
   const sight = g.add(dataInput, {}, "roundSight");
   g.setParam(sight, "items", [makeGeometryItem(input.frames)]);
@@ -1931,7 +2118,7 @@ export function buildDressGraph(input: DressGraphInput): Graph {
  * off the output itself rather than deriving from two inputs.
  */
 function assemble(input: DressGraphInput): { graph: Graph } {
-  const { kit, lap, frames, placements, seed, immovable } = input;
+  const { kit, lap, frames, placements, seed, immovable, mixPinned } = input;
   const g = new Graph(seed);
 
   const lib = poseLibrary(kit);
@@ -1942,7 +2129,9 @@ function assemble(input: DressGraphInput): { graph: Graph } {
 
   const placementsIn = g.add(dataInput, {}, "placements");
   g.setParam(placementsIn, "items", [
-    makeGeometryItem(placementCloudInTrackFrame(lap, placements, lib, seed, immovable)),
+    makeGeometryItem(
+      placementCloudInTrackFrame(lap, placements, lib, seed, immovable, input.mixPinned),
+    ),
   ]);
 
   const framesIn = g.add(dataInput, {}, "lap");
@@ -1999,6 +2188,54 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   g.output(repair, "converged", DRESS_OUTPUTS.converged);
   g.output(coverage, "out", DRESS_OUTPUTS.coverage);
   return { graph: g };
+}
+
+/** What {@link cookBandMix} reads back, one entry per placement. */
+export interface BandMixDecision {
+  /** The band each placement is in, as the graph's ladder decided. */
+  readonly band: Band[];
+  /** The band Z-3 says it should join, or undefined where it stays. */
+  readonly target: (Band | undefined)[];
+}
+
+/**
+ * Cook {@link writeBandMix} on its own, over one placement list.
+ *
+ * THE STAGE RUNS INSIDE A `repeatUntil` BODY AND SO CANNOT BE READ THERE,
+ * which is what this exists for. `repeatUntil` hands back its LAST round's
+ * outputs, and by the last round a settled lap has nothing left for the
+ * mix to say — so a test that read `mixTarget` off the loop would be
+ * reading a column of -1 and calling it agreement. Cooking the stage over
+ * a list that has NOT been mixed is the only way to compare its verdict
+ * against `repairBandMix`'s on the same input.
+ *
+ * It is also the shape every other decision in this demo is checked in:
+ * `cookCorners`, `cookReserveMarkers` and `cookLapPlacements` all cook one
+ * stage and read its columns back as plain arrays.
+ */
+export async function cookBandMix(input: DressGraphInput): Promise<BandMixDecision> {
+  const { kit, lap, placements, seed, immovable, mixPinned } = input;
+  const g = new Graph(seed);
+  const cloud = g.add(dataInput, {}, "placements");
+  g.setParam(cloud, "items", [
+    makeGeometryItem(
+      placementCloudInTrackFrame(lap, placements, poseLibrary(kit), seed, immovable, mixPinned),
+    ),
+  ]);
+  const mix = writeBandMix(g, cloud, "z3");
+  g.output(mix, "out", "mix");
+  const out = (await cook(g)).outputs;
+  const geo = requireGeo(out["mix"], "mix");
+  const bandCol = geo.attrs.point.require(PLACEMENT.mixBand);
+  const targetCol = geo.attrs.point.require(PLACEMENT.mixTarget);
+  const band: Band[] = [];
+  const target: (Band | undefined)[] = [];
+  for (let i = 0; i < placements.length; i++) {
+    band.push(MIX_BANDS[bandCol.get(i)] as Band);
+    const t = targetCol.get(i);
+    target.push(t >= 0 ? (MIX_BANDS[t] as Band) : undefined);
+  }
+  return { band, target };
 }
 
 /** The one async thing here: build, cook, and read the columns back. */
