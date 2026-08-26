@@ -2860,3 +2860,27 @@ global slide check divided one placement's worst by another's arc, which
 is not a quantity; the exact claim -- that the station column holds the
 f32 nearest its double, to half a spacing -- has no geometry in it and is
 what the suite pins now.
+
+### Correction: what actually blocks the list, 2026-08-26
+
+The entry above says three columns are undeliverable in a graph and names
+`locked`, `mixPinned` and `cover`. Two of those three are wrong, and the
+error is worth naming because it would send the next unit at the wrong
+target.
+
+**`locked` and `mixPinned` are derivable.** `locked` is L-3's brake marker
+id and `cookReserveMarkers` is already a graph. `mixPinned` is that
+reserved set together with `landmarkAssets`, which is "the assets used
+exactly once on the lap, then the lowest id in each tenth" -- a count per
+asset and a minimum per bucket, which is the shape of half the stages in
+this demo already. What never fires is L-4's REPAIR; its SET is a
+statistic over the list, and those are two different claims that got
+collapsed into one.
+
+**`cover` is the real blocker and it is not a flag.** L-6 does not mark
+placements, it MAKES them: `tunnels.ts` pushes cover pieces and
+`dress.ts:838` appends them to the list. So a graph-built list is not a
+list with one column missing, it is a list sixteen entries short. L-2 and
+L-3 add entries too. That is the honest shape of what is left: the
+remaining rules do not annotate the list, they EDIT it, and a list a graph
+owns has to own those edits.
