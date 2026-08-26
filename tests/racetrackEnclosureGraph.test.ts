@@ -37,12 +37,29 @@ import {
   type Geometry,
 } from "pcg-ts";
 import {
+  COVER,
+  PIECE,
   PLAN,
+  PLAN_PIN,
   addEnclosurePlan,
+  addEnclosureTiles,
+  coverCloud,
+  maxColumns,
+  slotCloud,
   stretchLengthField,
+  writeCornerTests,
   type PlanOptions,
 } from "../demos/racetrack/enclosureGraph.js";
-import { ENCLOSE, LONG_QUANTILE, drawStretchLengthW } from "../demos/racetrack/tunnels.js";
+import {
+  ENCLOSE,
+  LONG_QUANTILE,
+  coverCandidates,
+  drawStretchLengthW,
+} from "../demos/racetrack/tunnels.js";
+import { shippedVocabulary } from "../demos/racetrack/vocabulary.js";
+import { CORRIDOR } from "../demos/racetrack/zones.js";
+import { TRACK_FRAME } from "../demos/racetrack/graph.js";
+import type { PlaceableAsset } from "../demos/racetrack/assets.js";
 import { beforeEntryW, cornersOf, radiusAtW } from "../demos/racetrack/corners.js";
 import { dressedLapFor } from "./support/lap.js";
 import type { Lap } from "../demos/racetrack/lap.js";
@@ -107,9 +124,7 @@ async function planOf(
   const framesIn = g.add(dataInput, {}, "frames");
   g.setParam(framesIn, "items", [makeGeometryItem(frames)]);
   const out = addEnclosurePlan(g, framesIn, opts, "l6");
-  // `repeatUntil` names its output pins after the body's exposed
-  // outputs, so this one is "carry" rather than "out".
-  g.output(out, "carry", "plan");
+  g.output(out, PLAN_PIN, "plan");
 
   const geo = firstGeometry((await cook(g)).outputs["plan"]);
   expect(geo, `seed ${seed}: the planner produced no geometry`).toBeDefined();
@@ -374,6 +389,229 @@ describe("racetrack enclosure, as a graph", () => {
     console.log(
       `L-6 graph clash: budget ${budgetW.toFixed(0)}W -> ${r.plans.length} stretches ` +
         `in ${r.rounds} attempts`,
+    );
+  }, 120000);
+});
+
+/** One tiled piece, read back off the cloud. */
+interface Piece {
+  readonly stationW: number;
+  readonly t: number;
+  readonly h: number;
+  readonly slot: number;
+  readonly tile: number;
+  readonly tiles: number;
+  readonly ord: number;
+  readonly startW: number;
+  readonly lengthW: number;
+  readonly acrossW: number;
+  readonly baseH: number;
+  readonly columns: number;
+}
+
+async function tilesOf(
+  lap: Lap,
+  frames: Geometry,
+  seed: number,
+  budgetW: number,
+  attempts = 256,
+): Promise<Piece[]> {
+  const kit = shippedVocabulary();
+  const all = (kit.assets as unknown as PlaceableAsset[]).filter((a) => a.where);
+  const cover = coverCandidates(all);
+  const opts: PlanOptions = {
+    lapW: lap.lengthW,
+    halfWidth: lap.halfWidth,
+    budgetW,
+    minQuantile: LONG_QUANTILE,
+    attempts,
+  };
+  const g = new Graph(seed);
+  const framesIn = g.add(dataInput, {}, "frames");
+  g.setParam(framesIn, "items", [makeGeometryItem(frames)]);
+  const coverIn = g.add(dataInput, {}, "cover");
+  g.setParam(coverIn, "items", [makeGeometryItem(coverCloud(cover))]);
+  const slotsIn = g.add(dataInput, {}, "slots");
+  g.setParam(slotsIn, "items", [makeGeometryItem(slotCloud(maxColumns(cover)))]);
+
+  const withTests = writeCornerTests(g, framesIn, lap.lengthW, "f");
+  const plan = addEnclosurePlan(g, framesIn, opts, "l6");
+  const out = addEnclosureTiles(
+    g,
+    withTests,
+    plan,
+    coverIn,
+    slotsIn,
+    opts,
+    cover.map((a) => a.instances),
+    "l6t",
+  );
+  g.output(out, "out", "tiles");
+
+  const geo = firstGeometry((await cook(g)).outputs["tiles"]);
+  expect(geo, "the tiler produced no geometry").toBeDefined();
+  const p = geo!.attrs.point;
+  const num = (n: string) => p.require(n);
+  const st = num(TRACK_FRAME.station);
+  const t = num("trackT");
+  const h = num("trackH");
+  const slot = num(PIECE.slot);
+  const tile = num(PIECE.tile);
+  const tiles = num(PIECE.tiles);
+  const ord = num(COVER.ord);
+  const startW = num(PLAN.startW);
+  const lengthW = num(PLAN.lengthW);
+  const acrossW = num(COVER.acrossW);
+  const baseH = num(COVER.baseH);
+  const columns = num(COVER.columns);
+  const out2: Piece[] = [];
+  for (let i = 0; i < p.count; i++) {
+    out2.push({
+      stationW: st.get(i),
+      t: t.get(i),
+      h: h.get(i),
+      slot: slot.get(i),
+      tile: tile.get(i),
+      tiles: tiles.get(i),
+      ord: ord.get(i),
+      startW: startW.get(i),
+      lengthW: lengthW.get(i),
+      acrossW: acrossW.get(i),
+      baseH: baseH.get(i),
+      columns: columns.get(i),
+    });
+  }
+  return out2;
+}
+
+describe("racetrack enclosure tiling, as a graph", () => {
+  it("tiles a run the way coverPlacements does", async () => {
+    // SWEPT UNTIL BOTH PIECES HAVE BEEN USED, and that is not tidiness.
+    // The shipped vocabulary has exactly two cover candidates and they
+    // exercise different halves of this stage: one is 13.4W across and
+    // spans the corridor alone (columns 1), the other is 1.4W and needs
+    // four side by side. A single seed draws whichever it draws -- seed 1
+    // at 80W took the wide one every time -- so the column stamp and its
+    // filter were dead to the test, and a mutant that pinned every run to
+    // ONE column passed the whole suite.
+    const { lap, frames } = await dressedLapFor(1);
+    const pieces: Piece[] = [];
+    for (const planSeed of [1, 2, 3, 4, 5, 6]) {
+      pieces.push(...(await tilesOf(lap, frames, planSeed, 80)));
+    }
+    expect(pieces.length, "tiled nothing").toBeGreaterThan(20);
+    const ords = new Set(pieces.map((p) => p.ord));
+    expect(ords.size, "the sweep used only one of the two cover pieces").toBeGreaterThan(1);
+    expect(
+      Math.max(...pieces.map((p) => p.columns)),
+      "no run needed more than one column, so the stamp was never tested",
+    ).toBeGreaterThan(1);
+
+    // Group the pieces back into the runs they came from. `startW` is the
+    // run's identity here — two runs cannot share one, because the clash
+    // test keeps them `separationW` apart.
+    // Keyed on the start AND the piece, because the sweep pools several
+    // plans and two of them may legitimately begin at the same station
+    // with different assets.
+    const runs = new Map<string, Piece[]>();
+    for (const p of pieces) {
+      const key = `${p.startW}|${p.ord}|${p.tiles}`;
+      const held = runs.get(key) ?? [];
+      held.push(p);
+      runs.set(key, held);
+    }
+    expect(runs.size, "every piece landed in one run").toBeGreaterThan(0);
+
+    let widest = 0;
+    for (const [key, run] of runs) {
+      const first = run[0] as Piece;
+      const alongW = Math.max(0.3, (coverCandidates(
+        (shippedVocabulary().assets as unknown as PlaceableAsset[]).filter((a) => a.where),
+      )[first.ord] as PlaceableAsset).size.along);
+
+      // THE TILE COUNT IS THE REFERENCE'S, which is the whole reason
+      // `spacing` is a field rather than a constant: one MORE tile than
+      // the length needs, so pieces overlap instead of abutting.
+      const want = Math.max(1, Math.ceil(first.lengthW / alongW) + 1);
+      expect(first.tiles, `run ${key}: tile count`).toBe(want);
+
+      // EVERY TILE PRESENT, EXACTLY ONCE PER COLUMN. A tiler that dropped
+      // its last piece would still satisfy a pitch check.
+      const seen = new Map<number, number>();
+      for (const p of run) seen.set(p.tile, (seen.get(p.tile) ?? 0) + 1);
+      expect(seen.size, `run ${key}: missing tiles`).toBe(want);
+      for (const [tile, count] of seen) {
+        expect(count, `run ${key} tile ${tile}: column count`).toBe(
+          first.columns,
+        );
+      }
+
+      // AND EACH SITS WHERE THE REFERENCE PUTS IT.
+      for (const p of run) {
+        const along = (p.tile + 0.5) * (p.lengthW / p.tiles);
+        const want = (p.startW + along) % lap.lengthW;
+        expect(p.stationW, `run ${key} tile ${p.tile}: station`).toBeCloseTo(
+          want,
+          3,
+        );
+
+        // The flare, from the nearer mouth, exactly as the rule states it.
+        const toMouth = Math.min(along, p.lengthW - along);
+        const lift =
+          toMouth >= ENCLOSE.flareW ? 0 : ENCLOSE.flareRiseW * (1 - toMouth / ENCLOSE.flareW);
+        expect(p.h, `run ${key} tile ${p.tile}: height`).toBeCloseTo(
+          p.baseH + lift,
+          3,
+        );
+
+        // The column's lateral, likewise.
+        const wantT =
+          p.columns === 1
+            ? 0
+            : -ENCLOSE.coverW +
+              p.acrossW / 2 +
+              (p.slot * (2 * ENCLOSE.coverW - p.acrossW)) / (p.columns - 1);
+        expect(p.t, `run ${key} tile ${p.tile} slot ${p.slot}: lateral`)
+          .toBeCloseTo(wantT, 4);
+        widest = Math.max(widest, Math.abs(p.t) + p.acrossW / 2);
+      }
+    }
+
+    // THE POINT OF THE COLUMNS: the run spans the corridor it is meant to
+    // cover. A single column on a narrow piece would pass every check
+    // above and leave the road open to the sky.
+    expect(widest, "the pieces do not reach across the corridor").toBeGreaterThanOrEqual(
+      ENCLOSE.coverW - 1e-6,
+    );
+    console.log(
+      `L-6 graph tiling: ${runs.size} runs, ${pieces.length} pieces, reach ${widest.toFixed(2)}W ` +
+        `against a corridor half-span of ${ENCLOSE.coverW}W`,
+    );
+  }, 120000);
+
+  it("clears the corridor ceiling under every piece", async () => {
+    // COVER IS EXEMPT FROM Z-1 BECAUSE IT IS ALREADY CLEAR, which is a
+    // claim about the base and not about the centre — `coverCandidates`
+    // argues it at length and `coverPlacements` is where it has to hold.
+    // A piece whose base dipped under the ceiling would be stood off by
+    // Z-1 and put a hole in the roof exactly over the racing line.
+    const { lap, frames } = await dressedLapFor(2);
+    const pieces = await tilesOf(lap, frames, 2, 80);
+    expect(pieces.length).toBeGreaterThan(20);
+    const kit = shippedVocabulary();
+    const cover = coverCandidates(
+      (kit.assets as unknown as PlaceableAsset[]).filter((a) => a.where),
+    );
+    let lowest = Infinity;
+    for (const p of pieces) {
+      const tall = (cover[p.ord] as PlaceableAsset).size.tall;
+      lowest = Math.min(lowest, p.h - tall / 2);
+    }
+    expect(lowest, "a piece reaches below the corridor ceiling").toBeGreaterThanOrEqual(
+      CORRIDOR.ceilingW - 1e-4,
+    );
+    console.log(
+      `L-6 graph tiling: lowest base ${lowest.toFixed(3)}W against a ceiling of ${CORRIDOR.ceilingW}W`,
     );
   }, 120000);
 });
