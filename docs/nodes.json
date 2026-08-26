@@ -1958,6 +1958,71 @@
     }
   },
   {
+    "type": "quotaRebalance",
+    "description": "Reads a CATEGORY per point and a stated SHARE BAND per category, and writes down the minimum set of points that must change category for every share to land inside its band — which category each should join, and nothing else. This is the node for 'these six kinds, in these proportions', where the proportions are a REQUIREMENT rather than a hope: drawing each element from a weighted table gives the mix in expectation, and any particular population still misses, which is exactly what a stated proportion exists to rule out. `min` and `max` are two lists of the same length, one entry per category, in shares of the counted population (0.1 is a tenth); the list length IS the number of categories, so there is no second param to disagree with them. IT MOVES TO THE NEAREST EDGE AND STOPS, never to the middle of a band, and that is the whole of its restraint: a category a tenth below its floor is lifted to its floor and left there. Driving every category to the centre of its range would make a generated population markedly more uniform than a real one — populations reach a stated aggregate through variation between them, not by every one of them hitting the same number, so a generator that lands on the middle every time scores better against the rule and is worse. IT DECIDES AND DOES NOT ACT. Nothing here knows what an element of a different category looks like: whatever turns a 'mid' into an 'over' is a redraw only the caller can perform. So the output is a per-point DESTINATION, and a setAttribute, copyToPoints or transferByIndex downstream does the changing — usually inside a repeatUntil, so that a redraw which lands in the wrong category is simply seen again on the next round. WHICH ELEMENTS GO is `priority` ascending: the lowest-priority eligible member of an over-full category leaves first. That param is the one worth thinking about, because the obvious choice is usually wrong — priority by a POSITION coordinate takes the first members along that axis and concentrates every change in one stretch, which reads as a patch of different-looking work rather than as a mix. A hash (randomField) spreads them; a measure of how badly each element fits where it is concentrates them where they were least right. `include` and `eligible` are two different exclusions and both are needed: an element with `include` off is not counted in any share and cannot move (it is not part of the scheme being stated), while an element with `eligible` off still COUNTS toward its category's share but is never chosen to leave (it is part of the population and is pinned where it is — a landmark, a reserved marker, anything a stronger rule already placed). DETERMINISM: ties in `priority` are broken by point IDENTITY — the bits of the stored position plus the per-point `seed` attribute — never by array index, so shuffling the input or filtering something upstream yields the identical decision. HALO: none, and unlike the rest of the library that is not a number but an absence. A share is a fact about the WHOLE population, so this node has no partitioned form at all: cooked over half the points it reads half the denominator and decides a different set. It belongs on an unbounded level, or before a split. OUTPUT is the input geometry with one i32 point attribute added, `targetAttr`: the category index each moving point should join, and -1 on every point that stays — including every point `include` switched off, whose category is therefore never even read. No point is added, removed or moved, and topology survives untouched. A SHARE IS A RATIO OF WHOLE POINTS, and that is checked rather than hoped for: a category can only hold ceil(min*n) to floor(max*n) of n points, so bands that are legal as real numbers can still be unreachable — two categories banded [0, 0.1] and [0, 0.9] over 13 points admit no arrangement at all, since 1/13 is under the first ceiling and 12/13 is over the second. Measured over 312,581 band lists that pass the two SUM checks, better than one in five are unreachable this way, and every one of them used to drive this node into a ping-pong that spent its whole budget and emitted moves a caller would have redrawn assets for. They are refused instead, naming the population, because the fix is a wider band or a bigger population and neither is something this node can choose. IT CAN STILL STOP EARLY, legally and quietly: a category whose members are all ineligible has nothing to give up. `unmetAttr` is how a caller hears about it. COST is one pass over the points per move, and on a reachable set of bands every point that moves moves exactly once — so the pass count IS the move count, the move count is the minimum, and a mix put right by moving a tenth of the population costs a tenth of the passes.",
+    "category": "attribute",
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "category": {
+        "type": "f32",
+        "default": 0,
+        "description": "Which category each point is IN, as an index into `min`/`max`: 0 for the first entry, 1 for the second, and so on. Read as floor(value), and a point whose index lands outside [0, min.length) is refused naming the point — not clamped, because a category the author did not list is a scheme the author did not state, and folding it into the first or last one would balance a mix nobody asked for. Field-capable and evaluated on the point domain, which is the usual way it arrives: a band decided from a position and a size is an expression, not a column somebody wrote. Only read for points `include` leaves in, so an element outside the scheme needs no category at all.",
+        "acceptsField": true
+      },
+      "min": {
+        "type": "numberList",
+        "default": [],
+        "description": "The FLOOR of each category's share, in order, as a fraction of the counted population: [0.1, 0.04, 0.23] says the first category must hold at least a tenth. Each entry is in [0, 1] and must not exceed the matching `max`. THE LIST'S LENGTH IS THE NUMBER OF CATEGORIES, and `max` must be the same length — a count param beside them would be a third thing to keep in agreement. A floor of 0 is a category with no lower requirement, which is how 'this kind may be absent' is written. The floors are refused if they sum above 1: no population can satisfy them, and finding that out as a cook that never settles is the failure this check exists to replace."
+      },
+      "max": {
+        "type": "numberList",
+        "default": [],
+        "description": "The CEILING of each category's share, in order, on the same scale as `min` and with the same length. A ceiling of 1 is a category with no upper limit. The ceilings are refused if they sum below 1, for the mirror of `min`'s reason: the population has to go somewhere, so ceilings that leave less than the whole of it unallocated cannot all hold at once. A share landing EXACTLY on a floor or a ceiling is INSIDE the band — the comparisons are strict, so a category at exactly its ceiling is not over it, and a caller checking the same thing afterwards should use the same strictness or a slack coarser than the arithmetic (a share is a ratio of whole counts, so landing exactly on a two-decimal bound is the ordinary case rather than a coincidence)."
+      },
+      "include": {
+        "type": "f32",
+        "default": 1,
+        "description": "Nonzero (the default) puts the point IN the scheme: it is counted in its category's share and it may be chosen to move. Zero takes it out of both — not counted in any share, never moved, and its `category` never even read, so an element outside the scheme needs no category to be given one. This is the exclusion for elements that are STRUCTURE rather than population: a tunnel's ribs are all one category by geometry and a lap can carry forty of them, which would take that category from a tenth of the population to a quarter and make the stated mix unreachable on any track that has a tunnel. Compare `eligible`, which is the other exclusion and does the opposite thing to the denominator.",
+        "acceptsField": true
+      },
+      "eligible": {
+        "type": "f32",
+        "default": 1,
+        "description": "Nonzero (the default) allows this point to be chosen to LEAVE its category. Zero pins it: it still counts toward its category's share — it is part of the population — but is never selected to move. This is the exclusion for elements a STRONGER RULE already placed, and the distinction from `include` is the whole reason there are two params. Switching `include` off would hide the element from the shares as well, so the mix would be balanced against a population that is not the one on screen; switching `eligible` off leaves the arithmetic honest and takes only the element off the table. A category whose members are all ineligible simply cannot give any up, and the rebalance stops when it runs out of donors rather than looping.",
+        "acceptsField": true
+      },
+      "priority": {
+        "type": "f32",
+        "default": 0,
+        "description": "Which members of an over-full category leave FIRST: lowest value first, ties broken by point identity. The default of 0 makes every point tie, so the whole decision falls to identity — a stable, position-derived order that is the right answer when the choice genuinely does not matter. IT USUALLY DOES MATTER, and in a way that is invisible in the counts: priority by a position or arc coordinate takes the first k members along that axis, and since a category's members are spread over the whole population, 'the first k' is a CONTIGUOUS PATCH. Every change then lands in one stretch and the result reads as a repair rather than a mix, while every share is exactly right. randomField spreads them instead; a measure of how poorly each element suits its current category concentrates the changes where they were least deserved, which is usually what 'minimum change' was meant to mean.",
+        "acceptsField": true
+      },
+      "unmetAttr": {
+        "type": "string",
+        "default": "",
+        "description": "Optional DETAIL attribute (u32) receiving how many categories are still outside their band when this node stops — 0 when every band was met. Empty (the default) writes nothing. IT EXISTS BECAUSE STOPPING EARLY IS LEGAL AND SILENT. A category whose members are all `eligible`-off cannot give any up, so the rebalance runs out of donors and returns; the geometry it returns looks exactly like the geometry it would have returned on success, and a caller looping until nothing moves would spin on the difference. Name a column here and that caller can tell 'the mix is right' from 'the mix is still wrong and I stopped trying'. It is a count of CATEGORIES rather than of points because that is the question the bands ask; the number of points that moved is already readable as how many of `targetAttr` are >= 0. Same family as transferByIndex's and transferAttribute's `missCountAttr`, and written on the detail domain for their reason: it is one fact about the whole geometry, not one per element."
+      },
+      "targetAttr": {
+        "type": "string",
+        "default": "quotaTarget",
+        "description": "POINT attribute (i32) receiving the category each point should JOIN: an index into `min`/`max` for a point that must move, and -1 for every point that stays where it is, including every point `include` switched off. So the test for 'did this point move' is `>= 0` and needs no comparison against the category column — which matters, because a point outside the scheme has no category this node ever read. May not be empty: a quotaRebalance that writes nothing is a cook that looks like it worked. Same reporting-slot rule as the rest of the library — an existing column of a different shape under this name is refused rather than silently deleted and re-added, and a same-shape one is reset."
+      }
+    }
+  },
+  {
     "type": "removeAttribute",
     "description": "Deletes named attributes from one domain. Every idiom that carries a value between nodes — a scratch column feeding a filter, a parameter attribute read back by a field, a hit marker recovered from a transfer — leaves that column on the output forever; this is the only way to take it off again. Unknown names are an error by default, so a typo does not silently leave the debris it was meant to remove; set strict false when a name may legitimately be absent. Removing the point attribute \"P\" is refused: it is the position every downstream node reads, and dropping it turns a clear failure here into an obscure one later.",
     "category": "attribute",

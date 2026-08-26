@@ -4,7 +4,7 @@ Generated from the graphs in [`graphs`](../graphs) by `node scripts/gen-graphs.m
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-77 examples, alphabetical by file:
+78 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -45,6 +45,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-primitive-ref.json](#basics-primitive-refjson) — reference a shipped primitive by name
 - [basics-promote-attribute.json](#basics-promote-attributejson) — move an attribute between domains
 - [basics-props-along-a-path.json](#basics-props-along-a-pathjson) — space props evenly along a curve
+- [basics-quota-rebalance.json](#basics-quota-rebalancejson) — hold a population to a stated mix
 - [basics-radial-on-curve.json](#basics-radial-on-curvejson) — aim things radially around a curve
 - [basics-repeat-until-settled.json](#basics-repeat-until-settledjson) — run a body until it settles
 - [basics-report-to-the-host.json](#basics-report-to-the-hostjson) — what a graph hands back that is not geometry
@@ -809,6 +810,24 @@ Two primitives cover the whole road-and-lamp-posts shape: `shape/path-meander` i
 **Outputs:** `instances` (from `spawn`.`instances`)
 
 Cook it: `pcg cook graphs/basics-props-along-a-path.json --stats`
+
+## basics-quota-rebalance.json
+
+**hold a population to a stated mix**
+
+A draw gives a mix in EXPECTATION and any one population still misses: squaring the selector here skews the three kinds to roughly 58 / 24 / 18 percent, which is a perfectly good sampler and a broken requirement. `quotaRebalance` reads the kind and a share band per kind, and writes the smallest set of destinations that puts every share inside its band — to the nearest edge, so the over-full kind stops AT 40 percent rather than being driven to the middle. It decides and does not act: the `species` setAttribute below is what performs the change, choosing the destination where there is one (`quotaTarget` is -1 on every point that stays) and the point's own kind otherwise. `priority` is a hash rather than a coordinate on purpose — priority by position would take the first members along that axis and put every change in one corner of the patch, with the counts still exactly right.
+
+**Tags:** `basics`, `attributes`, `spawn`, `population`
+
+**Seed:** 1041
+
+**Node types:** `pointScatterInBounds`, `quotaRebalance`, `setAttribute`, `spawnInstances`
+
+**Primitives:** *(none)*
+
+**Outputs:** `instances` (from `spawn`.`instances`)
+
+Cook it: `pcg cook graphs/basics-quota-rebalance.json --stats`
 
 ## basics-radial-on-curve.json
 

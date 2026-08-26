@@ -2230,6 +2230,149 @@
         ]
       }
     },
+    "basics-quota-rebalance.json": {
+      "outputs": {
+        "instances": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 400,
+            "batches": [
+              {
+                "assetId": "boulder",
+                "count": 120,
+                "translation": {
+                  "min": [
+                    -29.6677,
+                    0,
+                    -29.8982
+                  ],
+                  "max": [
+                    29.661,
+                    0,
+                    29.6481
+                  ],
+                  "mean": [
+                    -1.2234,
+                    0,
+                    1.7549
+                  ]
+                },
+                "scale": {
+                  "min": [
+                    1,
+                    1,
+                    1
+                  ],
+                  "max": [
+                    1,
+                    1,
+                    1
+                  ],
+                  "mean": [
+                    1,
+                    1,
+                    1
+                  ]
+                },
+                "rotation": {
+                  "min": 0,
+                  "max": 0,
+                  "mean": 0
+                }
+              },
+              {
+                "assetId": "birch",
+                "count": 120,
+                "translation": {
+                  "min": [
+                    -29.6145,
+                    0,
+                    -29.308
+                  ],
+                  "max": [
+                    28.9414,
+                    0,
+                    29.1434
+                  ],
+                  "mean": [
+                    -0.3314,
+                    0,
+                    0.0308
+                  ]
+                },
+                "scale": {
+                  "min": [
+                    1,
+                    1,
+                    1
+                  ],
+                  "max": [
+                    1,
+                    1,
+                    1
+                  ],
+                  "mean": [
+                    1,
+                    1,
+                    1
+                  ]
+                },
+                "rotation": {
+                  "min": 0,
+                  "max": 0,
+                  "mean": 0
+                }
+              },
+              {
+                "assetId": "pine",
+                "count": 160,
+                "translation": {
+                  "min": [
+                    -29.279,
+                    0,
+                    -29.4725
+                  ],
+                  "max": [
+                    29.7264,
+                    0,
+                    29.5704
+                  ],
+                  "mean": [
+                    2.8802,
+                    0,
+                    -0.1814
+                  ]
+                },
+                "scale": {
+                  "min": [
+                    1,
+                    1,
+                    1
+                  ],
+                  "max": [
+                    1,
+                    1,
+                    1
+                  ],
+                  "mean": [
+                    1,
+                    1,
+                    1
+                  ]
+                },
+                "rotation": {
+                  "min": 0,
+                  "max": 0,
+                  "mean": 0
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
     "basics-radial-on-curve.json": {
       "outputs": {
         "instances": [

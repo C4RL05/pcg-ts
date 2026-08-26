@@ -57,6 +57,9 @@ const ROOT_SURFACE = [
   // Groups a path's points into runs by an along-arc gap and least-squares
   // fits an attribute against arc within each, per run.
   "runFit",
+  // Names the minimum set of points that must change category for every
+  // category's share of the population to land inside a stated band.
+  "quotaRebalance",
   "orientAlongVector", "paramNamesOf", "paramSchemaError", "paramValueError", "parseFieldText",
   "partitionByAttribute",
   // Writes, per path point, whether a fan of rays cast from it is blocked

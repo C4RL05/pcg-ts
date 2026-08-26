@@ -446,6 +446,7 @@ describe("category metadata", () => {
       pathShift: "attribute",
       pathCoverage: "attribute",
       runFit: "attribute",
+      quotaRebalance: "attribute",
       attributeRemap: "attribute",
       removeAttribute: "attribute",
       pointNeighborhood: "attribute",

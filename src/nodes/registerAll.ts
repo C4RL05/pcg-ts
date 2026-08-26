@@ -36,6 +36,7 @@ import { connectPoints } from "./topology.js";
 import { occlusionCull } from "./visibility.js";
 import { pathCoverage } from "./coverage.js";
 import { runFit } from "./runs.js";
+import { quotaRebalance } from "./quotas.js";
 
 /**
  * One value per standard-node module. Keep this list in sync with the
@@ -58,6 +59,7 @@ const MODULE_WITNESSES: readonly { readonly type: string }[] = [
   occlusionCull, // visibility.ts
   pathCoverage, // coverage.ts
   runFit, // runs.ts
+  quotaRebalance, // quotas.ts
 ];
 
 /**

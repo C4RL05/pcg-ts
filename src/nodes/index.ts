@@ -87,5 +87,6 @@ export * from "./filtering.js";
 export * from "./visibility.js";
 export * from "./coverage.js";
 export * from "./runs.js";
+export * from "./quotas.js";
 export * from "./attributes.js";
 export * from "./mathNodes.js";

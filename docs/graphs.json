@@ -1119,6 +1119,34 @@
     ]
   },
   {
+    "file": "basics-quota-rebalance.json",
+    "path": "graphs/basics-quota-rebalance.json",
+    "title": "hold a population to a stated mix",
+    "description": "A draw gives a mix in EXPECTATION and any one population still misses: squaring the selector here skews the three kinds to roughly 58 / 24 / 18 percent, which is a perfectly good sampler and a broken requirement. `quotaRebalance` reads the kind and a share band per kind, and writes the smallest set of destinations that puts every share inside its band — to the nearest edge, so the over-full kind stops AT 40 percent rather than being driven to the middle. It decides and does not act: the `species` setAttribute below is what performs the change, choosing the destination where there is one (`quotaTarget` is -1 on every point that stays) and the point's own kind otherwise. `priority` is a hash rather than a coordinate on purpose — priority by position would take the first members along that axis and put every change in one corner of the patch, with the counts still exactly right.",
+    "tags": [
+      "basics",
+      "attributes",
+      "spawn",
+      "population"
+    ],
+    "seed": 1041,
+    "nodeCount": 5,
+    "nodeTypes": [
+      "pointScatterInBounds",
+      "quotaRebalance",
+      "setAttribute",
+      "spawnInstances"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "instances",
+        "node": "spawn",
+        "pin": "instances"
+      }
+    ]
+  },
+  {
     "file": "basics-radial-on-curve.json",
     "path": "graphs/basics-radial-on-curve.json",
     "title": "aim things radially around a curve",
