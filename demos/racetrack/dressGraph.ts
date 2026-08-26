@@ -1015,6 +1015,24 @@ function placementCloudInTrackCoords(
  * cost is three nodes over the frames, cooked once and memoized, against
  * a few hundred placements.
  *
+ * THERE ARE NOW TWO IMPLEMENTATIONS OF THIS, AND THAT IS THE TRADE. The
+ * code this replaced carried the opposite promise -- "the lap's own
+ * lookup, not a second one... the frame a box is built in here is the
+ * frame it is built in there, to the bit" -- which was true because both
+ * sides literally called `frameLookup`. They no longer do: `buildBoxes`
+ * still walks `poseAt` and this walks the node, so the two agree by
+ * MEASUREMENT rather than by construction, and nothing but a test stops
+ * them drifting.
+ *
+ * That is the same trade every stage in this port has made and it is not
+ * a regression -- a rule stated twice and checked equal is what has caught
+ * the defects here, where a rule stated once could only ever be
+ * self-consistent. But it is a promise that was withdrawn rather than one
+ * that was never made, so it is named. `tests/racetrackDressGraph.test.ts`
+ * is what holds it: "samples the lap where poseAt does, one f32 station
+ * apart" compares the two directly, with the swapped-axis and
+ * dropped-normalize faults injected and measured to size its bounds.
+ *
  * P LANDS ON THE CENTRELINE, which is a truthful intermediate rather than
  * a placeholder: until the lift runs, a placement is where its station
  * is. `framePos` keeps that value after the lift has moved `P`, because
