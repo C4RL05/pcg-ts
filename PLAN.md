@@ -2404,3 +2404,64 @@ than replacing one. Expressible as a one-point cloud filtered by "no
 victim was found" and merged, but it is the part to build first, because
 it is the part that decides whether the whole thing fits in a
 `repeatUntil` body at all.
+
+### The convert-or-add, built exact, 2026-08-26
+
+`cookCornerBookkeeping`. It answers which corner converted each placement
+and which tight corner's ruler displaced it; building the resulting list
+stays with `placeCornerLanguage`.
+
+**The design the measurement pointed at was not the one that shipped.**
+The plan above expected a `repeatUntil` with parallel picking and
+collision arbitration, accepting the frozen histogram as a stated
+approximation. What made that unnecessary: **`cookCorners` has already
+run**, so a corner's `entryW` and `outside` are ordinary numbers at
+graph-build time. The eligibility test is then a field expression over the
+placements alone -- no `copyToPoints` stamping nineteen corners onto three
+hundred placements, no grouped reduction to undo it -- and unrolling the
+corners costs about a dozen whole-cloud reductions each. Sequential stages
+come free, so the histogram is rebuilt every stage and the port is EXACT.
+
+Two structural facts made unrolling the only sensible choice anyway: a
+`repeatUntil` body cannot see its own iteration index, so it could not
+know which corner it was handling; and it carries exactly ONE pin, where
+this needs two populations.
+
+**The pre-build measurement showed up again as a test.** Deliberately
+freezing the histogram fails all four equivalence seeds AND the
+shipped-count check on seed 3 -- which is exactly where the earlier
+measurement said the drift moves three victims.
+
+**Checked two ways, because one is not enough.** The suite transcribes the
+victim rule so picks can be compared index for index; that reference is
+mine, so agreeing with it proves only that the graph matches my READING of
+the rule. So it also runs the function that ships and compares its three
+counts, on four seeds: graph and shipped agree at 9+10/-25, 13+6/-22,
+13+6/-24, 10+9/-27.
+
+**Two things worth keeping.** One column carries both kinds of asset --
+non-negative is a pool index, negative is `-1 - row` for a reserved marker
+-- so "never convert a marker" is `ord < 0`, a test that stays true AS
+L-2 converts, which a column written before any conversion would not. And
+`victimCount = 1` with a strict `>` is a rule hiding in a loop
+initialiser: an asset with one copy on the lap is never the most repeated
+anything, so L-4's landmarks are safe from both stages by construction
+rather than by a protect set. It now has a name and a test.
+
+### Where the prelude stands after the convert-or-add, 2026-08-26
+
+The corner language is now entirely graph-decided except for assembling
+the list. What is left of the lap prelude:
+
+1. **Landmark uniqueness (L-4)** -- a greedy walk that re-draws the most
+   repeated placement in a bare tenth from the assets the lap has not
+   used. The same shape as this unit: a lap-wide histogram plus a
+   sequential pass, and the stretch index is a constant per stage.
+2. **The band mix (Z-3)** -- likewise, over six bands rather than ten
+   tenths, and with a per-band share to hit rather than a threshold.
+3. **The frame lookup**, which `transferAlongPath` answers.
+
+And then the repair TAIL, which is a different problem: the sightline
+cull, D-4's second pass, false edges, tunnels and enclosure all run
+INSIDE `dressLap`'s bounded fixed point, so they cannot move one at a
+time the way these have.

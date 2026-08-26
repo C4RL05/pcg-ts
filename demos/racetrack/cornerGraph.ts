@@ -1240,3 +1240,484 @@ export async function cookReserveMarkers(opts: {
     pool: assets.filter((a) => !reserved.has(a.id)),
   };
 }
+
+
+/* ------------------------------------------------------------------ *
+ * L-2's convert-or-add, and L-3's displacement.
+ * ------------------------------------------------------------------ */
+
+/** The columns the victim search reads and writes on the placements. */
+export const VICTIM = {
+  /**
+   * Which asset this placement carries.
+   *
+   * NON-NEGATIVE IS AN INDEX INTO THE POOL and negative is a MARKER, as
+   * `-1 - row` for the three reserved rows. One column rather than two
+   * because the histogram groups by it and the corner language's own
+   * "never convert a marker" is then `ord < 0` -- a test that stays true
+   * as L-2 converts, which a column written once before any conversion
+   * would not.
+   */
+  assetOrd: "vAssetOrd",
+  /** Station in W. */
+  stationW: "vStationW",
+  /** Signed lateral in W. */
+  t: "vT",
+  /** How many placements on the lap carry this placement's asset. */
+  count: "vCount",
+  /** Which corner converted this placement, or -1. */
+  claimedBy: "vClaimedBy",
+  /** Which tight corner's ruler displaced it, or -1. */
+  displacedBy: "vDisplacedBy",
+} as const;
+
+/**
+ * The largest placement index, standing in for "no victim".
+ *
+ * A CEILING RATHER THAN AN INFINITY, for the reason `stationGraph` gives
+ * about its own `LOSES`: `resolveOn` refuses a column a field left
+ * non-finite, so a sentinel that has to survive a `setAttribute` cannot
+ * be `Infinity`. Any value above every real point index does.
+ */
+const NO_VICTIM = 1e9;
+
+/**
+ * How many copies an asset must have on the lap before it may be taken.
+ *
+ * `placeCornerLanguage` spells this as `victimCount = 1` with a strict
+ * `>`, which reads as a loop initialiser and IS a rule: an asset with one
+ * copy on the whole lap is never converted and never displaced, so L-4's
+ * landmarks -- which are exactly the assets appearing once -- are safe
+ * from L-2 and L-3 by construction rather than by a protect set. Named
+ * here so the next reader need not derive it from an initial value.
+ */
+const MIN_REPEATS_TO_TAKE = 1;
+
+const HIST_ONE = "vHistOne";
+const HIST_TOTAL = "vHistTotal";
+const ELIGIBLE = "vEligible";
+const VICTIM_SCORE = "vScore";
+const VICTIM_INDEX = "vIndex";
+const BEST_COUNT = "vBest";
+const CHOSEN_INDEX = "vChosen";
+
+/** The marker ord for a row of the marker kit: 0 sharp, 1 open, 2 brake. */
+function markerOrdOf(row: number): number {
+  return -1 - row;
+}
+
+/**
+ * The lap-wide count of each asset, back onto every placement.
+ *
+ * THE GROUPED REDUCTION `pathScan`'s `reduce` WAS ADDED FOR, and the only
+ * way this library can spell one: `attributeReduce` collapses a whole
+ * domain into the detail domain and cannot group at all. One path per
+ * distinct asset ord, a scan of a constant 1 reported through
+ * `totalAttr`, and a promote back onto the points.
+ *
+ * `alive` MASKS WHAT IS NO LONGER THERE. L-3 displaces placements by
+ * removing them, and `repeats()` is recomputed over the list AFTER each
+ * removal -- so a displaced placement must stop counting towards its own
+ * asset's total. It is masked rather than filtered because the point has
+ * to keep its index: every later stage names a victim by index, and a
+ * filter would renumber the lap under them.
+ */
+function addHistogram(
+  g: Graph,
+  from: { readonly node: NodeHandle; readonly pin: string },
+  tag: string,
+): NodeHandle {
+  const one = put(
+    g,
+    from,
+    HIST_ONE,
+    eq(attribute(VICTIM.displacedBy), -1),
+    `${tag}One`,
+  );
+  const grouped = g.add(
+    pointsToPath,
+    { groupAttr: VICTIM.assetOrd, closed: false, shortGroups: "skip" },
+    `${tag}Group`,
+  );
+  g.connect(one, "out", grouped, "in");
+  const scanned = g.add(
+    pathScan,
+    { name: HIST_ONE, outName: "vHistScan", mode: "inclusive", totalAttr: HIST_TOTAL },
+    `${tag}Scan`,
+  );
+  g.connect(grouped, "out", scanned, "in");
+  const promoted = g.add(
+    promoteAttribute,
+    { name: HIST_TOTAL, from: "primitive", to: "point", mode: "first" },
+    `${tag}Promote`,
+  );
+  g.connect(scanned, "out", promoted, "in");
+  // A GROUP OF ONE IS SKIPPED BY `shortGroups` AND READS THE FOLD'S
+  // IDENTITY, which for a sum is zero -- so the total is floored at its
+  // own contribution. A live placement is one copy of its own asset, and
+  // a count of zero would say the lap does not contain something it does.
+  return put(
+    g,
+    { node: promoted, pin: "out" },
+    VICTIM.count,
+    max(attribute(HIST_ONE), attribute(HIST_TOTAL)),
+    `${tag}Count`,
+  );
+}
+
+/** Broadcast a whole-cloud reduction back onto every point. */
+function broadcastOver(
+  g: Graph,
+  from: { readonly node: NodeHandle; readonly pin: string },
+  column: string,
+  mode: "min" | "max" | "sum",
+  outName: string,
+  tag: string,
+): NodeHandle {
+  const reduced = g.add(
+    attributeReduce,
+    { name: column, domain: "point", mode, outName },
+    `${tag}Reduce`,
+  );
+  g.connect(from.node, from.pin, reduced, "in");
+  const promoted = g.add(
+    promoteAttribute,
+    { name: outName, from: "detail", to: "point", mode: "first" },
+    `${tag}Bcast`,
+  );
+  g.connect(reduced, "out", promoted, "in");
+  return promoted;
+}
+
+/** `Math.sign` of a column, with zero staying zero as it does in JS. */
+function signOf(name: string): Field {
+  return select(gt(attribute(name), 0), 1, select(lt(attribute(name), 0), -1, 0));
+}
+
+/**
+ * The most repeated placement a window holds, chosen and marked.
+ *
+ * ONE SEARCH, TWO CALLERS. L-2's conversion and L-3's displacement differ  only
+ * in their window, whether they test the side, and what they do with the
+ * answer -- so the search itself is written once and the differences are
+ * arguments. Two copies of a two-reduction tie-break is exactly how two
+ * rules end up breaking ties differently.
+ *
+ * THE TIE-BREAK IS TWO REDUCTIONS, as D-4's donor search is: the first
+ * pass finds the extreme VALUE and the second the SMALLEST INDEX holding
+ * it, so a tie breaks to the lower index here and in the TypeScript alike
+ * rather than to whichever the reduction happened to see first.
+ */
+function addVictimSearch(
+  g: Graph,
+  from: { readonly node: NodeHandle; readonly pin: string },
+  opts: {
+    readonly entryW: number;
+    readonly windowW: readonly [number, number];
+    readonly outside?: number;
+    readonly lapW: number;
+    readonly tag: string;
+  },
+): { readonly out: NodeHandle; readonly isVictim: Field } {
+  const { entryW, windowW, outside, lapW, tag } = opts;
+  const counted = addHistogram(g, from, tag);
+
+  // `beforeEntryW`, transcribed: the distance BACK from the entry, always
+  // positive, because on a loop a placement at station 4 for an entry at
+  // station 2 is a lap early rather than two W late.
+  const before = wrapTo(sub(entryW, attribute(VICTIM.stationW)), lapW);
+  // L-2 tests the side and L-3 does not, which is not an oversight in
+  // either: a marker announces a corner from its outside, and a ruler
+  // pays for itself out of the whole window.
+  //
+  // `Math.sign(0)` IS 0 AND MATCHES NEITHER SIDE, so a placement at
+  // exactly zero lateral can never be converted. Spelled as an equality
+  // against the sign rather than as a product of comparisons, so that
+  // zero keeps failing rather than quietly passing.
+  const side = outside === undefined ? 1 : eq(signOf(VICTIM.t), outside);
+  const eligible = put(
+    g,
+    { node: counted, pin: "out" },
+    ELIGIBLE,
+    mul(
+      mul(ge(before, windowW[0]), le(before, windowW[1])),
+      mul(
+        mul(side, ge(attribute(VICTIM.assetOrd), 0)),
+        mul(
+          gt(attribute(VICTIM.count), MIN_REPEATS_TO_TAKE),
+          mul(
+            eq(attribute(VICTIM.claimedBy), -1),
+            eq(attribute(VICTIM.displacedBy), -1),
+          ),
+        ),
+      ),
+    ),
+    `${tag}Eligible`,
+  );
+
+  const scored = put(
+    g,
+    { node: eligible, pin: "out" },
+    VICTIM_SCORE,
+    select(attribute(ELIGIBLE), attribute(VICTIM.count), -1),
+    `${tag}Score`,
+  );
+  const best = broadcastOver(
+    g,
+    { node: scored, pin: "out" },
+    VICTIM_SCORE,
+    "max",
+    BEST_COUNT,
+    `${tag}Best`,
+  );
+  const ranked = put(
+    g,
+    { node: best, pin: "out" },
+    VICTIM_INDEX,
+    select(
+      mul(attribute(ELIGIBLE), eq(attribute(VICTIM.count), attribute(BEST_COUNT))),
+      index(),
+      NO_VICTIM,
+    ),
+    `${tag}Rank`,
+  );
+  const chosen = broadcastOver(
+    g,
+    { node: ranked, pin: "out" },
+    VICTIM_INDEX,
+    "min",
+    CHOSEN_INDEX,
+    `${tag}Chosen`,
+  );
+
+  // Read off the SCORE rather than off the index, because `victimCount`
+  // starting at 1 with a strict `>` is what says "no victim" -- the index
+  // sentinel would have to be compared as well and says nothing the score
+  // does not.
+  return {
+    out: chosen,
+    isVictim: mul(
+      eq(index(), attribute(CHOSEN_INDEX)),
+      gt(attribute(BEST_COUNT), MIN_REPEATS_TO_TAKE),
+    ),
+  };
+}
+
+/**
+ * ONE CORNER'S convert-or-add.
+ *
+ * THE CORNER'S OWN NUMBERS ARE CONSTANTS HERE, and that is what makes the
+ * rule expressible without a join at all. `cookCorners` has already run,
+ * so `entryW` and `outside` are ordinary JavaScript numbers by the time
+ * this graph is built -- the eligibility test is a field expression over
+ * the placements alone, with no `copyToPoints` stamping every corner onto
+ * every placement and no grouped reduction to undo it afterwards.
+ *
+ * WHICH IS ALSO WHY THE LOOP IS UNROLLED. A `repeatUntil` body cannot see
+ * its own iteration index, so it could not know which corner it was
+ * handling; it would have to carry the corner cloud, join it to the
+ * placements every round, and reduce per group to get back to the one
+ * number this already has. `repeatUntil` also carries exactly one pin,
+ * and this needs two populations.
+ *
+ * AND IT IS EXACT RATHER THAN APPROXIMATE. The histogram is rebuilt at
+ * every stage, so corner k+1 sees the conversion corner k made -- which
+ * is what `placeCornerLanguage` does, and it is the part a parallel pick
+ * would have had to give up. Measured before this was built: freezing the
+ * histogram moves the victim on 0 to 3 corners of 19, and lets two
+ * corners name the SAME placement on 0 to 1 of them, converting it twice
+ * and silently leaving one corner with no marker while the converted and
+ * added counts still sum correctly. Sequential stages make both
+ * impossible rather than unlikely.
+ */
+function addConvertStage(
+  g: Graph,
+  from: { readonly node: NodeHandle; readonly pin: string },
+  corner: Corner,
+  cornerIndex: number,
+  lapW: number,
+  pre: string,
+): NodeHandle {
+  const tag = `${pre}C${cornerIndex}`;
+  const search = addVictimSearch(g, from, {
+    entryW: corner.entryW,
+    windowW: MARKER.windowW as unknown as readonly [number, number],
+    outside: corner.outside,
+    lapW,
+    tag,
+  });
+  const claimed = put(
+    g,
+    { node: search.out, pin: "out" },
+    VICTIM.claimedBy,
+    select(search.isVictim, cornerIndex, attribute(VICTIM.claimedBy)),
+    `${tag}Claim`,
+  );
+  // THE CONVERSION IS APPLIED HERE, not after the last stage, and that is
+  // the whole reason this is exact: the next corner's histogram has to
+  // count the marker rather than the asset it replaced.
+  return put(
+    g,
+    { node: claimed, pin: "out" },
+    VICTIM.assetOrd,
+    select(
+      search.isVictim,
+      markerOrdOf(corner.severity === "sharp" ? 0 : 1),
+      attribute(VICTIM.assetOrd),
+    ),
+    `${tag}Convert`,
+  );
+}
+
+/**
+ * ONE MARK'S WORTH of L-3's payment.
+ *
+ * PAY FIRST, AND UP TO THREE TIMES. `placeCornerLanguage` displaces the
+ * most repeated ordinary placement in the braking window, up to
+ * `BRAKING.count` of them, BEFORE it adds the ruler -- so the displaced
+ * placements cannot be the marks just added, and a window with nothing to
+ * give still gets its ruler.
+ *
+ * IT BREAKS RATHER THAN CONTINUES when a round finds nothing, which
+ * unrolled is simply what happens: a stage with no eligible placement
+ * marks none, and the next stage over the same window finds none either.
+ */
+function addDisplaceStage(
+  g: Graph,
+  from: { readonly node: NodeHandle; readonly pin: string },
+  corner: Corner,
+  tightIndex: number,
+  mark: number,
+  lapW: number,
+  pre: string,
+): NodeHandle {
+  const tag = `${pre}D${tightIndex}_${mark}`;
+  const search = addVictimSearch(g, from, {
+    entryW: corner.entryW,
+    windowW: BRAKING.windowW as unknown as readonly [number, number],
+    lapW,
+    tag,
+  });
+  return put(
+    g,
+    { node: search.out, pin: "out" },
+    VICTIM.displacedBy,
+    select(search.isVictim, tightIndex, attribute(VICTIM.displacedBy)),
+    `${tag}Displace`,
+  );
+}
+
+/** One placement, as the victim search reads and answers it. */
+export interface VictimPlacement {
+  /** Index into the pool, or `-1 - row` once L-2 has made it a marker. */
+  readonly assetOrd: number;
+  readonly station: number;
+  readonly t: number;
+}
+
+/** What the convert-or-add decided, per placement of the input list. */
+export interface CornerBookkeeping {
+  /** Which corner converted placement `i`, or -1. Parallel to the input. */
+  readonly claimedBy: readonly number[];
+  /** Which tight corner displaced placement `i`, or -1. */
+  readonly displacedBy: readonly number[];
+  /** Corner indices whose marker found no victim and must be ADDED. */
+  readonly added: readonly number[];
+}
+
+/** The columns {@link cookCornerBookkeeping} builds its cloud from. */
+function bookkeepingCloud(placements: readonly VictimPlacement[]): Geometry {
+  const geo = createPointCloud(placements.length);
+  const ord = geo.attrs.point.add(VICTIM.assetOrd, "i32", 1);
+  const st = geo.attrs.point.add(VICTIM.stationW, "f32", 1);
+  const t = geo.attrs.point.add(VICTIM.t, "f32", 1);
+  const claimed = geo.attrs.point.add(VICTIM.claimedBy, "i32", 1);
+  const displaced = geo.attrs.point.add(VICTIM.displacedBy, "i32", 1);
+  const P = geo.attrs.point.require("P");
+  for (let i = 0; i < placements.length; i++) {
+    const p = placements[i];
+    ord.set(i, p.assetOrd);
+    st.set(i, p.station);
+    t.set(i, p.t);
+    claimed.set(i, -1);
+    displaced.set(i, -1);
+    // POSITIONS ARE THE PLACEMENT'S OWN, so two placements at one station
+    // on opposite sides are two points rather than one identity. Nothing
+    // here draws a random number, so this is not the `randomField` rule --
+    // it is that a cloud whose points coincide is a cloud whose points
+    // cannot be told apart by anything downstream that ever might.
+    P.setTuple(i, [p.station, 0, p.t]);
+  }
+  return geo;
+}
+
+/**
+ * Run L-2's convert-or-add and L-3's displacement as a graph.
+ *
+ * WHAT THIS DECIDES AND WHAT IT DOES NOT. It answers, per placement,
+ * which corner converted it and which tight corner's ruler displaced it,
+ * and which corners found no victim and must have their marker ADDED
+ * instead. It does not build the resulting list: `placeCornerLanguage`
+ * still owns that, because the marker's own asset, lateral and height
+ * come from the language cook and the ruler's three marks are exact
+ * arithmetic that never needed porting.
+ *
+ * THE CORNERS COME IN COOKED. Their entries and sides are constants in
+ * the graph this builds, which is what lets every stage be a whole-cloud
+ * reduction rather than a join -- see `addConvertStage`. So a caller runs
+ * `cookCorners` first, and this is the second cook, exactly as the
+ * reservation is.
+ */
+export async function cookCornerBookkeeping(opts: {
+  readonly placements: readonly VictimPlacement[];
+  readonly corners: readonly Corner[];
+  readonly lapW: number;
+  readonly seed?: number;
+}): Promise<CornerBookkeeping> {
+  const { placements, corners, lapW } = opts;
+  // AN EMPTY LAP IS ANSWERED WITHOUT COOKING, and it is a real answer
+  // rather than a dodge: with nothing to convert every corner's marker is
+  // ADDED, which is what `placeCornerLanguage` does when its victim
+  // search finds nothing. The graph cannot say it -- the histogram groups
+  // the placements into paths and `pathScan` refuses a cloud that has
+  // none, correctly, because a scan over no path is a question with no
+  // subject. Guarding here rather than teaching every stage to tolerate
+  // an empty cloud keeps the emptiness in one place.
+  if (placements.length === 0) {
+    return { claimedBy: [], displacedBy: [], added: corners.map((_, ci) => ci) };
+  }
+  const g = new Graph(opts.seed ?? 1);
+  const inCloud = g.add(dataInput, {}, "placements");
+  g.setParam(inCloud, "items", [makeGeometryItem(bookkeepingCloud(placements))]);
+
+  // L-2 FIRST, EVERY CORNER, THEN L-3. That order is
+  // `placeCornerLanguage`'s and it is load-bearing: L-3's histogram sees
+  // the markers L-2 made, so a ruler pays for itself out of a lap that
+  // already speaks the corner language rather than one that is about to.
+  let at: NodeHandle = inCloud;
+  for (let ci = 0; ci < corners.length; ci++) {
+    at = addConvertStage(g, { node: at, pin: "out" }, corners[ci], ci, lapW, "bk");
+  }
+  const tight = corners.filter((c) => c.tightestW < SEVERITY.tightW);
+  for (let ti = 0; ti < tight.length; ti++) {
+    for (let k = 0; k < BRAKING.count; k++) {
+      at = addDisplaceStage(g, { node: at, pin: "out" }, tight[ti], ti, k, lapW, "bk");
+    }
+  }
+  g.output(at, "out", "placements");
+
+  const cooked = await cook(g);
+  const geo = (cooked.outputs.placements[0] as { geo: Geometry }).geo;
+  const col = (name: string): number[] => {
+    const c = geo.attrs.point.require(name);
+    const out: number[] = [];
+    for (let i = 0; i < geo.attrs.point.count; i++) out.push(c.get(i) as number);
+    return out;
+  };
+  const claimedBy = col(VICTIM.claimedBy);
+  const displacedBy = col(VICTIM.displacedBy);
+  const converted = new Set(claimedBy.filter((v) => v >= 0));
+  const added: number[] = [];
+  for (let ci = 0; ci < corners.length; ci++) if (!converted.has(ci)) added.push(ci);
+  return { claimedBy, displacedBy, added };
+}
