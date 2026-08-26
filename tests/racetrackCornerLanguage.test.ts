@@ -22,13 +22,18 @@
  * lap reads as a scatter of three. It has its own test below.
  */
 import { describe, expect, it } from "vitest";
-import { cookCornerLanguage, markerCloud } from "../demos/racetrack/cornerGraph.js";
+import {
+  cookCornerLanguage,
+  cookReserveMarkers,
+  markerCloud,
+} from "../demos/racetrack/cornerGraph.js";
 import { cookCorners } from "../demos/racetrack/cornerGraph.js";
 import {
   BRAKING,
   MARKER,
   brakingRulersSatisfied,
   cornerMarkersSatisfied,
+  markerCandidates,
   placeCornerLanguage,
   reserveMarkers,
   rulerStations,
@@ -323,6 +328,165 @@ describe("cornerLanguage: through the one lap graph the page cooks", () => {
     // miss rather than a broken port -- `dressLap` counts those in
     // `markersLostToCull`. The claim is that nothing is lost to anything
     // ELSE, which is what comparing against that count says.
+    expect(l2.missing.length).toBeLessThanOrEqual(dressed.stats.markersLostToCull);
+    expect(l3.failures.length).toBeLessThanOrEqual(dressed.stats.rulersLostToCull);
+  });
+});
+
+describe("cornerLanguage: reserving the vocabulary", () => {
+  const POOL = (KIT.assets as unknown as PlaceableAsset[]).filter((a) => a.where);
+
+  it("reserves three distinct verticals, and takes them out of the pool", async () => {
+    const cands = markerCandidates(POOL);
+    // eslint-disable-next-line no-console
+    console.log(`${cands.length} vertical candidates of ${POOL.length} placeable assets`);
+    for (let seed = 1; seed <= 6; seed++) {
+      const { markers, pool } = await cookReserveMarkers({ assets: POOL, seed });
+      expect(markers, `seed ${seed}`).toBeDefined();
+      if (!markers) continue;
+      const ids = [markers.sharp.id, markers.open.id, markers.brake.id];
+      // WITHOUT REPLACEMENT is the whole difference between this and three
+      // independent draws, and it is what makes the corner language
+      // legible: two roles sharing an asset would leave a severity with
+      // nothing distinct to announce it.
+      expect(new Set(ids).size, `seed ${seed} distinct`).toBe(3);
+      for (const a of ids) expect(cands.some((c) => c.id === a)).toBe(true);
+      expect(pool.length).toBe(POOL.length - 3);
+      expect(pool.some((a) => ids.includes(a.id))).toBe(false);
+    }
+  });
+
+  it("assigns the roles tallest first, which is what makes sharp sharp", async () => {
+    for (let seed = 1; seed <= 6; seed++) {
+      const { markers } = await cookReserveMarkers({ assets: POOL, seed });
+      if (!markers) continue;
+      expect(markers.sharp.size.tall).toBeGreaterThanOrEqual(markers.open.size.tall);
+      expect(markers.open.size.tall).toBeGreaterThanOrEqual(markers.brake.size.tall);
+    }
+  });
+
+  it("weights by how often the source used the asset, not uniformly", async () => {
+    // THE MECHANISM `reserveMarkers` ARGUES FOR. L-2 puts its marker at
+    // every corner of a severity, so whatever is chosen becomes one of the
+    // most repeated objects on the lap -- and promoting a one-off to that
+    // is a bigger departure from the source than L-2 intends. Measured as
+    // the mean `instances` of what is picked against the mean over all
+    // candidates, over enough seeds for the difference to mean something.
+    const cands = markerCandidates(POOL);
+    const flat = cands.reduce((n, a) => n + Math.max(1, a.instances), 0) / cands.length;
+    let picked = 0;
+    let n = 0;
+    for (let seed = 1; seed <= 40; seed++) {
+      const { markers } = await cookReserveMarkers({ assets: POOL, seed });
+      if (!markers) continue;
+      for (const a of [markers.sharp, markers.open, markers.brake]) {
+        picked += Math.max(1, a.instances);
+        n++;
+      }
+    }
+    const mean = picked / n;
+    // eslint-disable-next-line no-console
+    console.log(
+      `mean instances: picked ${mean.toFixed(2)} against a flat ${flat.toFixed(2)} over ${n} draws`,
+    );
+    // Three of `cands.length` are taken every time, so the mean cannot run
+    // far from flat -- but a weighted draw must sit ABOVE it, and a
+    // uniform one would sit on it.
+    expect(mean).toBeGreaterThan(flat);
+  });
+
+  it("gives the same three twice, and different three for a different seed", async () => {
+    const a = await cookReserveMarkers({ assets: POOL, seed: 5 });
+    const b = await cookReserveMarkers({ assets: POOL, seed: 5 });
+    expect(b.markers?.sharp.id).toBe(a.markers?.sharp.id);
+    expect(b.markers?.open.id).toBe(a.markers?.open.id);
+    expect(b.markers?.brake.id).toBe(a.markers?.brake.id);
+    const ids = (r: typeof a) =>
+      [r.markers?.sharp.id, r.markers?.open.id, r.markers?.brake.id].join(",");
+    let differs = false;
+    for (let seed = 6; seed <= 20 && !differs; seed++) {
+      differs = ids(await cookReserveMarkers({ assets: POOL, seed })) !== ids(a);
+    }
+    expect(differs, "some seed picks a different vocabulary").toBe(true);
+  });
+
+  it("draws the three rounds independently, and reaches the vocabulary they allow", async () => {
+    // THE ONE THAT NEEDED A MEASUREMENT TO STATE. `reserveMarkers` draws
+    // `rand(seed, k, 0x4d21)` -- one number PER ROUND -- and the graph
+    // reads round k's uniform off a three-point cloud, because
+    // `randomField` answers per point and a uniform read on the
+    // candidates would give every candidate a different one.
+    //
+    // The obvious way to get that wrong is to hand every round the SAME
+    // uniform, and it is nearly invisible: the picks are still distinct
+    // (masking the taken weight shifts the CDF), still weighted, still
+    // deterministic, and every other test in this file passes. What
+    // collapses is the SPACE -- three degrees of freedom become one, and
+    // the second pick can only ever land at or before the first, because
+    // removing a candidate shrinks the total that the same uniform is
+    // scaled against.
+    //
+    // Measured over 120 seeds on this kit's 8 verticals, which allow 56
+    // distinct sets of three: three uniforms reach 28 of them, one
+    // uniform reaches 8. So this bound is a real discriminator rather
+    // than a restatement of the sample -- the failing variant was run to
+    // confirm it fails.
+    const sets = new Set<string>();
+    for (let seed = 1; seed <= 120; seed++) {
+      const { markers } = await cookReserveMarkers({ assets: POOL, seed });
+      if (!markers) continue;
+      sets.add(
+        [markers.sharp.id, markers.open.id, markers.brake.id]
+          .sort((a, b) => a - b)
+          .join(","),
+      );
+    }
+    // eslint-disable-next-line no-console
+    console.log(`${sets.size} distinct vocabularies over 120 seeds`);
+    expect(sets.size).toBeGreaterThan(15);
+  });
+
+  it("reserves nothing when a kit has fewer than three verticals", async () => {
+    // REPORTED RATHER THAN THROWN, which is `reserveMarkers`' own answer:
+    // `dressLap` handles a missing kit by placing no corner language, and
+    // a throw here would turn "this kit is too small for L-2" into "the
+    // demo is broken".
+    const two = markerCandidates(POOL).slice(0, 2);
+    const out = await cookReserveMarkers({ assets: two, seed: 1 });
+    expect(out.markers).toBeUndefined();
+    expect(out.pool.length).toBe(two.length);
+  });
+
+  it("dresses a whole lap from a graph-reserved vocabulary", async () => {
+    // The reservation re-bases, so this is a range claim rather than an
+    // equality: a different three speak the corner language, and both
+    // gates still have to hold.
+    const { lap } = await lapFor(1);
+    const reservation = await cookReserveMarkers({ assets: POOL, seed: 1 });
+    const { markers, pool } = reservation;
+    if (!markers) throw new Error("racetrackCornerLanguage: no markers reserved");
+    const decided = await cookLapPlacements({ lap, seed: 1, pool, markers });
+    // THE RESERVATION HAS TO GO IN TOO, and an earlier version of this
+    // test did not pass it -- `dressLap` then re-derived a TypeScript
+    // reservation, so the choices were indices into a pool it did not
+    // have. It passed anyway, because at this one seed the two
+    // reservations happened to agree; deliberately changing the graph's
+    // draw made them diverge and `fromChoice`'s carried-id guard caught
+    // it. A test that passes by coincidence is the thing that guard was
+    // added for.
+    const dressed = dressLap(KIT, lap, 1, {
+      reservation,
+      stations: decided.stations,
+      choices: decided.choices,
+      language: decided.language,
+    });
+    const corners = await cookCorners({ lap });
+    const l2 = cornerMarkersSatisfied(dressed.placements, corners, markers, lap.lengthW);
+    const l3 = brakingRulersSatisfied(dressed.placements, corners, markers, lap.lengthW);
+    // eslint-disable-next-line no-console
+    console.log(
+      `graph-reserved: sharp ${markers.sharp.name}, open ${markers.open.name}, brake ${markers.brake.name}; L-2 ${l2.satisfied ? "ok" : l2.missing.length + " missing"} / L-3 ${l3.satisfied ? "ok" : l3.failures.length + " failed"}`,
+    );
     expect(l2.missing.length).toBeLessThanOrEqual(dressed.stats.markersLostToCull);
     expect(l3.failures.length).toBeLessThanOrEqual(dressed.stats.rulersLostToCull);
   });

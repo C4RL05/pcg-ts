@@ -2279,3 +2279,76 @@ folded into the lap graph, which is its own test.
 2. **Landmark uniqueness (L-4) and the band mix (Z-3)**, both list
    arithmetic over the whole lap, and both greedy in the same way.
 3. **The frame lookup**, which `transferAlongPath` now answers.
+
+### Reserving the vocabulary, and a test that passed by coincidence, 2026-08-26
+
+`reserveMarkers` is a graph: three weighted draws without replacement over
+the kit's verticals. `DressOptions.reservation` is the fourth seam, and
+the page now decides its own corner vocabulary.
+
+**The loop is UNROLLED, not `repeatUntil`, and that is a decision.** A
+`repeatUntil` body cannot see its own iteration index, and the round index
+is exactly what selects the uniform -- `rand(seed, k, 0x4d21)` is one
+number per round. Three is a constant `MarkerKit`'s own shape fixes, so
+three stages is the honest spelling.
+
+**One uniform per ROUND needed a mechanism.** `randomField` answers one
+number per POINT, so reading it on the candidates gives every candidate a
+different uniform, which is not a draw from anything. The answer is a
+separate three-point cloud whose rows are the three uniforms, gathered
+onto every candidate by `transferByIndex` at a constant index.
+
+**A taken candidate is masked to zero weight rather than removed** -- the
+same thing said in a language with no `splice`, since a zero weight makes
+a bracket of width zero and a bracket of width zero can contain nothing.
+
+**The bookkeeping test passed by coincidence, and the id guard caught it.**
+The end-to-end test handed `dressLap` a graph-reserved POOL while
+`dressLap` re-derived a TypeScript-reserved one -- so the asset choices
+were indices into a list that did not exist there. It passed, because at
+seed 1 the two reservations happened to pick the same three. Deliberately
+changing the graph's draw made them diverge, and `fromChoice`'s carried
+asset id -- added two units ago for exactly this class -- threw. The fix
+is `DressOptions.reservation`, which carries the markers AND the pool
+together, because a reservation is a partition and taking half of it
+lets the halves disagree.
+
+**Three falsifications, and the third needed a measurement to state.**
+
+| mutation | caught |
+| --- | --- |
+| drop the without-replacement mask | yes -- a later round overwrites an earlier round's marker, so a pick vanishes |
+| hand every round the same uniform | **not at first** |
+| (the error message blamed the wrong cause) | corrected |
+
+The shared uniform is nearly invisible: the picks stay distinct because
+masking shifts the CDF, stay weighted, stay deterministic, and every other
+test passes. What collapses is the SPACE -- three degrees of freedom
+become one, and the second pick can only land at or before the first,
+because removing a candidate shrinks the total the same uniform is scaled
+against. Measured over 120 seeds on 8 verticals, which allow 56 distinct
+sets of three: **three uniforms reach 28, one uniform reaches 8.** The
+bound asserts >15, with the failing variant run to confirm it fails.
+
+**Measured otherwise:** 8 vertical candidates of 229 placeable assets;
+mean `instances` of what is picked 7.68 against a flat 4.75 over 120
+draws, which is the weighting `reserveMarkers` argues for showing up as a
+number; both L-2 and L-3 gates satisfied on a lap dressed from a
+graph-reserved vocabulary.
+
+**Two cooks on the page, deliberately.** The reservation decides which
+assets EXIST for everything after it, so it cannot be a stage inside the
+graph that consumes its answer. Folding it in would also mean ranking
+three objects by height in-graph and handing `dressLap` a pool it can
+resolve indices against, which is a list of TypeScript objects. The cook
+is over eight candidates and costs nothing measurable.
+
+### Where the prelude stands after the reservation, 2026-08-26
+
+1. **The bookkeeping half of the corner language** -- convert-or-add and
+   the ruler's displacement. Both are greedy walks over a mutable list
+   that recompute a lap-wide histogram after every change; the histogram
+   itself is now expressible (`pointsToPath` by asset, `pathScan` with a
+   `totalAttr`), and the sequential part wants D-4's `repeatUntil`.
+2. **Landmark uniqueness (L-4) and the band mix (Z-3)**, the same shape.
+3. **The frame lookup**, which `transferAlongPath` now answers.

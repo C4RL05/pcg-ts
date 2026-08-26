@@ -176,6 +176,33 @@ export interface DressOptions {
    * two, passing this re-bases every figure downstream of it.
    */
   readonly language?: DrawnCornerLanguage;
+
+  /**
+   * The three reserved marker assets and the pool that is left, when the
+   * caller has already reserved them.
+   *
+   * THE SEAM THE OTHER THREE ASSUMED, and it was missing. `choices` is an
+   * index INTO the pool, so a caller cooking against a graph-reserved
+   * pool while this function re-derived a TypeScript-reserved one was
+   * handing over indices into a list that does not exist here -- which is
+   * exactly what {@link AssetChoice}'s carried asset id catches, and did.
+   * Before that guard existed the two pools happened to agree at one seed
+   * and the whole arrangement looked correct.
+   *
+   * BOTH HALVES TOGETHER, NOT THE MARKERS ALONE. A reservation is a
+   * partition: three assets held back, and everything else left to dress
+   * from. Taking only the markers and re-deriving the pool would let the
+   * two disagree, which is the failure this option exists to make
+   * unwriteable.
+   *
+   * `markers` absent is `reserveMarkers` reporting a kit with fewer than
+   * three verticals, and `dressLap` answers that by placing no corner
+   * language -- the same as it always has.
+   */
+  readonly reservation?: {
+    readonly markers?: MarkerKit;
+    readonly pool: PlaceableAsset[];
+  };
 }
 
 /**
@@ -525,10 +552,10 @@ export function dressLap(
   const frameAt = frameLookup(lap);
   const corners = cornersOf(lap);
 
-  // 0. Reserve L-2 and L-3's vocabulary BEFORE anything is dressed. See
-  //    `reserveFor`, which is also what a caller cooking `opts.choices`
-  //    must call to get the pool those indices are into.
-  const { markers, pool } = reserveFor(kit, seed);
+  // 0. Reserve L-2 and L-3's vocabulary BEFORE anything is dressed --
+  //    from the caller when it has already reserved, and from
+  //    `reserveFor` when it has not. See `DressOptions.reservation`.
+  const { markers, pool } = opts.reservation ?? reserveFor(kit, seed);
   const reserved = new Set(
     markers ? [markers.sharp.id, markers.open.id, markers.brake.id] : [],
   );

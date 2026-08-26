@@ -84,7 +84,9 @@ import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/pane
 import { attachWordmark } from "../../shared/wordmark.js";
 import { BACKGROUND } from "../../shared/scene.js";
 import { OUTPUTS, buildRoadGraph } from "./graph.js";
-import { type DressStats, type Dressing, dressLap, reserveFor } from "./dress.js";
+import { type DressStats, type Dressing, dressLap } from "./dress.js";
+import type { PlaceableAsset } from "./assets.js";
+import { cookReserveMarkers } from "./cornerGraph.js";
 import { cookLapPlacements } from "./assetGraph.js";
 import { DENSITY } from "./stations.js";
 import { type Kit, type PlacedBox, loadKit, placeKit } from "./kit.js";
@@ -965,16 +967,29 @@ async function cookAndBuild(): Promise<void> {
     // with neither option keep measuring the fitted process, which is
     // what those figures were fitted against.
     const kit = dressingKit();
-    const { pool, markers } = reserveFor(kit, state.seed);
+    // TWO COOKS, AND THE REASON IS NOT LAZINESS. The reservation decides
+    // WHICH ASSETS EXIST for everything after it -- the pool the stations
+    // draw from is the kit minus these three -- so it cannot be a stage
+    // inside the graph that consumes its answer. Folding it in would also
+    // mean deciding the three roles in-graph, which is a rank of three
+    // objects by height, and handing `dressLap` a pool it can resolve
+    // indices against, which is a list of TypeScript objects. Both are
+    // work with nothing to show for it: this cook is over eight
+    // candidates and costs nothing measurable.
+    const reservation = await cookReserveMarkers({
+      assets: (kit.assets as unknown as PlaceableAsset[]).filter((a) => a.where),
+      seed: state.seed,
+    });
     const decided = await cookLapPlacements({
       lap: next.lap,
       seed: state.seed,
-      pool,
-      markers,
+      pool: reservation.pool,
+      markers: reservation.markers,
       densityScale: state.density,
     });
     const dressed = dressLap(kit, next.lap, state.seed, {
       density: state.density,
+      reservation,
       stations: decided.stations,
       choices: decided.choices,
       language: decided.language,

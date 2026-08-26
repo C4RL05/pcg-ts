@@ -56,14 +56,22 @@ import {
   pointLine,
   randomField,
   pathRuns,
+  pathScan,
+  pointsToPath,
   promoteAttribute,
   select,
   setAttribute,
   sub,
   transferByIndex,
 } from "pcg-ts";
+import type { PlaceableAsset } from "./assets.js";
 import { CORNER_R_W, type Corner, SEVERITY } from "./corners.js";
-import { BRAKING, MARKER, type MarkerKit } from "./legibility.js";
+import {
+  BRAKING,
+  MARKER,
+  type MarkerKit,
+  markerCandidates,
+} from "./legibility.js";
 import { CORNER_MODEL } from "./graph.js";
 import type { Lap } from "./lap.js";
 import { lapAsPath } from "./stationGraph.js";
@@ -513,6 +521,8 @@ const MARKER_KEY = {
   height: "marker.height",
   /** L-3's shared lateral magnitude, one per ruler. Was 0x3b01. */
   ruler: "marker.ruler",
+  /** The three draws that reserve the vocabulary. Was 0x4d21. */
+  reserve: "marker.reserve",
 } as const;
 
 /**
@@ -915,4 +925,318 @@ export async function cookCornerLanguage(opts: {
   g.output(stage.markers, "out", CORNER_LANGUAGE_OUTPUTS.markers);
   g.output(stage.rulers, "out", CORNER_LANGUAGE_OUTPUTS.rulers);
   return readCornerLanguage(await cook(g));
+}
+
+/* ------------------------------------------------------------------ *
+ * Reserving the corner language's three assets.
+ * ------------------------------------------------------------------ */
+
+/** The columns the candidate cloud carries through the three draws. */
+export const CANDIDATE = {
+  /** Index into the candidate list this cloud was built from. */
+  ord: "candOrd",
+  /** `max(1, instances)` — the weight a draw sees. */
+  weight: "candWeight",
+  /** 1 once a round has taken this candidate. */
+  taken: "candTaken",
+  /** Which round took it: 0, 1, 2, or -1 for untaken. */
+  round: "candRound",
+} as const;
+
+/**
+ * The candidates, flattened — verticals only, in ascending id.
+ *
+ * THE ID ORDER IS LOAD-BEARING and is `markerCandidates`' own, not a
+ * convenience: the weighted walk consumes the list in order, so two
+ * orderings give two different picks from the same uniform. Sorting here
+ * rather than trusting the caller is what makes the graph's answer a
+ * function of the KIT rather than of however the kit happened to be
+ * assembled.
+ *
+ * `max(1, instances)` IS THE WEIGHT, transcribed. `reserveMarkers` argues
+ * for weighting by how often the source used the asset rather than
+ * uniformly — L-2 puts its marker at every corner of a severity, so
+ * whatever is chosen becomes one of the most repeated objects on the lap,
+ * and promoting a one-off to that is a bigger departure from the source
+ * than L-2 intends. The floor of 1 is what keeps a never-used candidate
+ * reachable at all.
+ */
+export function candidateCloud(candidates: readonly PlaceableAsset[]): Geometry {
+  const geo = createPointCloud(candidates.length);
+  const ord = geo.attrs.point.add(CANDIDATE.ord, "i32", 1);
+  const weight = geo.attrs.point.add(CANDIDATE.weight, "f32", 1);
+  geo.attrs.point.add(CANDIDATE.taken, "f32", 1);
+  const P = geo.attrs.point.require("P");
+  for (let i = 0; i < candidates.length; i++) {
+    ord.set(i, i);
+    weight.set(i, Math.max(1, candidates[i].instances));
+    // Distinct positions, so `randomField` can tell the rows apart -- the
+    // same rule `markerCloud` follows and for the same reason.
+    P.setTuple(i, [i, 0, 0]);
+  }
+  return geo;
+}
+
+/**
+ * The three uniforms the three rounds draw with, on their own cloud.
+ *
+ * A SEPARATE THREE-POINT CLOUD, and this is the part of the port that
+ * needed a mechanism rather than a transcription. `reserveMarkers` draws
+ * `rand(seed, k, 0x4d21)` — ONE number per round, indexed by the round.
+ * `randomField` answers one number per POINT, so reading it on the
+ * candidates would give a different uniform to every candidate, which is
+ * not a draw from anything. Three points with three identities give three
+ * numbers, and `transferByIndex` at a constant index hands round k's
+ * number to every candidate at once.
+ */
+function drawCloud(): Geometry {
+  const geo = createPointCloud(RESERVE_ROUNDS);
+  const P = geo.attrs.point.require("P");
+  for (let i = 0; i < RESERVE_ROUNDS; i++) P.setTuple(i, [i, 0, 0]);
+  return geo;
+}
+
+/**
+ * How many assets the corner language reserves.
+ *
+ * THREE, NOT TWO, and `reserveMarkers` gives the argument: L-2 asks for a
+ * distinct object per severity and L-3 for a ruler, so if the ruler were
+ * one of the two markers the marker would stop being distinct. It is a
+ * constant rather than a parameter because {@link MarkerKit} has exactly
+ * three fields — a fourth would have nowhere to go.
+ */
+const RESERVE_ROUNDS = 3;
+
+/** The uniform column the draw cloud carries. */
+const DRAW_U = "reserveU";
+
+/** Running weight below and through each candidate, this round. */
+const RESERVE_CUM_LO = "reserveCumLo";
+const RESERVE_CUM_HI = "reserveCumHi";
+const RESERVE_TOTAL = "reserveTotal";
+const RESERVE_DRAW = "reserveDraw";
+
+/**
+ * One weighted draw from the candidates that no earlier round has taken.
+ *
+ * THE LOOP IS UNROLLED RATHER THAN RUN IN `repeatUntil`, and that is a
+ * decision rather than an omission. A `repeatUntil` body cannot see its
+ * own iteration index, so it could not reach round k's uniform — the one
+ * quantity here that is indexed BY the round. Three is a constant that
+ * `MarkerKit`'s own shape fixes, so three stages is the honest spelling
+ * and it costs no mechanism to read later.
+ *
+ * THE BRACKET IS TWO SCANS, as everywhere else in this campaign: scanning
+ * one column exclusive and inclusive gives bounds that are the same f64
+ * partial sum rounded at the same place, so every bracket's top IS its
+ * successor's bottom and exactly one candidate survives.
+ *
+ * A TAKEN CANDIDATE IS MASKED TO ZERO WEIGHT rather than removed, which
+ * is the same thing said in a language that has no `splice`: a zero
+ * weight makes a bracket of width zero, and a bracket of width zero can
+ * contain nothing.
+ */
+function addReserveRound(
+  g: Graph,
+  from: { readonly node: NodeHandle; readonly pin: string },
+  draws: { readonly node: NodeHandle; readonly pin: string },
+  round: number,
+  pre: string,
+): NodeHandle {
+  const tag = `${pre}R${round}`;
+
+  // This round's uniform, the same number on every candidate.
+  const drawn = g.add(
+    transferByIndex,
+    { index: round, attributes: [DRAW_U], outOfRange: "clamp" },
+    `${tag}Draw`,
+  );
+  g.connect(from.node, from.pin, drawn, "in");
+  g.connect(draws.node, draws.pin, drawn, "source");
+
+  // What this round may still take.
+  const live = put(
+    g,
+    { node: drawn, pin: "out" },
+    LIVE_WEIGHT,
+    mul(attribute(CANDIDATE.weight), sub(1, attribute(CANDIDATE.taken))),
+    `${tag}Live`,
+  );
+
+  // ONE PATH OVER EVERY CANDIDATE, because the draw is over the whole
+  // remaining list. `shortGroups` never applies -- there is one group and
+  // `reserveMarkers` has already refused a candidate list below three.
+  const path = g.add(pointsToPath, { closed: false }, `${tag}Path`);
+  g.connect(live, "out", path, "in");
+
+  const below = g.add(
+    pathScan,
+    { name: LIVE_WEIGHT, outName: RESERVE_CUM_LO, mode: "exclusive" },
+    `${tag}CumLo`,
+  );
+  g.connect(path, "out", below, "in");
+  const through = g.add(
+    pathScan,
+    {
+      name: LIVE_WEIGHT,
+      outName: RESERVE_CUM_HI,
+      mode: "inclusive",
+      totalAttr: RESERVE_TOTAL,
+    },
+    `${tag}CumHi`,
+  );
+  g.connect(below, "out", through, "in");
+  const total = g.add(
+    promoteAttribute,
+    { name: RESERVE_TOTAL, from: "primitive", to: "point", mode: "first" },
+    `${tag}Total`,
+  );
+  g.connect(through, "out", total, "in");
+
+  const scaled = put(
+    g,
+    { node: total, pin: "out" },
+    RESERVE_DRAW,
+    mul(attribute(DRAW_U), attribute(RESERVE_TOTAL)),
+    `${tag}Scaled`,
+  );
+
+  // WHICH CANDIDATE THIS ROUND TOOK, as a flag rather than a filter: the
+  // cloud has to survive intact into the next round, so nothing is
+  // dropped and `taken` simply grows by one.
+  //
+  // THE BOUNDARY DIFFERS FROM THE TYPESCRIPT BY ONE ULP AND ONLY THERE.
+  // `reserveMarkers` subtracts weights and takes the first candidate
+  // whose running total reaches the draw (`u <= 0` after subtracting), so
+  // a draw landing EXACTLY on a boundary goes to the lower candidate;
+  // this bracket is half-open upward, so it goes to the upper one. The
+  // draw is a float times a sum of integers and the port re-bases anyway,
+  // so the disagreement is a measure-zero event on a lap that already
+  // differs -- but it is the kind of thing that is invisible until
+  // somebody builds a fixture with weights of 1 and asks why.
+  const x = attribute(RESERVE_DRAW);
+  const hit = mul(
+    le(attribute(RESERVE_CUM_LO), x),
+    lt(x, attribute(RESERVE_CUM_HI)),
+  );
+  const marked = put(
+    g,
+    { node: scaled, pin: "out" },
+    CANDIDATE.taken,
+    max(attribute(CANDIDATE.taken), hit),
+    `${tag}Taken`,
+  );
+  return put(
+    g,
+    { node: marked, pin: "out" },
+    CANDIDATE.round,
+    select(hit, round, attribute(CANDIDATE.round)),
+    `${tag}Round`,
+  );
+}
+
+/** The masked weight a round's scan actually runs over. */
+const LIVE_WEIGHT = "candLive";
+
+/**
+ * Reserve three of the candidates, by three weighted draws without
+ * replacement.
+ *
+ * WHAT COMES BACK IS THREE INDICES, NOT A `MarkerKit`. Assigning the
+ * roles is `reserveMarkers`' own rule -- sharp is the tallest of the
+ * three, open the second, brake the shortest -- and it is an ordering of
+ * three objects rather than a decision about the lap. It stays with the
+ * caller, which also means there is no role column here for nothing to
+ * read: this campaign has twice now written a column the consuming
+ * TypeScript quietly ignored, and the cheapest way not to do it a third
+ * time is not to write one.
+ */
+export function addReserveStage(
+  g: Graph,
+  candidates: { readonly node: NodeHandle; readonly pin: string },
+  draws: { readonly node: NodeHandle; readonly pin: string },
+  pre: string,
+): NodeHandle {
+  let at = put(g, candidates, CANDIDATE.round, -1, `${pre}Round0`);
+  for (let k = 0; k < RESERVE_ROUNDS; k++) {
+    at = addReserveRound(g, { node: at, pin: "out" }, draws, k, pre);
+  }
+  return at;
+}
+
+/**
+ * Run `reserveMarkers` as a graph, and answer what it answers.
+ *
+ * A DROP-IN FOR `reserveMarkers`, including its refusal to reserve
+ * anything when a kit has fewer than three verticals -- which it reports
+ * rather than throwing, because `dressLap` already answers a missing kit
+ * by placing no corner language at all.
+ *
+ * IT RE-BASES. `reserveMarkers` draws from `rand(seed, k, 0x4d21)` and
+ * this draws from `randomField` on a three-point cloud, so the two pick
+ * different assets from the same kit and seed. Everything downstream of
+ * the reservation moves with it, which on this vocabulary means the
+ * corner language speaks with different objects -- the same rule, a
+ * different vocabulary.
+ */
+export async function cookReserveMarkers(opts: {
+  readonly assets: readonly PlaceableAsset[];
+  readonly seed: number;
+}): Promise<{ markers?: MarkerKit; pool: PlaceableAsset[] }> {
+  const { assets, seed } = opts;
+  const cands = markerCandidates(assets);
+  if (cands.length < RESERVE_ROUNDS) return { pool: [...assets] };
+
+  const g = new Graph(seed);
+  const candsIn = g.add(dataInput, {}, "candidates");
+  g.setParam(candsIn, "items", [makeGeometryItem(candidateCloud(cands))]);
+  const drawsIn = g.add(dataInput, {}, "draws");
+  g.setParam(drawsIn, "items", [makeGeometryItem(drawCloud())]);
+  const u = put(
+    g,
+    { node: drawsIn, pin: "out" },
+    DRAW_U,
+    randomField(MARKER_KEY.reserve),
+    "reserveU",
+  );
+
+  const stage = addReserveStage(
+    g,
+    { node: candsIn, pin: "out" },
+    { node: u, pin: "out" },
+    "rv",
+  );
+  g.output(stage, "out", "candidates");
+
+  const cooked = await cook(g);
+  const geo = (cooked.outputs.candidates[0] as { geo: Geometry }).geo;
+  const ordCol = geo.attrs.point.require(CANDIDATE.ord);
+  const roundCol = geo.attrs.point.require(CANDIDATE.round);
+  const picked: PlaceableAsset[] = [];
+  for (let k = 0; k < RESERVE_ROUNDS; k++) {
+    let found = -1;
+    for (let i = 0; i < geo.attrs.point.count; i++) {
+      if ((roundCol.get(i) as number) === k) {
+        found = ordCol.get(i) as number;
+        break;
+      }
+    }
+    if (found < 0) {
+      throw new Error(
+        `cookReserveMarkers: no candidate of ${cands.length} is marked as round ${k}'s, out of ${RESERVE_ROUNDS} rounds. The likeliest cause is a round taking a candidate an earlier round already took: a second hit overwrites that candidate's round marker, so the earlier round's pick disappears rather than showing up as a duplicate. Check that each round masks the already-taken weight to zero.`,
+      );
+    }
+    picked.push(cands[found]);
+  }
+
+  // TALLEST FIRST, which is `reserveMarkers`' rule and not this graph's:
+  // ordering three objects by a measurement they already carry is not a
+  // decision about the lap, and putting it here keeps the graph from
+  // publishing a role column that nothing would check.
+  const bySize = [...picked].sort((a, b) => b.size.tall - a.size.tall);
+  const reserved = new Set(picked.map((a) => a.id));
+  return {
+    markers: { sharp: bySize[0], open: bySize[1], brake: bySize[2] },
+    pool: assets.filter((a) => !reserved.has(a.id)),
+  };
 }
