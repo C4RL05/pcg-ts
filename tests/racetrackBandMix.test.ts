@@ -27,14 +27,19 @@ import { Z3, bandOfPlacement, repairBandMix, type Band } from "../demos/racetrac
 import { placementsBeforeLanguage, reserveFor } from "../demos/racetrack/dress.js";
 import {
   MIX_BANDS,
+  PLACEMENT,
   cookBandMix,
   cookBandRedraw,
+  dressLapByGraph,
+  mixPoseIds,
   poseAssetId,
   poseLibrary,
 } from "../demos/racetrack/dressGraph.js";
+import type { Attribute } from "pcg-ts";
 import { rand } from "../demos/racetrack/rand.js";
 import { landmarkAssets } from "../demos/racetrack/legibility.js";
 import type { StationedPlacement } from "../demos/racetrack/legibility.js";
+import type { PlaceableAsset } from "../demos/racetrack/assets.js";
 import { shippedVocabulary } from "../demos/racetrack/vocabulary.js";
 import { lapFor } from "./support/lap.js";
 
@@ -304,36 +309,78 @@ describe("bandMix: the redraw", () => {
     }
   });
 
-  it("leaves a placement alone when its asset is the one it already had", async () => {
-    // THE POSE IS THE EXACT HALF OF THIS PORT, and this is where that is
-    // visible: `poseFor` keys on the STATION, which a redraw never moves,
-    // so a placement whose asset does not change keeps the pose it had —
-    // to the bit, not to a tolerance. Every unmarked placement is that
-    // case, and the stage re-derives their poses rather than copying them.
-    const seed = 1;
-    const { placements, pool, pinned, lap, frames } = await unmixedLap(seed);
-    const got = await cookBandRedraw({
-      kit: KIT,
-      lap,
-      frames,
-      placements,
-      seed,
-      immovable: new Set<number>(),
-      mixPinned: pinned,
-      pool,
-    });
+  it("gives a redrawn placement a pose belonging to the asset it drew", async () => {
+    // THIS TEST USED TO COMPARE `poseFor` TO ITSELF. It walked only the
+    // placements the mix did NOT touch — whose pose column the stage never
+    // writes, because the commit gate is 0 — and re-derived the same
+    // expression `placementCloudInTrackFrame` had already put there. The
+    // 100-odd it checked were all placements the graph computed nothing
+    // for, so the flat pose table, `poseOff` and `poseCount` were never
+    // read by any assertion in the suite.
+    //
+    // The claim that matters is on the APPLIED side: a redrawn placement
+    // holds a pose of the asset it actually drew, chosen by that asset's
+    // own list from the station's own uniform.
     const lib = poseLibrary(KIT);
+    const ownerOf = new Map<number, number>();
+    for (const [asset, ids] of lib.posesOf) for (const id of ids) ownerOf.set(id, asset);
+
     let checked = 0;
-    for (let i = 0; i < placements.length; i++) {
-      if (got.target[i] !== undefined) continue;
-      const p = placements[i] as StationedPlacement;
-      const ids = lib.posesOf.get(p.asset.id) ?? [];
-      if (ids.length === 0) continue;
-      const u = rand(seed, Math.round(p.station * 97), 0x7053);
-      expect(got.pose[i]).toBe(ids[Math.floor(u * ids.length) % ids.length]);
-      checked++;
+    for (const seed of SEEDS) {
+      const { placements, pool, pinned, lap, frames } = await unmixedLap(seed);
+      const got = await cookBandRedraw({
+        kit: KIT,
+        lap,
+        frames,
+        placements,
+        seed,
+        immovable: new Set<number>(),
+        mixPinned: pinned,
+        pool,
+      });
+      for (let i = 0; i < placements.length; i++) {
+        if (!got.applied[i]) continue;
+        const p = placements[i] as StationedPlacement;
+        const owner = ownerOf.get(got.pose[i] as number);
+        expect(owner).toBeDefined();
+        const asset = pool.find((a) => a.id === owner);
+        expect(asset).toBeDefined();
+        // The pose is the one THIS asset's list answers for this station.
+        const ids = lib.posesOf.get(owner as number) as number[];
+        const u = rand(seed, Math.round(p.station * 97), 0x7053);
+        expect(got.pose[i]).toBe(ids[Math.floor(u * ids.length) % ids.length]);
+        // And the extents committed are that asset's own, which is what
+        // says the pose and the asset came out of the same draw.
+        expect(got.tall[i]).toBeCloseTo((asset as PlaceableAsset).size.tall, 5);
+        checked++;
+      }
     }
-    expect(checked).toBeGreaterThan(100);
+    // eslint-disable-next-line no-console
+    console.log(`${checked} redrawn placements checked against their asset's pose list`);
+    expect(checked).toBeGreaterThan(50);
+  }, 120_000);
+
+  it("indexes the asset-id table at both ends and under cover", async () => {
+    // THE `cover:` HALF IS UNREACHABLE FROM A LAP, because the mix
+    // excludes cover pieces and `placementsBeforeLanguage` makes none — so
+    // a `half` off by one would ship. The table is checked directly
+    // instead: the index the stage computes is `pose + 1 + cover * half`.
+    const lib = poseLibrary(KIT);
+    const table = mixPoseIds(lib);
+    const half = table.length / 2;
+    expect(Number.isInteger(half)).toBe(true);
+    expect(half).toBe(lib.boxes.length + 1);
+    const at = (pose: number, cover: 0 | 1): string =>
+      table[pose + 1 + cover * half] as string;
+    expect(at(-1, 0)).toBe(poseAssetId(-1, false));
+    expect(at(0, 0)).toBe(poseAssetId(0, false));
+    expect(at(lib.boxes.length - 1, 0)).toBe(poseAssetId(lib.boxes.length - 1, false));
+    expect(at(-1, 1)).toBe(poseAssetId(-1, true));
+    expect(at(0, 1)).toBe(poseAssetId(0, true));
+    expect(at(lib.boxes.length - 1, 1)).toBe(poseAssetId(lib.boxes.length - 1, true));
+    // Nothing past the ends: the selector floors then CLAMPS, so an index
+    // one past the last entry would silently answer the last cover pose.
+    expect(lib.boxes.length - 1 + 1 + half).toBe(table.length - 1);
   });
 
   it("moves the shares toward Z-3, which is what the whole rule is for", async () => {
@@ -382,4 +429,120 @@ describe("bandMix: the redraw", () => {
     expect(m0).toBeGreaterThan(0.05);
     expect(m1).toBeLessThan(m0 * 0.5);
   });
+});
+
+describe("bandMix: in the loop", () => {
+  it.each([1, 11, 18] as const)(
+    "settles a lap the mix has real work on, with P and scale following it (seed %i)",
+    async (seed) => {
+      // THE CASE NOTHING ELSE COVERS. Every other suite either switches
+      // Z-3 off (the rule comparisons, which measure the other three) or
+      // hands it a list `dressLap` has already balanced (the streamed
+      // level), so the mix marks nothing and its bugs are invisible. This
+      // cooks the WHOLE body, loop and all, over a list the mix has 14 to
+      // 46 moves to make on — and seeds 11 and 18 are here by name because
+      // they are the two of twenty that used to run the loop out.
+      const { placements, pool, pinned, lap, frames } = await unmixedLap(seed);
+      const got = await dressLapByGraph({
+        kit: KIT,
+        lap,
+        frames,
+        placements,
+        seed,
+        immovable: new Set<number>(),
+        mixPinned: pinned,
+        pool,
+      });
+
+      // eslint-disable-next-line no-console
+      console.log(`seed ${seed}: ${got.rounds} rounds, converged ${got.converged}`);
+      expect(got.converged).toBe(true);
+
+      // P AND `scale` ARE DERIVED, AND THE REDRAW INVALIDATES BOTH. The
+      // mix rewrites a placement's lateral, height and extents after the
+      // lift has already turned the old ones into a world position, so a
+      // stage that forgets to re-derive them leaves the boxes where the
+      // PREVIOUS asset stood — measured at up to 113 world units before
+      // this was checked, and invisible inside the loop because the next
+      // round repairs it. It only escapes on the round the loop stops,
+      // which is exactly the round that ships.
+      const geo = got.placements;
+      const pts = geo.attrs.point;
+      const P = pts.require("P");
+      const framePos = pts.require(PLACEMENT.framePos);
+      const across = pts.require(PLACEMENT.across);
+      const up = pts.require(PLACEMENT.up);
+      const t = pts.require(PLACEMENT.t);
+      const h = pts.require(PLACEMENT.h);
+      const scale = pts.require("scale");
+      const sizes = [
+        pts.require(PLACEMENT.sizeAcross),
+        pts.require(PLACEMENT.sizeAlong),
+        pts.require(PLACEMENT.sizeTall),
+      ];
+      let worstP = 0;
+      let worstS = 0;
+      for (let i = 0; i < pts.count; i++) {
+        for (let k = 0; k < 3; k++) {
+          const want =
+            framePos.get(i, k) +
+            across.get(i, k) * t.get(i) * lap.halfWidth +
+            up.get(i, k) * h.get(i) * lap.halfWidth;
+          worstP = Math.max(worstP, Math.abs(P.get(i, k) - want));
+          worstS = Math.max(
+            worstS,
+            Math.abs(scale.get(i, k) - (sizes[k] as Attribute).get(i) * lap.halfWidth),
+          );
+        }
+      }
+      // eslint-disable-next-line no-console
+      console.log(`seed ${seed}: worst P drift ${worstP.toExponential(2)}, scale ${worstS.toExponential(2)}`);
+      // f32 columns at a lap's world scale, not an equality: the lift
+      // recomputes in f32 from f32 inputs and stores f32.
+      expect(worstP).toBeLessThan(0.05);
+      expect(worstS).toBeLessThan(1e-3);
+    },
+    120_000,
+  );
+
+  it("brings the settled lap's band shares inside Z-3", async () => {
+    const seed = 1;
+    const { placements, pool, pinned, lap, frames } = await unmixedLap(seed);
+    const got = await dressLapByGraph({
+      kit: KIT,
+      lap,
+      frames,
+      placements,
+      seed,
+      immovable: new Set<number>(),
+      mixPinned: pinned,
+      pool,
+    });
+    const pts = got.placements.attrs.point;
+    const t = pts.require(PLACEMENT.t);
+    const h = pts.require(PLACEMENT.h);
+    const tall = pts.require(PLACEMENT.sizeTall);
+    const cover = pts.require(PLACEMENT.cover);
+    const counts = new Map<Band, number>();
+    let live = 0;
+    for (let i = 0; i < pts.count; i++) {
+      if (cover.get(i) !== 0) continue;
+      live++;
+      const b = bandOfPlacement(t.get(i), h.get(i), tall.get(i), "centre");
+      counts.set(b, (counts.get(b) ?? 0) + 1);
+    }
+    const report: string[] = [];
+    let outside = 0;
+    for (const b of MIX_BANDS) {
+      const share = (counts.get(b) ?? 0) / live;
+      const [lo, hi] = Z3[b].rule;
+      report.push(`${b}=${share.toFixed(3)}`);
+      if (share < lo - 1e-6 || share > hi + 1e-6) outside++;
+    }
+    // eslint-disable-next-line no-console
+    console.log(`seed ${seed}: ${live} live, ${report.join(" ")}, ${outside} bands outside`);
+    // THE WHOLE POINT OF THE RULE, end to end and through the cull that
+    // spends the loop undoing it.
+    expect(outside).toBe(0);
+  }, 120_000);
 });

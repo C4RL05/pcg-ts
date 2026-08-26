@@ -483,6 +483,28 @@ export const PLACEMENT = {
    * where it stays. See {@link writeBandMix}.
    */
   mixTarget: "mixTarget",
+  /**
+   * 1 where Z-3 has already redrawn this placement on this lap.
+   *
+   * THE GRAPH'S `failed` SET, AND IT IS WHAT MAKES THE LOOP TERMINATE.
+   * `repairBandMix` remembers the (donor, band) pairs it has tried and
+   * will not offer the same donor twice, without which "the scan for a
+   * donor is a linear `find`, so the same first-in-band placement is
+   * chosen every time and the loop spends the whole population budget
+   * re-deciding the same thing" — its own words. The graph met the same
+   * wall one level up: the mix refills a band, the NEXT round's cull
+   * pushes the replacement clear of the racing line, the push changes its
+   * band, and the quota — which takes the first eligible member in station
+   * order, and that is still this one — marks it again. Measured over
+   * twenty seeds without this column, the graph ran out of rounds on two
+   * of them where `dressLap` settled on every one.
+   *
+   * A placement may therefore be redrawn at most ONCE per lap, which
+   * bounds the mix by the population exactly as the reference's own pass
+   * loop is bounded. It costs nothing on the seeds that already settled:
+   * round one does essentially all of the work and never asks twice.
+   */
+  mixTried: "mixTried",
   /** 1 where Z-1 moved this placement this round. See {@link writeCorridor}. */
   corridorMoved: "corridorMoved",
   /**
@@ -909,6 +931,9 @@ function placementCloudInTrackFrame(
   const locked = pts.add(PLACEMENT.locked, "f32", 1);
   const mixPinned = pts.add(PLACEMENT.mixPinned, "f32", 1);
   const poseU = pts.add(PLACEMENT.poseU, "f32", 1);
+  // Created here rather than by the stage that sets it: the quota reads
+  // it in round one, BEFORE the redraw has run even once.
+  pts.add(PLACEMENT.mixTried, "f32", 1);
   const asset = pts.add(PLACEMENT.asset, "string", 1);
 
   // The lap's own lookup, not a second one. `frameLookup` is exactly what
@@ -1850,6 +1875,19 @@ export function mixBandPools(
   lib: PoseLibrary,
   protect: ReadonlySet<number>,
 ): boolean[] {
+  // AND THE POOL ITSELF HAS TO BE WIDE ENOUGH TO BE A PATH. The bracket
+  // groups the copies of one placement into a polyline, and `pointsToPath`
+  // emits no primitive for a group of fewer than two points — so a pool of
+  // one asset produces no primitives at all and `pathScan` refuses the
+  // cook. It fails loudly rather than misaligning, which is the good half;
+  // the bad half is that this function's whole job is to make the survivor
+  // count safe BY CONSTRUCTION, so the one precondition it does not state
+  // is the one nobody would look for.
+  if (pool.length < 2) {
+    throw new Error(
+      `mixBandPools: the redraw needs a pool of at least 2 assets to bracket a weighted pick, got ${pool.length}; a one-asset pool has nothing to choose between, so switch Z-3 off by pinning it instead`,
+    );
+  }
   return MIX_BANDS.map((band) => {
     const [blo, bhi] = BAND_T[band];
     return pool.some((a) => {
@@ -1930,6 +1968,7 @@ function perBand(dst: Field, of: (band: Band) => number): Field {
 function writeBandRedraw(
   g: Graph,
   target: NodeHandle,
+  halfWidth: number,
   bandPools: readonly boolean[],
   poseIds: readonly string[],
   tag: string,
@@ -2113,6 +2152,15 @@ function writeBandRedraw(
     [MIX.newPose, attribute(MIX_POSE.id)],
     [
       MIX.commit,
+      // `poseId >= 0` IS THE BACKSTOP AND NOT THE GUARD, which is worth
+      // saying because it reads like the guard. An asset with no recorded
+      // pose has `floor(u * 0) = 0`, so its slot is the NEXT asset's first
+      // pose — a perfectly valid id, and `outOfRange: "clamp"` never
+      // engages. What actually keeps such an asset out of the draw is
+      // `eligible`'s `poseCount > 0`, upstream in the weight. This term
+      // catches only the case where the whole pool has no pose anywhere,
+      // which is the single -1 row `mixPoseCloud` inserts to keep
+      // `transferByIndex` off an empty source.
       mul(
         mul(usable, eq(bandField(finalT, finalH), dst)),
         ge(attribute(MIX_POSE.id), 0),
@@ -2125,6 +2173,21 @@ function writeBandRedraw(
   }
 
   // ---- back onto the carry, by ordinal ---------------------------------
+
+  // THE GATE IS CLEARED BEFORE IT IS GATHERED INTO, which is not
+  // belt-and-braces. `transferByIndex` over an empty source MISSES every
+  // destination point and a miss leaves the prior value — and `MIX.commit`
+  // is the one scratch column that survives the round, because the settle
+  // count reads it. A stale 1 would apply a row of zeros: a placement
+  // teleported to the centreline with no extents and no pose, silently.
+  // The other transferred columns are stripped each round and so come back
+  // at their defaults; this one has to be written.
+  const cleared = g.add(
+    setAttribute,
+    { name: MIX.commit, tupleSize: 1, value: 0 },
+    `${tag}_clearCommit`,
+  );
+  g.connect(chain, "out", cleared, "in");
 
   const gathered = g.add(
     transferByIndex,
@@ -2143,11 +2206,24 @@ function writeBandRedraw(
     },
     `${tag}_gather`,
   );
-  g.connect(chain, "out", gathered, "in");
+  g.connect(cleared, "out", gathered, "in");
   g.connect(answer, "out", gathered, "source");
 
   const apply = attribute(MIX.commit);
-  let out: NodeHandle = gathered;
+  // Recorded BEFORE the columns it gates, so that a reader of this stage's
+  // output sees a flag that describes the whole lap so far rather than
+  // this round alone. It never returns to 0.
+  const tried = g.add(
+    setAttribute,
+    {
+      name: PLACEMENT.mixTried,
+      tupleSize: 1,
+      value: max(attribute(PLACEMENT.mixTried), apply),
+    },
+    `${tag}_tried`,
+  );
+  g.connect(gathered, "out", tried, "in");
+  let out: NodeHandle = tried;
   for (const [name, next, prev] of [
     [PLACEMENT.t, MIX.newT, PLACEMENT.t],
     [PLACEMENT.h, MIX.newH, PLACEMENT.h],
@@ -2214,7 +2290,33 @@ function writeBandRedraw(
     `${tag}_scratch`,
   );
   g.connect(named, "out", cleaned, "in");
-  return { tail: cleaned, assets: stamped, poses: posed };
+
+  // P AND `scale` ARE DERIVED COLUMNS AND THIS STAGE JUST INVALIDATED
+  // THEM. The lift turns (t, h) into a world position and the box write
+  // turns the asset's extents into a world scale; both ran BEFORE the
+  // mix, so a committed redraw leaves a placement whose position is where
+  // its old asset stood and whose scale is that asset's size. Measured
+  // before this was added: 27 to 46 placements a round carrying a P up to
+  // 113 world units from where the rule had put them. Inside the loop the
+  // next round happens to repair it, which is worse than not repairing it
+  // — the damage only escapes on the round the loop stops, so it looked
+  // fine until a seed converged at the wrong moment.
+  const lifted = writeLift(g, cleaned, halfWidth, `${tag}_relift`);
+  const rescaled = g.add(
+    setAttribute,
+    {
+      name: "scale",
+      tupleSize: 3,
+      value: vec(
+        mul(attribute(PLACEMENT.sizeAcross), halfWidth),
+        mul(attribute(PLACEMENT.sizeAlong), halfWidth),
+        mul(attribute(PLACEMENT.sizeTall), halfWidth),
+      ),
+    },
+    `${tag}_rescale`,
+  );
+  g.connect(lifted, "out", rescaled, "in");
+  return { tail: rescaled, assets: stamped, poses: posed };
 }
 
 /**
@@ -2297,8 +2399,13 @@ function writeBandMix(g: Graph, target: NodeHandle, tag: string): NodeHandle {
       // A marker or a landmark STAYS IN THE DENOMINATOR and off the
       // table, which is the other exclusion and the opposite arithmetic:
       // it is part of the population the mix is stated over, and no
-      // rebalance may move it.
-      eligible: sub(1, attribute(PLACEMENT.mixPinned)),
+      // rebalance may move it. So does a placement this rule has already
+      // redrawn once — see {@link PLACEMENT.mixTried} for why that is the
+      // difference between a loop that settles and one that runs out.
+      eligible: mul(
+        sub(1, attribute(PLACEMENT.mixPinned)),
+        sub(1, attribute(PLACEMENT.mixTried)),
+      ),
       priority: attribute(PLACEMENT.station),
       targetAttr: PLACEMENT.mixTarget,
     },
@@ -2363,8 +2470,14 @@ function writeSettleCount(g: Graph, target: NodeHandle, tag: string): NodeHandle
     {
       name: PLACEMENT.roundMoved,
       tupleSize: 1,
+      // Z-3'S COMMIT IS IN HERE AND HAS TO BE. A round whose only event
+      // was a band being refilled is a round that moved something, and a
+      // loop that cannot see it reports `converged` over a lap it has just
+      // changed — measured, before this term was added, as two seeds in
+      // twenty shipping a placement whose boxes were built up to 17 world
+      // units from where the rule had just put it.
       value: max(
-        attribute(PLACEMENT.corridorMoved),
+        max(attribute(PLACEMENT.corridorMoved), attribute(MIX.commit)),
         max(gt(abs(attribute(PLACEMENT.pushW)), 0), attribute(PLACEMENT.drop)),
       ),
     },
@@ -2434,7 +2547,7 @@ export function buildRepairBody(
   // lowers a placement out of the verge band, so the shares the mix reads
   // are only the lap's once both have run.
   const mixed = writeBandMix(b, settled, "z3");
-  const redrawn = writeBandRedraw(b, mixed, mix.bandPools, mix.poseIds, "z3");
+  const redrawn = writeBandRedraw(b, mixed, lap.halfWidth, mix.bandPools, mix.poseIds, "z3");
   const counted = writeSettleCount(b, redrawn.tail, "round");
 
   return {
@@ -2918,6 +3031,7 @@ export async function cookBandRedraw(input: DressGraphInput): Promise<BandRedraw
   const redraw = writeBandRedraw(
     g,
     mixed,
+    lap.halfWidth,
     mixBandPools(pool, lib, mixPinned),
     mixPoseIds(lib),
     "z3",
