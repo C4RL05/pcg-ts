@@ -1071,16 +1071,17 @@ export const pathPointAt = standardNode<PathPointAtParams>({
 export interface PathScanParams {
   name: string;
   outName: string;
+  reduce: string;
   mode: string;
   totalAttr: string;
 }
 
-/** A running total along a path, in walk order. */
+/** A running fold along a path, in walk order. */
 export const pathScan = standardNode<PathScanParams>({
   type: "pathScan",
   category: "attribute",
   description:
-    "Writes the RUNNING TOTAL of a numeric point attribute along every polyline, in the path's own walk order — a prefix sum, the accumulating counterpart to attributeReduce's collapse. This is the operation a field cannot express at any length: a field resolves each element from that element alone, so 'how much of this attribute lies BEHIND me along the curve' has no formulation in the grammar, and the quantities that need it are ordinary — distance travelled, accumulated cost, an inventory that fills as the path runs, and above all a CUMULATIVE DISTRIBUTION, which is what turns a per-sample density into placements. Order is the path's, which is why this is a path node rather than a domain-wide one: a scan without an order is not defined, and a polyline is where this library keeps one. A CLOSED path scans from its seam and does not count the repeated last vertex twice. Points in no polyline are left at zero, and a point visited by several polylines takes the last one in primitive order, both matching writeTangents. NaN CONTRIBUTES ZERO rather than poisoning everything downstream of it, which matters more here than in attributeReduce: there one bad element spoils one statistic, here it would spoil the whole tail of a column. INVERSE-TRANSFORM SAMPLING, the reason this exists, is then three nodes — scan a per-sample density with `totalAttr` set, divide by that total for a CDF in 0..1, and transferAttribute 'nearest' from a cloud of N evenly spaced targets in CDF space back onto the frames. Each target lands on the sample whose CDF is nearest its own, which places exactly N points in proportion to the density, with no rejection and no approximate count.",
+    "Writes a RUNNING FOLD of a numeric point attribute along every polyline, in the path's own walk order — by default a prefix SUM, the accumulating counterpart to attributeReduce's collapse, and under `reduce` a running minimum or maximum over that same walk instead. This is the operation a field cannot express at any length: a field resolves each element from that element alone, so 'how much of this attribute lies BEHIND me along the curve' has no formulation in the grammar, and the quantities that need it are ordinary — distance travelled, accumulated cost, an inventory that fills as the path runs, and above all a CUMULATIVE DISTRIBUTION, which is what turns a per-sample density into placements. Order is the path's, which is why this is a path node rather than a domain-wide one: a scan without an order is not defined, and a polyline is where this library keeps one. A CLOSED path scans from its seam and does not count the repeated last vertex twice, under every fold — and the skip is not merely tidiness for the folds that could absorb it. A min or a max is idempotent, so folding the seam vertex's value in a second time could not move the path's answer; but the second VISIT would also re-WRITE the seam point's own column entry, with the fold over nearly the whole path rather than with what stands behind that point, and that is wrong under all three. One rule, one set of visited points, three folds. Points in no polyline are left at the fold's IDENTITY — zero for a sum, which is what they have always read, and ±Infinity for a min or a max — and a point visited by several polylines takes the last one in primitive order, both matching writeTangents and pathRuns. NaN CONTRIBUTES NOTHING rather than poisoning everything downstream of it — zero to a sum, and no candidate to a min or a max — which matters more here than in attributeReduce: there one bad element spoils one statistic, here it would spoil the whole tail of a column. INVERSE-TRANSFORM SAMPLING, the reason the SUM exists, is then three nodes — scan a per-sample density with `totalAttr` set, divide by that total for a CDF in 0..1, and transferAttribute 'nearest' from a cloud of N evenly spaced targets in CDF space back onto the frames. Each target lands on the sample whose CDF is nearest its own, which places exactly N points in proportion to the density, with no rejection and no approximate count. THAT IDIOM IS `reduce` 'sum' AND NOTHING ELSE, and the nearest-in-CDF lookup is the part that gives it away: a distribution is accumulated MASS, and a running extreme accumulates none — it opens at the first value rather than at zero and moves only where a record is set, so the buckets it lays out have width only at the samples that beat the record and ZERO width everywhere else. Evenly spaced targets in that space land on the records and nowhere else, which is not sampling in proportion to anything. WHAT THE OTHER FOLDS ARE FOR is the GROUPED REDUCTION the library otherwise cannot spell: pointsToPath with a `groupAttr` cuts a cloud into one path per group, `reduce` 'max' with `totalAttr` set writes each group's maximum onto the primitive domain, and promoteAttribute (primitive to point) hands it back to every point of its own group. attributeReduce has min and max but collapses a WHOLE domain onto the detail domain and cannot group, so 'the largest value in each group, on every member of that group' had no expression at all before this param and came out as a hand-written loop in whatever host needed it.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -1088,26 +1089,33 @@ export const pathScan = standardNode<PathScanParams>({
       type: "string",
       default: "density",
       description:
-        "Numeric POINT attribute to accumulate (f32/i32/u32/bool, tuple 1..4). Must exist. Tuples accumulate componentwise, each component its own independent running total.",
+        "Numeric POINT attribute to fold (f32/i32/u32/bool, tuple 1..4). Must exist. Tuples fold COMPONENTWISE, each component its own independent running value — which under `reduce` 'min' or 'max' means a per-component extreme and not the tuple that happened to hold the smallest component: comparing tuples would need an order on tuples, and there is none that is not an arbitrary choice made on the caller's behalf.",
     },
     outName: {
       type: "string",
       default: "scan",
       description:
-        "POINT attribute receiving the running total (f32, at the source's tuple size). Must differ from `name`: scanning in place would read back values this node had already overwritten, so every element after the first would accumulate partial sums instead of its input. 'P' is refused outright. Same reporting-slot rule as the rest of the library — a column of a different shape under this name is refused rather than deleted and re-added, and a same-shape one is reset.",
+        "POINT attribute receiving the running value (f32, at the source's tuple size). Must differ from `name`: scanning in place would read back values this node had already overwritten, so every element after the first would fold in this node's own output instead of its input. 'P' is refused outright. Same reporting-slot rule as the rest of the library — a column of a different shape under this name is refused rather than deleted and re-added, and a same-shape one is reset. f32 whatever `reduce` is, and that is not a limitation for a min or a max: an extreme is one of the values that were handed in, never a combination of two, so it survives the trip at the same precision a sum's inputs did — and f32 carries the ±Infinity a path that has folded in nothing yet reads.",
+    },
+    reduce: {
+      type: "enum",
+      default: "sum",
+      enum: ["sum", "min", "max"],
+      description:
+        "WHAT THE ACCUMULATOR IS. 'sum' (the default, and everything this node did before this param existed) adds the values along a path; 'min' and 'max' keep the smallest or largest seen so far instead. Nothing else moves — `mode`, `totalAttr`, the walk order, the seam rule and componentwise tuple handling are the same scan, because a running minimum differs from a prefix sum only in the fold, and the fold was never the hard part: the ORDER is, and a polyline is where this library keeps one. EACH PATH OPENS ON ITS FOLD'S IDENTITY: 0 for a sum, +Infinity for a min, -Infinity for a max — attributeReduce's answer over an empty domain, and the same answer for the same reason. In 'exclusive' mode a path's FIRST point reads exactly that, since by definition its own value is not in its own total, so a min there reads +Infinity and a max -Infinity. That is the honest answer rather than a sentinel to remember: the minimum of no values IS +Infinity — it is the only x for which min(x, v) = v — the output column is f32 and represents both infinities exactly, and unlike a sum's 0 it can never be mistaken for a measurement, so `isFinite` on the column is a usable test for 'nothing has been folded in here' — which covers a path's first point in 'exclusive' AND a point on no polyline at all, the two elements that have nothing behind them — that a sum can never offer. Answering 0 instead would make an empty min compare TIGHTER than every real value, which is precisely the false positive a threshold rule cannot survive. NaN IS SKIPPED, not propagated — the rule the sum already had, kept: both `<` and `>` are false against a NaN, so an unmeasurable value simply never becomes the record, and one bad sample costs its own point instead of the whole tail of the column. A PATH OF ONE POINT is degenerate rather than unreachable — a polyline needs two vertices, but a CLOSED one whose two vertices are the same point walks exactly one — and it reads the identity in 'exclusive' and its own value in 'inclusive', which is the sum's 0-and-v said in the other monoid, since min(+Infinity, v) is v. THE COMPARISON IS SIGNED, never a magnitude: a max over -5 and -1 is -1. WHAT `mode` COSTS DIFFERS BY FOLD: for a sum the two modes differ at a point BY THAT POINT'S OWN VALUE, so they part company almost everywhere and agree only where the value is zero (or a NaN, which contributes zero); for a min or a max they differ only at the points that SET A NEW RECORD, because an extreme is idempotent and the running value therefore moves one way and then stays. IT IS A PARAM AND NOT A SECOND NODE for the reason pathRuns' `reduce` is one: 'the largest width so far along this lap' and 'the width so far along this lap' are one query asked twice, and this is that same param over a whole path where pathRuns spells it over segmented runs — one vocabulary, one identity, one NaN rule, so a graph that folds a minimum between markers and one that folds it along the whole path do not have to be read two different ways.",
     },
     mode: {
       type: "enum",
       default: "inclusive",
       enum: ["inclusive", "exclusive"],
       description:
-        "Whether a point's own value is part of its own total. 'inclusive' ends the last point of a path on the path's whole total; 'exclusive' starts the first point at zero, which is the one that makes a CDF whose first bucket is reachable. Neither is more correct — pick by which end you need exact.",
+        "Whether a point's own value is part of its own running value. 'inclusive' ends the last point of a path on the path's whole fold; 'exclusive' starts the first point at the `reduce` fold's identity — zero for a sum, which is the one that makes a CDF whose first bucket is reachable, and ±Infinity for a min or a max, which is what 'the smallest thing strictly behind me' means when there is nothing behind me yet. Neither is more correct — pick by which end you need exact.",
     },
     totalAttr: {
       type: "string",
       default: "",
       description:
-        "OPT-IN REPORT: name of an f32 PRIMITIVE attribute receiving each path's WHOLE total, the number both modes are heading for. Empty (the default) writes none and the output is byte-identical to a cook without it. On the PRIMITIVE domain because a total is a fact about a PATH, exactly as pathResample's `lengthAttr` is; promote it (promoteAttribute, primitive to point) for a field to read it per sample, which is what normalizing a scan into a 0..1 CDF needs. Reported in 'exclusive' mode too, where it is otherwise unrecoverable from the column because no point holds it. May not name the same attribute as `outName` — a different domain, but one name, which is a coincidence worth refusing rather than explaining downstream.",
+        "OPT-IN REPORT: name of an f32 PRIMITIVE attribute receiving each path's WHOLE FOLD — its total under `reduce` 'sum', its minimum under 'min', its maximum under 'max' — the number both modes are heading for. Empty (the default) writes none and the output is byte-identical to a cook without it. On the PRIMITIVE domain because a fold is a fact about a PATH, exactly as pathResample's `lengthAttr` is; promote it (promoteAttribute, primitive to point) for a field to read it per sample, which is what normalizing a scan into a 0..1 CDF needs — and, with a `groupAttr` on the pointsToPath upstream, what makes this node the library's GROUPED REDUCTION: one path per group, that group's fold on its primitive, promoted back onto every point of it. Promote with 'first' rather than 'average' when the fold can be an infinity: with one path per point the two agree on the value, and where a point really does sit on two paths, averaging a +Infinity against a -Infinity gives NaN where 'first' still gives a number. REPORTED IN 'exclusive' MODE TOO, where a sum's total is otherwise unrecoverable from the column because no point holds it. Under a min or a max that sentence is nearly true, and the exception is the dangerous half: the last point's exclusive value IS the whole fold unless the last point is the one that set the record, and nothing in the column says which case you are in — so the report is the answer that is right every time rather than usually, which is a stronger reason to ask for it than the sum ever had. Primitives that are not polylines are left at the identity like any unwritten element, so a mesh in the same geometry reads the fold over no points rather than a zero that would beat every real minimum. May not name the same attribute as `outName` — a different domain, but one name, which is a coincidence worth refusing rather than explaining downstream.",
     },
   },
   execute({ inputs, params }) {
@@ -1131,7 +1139,7 @@ export const pathScan = standardNode<PathScanParams>({
     }
     if (outName === name) {
       throw new Error(
-        `pathScan: params "name" and "outName" are both "${name}"; a scan cannot be written over its own source, because every element after the first would accumulate the totals this node had already written rather than the values it was given`,
+        `pathScan: params "name" and "outName" are both "${name}"; a scan cannot be written over its own source, because every element after the first would fold in the running values this node had already written rather than the values it was given`,
       );
     }
     if (totalAttr !== "" && totalAttr === outName) {
@@ -1186,30 +1194,64 @@ export const pathScan = standardNode<PathScanParams>({
     // square root per segment to produce numbers this node never touches.
     const walks = polylineWalks(geo, "pathScan");
     const sd = geo.attrs.point.require(name).data;
-    const zero = new Array<number>(ts).fill(0);
-    const out = geo.attrs.point.replace(outName, "f32", ts, zero).data;
-    const totals = totalAttr === "" ? null : geo.attrs.primitive.replace(totalAttr, "f32", ts, zero);
     const exclusive = params.mode === "exclusive";
+    const takeMin = params.reduce === "min";
+    const takeMax = params.reduce === "max";
+    // Hoisted so the fold below is one loop-invariant test on the sum
+    // path rather than two: sum is the default and must stay exactly the
+    // arithmetic this node has always done.
+    const extreme = takeMin || takeMax;
+    // Every path opens on its fold's IDENTITY, and so do both output
+    // columns, so an element nothing wrote — a point in no polyline, a
+    // primitive that is not one — reads the reduction over no values at
+    // all: 0 for a sum (what it has always read), +Infinity for a min,
+    // -Infinity for a max, which is attributeReduce's answer over an
+    // empty domain. f32 carries both infinities exactly, so this is a
+    // real value rather than a sentinel the caller has to remember, and
+    // it is the one answer that cannot be confused with a measurement.
+    const identity = takeMin
+      ? Number.POSITIVE_INFINITY
+      : takeMax
+        ? Number.NEGATIVE_INFINITY
+        : 0;
+    const start = new Array<number>(ts).fill(identity);
+    const out = geo.attrs.point.replace(outName, "f32", ts, start).data;
+    const totals =
+      totalAttr === "" ? null : geo.attrs.primitive.replace(totalAttr, "f32", ts, start);
     // Accumulate in f64 whatever the source type, so a long f32 sum does
-    // not lose its tail — the same reason attributeReduce does.
+    // not lose its tail — the same reason attributeReduce does. A min or
+    // a max needs none of that (it COPIES one of the values it was handed
+    // rather than combining two, so it is exact in any width that holds
+    // the source) and loses nothing by sharing the same slab.
     const acc = new Float64Array(4);
     // The mode is decided once for the node, so it picks the loop rather
     // than being re-tested per component of per point.
     for (const walk of walks) {
       const pts = walk.points;
       // A closed path repeats its first point as its last vertex; that
-      // repeat is the closure, not a value to add a second time.
+      // repeat is the closure, not a value to fold a second time. The
+      // skip stays under every `reduce` even though an extreme would
+      // absorb the second contribution unchanged: the second VISIT also
+      // re-writes the seam point's own column entry, with the fold over
+      // nearly the whole path instead of with what stands behind it.
       const m = walk.closed ? pts.length - 1 : pts.length;
-      acc.fill(0);
+      acc.fill(identity);
       if (exclusive) {
         for (let k = 0; k < m; k++) {
           const o = pts[k] * ts;
           for (let c = 0; c < ts; c++) {
             const v = sd[o + c];
             out[o + c] = acc[c];
-            // NaN contributes nothing rather than propagating. `v !== v`
-            // is the NaN test that does not depend on argument coercion.
-            if (v === v) acc[c] += v;
+            // The fold. NaN contributes nothing rather than propagating,
+            // in both forms: `v === v` is the NaN test that does not
+            // depend on argument coercion, and for an extreme the
+            // comparison IS that test, since `<` and `>` are both false
+            // against a NaN and it therefore never becomes the record.
+            if (!extreme) {
+              if (v === v) acc[c] += v;
+            } else if (takeMin) {
+              if (v < acc[c]) acc[c] = v;
+            } else if (v > acc[c]) acc[c] = v;
           }
         }
       } else {
@@ -1217,7 +1259,11 @@ export const pathScan = standardNode<PathScanParams>({
           const o = pts[k] * ts;
           for (let c = 0; c < ts; c++) {
             const v = sd[o + c];
-            if (v === v) acc[c] += v;
+            if (!extreme) {
+              if (v === v) acc[c] += v;
+            } else if (takeMin) {
+              if (v < acc[c]) acc[c] = v;
+            } else if (v > acc[c]) acc[c] = v;
             out[o + c] = acc[c];
           }
         }

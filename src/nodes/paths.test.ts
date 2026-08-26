@@ -24,6 +24,7 @@ import {
   pointScatterInBounds,
   pointsToPath,
   projectToPlane,
+  promoteAttribute,
   serializeGraph,
   setAttribute,
   splineSample,
@@ -2902,6 +2903,271 @@ describe("pathScan", () => {
     expect(Math.abs(late - N * 0.75)).toBeLessThanOrEqual(1);
     // And they are spread through the dense half rather than piled up.
     expect(new Set(stations).size).toBe(N);
+  });
+
+  it("leaves reduce 'sum' exactly where it was, named or defaulted", async () => {
+    // The byte-identity claim, pinned against a hand-computed column
+    // rather than against another cook.
+    const src = () => pathWith("w", [1, 2, 3, 4]);
+    expect(col(await scan({ name: "w", outName: "s", reduce: "sum" }, src()), "s")).toEqual([
+      1, 3, 6, 10,
+    ]);
+    // And the default is that same value, so no serialized graph written
+    // before this param existed changes meaning.
+    expect(snapshotGeometry(await scan({ name: "w", outName: "s", reduce: "sum" }, src()))).toEqual(
+      snapshotGeometry(await scan({ name: "w", outName: "s" }, src())),
+    );
+  });
+
+  it("keeps the smallest or largest value so far under reduce min and max", async () => {
+    // [5, 2, 8, 3]. A sum here says 5, 7, 15, 18, which answers a
+    // different question entirely.
+    const src = () => pathWith("w", [5, 2, 8, 3]);
+    const M = { name: "w", outName: "s" };
+    expect(col(await scan({ ...M, reduce: "min" }, src()), "s")).toEqual([5, 2, 2, 2]);
+    expect(col(await scan({ ...M, reduce: "max" }, src()), "s")).toEqual([5, 5, 8, 8]);
+    // The running value only ever moves one way and then stays, which is
+    // the property that makes a min a staircase and a sum a ramp — and
+    // the reason it can never be a distribution.
+    const mins = col(await scan({ ...M, reduce: "min" }, src()), "s");
+    for (let i = 1; i < mins.length; i++) expect(mins[i]).toBeLessThanOrEqual(mins[i - 1]);
+  });
+
+  it("opens each path at the fold's identity, which is what exclusive reads first", async () => {
+    // THE SHARP END. Exclusive means a point's own value is not in its
+    // own total, so a path's first point has folded in nothing — and the
+    // minimum of nothing is +Infinity, exactly as attributeReduce
+    // answers an empty domain. Not a sentinel: it is the only value x
+    // with min(x, v) = v, f32 carries it exactly, and unlike a sum's 0
+    // it can never be mistaken for a measurement.
+    const src = () => pathWith("w", [5, 2, 8]);
+    const E = { name: "w", outName: "s", mode: "exclusive" };
+    expect(col(await scan({ ...E, reduce: "min" }, src()), "s")).toEqual([
+      Number.POSITIVE_INFINITY,
+      5,
+      2,
+    ]);
+    expect(col(await scan({ ...E, reduce: "max" }, src()), "s")).toEqual([
+      Number.NEGATIVE_INFINITY,
+      5,
+      5,
+    ]);
+    // It survives the f32 column, so a caller really can test with
+    // isFinite rather than remembering a magic number.
+    const first = col(await scan({ ...E, reduce: "min" }, src()), "s")[0];
+    expect(Number.isFinite(first)).toBe(false);
+    expect(first).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it("differs between the two modes only where a record is set", async () => {
+    // The mode/reduce interaction worth stating: a sum's inclusive and
+    // exclusive columns differ at EVERY point, by that point's own
+    // value; an extreme's differ only where the point beat the record,
+    // because min and max are idempotent.
+    const src = () => pathWith("w", [5, 2, 8, 3]);
+    const M = { name: "w", outName: "s", reduce: "min" };
+    const incl = col(await scan(M, src()), "s");
+    const excl = col(await scan({ ...M, mode: "exclusive" }, src()), "s");
+    const values = [5, 2, 8, 3];
+    expect(excl).toEqual([Number.POSITIVE_INFINITY, 5, 2, 2]);
+    expect(incl).toEqual([5, 2, 2, 2]);
+    for (let i = 0; i < values.length; i++) expect(incl[i]).toBe(Math.min(excl[i], values[i]));
+  });
+
+  it("reports each path's whole fold on the primitive domain, in every fold", async () => {
+    // Two paths in one geometry, so this also pins that the accumulator
+    // RESETS between them rather than running on from the first.
+    const src = () => withAttr(twoPaths(), "w", [1, 2, 10, 20]);
+    const T = { name: "w", outName: "s", totalAttr: "tot" };
+    const totals = async (reduce: string): Promise<number[]> => {
+      const out = await scan({ ...T, reduce }, src());
+      const tot = out.attrs.primitive.require("tot");
+      return [tot.get(0), tot.get(1)];
+    };
+    expect(await totals("sum")).toEqual([3, 30]);
+    expect(await totals("min")).toEqual([1, 10]);
+    expect(await totals("max")).toEqual([2, 20]);
+  });
+
+  it("reports the fold in exclusive mode, where the column holds it only by luck", async () => {
+    // A sum's total is nowhere in an exclusive column: no point holds
+    // it. Under a min the last point's value USUALLY is the whole fold
+    // — and the exception is the dangerous half, because nothing in the
+    // column says which case you are in. Here are both, one apart.
+    const E = { name: "w", outName: "s", mode: "exclusive", reduce: "min", totalAttr: "tot" };
+    const lucky = await scan(E, pathWith("w", [5, 2, 8]));
+    expect(col(lucky, "s")).toEqual([Number.POSITIVE_INFINITY, 5, 2]);
+    expect(lucky.attrs.primitive.require("tot").get(0)).toBe(2); // the column's last entry, by luck
+    const unlucky = await scan(E, pathWith("w", [5, 2, 1]));
+    expect(col(unlucky, "s")).toEqual([Number.POSITIVE_INFINITY, 5, 2]);
+    // The record was set by the LAST point, so 1 appears nowhere in the
+    // column. Only the report has it.
+    expect(unlucky.attrs.primitive.require("tot").get(0)).toBe(1);
+    expect(col(unlucky, "s")).not.toContain(1);
+  });
+
+  it("folds a signed comparison rather than a magnitude", async () => {
+    // A max over negatives is the LEAST negative. Getting this wrong is
+    // invisible on any all-positive fixture, which most of them are.
+    const src = () => pathWith("w", [-5, -1, -9]);
+    const M = { name: "w", outName: "s" };
+    expect(col(await scan({ ...M, reduce: "max" }, src()), "s")).toEqual([-5, -1, -1]);
+    expect(col(await scan({ ...M, reduce: "min" }, src()), "s")).toEqual([-5, -5, -9]);
+  });
+
+  it("folds each component of a tuple independently under an extreme", async () => {
+    const pos: number[] = [];
+    for (let i = 0; i < 3; i++) pos.push(i, 0, 0);
+    const geo = createPolyline(pos);
+    const w = geo.attrs.point.add("w", "f32", 2, [0, 0]);
+    w.setTuple(0, [5, 10]);
+    w.setTuple(1, [2, 90]);
+    w.setTuple(2, [8, 30]);
+    // Componentwise, and NOT the tuple that held the smallest component:
+    // point 1 wins component 0 and loses component 1, and the row that
+    // comes out is a pair neither point ever carried.
+    const out = await scan({ name: "w", outName: "s", reduce: "min", totalAttr: "tot" }, geo);
+    expect(col(out, "s")).toEqual([5, 10, 2, 10, 2, 10]);
+    expect(out.attrs.primitive.require("tot").getTuple(0)).toEqual([2, 10]);
+  });
+
+  it("lets a NaN fail to be a record instead of poisoning the tail", async () => {
+    const M = { name: "w", outName: "s", totalAttr: "tot" };
+    expect(col(await scan({ ...M, reduce: "min" }, pathWith("w", [3, NaN, 1, 5])), "s")).toEqual([
+      3, 3, 1, 1,
+    ]);
+    // A path whose every value was unmeasurable folded in nothing, and
+    // says so with the identity rather than inventing a number — in the
+    // column and in the report alike.
+    const allNaN = await scan({ ...M, reduce: "min" }, pathWith("w", [NaN, NaN]));
+    expect(col(allNaN, "s")).toEqual([Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]);
+    expect(allNaN.attrs.primitive.require("tot").get(0)).toBe(Number.POSITIVE_INFINITY);
+    const allNaNMax = await scan({ ...M, reduce: "max" }, pathWith("w", [NaN, NaN]));
+    expect(col(allNaNMax, "s")).toEqual([Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY]);
+  });
+
+  it("answers a path of one point with its own value, or with the identity", async () => {
+    // Degenerate rather than unreachable: a polyline needs two vertices,
+    // but a CLOSED one whose two vertices are the same point walks
+    // exactly one. Point 1 is in no polyline and reads the identity.
+    const single = (): Geometry => {
+      const geo = createPointCloud(2);
+      const P = geo.attrs.point.require("P");
+      P.setTuple(0, [0, 0, 0]);
+      P.setTuple(1, [5, 0, 0]);
+      withAttr(geo, "w", [7, 3]);
+      setPolylineTopology(geo, [0, 0], [0], [2]);
+      return geo;
+    };
+    const M = { name: "w", outName: "s", totalAttr: "tot" };
+    const min = await scan({ ...M, reduce: "min" }, single());
+    expect(col(min, "s")).toEqual([7, Number.POSITIVE_INFINITY]);
+    expect(min.attrs.primitive.require("tot").get(0)).toBe(7);
+    const excl = await scan({ ...M, reduce: "min", mode: "exclusive" }, single());
+    expect(col(excl, "s")).toEqual([Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]);
+    expect(excl.attrs.primitive.require("tot").get(0)).toBe(7);
+    expect(col(await scan({ ...M, reduce: "sum" }, single()), "s")).toEqual([7, 0]);
+  });
+
+  it("does not fold a closed path's seam vertex twice, under any fold", async () => {
+    // The skip is not only about double-counting. An extreme would
+    // ABSORB the second contribution unchanged — the total is 2 either
+    // way — but the second VISIT re-writes point 0's own column entry,
+    // and 5 is what stands behind point 0, not 2. Drop the `- 1` from
+    // the walk length and this fixture reads [2, 2, 2, 2].
+    const square = (): Geometry =>
+      withAttr(
+        createPolyline([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], { closed: true }),
+        "w",
+        [5, 2, 8, 3],
+      );
+    const M = { name: "w", outName: "s", totalAttr: "tot" };
+    const min = await scan({ ...M, reduce: "min" }, square());
+    expect(min.pointCount).toBe(4);
+    expect(col(min, "s")).toEqual([5, 2, 2, 2]);
+    expect(min.attrs.primitive.require("tot").get(0)).toBe(2);
+    const max = await scan({ ...M, reduce: "max" }, square());
+    expect(col(max, "s")).toEqual([5, 5, 8, 8]);
+    expect(max.attrs.primitive.require("tot").get(0)).toBe(8);
+  });
+
+  it("leaves a point in no polyline holding the fold's identity", async () => {
+    // 'Left at zero' was always 'left at the reduction over no values',
+    // and for a min that is +Infinity. Zero would compare TIGHTER than
+    // every real measurement, which is the false positive a threshold
+    // rule cannot survive.
+    const make = (): Geometry => {
+      const geo = createPointCloud(4);
+      const P = geo.attrs.point.require("P");
+      P.setTuple(0, [0, 0, 0]);
+      P.setTuple(1, [1, 0, 0]);
+      P.setTuple(2, [2, 0, 0]);
+      P.setTuple(3, [9, 9, 9]); // in no polyline
+      setPolylineTopology(geo, [0, 1, 2], [0], [3]);
+      withAttr(geo, "w", [5, 5, 5, 5]);
+      return geo;
+    };
+    const M = { name: "w", outName: "s" };
+    expect(col(await scan({ ...M, reduce: "min" }, make()), "s")).toEqual([
+      5,
+      5,
+      5,
+      Number.POSITIVE_INFINITY,
+    ]);
+    expect(col(await scan({ ...M, reduce: "max" }, make()), "s")).toEqual([
+      5,
+      5,
+      5,
+      Number.NEGATIVE_INFINITY,
+    ]);
+    // And the sum still reads zero there, which is the same rule.
+    expect(col(await scan({ ...M, reduce: "sum" }, make()), "s")).toEqual([5, 10, 15, 0]);
+  });
+
+  it("is deterministic under min across fresh runs", async () => {
+    const src = pathWith("w", [5, 2, 8, 9, 1]);
+    const run = async () =>
+      snapshotGeometry(await scan({ name: "w", outName: "s", reduce: "min" }, src));
+    expect(await run()).toEqual(await run());
+  });
+
+  it("reduces PER GROUP, which nothing else in the library can do", async () => {
+    // THE GROUPED REDUCTION, end to end. attributeReduce has min and max
+    // but collapses a WHOLE domain onto the detail domain and cannot
+    // group, so 'the largest value in each group, on every member of
+    // that group' had no expression at all: one path per group, the
+    // group's fold on its primitive, promoted back onto its points.
+    const cloud = createPointCloud(6);
+    const P = cloud.attrs.point.require("P");
+    for (let i = 0; i < 6; i++) P.setTuple(i, [i, 0, 0]);
+    withAttr(withAttr(cloud, "w", [3, 9, 4, 8, 2, 5]), "g", [0, 0, 0, 1, 1, 1]);
+
+    const paths = firstGeo(
+      (await runNode(pointsToPath, { groupAttr: "g" }, { in: [makeGeometryItem(cloud)] })).out,
+    );
+    expect(paths.primitiveCount).toBe(2);
+    const scanned = await scan(
+      { name: "w", outName: "s", reduce: "max", totalAttr: "grpMax" },
+      paths,
+    );
+    // 'first' rather than 'average': with one path per point they agree
+    // on the value, and 'first' still gives a number where a point on
+    // two paths would average a +Infinity against a -Infinity into NaN.
+    const promoted = firstGeo(
+      (
+        await runNode(
+          promoteAttribute,
+          { name: "grpMax", from: "primitive", to: "point", mode: "first" },
+          { in: [makeGeometryItem(scanned)] },
+        )
+      ).out,
+    );
+    // Every point of a group reads ITS OWN group's maximum — not the
+    // cloud's 9, and not a running value.
+    expect(col(promoted, "grpMax")).toEqual([9, 9, 9, 8, 8, 8]);
+    // The running column is still the running column; the broadcast one
+    // is the fold. Both survive the promotion.
+    expect(col(promoted, "s")).toEqual([3, 9, 9, 8, 8, 8]);
   });
 });
 describe("pathRuns", () => {
