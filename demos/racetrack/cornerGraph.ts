@@ -33,20 +33,28 @@ import {
   type Geometry,
   Graph,
   type NodeHandle,
+  abs,
   add,
   attribute,
   attributeReduce,
   component,
   cook,
+  copyToPoints,
+  createPointCloud,
   dataInput,
   eq,
   filterByExpression,
   ge,
   gt,
   index,
+  le,
   lt,
   makeGeometryItem,
+  max,
+  mod,
   mul,
+  pointLine,
+  randomField,
   pathRuns,
   promoteAttribute,
   select,
@@ -55,6 +63,7 @@ import {
   transferByIndex,
 } from "pcg-ts";
 import { CORNER_R_W, type Corner, SEVERITY } from "./corners.js";
+import { BRAKING, MARKER, type MarkerKit } from "./legibility.js";
 import { CORNER_MODEL } from "./graph.js";
 import type { Lap } from "./lap.js";
 import { lapAsPath } from "./stationGraph.js";
@@ -455,4 +464,455 @@ export async function cookCorners(opts: {
     outside: outside[i] >= 0 ? 1 : -1,
     severity: sharp[i] !== 0 ? "sharp" : "open",
   }));
+}
+
+/* ------------------------------------------------------------------ *
+ * L-2 and L-3: where the corner language goes.
+ * ------------------------------------------------------------------ */
+
+/** The columns the marker table carries, and the stages gather from it. */
+export const MARKER_COL = {
+  /** Row index: 0 sharp, 1 open, 2 brake. The gather's index. */
+  row: "markerRow",
+  /** The kit's own id for that asset, so the answer can be checked. */
+  id: "markerAssetId",
+  latP10: "markerLatP10",
+  latMed: "markerLatMed",
+  latP90: "markerLatP90",
+} as const;
+
+/** The columns the marker and ruler stages write on their placements. */
+export const PLACED = {
+  /** Station in W, wrapped into [0, lapW). */
+  stationW: "markStationW",
+  /** Signed offset across the track in W, positive RIGHT of travel. */
+  t: "markT",
+  /** Height in W. */
+  h: "markH",
+  /** Which row of the marker table this placement uses. */
+  row: "markRow",
+  /** Which corner it belongs to, by that corner's own index. */
+  corner: "markCorner",
+} as const;
+
+/**
+ * The four `randomField` keys, replacing L-2's three salts and L-3's one.
+ *
+ * FOUR NODES, FOUR STREAMS. As with the asset choice, what makes these
+ * independent is that they sit on four different `setAttribute` nodes —
+ * `randomField` hashes the NODE's derived seed with the key and the
+ * point's identity — and the names are for readability and for keeping a
+ * later fifth draw from silently meaning one of these.
+ */
+const MARKER_KEY = {
+  /** How far before the entry L-2's marker sits. Was salt 0x2c01. */
+  before: "marker.before",
+  /** The quantile L-2 draws its lateral magnitude from. Was 0x2c02. */
+  lateral: "marker.lateral",
+  /** L-2's height in its band. Was 0x2c03. */
+  height: "marker.height",
+  /** L-3's shared lateral magnitude, one per ruler. Was 0x3b01. */
+  ruler: "marker.ruler",
+} as const;
+
+/**
+ * The three reserved assets, flattened onto a three-point cloud.
+ *
+ * ROW ORDER IS THE ROLE, fixed: 0 sharp, 1 open, 2 brake. L-2 chooses
+ * between rows 0 and 1 by severity and L-3 always takes row 2, so the
+ * choice is a `select` over an index rather than a branch over two
+ * different clouds — which is what lets one gather serve both.
+ *
+ * ONLY THE LATERAL QUANTILES COME ALONG. L-2 draws its magnitude from the
+ * marker's own measured lateral and then forces it outside and past
+ * `MARKER.minLateralW`; nothing here reads the marker's height
+ * distribution, because L-2 fixes the height in a band of its own and
+ * `legibility.ts` argues at length for why filtering markers on their
+ * measured height median is the same constraint counted twice.
+ */
+export function markerCloud(markers: MarkerKit): Geometry {
+  const geo = createPointCloud(3);
+  const row = geo.attrs.point.add(MARKER_COL.row, "i32", 1);
+  const id = geo.attrs.point.add(MARKER_COL.id, "i32", 1);
+  const p10 = geo.attrs.point.add(MARKER_COL.latP10, "f32", 1);
+  const med = geo.attrs.point.add(MARKER_COL.latMed, "f32", 1);
+  const p90 = geo.attrs.point.add(MARKER_COL.latP90, "f32", 1);
+  const P = geo.attrs.point.require("P");
+  const rows = [markers.sharp, markers.open, markers.brake];
+  for (let i = 0; i < rows.length; i++) {
+    const a = rows[i];
+    row.set(i, i);
+    id.set(i, a.id);
+    // A marker candidate always has `where` -- `reserveFor` filters the
+    // kit to assets that carry one before `reserveMarkers` ever sees it --
+    // so an absent one is a broken kit rather than a case to handle.
+    const w = a.where;
+    if (!w) {
+      throw new Error(
+        `markerCloud: the reserved marker "${a.name}" (id ${a.id}) carries no measured placement, and L-2 draws its lateral from exactly that. reserveMarkers picks from assets that have one, so this kit was filtered differently somewhere.`,
+      );
+    }
+    p10.set(i, w.lateral.p10);
+    med.set(i, w.lateral.median);
+    p90.set(i, w.lateral.p90);
+    // DISTINCT POSITIONS, because `randomField` keys on a point's identity
+    // and three coincident rows would be one identity. Nothing here draws
+    // on the marker cloud today -- every draw happens on the corner, which
+    // is the only place it can mean "one value per corner" -- but a table
+    // whose rows cannot be told apart is a trap for whoever adds the next
+    // stage, and the fix costs three writes.
+    P.setTuple(i, [i, 0, 0]);
+  }
+  return geo;
+}
+
+/** One corner's L-2 marker, or one mark of one corner's L-3 ruler. */
+export interface MarkPlacement {
+  /** Index into the corner list `cookCorners` answers, in racing order. */
+  readonly corner: number;
+  /** Row of the marker kit: 0 sharp, 1 open, 2 brake. */
+  readonly row: number;
+  readonly station: number;
+  readonly t: number;
+  readonly h: number;
+}
+
+/** What one cook of the corner language decides. */
+export interface CornerLanguagePlacements {
+  /** One per corner, in racing order. L-2. */
+  readonly markers: readonly MarkPlacement[];
+  /** Three per corner tighter than `SEVERITY.tightW`, in racing order. L-3. */
+  readonly rulers: readonly MarkPlacement[];
+}
+
+/**
+ * L-2's marker for every corner: where it goes, and which archetype.
+ *
+ * THREE DRAWS PER CORNER, one per quantity, exactly as `placeCornerLanguage`
+ * makes them off three salts. What this stage does NOT decide is whether
+ * the marker takes over an existing placement's slot or is added beside
+ * it — that is a greedy walk over the whole placement list, it recomputes
+ * which asset is most repeated after every change, and it stays in
+ * TypeScript for now. When it converts, it keeps the victim's station and
+ * this stage's station is discarded; when it adds, this one is used.
+ */
+function addMarkerStage(
+  g: Graph,
+  corners: { readonly node: NodeHandle; readonly pin: string },
+  table: { readonly node: NodeHandle; readonly pin: string },
+  lapW: number,
+  pre: string,
+): NodeHandle {
+  // WHICH ARCHETYPE, as an index rather than a branch: row 0 for a corner
+  // tighter than `SEVERITY.sharpW` and row 1 for the rest, which is
+  // `cornersOf`'s severity split spelled as the gather's argument.
+  const row = put(
+    g,
+    corners,
+    PLACED.row,
+    select(attribute(CORNER.sharp), 0, 1),
+    `${pre}Row`,
+  );
+
+  // WHICH CORNER, recorded before anything filters, because a caller pairs
+  // these against the corner list by index and `filterByExpression` does
+  // not renumber what it keeps -- it just keeps fewer.
+  const which = put(g, { node: row, pin: "out" }, PLACED.corner, index(), `${pre}Which`);
+
+  const gathered = g.add(
+    transferByIndex,
+    {
+      index: attribute(PLACED.row),
+      attributes: [MARKER_COL.latP10, MARKER_COL.latMed, MARKER_COL.latP90],
+      outOfRange: "clamp",
+    },
+    `${pre}Gather`,
+  );
+  g.connect(which, "out", gathered, "in");
+  g.connect(table.node, table.pin, gathered, "source");
+
+  // The window is measured BACK from the entry, so a larger `before` is
+  // further upstream of the corner.
+  const beforeW = add(
+    MARKER.windowW[0],
+    mul(randomField(MARKER_KEY.before), MARKER.windowW[1] - MARKER.windowW[0]),
+  );
+  const stationed = put(
+    g,
+    { node: gathered, pin: "out" },
+    PLACED.stationW,
+    wrapTo(sub(attribute(CORNER.entryW), beforeW), lapW),
+    `${pre}Station`,
+  );
+
+  // ITS OWN LATERAL, FORCED OUTSIDE AND PAST THE CORRIDOR. The `max` is
+  // why Z-1 never has to move a marker, and the `abs` is why an asset
+  // whose quantiles extrapolate negative still lands on the outside
+  // rather than having its side decided by the sign of a draw.
+  const magnitude = max(
+    MARKER.minLateralW,
+    abs(
+      quantileField(
+        attribute(MARKER_COL.latP10),
+        attribute(MARKER_COL.latMed),
+        attribute(MARKER_COL.latP90),
+        randomField(MARKER_KEY.lateral),
+      ),
+    ),
+  );
+  const lateral = put(
+    g,
+    { node: stationed, pin: "out" },
+    PLACED.t,
+    mul(attribute(CORNER.outside), magnitude),
+    `${pre}Lateral`,
+  );
+
+  return put(
+    g,
+    { node: lateral, pin: "out" },
+    PLACED.h,
+    add(
+      MARKER.heightW[0],
+      mul(randomField(MARKER_KEY.height), MARKER.heightW[1] - MARKER.heightW[0]),
+    ),
+    `${pre}Height`,
+  );
+}
+
+/**
+ * L-3's ruler: three marks before every corner tighter than 8 W.
+ *
+ * EXACTLY EVEN, SPANNING THE WINDOW END TO END, and the stations carry no
+ * draw at all: 6, 10.5 and 15 W before the entry, which is `rulerStations`
+ * arithmetic and nothing else. Spacing CV is zero by construction.
+ *
+ * ONE LATERAL FOR ALL THREE — they are a line, not a scatter — and that is
+ * why the draw happens on the CORNER and is carried onto the copies
+ * rather than being drawn per mark. `copyToPoints` gives each copy its own
+ * identity, so a `randomField` read after the copy would give three
+ * different magnitudes and the ruler would not be a ruler. The asset
+ * choice learned the same lesson about its uniforms; this is the case
+ * where getting it wrong is visible rather than merely wrong.
+ */
+function addRulerStage(
+  g: Graph,
+  corners: { readonly node: NodeHandle; readonly pin: string },
+  lapW: number,
+  pre: string,
+): NodeHandle {
+  const which = put(g, corners, PLACED.corner, index(), `${pre}Which`);
+
+  // The shared magnitude, drawn once per corner and before the copy.
+  const mag = put(
+    g,
+    { node: which, pin: "out" },
+    RULER_MAG,
+    add(
+      BRAKING.lateralW[0],
+      mul(randomField(MARKER_KEY.ruler), BRAKING.lateralW[1] - BRAKING.lateralW[0]),
+    ),
+    `${pre}Mag`,
+  );
+
+  const tightOnly = g.add(
+    filterByExpression,
+    { predicate: attribute(CORNER.tight), topology: "drop" },
+    `${pre}Tight`,
+  );
+  g.connect(mag, "out", tightOnly, "in");
+
+  // THE TEMPLATE'S POINTS ARE SPREAD, not coincident, for the reason
+  // `stationGraph`'s slot template gives: `copyToPoints` offsets each copy
+  // by its template point, and two copies at one position with one seed
+  // are ONE identity to everything downstream.
+  const template = g.add(
+    pointLine,
+    {
+      mode: "endpoints",
+      count: BRAKING.count,
+      start: [0, 0, 0],
+      end: [BRAKING.count - 1, 0, 0],
+      includeEnd: true,
+    },
+    `${pre}Marks`,
+  );
+
+  const copies = g.add(
+    copyToPoints,
+    {
+      targetNames: [CORNER.entryW, CORNER.outside, PLACED.corner, RULER_MAG],
+      topology: "drop",
+    },
+    `${pre}Copies`,
+  );
+  g.connect(template, "out", copies, "source");
+  g.connect(tightOnly, "out", copies, "target");
+
+  // Copy `s` of target `t` lands at output index `t * count + s`, so a
+  // mark's rank within its own ruler is `index() mod count` -- the same
+  // arithmetic the station clusters use, and no second column for it.
+  const k = mod(index(), BRAKING.count);
+  const span = BRAKING.windowW[1] - BRAKING.windowW[0];
+  const beforeW = add(BRAKING.windowW[0], mul(k, span / (BRAKING.count - 1)));
+
+  const stationed = put(
+    g,
+    { node: copies, pin: "out" },
+    PLACED.stationW,
+    wrapTo(sub(attribute(CORNER.entryW), beforeW), lapW),
+    `${pre}Station`,
+  );
+  const lateral = put(
+    g,
+    { node: stationed, pin: "out" },
+    PLACED.t,
+    mul(attribute(CORNER.outside), attribute(RULER_MAG)),
+    `${pre}Lateral`,
+  );
+  const heighted = put(
+    g,
+    { node: lateral, pin: "out" },
+    PLACED.h,
+    MARKER.heightW[0],
+    `${pre}Height`,
+  );
+  // Every mark is row 2, the brake archetype. Written rather than assumed
+  // so the two stages hand back the same shape and a reader of the output
+  // never has to know which stage produced a row.
+  return put(g, { node: heighted, pin: "out" }, PLACED.row, 2, `${pre}Row`);
+}
+
+/** The ruler's shared lateral magnitude, drawn per corner. */
+const RULER_MAG = "rulerMag";
+
+/** A station wrapped into [0, modulus), for a negative value too. */
+function wrapTo(value: Field, modulus: number): Field {
+  return mod(add(mod(value, modulus), modulus), modulus);
+}
+
+/**
+ * `drawQuantile`, as a field — two lines, not four.
+ *
+ * The same derivation `assetGraph` sets out: the outer two branches of
+ * the TypeScript are their neighbours evaluated outside their range, so
+ * the piecewise-linear inverse CDF has exactly two pieces meeting at the
+ * median. Restated here rather than imported because `assetGraph`'s copy
+ * is private to the asset draw and a shared helper between two modules
+ * that happen to need the same two lines is a coupling neither wants;
+ * `racetrackCornerLanguage` checks this one against `drawQuantile`
+ * directly, so a divergence is a failing test rather than a surprise.
+ */
+function quantileField(p10: Field, median: Field, p90: Field, u: Field): Field {
+  const lower = add(p10, mul(mul(sub(u, 0.1), 2.5), sub(median, p10)));
+  const upper = add(median, mul(mul(sub(u, 0.5), 2.5), sub(p90, median)));
+  return select(le(u, 0.5), lower, upper);
+}
+
+/** What {@link addCornerLanguage} leaves behind. */
+export interface CornerLanguageStage {
+  /** One point per corner. L-2. */
+  readonly markers: NodeHandle;
+  /** Three per corner tighter than `SEVERITY.tightW`. L-3. */
+  readonly rulers: NodeHandle;
+}
+
+/**
+ * L-2 and L-3's placements, added to a graph that already holds the lap.
+ *
+ * TAKES THE PATH, NOT THE CORNERS, so a caller need not have built the
+ * corner stage itself -- and so that when one has, the two share it:
+ * `Graph` memoizes per node, so adding this beside the asset choice on
+ * the same `lapPath` resamples nothing again and reads the corner model
+ * once.
+ */
+export function addCornerLanguage(
+  g: Graph,
+  path: { readonly node: NodeHandle; readonly pin: string },
+  markers: MarkerKit,
+  lap: Lap,
+  pre: string,
+): CornerLanguageStage {
+  const tableIn = g.add(dataInput, {}, `${pre}Table`);
+  g.setParam(tableIn, "items", [makeGeometryItem(markerCloud(markers))]);
+  const stage = addCornerStage(g, path, { halfWidth: lap.halfWidth, prefix: `${pre}Cn` });
+  return {
+    markers: addMarkerStage(
+      g,
+      { node: stage.out, pin: "out" },
+      { node: tableIn, pin: "out" },
+      lap.lengthW,
+      `${pre}L2`,
+    ),
+    rulers: addRulerStage(g, { node: stage.out, pin: "out" }, lap.lengthW, `${pre}L3`),
+  };
+}
+
+/** The output names {@link addCornerLanguage}'s two clouds publish under. */
+export const CORNER_LANGUAGE_OUTPUTS = { markers: "l2", rulers: "l3" } as const;
+
+/** Read the two clouds {@link addCornerLanguage} published back. */
+export function readCornerLanguage(cooked: {
+  readonly outputs: Record<string, readonly unknown[]>;
+}): CornerLanguagePlacements {
+  const read = (name: string): MarkPlacement[] => {
+    const geo = (cooked.outputs[name][0] as { geo: Geometry }).geo;
+    const col = (n: string): number[] => {
+      const c = geo.attrs.point.require(n);
+      const out: number[] = [];
+      for (let i = 0; i < geo.attrs.point.count; i++) out.push(c.get(i) as number);
+      return out;
+    };
+    const corner = col(PLACED.corner);
+    const row = col(PLACED.row);
+    const station = col(PLACED.stationW);
+    const t = col(PLACED.t);
+    const h = col(PLACED.h);
+    return corner.map((c, i) => ({
+      corner: c,
+      row: row[i],
+      station: station[i],
+      t: t[i],
+      h: h[i],
+    }));
+  };
+  return {
+    markers: read(CORNER_LANGUAGE_OUTPUTS.markers),
+    rulers: read(CORNER_LANGUAGE_OUTPUTS.rulers),
+  };
+}
+
+/**
+ * Run L-2 and L-3's placements as a graph of their own.
+ *
+ * A COOK OF ITS OWN, FOR THE SUITES AND FOR A CALLER WHO WANTS ONLY THIS.
+ * The page does not use it: `cookLapPlacements` adds the same two stages
+ * to the graph that already holds the stations and the asset choice,
+ * because the endpoint is a lap LEVEL and a level is one graph.
+ *
+ * WHAT COMES BACK IS WHERE THINGS GO, NOT THE DRESSED LAP.
+ * `placeCornerLanguage` still owns the convert-or-add and the
+ * displacement, because both are greedy walks over a mutable list that
+ * recompute a lap-wide histogram after every change. This decides the
+ * three quantities L-2 draws and the one L-3 draws -- the half that
+ * re-bases -- and hands them over.
+ */
+export async function cookCornerLanguage(opts: {
+  readonly lap: Lap;
+  readonly seed: number;
+  readonly markers: MarkerKit;
+}): Promise<CornerLanguagePlacements> {
+  const { lap, seed, markers } = opts;
+  if (!lap.corner) {
+    throw new Error(
+      "cookCornerLanguage: this lap carries no corner model, and L-2 and L-3 are placed relative to corner entries. Cook the lap through buildRoadGraph first, or use placeCornerLanguage, which states the same rules in TypeScript for a lap that was never cooked.",
+    );
+  }
+  const g = new Graph(seed);
+  const pathIn = g.add(dataInput, {}, "lapPath");
+  g.setParam(pathIn, "items", [makeGeometryItem(lapAsPath(lap))]);
+  const stage = addCornerLanguage(g, { node: pathIn, pin: "out" }, markers, lap, "cl");
+  g.output(stage.markers, "out", CORNER_LANGUAGE_OUTPUTS.markers);
+  g.output(stage.rulers, "out", CORNER_LANGUAGE_OUTPUTS.rulers);
+  return readCornerLanguage(await cook(g));
 }

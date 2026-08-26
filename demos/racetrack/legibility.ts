@@ -461,12 +461,43 @@ export interface CornerLanguage {
  * for itself instead by displacing the most-repeated ordinary placements
  * from the same window — which is also the window L-1 most wants clear.
  */
+/**
+ * Where L-2's markers and L-3's rulers go, when a graph has decided.
+ *
+ * THE SEAM IS THE DRAWS, NOT THE PLACEMENT. `cookCornerLanguage` answers
+ * the three quantities L-2 draws per corner and the one L-3 draws per
+ * ruler — the half that re-bases — and this function keeps the
+ * convert-or-add and the displacement, which are greedy walks over a
+ * mutable list that recompute a lap-wide histogram after every change.
+ * Splitting there is what lets the drawn half move without the bookkeeping
+ * half having to move with it.
+ *
+ * `markers` is parallel to `corners`, one entry each in racing order;
+ * `rulers` is three per TIGHT corner, in racing order, so tight corner
+ * `ti` owns entries `ti*3 .. ti*3+2`. Every ruler mark is transcribed
+ * WHOLE -- its own station, lateral and height -- rather than having one
+ * lateral read off the first and imposed on the other two, so that "the
+ * three share a lateral" stays a claim about the COOK that
+ * `brakingRulersSatisfied` can fail. See the loop for what reading only
+ * the first one hid.
+ *
+ * L-2'S STATION IS ONLY USED WHEN THE MARKER IS ADDED. A conversion keeps
+ * the victim's station — L-2 asks that the marker be in the window, and
+ * the victim's station already is — so roughly half of these are
+ * discarded on a real lap, and that is the rule rather than waste.
+ */
+export interface DrawnCornerLanguage {
+  readonly markers: readonly { readonly station: number; readonly t: number; readonly h: number }[];
+  readonly rulers: readonly { readonly station: number; readonly t: number; readonly h: number }[];
+}
+
 export function placeCornerLanguage(
   placements: readonly StationedPlacement[],
   corners: readonly Corner[],
   markers: MarkerKit | undefined,
   lapW: number,
   seed: number,
+  drawn?: DrawnCornerLanguage,
 ): CornerLanguage {
   const tight = corners.filter((c) => c.tightestW < BRAKING.tighterThanW);
   const verticalsBefore = countVerticalsInBrakingWindows(placements, tight, lapW);
@@ -502,16 +533,24 @@ export function placeCornerLanguage(
     const where = asset.where;
     if (!where) continue;
 
+    // WHERE THE MARKER GOES: from the caller when a graph has already
+    // drawn it, and from the three draws here when it has not. See
+    // `drawn` on this function's options.
+    const decided = drawn?.markers[ci];
     // The window is measured BACK from the entry, so a larger `before` is
     // further upstream of the corner.
     const u = rand(seed, ci, 0x2c01);
     const beforeW = MARKER.windowW[0] + u * (MARKER.windowW[1] - MARKER.windowW[0]);
-    const station = (((c.entryW - beforeW) % lapW) + lapW) % lapW;
+    const station = decided
+      ? decided.station
+      : (((c.entryW - beforeW) % lapW) + lapW) % lapW;
 
     // Its own lateral, forced to the outside and out past the corridor.
     const raw = Math.abs(drawQuantile(where.lateral, rand(seed, ci, 0x2c02)));
-    const t = c.outside * Math.max(MARKER.minLateralW, raw);
-    const h = MARKER.heightW[0] + rand(seed, ci, 0x2c03) * (MARKER.heightW[1] - MARKER.heightW[0]);
+    const t = decided ? decided.t : c.outside * Math.max(MARKER.minLateralW, raw);
+    const h = decided
+      ? decided.h
+      : MARKER.heightW[0] + rand(seed, ci, 0x2c03) * (MARKER.heightW[1] - MARKER.heightW[0]);
 
     // Convert the most-repeated ordinary placement already in the window
     // on the outside, if there is one. Its station is kept: the station
@@ -551,9 +590,15 @@ export function placeCornerLanguage(
   // L-3, on the tight corners only.
   for (let ti = 0; ti < tight.length; ti++) {
     const c = tight[ti];
-    // One lateral for all three: they are a line, not a scatter.
+    // One lateral for all three: they are a line, not a scatter. From the
+    // caller when a graph drew it, and from here when it did not -- and
+    // the graph's marks arrive in the same order this loop wants them,
+    // three per tight corner in racing order.
+    const cooked = drawn ? drawn.rulers.slice(ti * BRAKING.count, (ti + 1) * BRAKING.count) : [];
     const mag =
       BRAKING.lateralW[0] + rand(seed, ti, 0x3b01) * (BRAKING.lateralW[1] - BRAKING.lateralW[0]);
+    // Still drawn, because a cook that handed back nothing must leave
+    // this loop running the process every suite without a graph measures.
     const t = c.outside * mag;
     const h = MARKER.heightW[0];
 
@@ -582,8 +627,25 @@ export function placeCornerLanguage(
 
     // EXACTLY EVEN, spanning the window end to end. Spacing CV is zero by
     // construction, against the 0.46 the source manages by accident.
-    for (const station of rulerStations(c, lapW)) {
-      out.push({ asset: markers.brake, t, h, station });
+    //
+    // EACH MARK IS TAKEN WHOLE FROM THE COOK when there is one, rather
+    // than having one lateral read off the first and imposed on all three.
+    // That distinction is not cosmetic and cost a falsification: reading
+    // only `cooked[0].t` made "the three share a lateral" a property of
+    // THIS LOOP, so a graph that drew the magnitude per mark instead of
+    // per corner -- the one way to get L-3 wrong that every count still
+    // survives -- came out looking correct here. Transcribing all three
+    // puts the claim back where it is made, and `brakingRulersSatisfied`
+    // is then a real check on it rather than a check on this line.
+    const stations = rulerStations(c, lapW);
+    for (let k = 0; k < stations.length; k++) {
+      const mark = cooked[k];
+      out.push({
+        asset: markers.brake,
+        t: mark ? mark.t : t,
+        h: mark ? mark.h : h,
+        station: mark ? mark.station : stations[k],
+      });
       brakeAdded++;
     }
   }

@@ -66,7 +66,12 @@ import {
   transferAlongPath,
 } from "pcg-ts";
 import type { PlaceableAsset } from "./assets.js";
+import {
+  addCornerLanguage,
+  readCornerLanguage,
+} from "./cornerGraph.js";
 import { CORNER_MODEL } from "./graph.js";
+import type { DrawnCornerLanguage, MarkerKit } from "./legibility.js";
 import type { Lap } from "./lap.js";
 import {
   STATION_LENGTH_ATTR,
@@ -634,6 +639,15 @@ export interface LapPlacements {
    * weighed zero — which is `placeAsset`'s own `undefined`.
    */
   readonly choices: readonly (AssetChoice | undefined)[];
+  /**
+   * Where L-2's markers and L-3's ruler marks go — `DressOptions.language`.
+   *
+   * Absent when no {@link MarkerKit} was handed in, which is the case
+   * `reserveMarkers` reports when a kit has fewer than three verticals to
+   * reserve: there is no corner language to place, and `dressLap` already
+   * answers that by placing none.
+   */
+  readonly language?: DrawnCornerLanguage;
 }
 
 /**
@@ -656,8 +670,17 @@ export async function cookLapPlacements(opts: {
   readonly pool: readonly PlaceableAsset[];
   readonly params?: StationParams;
   readonly densityScale?: number;
+  /**
+   * The three reserved marker assets, when the caller has them.
+   *
+   * FROM THE SAME `reserveFor` CALL AS `pool`, necessarily: the pool is
+   * what is LEFT once these three are held back, so a kit and a seed
+   * decide both together and splitting them would let a lap dress from a
+   * pool that still contains its own corner markers.
+   */
+  readonly markers?: MarkerKit;
 }): Promise<LapPlacements> {
-  const { lap, seed, pool } = opts;
+  const { lap, seed, pool, markers } = opts;
   if (!lap.corner) {
     throw new Error(
       "cookLapPlacements: this lap carries no corner model, and the asset pick is weighted by the curvature at each station. Cook the lap through buildRoadGraph (which writes cornerRadiusW) before dressing it, or use cookStations, which does not read curvature.",
@@ -694,6 +717,19 @@ export async function cookLapPlacements(opts: {
   g.output(repair.out, repair.roundsPin, "rounds");
   g.output(repair.out, repair.convergedPin, "converged");
   g.output(choice.out, "out", "chosen");
+
+  // THE CORNER LANGUAGE JOINS THE SAME GRAPH, not a second cook, for the
+  // reason this function exists at all: the endpoint is a lap LEVEL, and
+  // a level is one graph. It shares the lap path with the stations, so
+  // the frames are resampled once and the corner model read once.
+  const language =
+    markers === undefined
+      ? undefined
+      : addCornerLanguage(g, { node: pathIn, pin: "out" }, markers, lap, "cl");
+  if (language) {
+    g.output(language.markers, "out", "l2");
+    g.output(language.rulers, "out", "l3");
+  }
 
   const cooked = await cook(g);
   const geoOf = (name: string): Geometry =>
@@ -762,5 +798,6 @@ export async function cookLapPlacements(opts: {
       log: [],
     },
     choices: rows.map((r) => r.choice),
+    language: language ? readCornerLanguage(cooked) : undefined,
   };
 }

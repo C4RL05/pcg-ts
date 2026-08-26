@@ -2212,3 +2212,70 @@ description says so outright now.
 2. **Landmark uniqueness (L-4) and the band mix (Z-3)**, both list
    arithmetic over the whole lap.
 3. **The frame lookup**, which `transferAlongPath` now answers.
+
+### The marker vocabulary, and the seam that hid a bug, 2026-08-26
+
+L-2's markers and L-3's rulers are decided by nodes.
+`cookLapPlacements` now adds them to the SAME graph as the stations and
+the asset choice, because the endpoint is a lap level and a level is one
+graph -- `Graph` memoizes per node, so the lap path is resampled once and
+the corner model read once for all three stages.
+
+**What moved and what did not.** The corner language splits cleanly in
+two, and only one half is portable:
+
+| | |
+| --- | --- |
+| DRAWN, and now nodes | a marker's distance back from the entry, its lateral quantile, its height; a ruler's shared lateral |
+| EXACT, and unchanged | `rulerStations` -- 6, 10.5 and 15 W before the entry |
+| GREEDY, still TypeScript | the convert-or-add, and the ruler's displacement |
+
+The greedy half recomputes a lap-wide histogram of which asset is most
+repeated after every change, and can DELETE. That is D-4's class of rule
+and wants D-4's treatment; it is one more pass.
+
+**The one that would have been invisible.** L-3's three marks must share
+ONE lateral -- "they are a line, not a scatter" -- and the way to get that
+wrong in a graph is to draw the magnitude AFTER `copyToPoints` rather than
+before it, because a copy carries its own identity and `randomField` then
+answers three different numbers. Every count, every station and every
+window still passes. The asset choice learned the same lesson about its
+uniforms; this is the case where getting it wrong is visible in the
+picture rather than merely wrong.
+
+**And the seam hid it, which is the finding worth keeping.** The first
+version of `placeCornerLanguage`'s hand-off read the lateral off
+`cooked[0]` and imposed it on all three marks -- so "the three share a
+lateral" was a property of THAT LINE, not of the cook, and the scattered
+draw came out looking correct. `brakingRulersSatisfied`, the shipped gate
+whose whole job is to catch exactly this, could not see it either. The fix
+is to transcribe each mark WHOLE, which puts the claim back where it is
+made; with that done the deliberate mutation fails both the dedicated test
+and the shipped gate. This is the second time in three units that a
+value the graph computed was quietly discarded by the TypeScript that
+consumed it -- the first was `cornerOutside` -- and the shape is the same
+both times: **a column the seam does not read is a column nothing tests.**
+
+**Three falsifications, all caught after the fix:**
+
+| mutation | caught by |
+| --- | --- |
+| ruler magnitude drawn per mark, not per corner | the line test AND `brakingRulersSatisfied` |
+| the gather always reads row 0 (sharp) | the archetype assertion |
+| ruler span divided by `count` not `count - 1` | the `rulerStations` comparison AND the gate |
+
+**Measured, seed 1, shipped vocabulary:** 19 corners, 9 tight, L-2 9+10,
+L-3 27 marks, both gates satisfied, and the ruler stations agree with
+`rulerStations` to 3.05e-5 W -- well inside `SAME_STATION_W`, which
+matters because the gate looks for a mark AT each of those stations.
+Identical figures whether the language is cooked in its own graph or
+folded into the lap graph, which is its own test.
+
+### Where the prelude stands after the marker vocabulary, 2026-08-26
+
+1. **The bookkeeping half of the corner language** -- convert-or-add and
+   the ruler's displacement -- plus `reserveMarkers`, which is three
+   weighted draws WITHOUT replacement and is its own small problem.
+2. **Landmark uniqueness (L-4) and the band mix (Z-3)**, both list
+   arithmetic over the whole lap, and both greedy in the same way.
+3. **The frame lookup**, which `transferAlongPath` now answers.

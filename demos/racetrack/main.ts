@@ -965,17 +965,19 @@ async function cookAndBuild(): Promise<void> {
     // with neither option keep measuring the fitted process, which is
     // what those figures were fitted against.
     const kit = dressingKit();
-    const { pool } = reserveFor(kit, state.seed);
+    const { pool, markers } = reserveFor(kit, state.seed);
     const decided = await cookLapPlacements({
       lap: next.lap,
       seed: state.seed,
       pool,
+      markers,
       densityScale: state.density,
     });
     const dressed = dressLap(kit, next.lap, state.seed, {
       density: state.density,
       stations: decided.stations,
       choices: decided.choices,
+      language: decided.language,
     });
     lastStats = dressed.stats;
     buildCircuit(next);

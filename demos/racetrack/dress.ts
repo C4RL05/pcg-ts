@@ -51,6 +51,7 @@ import type { Kit, PlacedBox } from "./kit.js";
 import type { Lap } from "./lap.js";
 import { placeAt } from "./lap.js";
 import {
+  type DrawnCornerLanguage,
   type MarkerKit,
   type StationedPlacement,
   brakingRulersSatisfied,
@@ -154,6 +155,27 @@ export interface DressOptions {
    * passing this re-bases every figure downstream of it.
    */
   readonly choices?: readonly (AssetChoice | undefined)[];
+
+  /**
+   * Where L-2's markers and L-3's ruler marks go, when a graph drew them.
+   *
+   * THE THIRD SEAM, and the narrowest of the three. It carries only the
+   * four quantities the corner language DRAWS -- a marker's distance back
+   * from the entry, its lateral quantile and its height, and a ruler's
+   * shared lateral -- because everything else L-2 and L-3 do is either
+   * exact arithmetic (`rulerStations`) or a greedy walk over the whole
+   * placement list that recomputes a lap-wide histogram after every
+   * change. `assetGraph.cookCornerLanguage` produces this shape.
+   *
+   * IT PAIRS BY POSITION, and against two different lists: `markers` is
+   * parallel to `cornersOf(lap)` and `rulers` is three per corner tighter
+   * than `SEVERITY.tightW`, both in racing order. Cook it against the same
+   * lap that is being dressed.
+   *
+   * Omitted, the TypeScript draws run as they always have. Like the other
+   * two, passing this re-bases every figure downstream of it.
+   */
+  readonly language?: DrawnCornerLanguage;
 }
 
 /**
@@ -557,8 +579,17 @@ export function dressLap(
   });
 
   // 4. L-2 and L-3. Markers land outside the corridor by construction, so
-  //    they do not need step 3 run again over them.
-  const lang = placeCornerLanguage(placements, corners, markers, lap.lengthW, seed);
+  //    they do not need step 3 run again over them. Where each marker and
+  //    each ruler mark GOES comes from the caller when a graph drew it;
+  //    see `DressOptions.language`.
+  const lang = placeCornerLanguage(
+    placements,
+    corners,
+    markers,
+    lap.lengthW,
+    seed,
+    opts.language,
+  );
   placements = lang.placements;
 
   // 5. L-4, which may not touch the reserved vocabulary.
