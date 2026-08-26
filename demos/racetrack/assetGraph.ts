@@ -52,6 +52,7 @@ import {
   dataInput,
   div,
   filterByExpression,
+  ge,
   le,
   lt,
   makeGeometryItem,
@@ -71,6 +72,8 @@ import {
   readCornerLanguage,
 } from "./cornerGraph.js";
 import { CORNER_MODEL } from "./graph.js";
+import { CORRIDOR } from "./zones.js";
+import { SAME_PLACE_W } from "./tolerance.js";
 import type { DrawnCornerLanguage, MarkerKit } from "./legibility.js";
 import type { Lap } from "./lap.js";
 import {
@@ -124,6 +127,16 @@ export const ASSET = {
   hgtP90: "hgtP90",
   /** Share of the asset's instances that were right of travel. */
   right: "assetRight",
+  /**
+   * The asset's own extents, which Z-1 reads and nothing else does.
+   *
+   * WIDTH AND HEIGHT ONLY. `resolveCorridor` asks two questions of a
+   * piece -- is it SMALL, by `across < 1 && tall < 1.5`, and how far must
+   * its NEAR FACE move to clear the corridor edge, by `across / 2` -- and
+   * the along-track extent answers neither.
+   */
+  across: "assetAcross",
+  tall: "assetTall",
 } as const;
 
 /** The columns the choice stage writes on, or carries to, a station. */
@@ -271,6 +284,8 @@ export function assetCloud(pool: readonly PlaceableAsset[]): Geometry {
   const lat = [f32(ASSET.latP10), f32(ASSET.latMed), f32(ASSET.latP90)];
   const hgt = [f32(ASSET.hgtP10), f32(ASSET.hgtMed), f32(ASSET.hgtP90)];
   const right = f32(ASSET.right);
+  const across = f32(ASSET.across);
+  const tall = f32(ASSET.tall);
 
   const clean = (v: number): number => (Number.isFinite(v) ? Math.max(0, v) : 0);
   for (let i = 0; i < pool.length; i++) {
@@ -288,6 +303,8 @@ export function assetCloud(pool: readonly PlaceableAsset[]): Geometry {
     // oddly in the same case. A count below zero is a defect in the
     // measured file either way, and this is the honest place to say so.
     inst.set(i, clean(a.instances));
+    across.set(i, a.size.across);
+    tall.set(i, a.size.tall);
     aff[0].set(i, clean(w.affinity.straight));
     aff[1].set(i, clean(w.affinity.easy));
     aff[2].set(i, clean(w.affinity.medium));
@@ -608,7 +625,90 @@ export function addAssetChoiceStage(
     `${pre}Height`,
   );
 
-  return { out: placedH };
+  return { out: addCorridorStage(g, { node: placedH, pin: "out" }, pre) };
+}
+
+/**
+ * Z-1, resolved by what the piece IS.
+ *
+ * THE LAST PURELY PER-PLACEMENT RULE, and the reason it belongs here
+ * rather than with the repairs: it reads one placement's lateral, height
+ * and extents and answers from those alone. Nothing about the lap enters
+ * it. Measured across eight seeds it fires 19 to 33 times a lap, which
+ * makes it the only rule left outside `dressLap`'s repair loop that does
+ * real work.
+ *
+ * THE TWO EXITS ARE DIFFERENT, and that is the whole rule. Clamping
+ * everything to the corridor edge satisfies Z-1 and costs the verge band,
+ * because the archetypes reaching inside 1 W are the same ones filling
+ * 1.0 to 1.5 W; lifting everything is worse than either. Small art RISES,
+ * keeping its lateral; large art STANDS OFF, keeping its band.
+ *
+ * ITS EDGE GOES TO THE EDGE, NOT ITS CENTRE. Moving the centre to
+ * |t| = 1 W leaves half the object's width over the road, and the wider
+ * the piece the worse it is -- `zones.ts` calls that the fifth time in
+ * this demo that a centre was used where an extent was meant.
+ *
+ * THE DATUM IS THE BASE, NOT THE CENTRE, and this is where a port could
+ * quietly go wrong: the choice stage draws `h` as the placement's CENTRE
+ * height, and `inCorridor` tests the BASE. So the base is derived, tested
+ * and resolved, and only then turned back into a centre -- exactly the
+ * round trip `dressLap` does by hand, and the one whose f32 residue the
+ * slice-2 notes flagged as a convergence hazard for `moved()`.
+ */
+function addCorridorStage(
+  g: Graph,
+  from: { readonly node: NodeHandle; readonly pin: string },
+  pre: string,
+): NodeHandle {
+  const baseH = sub(attribute(CHOICE.h), mul(0.5, attribute(ASSET.tall)));
+  const t = attribute(CHOICE.t);
+  // `inCorridor`, transcribed, epsilon included: a placement sitting
+  // exactly on an edge is OUTSIDE, so the rule does not fire on the
+  // pieces it has already moved there.
+  const inside = mul(
+    lt(abs(t), CORRIDOR.halfWidthW - SAME_PLACE_W),
+    mul(
+      ge(baseH, CORRIDOR.floorW - SAME_PLACE_W),
+      lt(baseH, CORRIDOR.ceilingW - SAME_PLACE_W),
+    ),
+  );
+  const small = mul(
+    lt(attribute(ASSET.across), 1),
+    lt(attribute(ASSET.tall), 1.5),
+  );
+
+  // `Math.sign(t || 1)`: a placement at exactly zero stands off to the
+  // RIGHT, because `0 || 1` is 1. Spelled as a `ge` so that zero takes
+  // the positive branch, which is the same answer by a different route
+  // and does not depend on JavaScript's falsiness.
+  const stood = put(
+    g,
+    from,
+    CHOICE.t,
+    select(
+      mul(inside, sub(1, small)),
+      mul(
+        select(ge(t, 0), 1, -1),
+        add(CORRIDOR.halfWidthW, mul(0.5, attribute(ASSET.across))),
+      ),
+      t,
+    ),
+    `${pre}Z1Lateral`,
+  );
+  // SMALL ART RISES TO THE CEILING, as a BASE, so the centre it is stored
+  // as is the ceiling plus half the piece.
+  return put(
+    g,
+    { node: stood, pin: "out" },
+    CHOICE.h,
+    select(
+      mul(inside, small),
+      add(CORRIDOR.ceilingW, mul(0.5, attribute(ASSET.tall))),
+      attribute(CHOICE.h),
+    ),
+    `${pre}Z1Height`,
+  );
 }
 
 /** One station's asset, as an index into the pool the cook was given. */

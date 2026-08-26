@@ -46,6 +46,7 @@ import {
 import { CORNER_MODEL } from "../demos/racetrack/graph.js";
 import type { Lap } from "../demos/racetrack/lap.js";
 import { dressLap, reserveFor } from "../demos/racetrack/dress.js";
+import { resolveCorridor } from "../demos/racetrack/zones.js";
 import { DENSITY } from "../demos/racetrack/stations.js";
 import { shippedVocabulary } from "../demos/racetrack/vocabulary.js";
 import { lapFor } from "./support/lap.js";
@@ -269,15 +270,37 @@ describe("assetGraph: the weighted pick", () => {
     const got = await pick({ pool: one, stations: 400, radiusW: 100, seed: 5 });
     expect(got.ord.every((o) => o === 0)).toBe(true);
     const q = (v: [number, number, number]) => ({ p10: v[0], median: v[1], p90: v[2] });
+    // Z-1 RUNS AFTER THE DRAW, so the expectation is the COMPOSITION and
+    // not the quantile alone. This asset is 1 W across and 1 W tall, so
+    // `resolveCorridor` calls it large -- `across < 1` is false at exactly
+    // 1 -- and stands it off whenever the lateral draw lands inside the
+    // corridor, which the extrapolating tail of a p10 of 1 does reach.
+    // Comparing against the raw quantile here would be asserting that a
+    // rule the pipeline runs does not run.
+    const asset0 = one[0];
     let worstT = 0;
     let worstH = 0;
+    let moved = 0;
     for (let i = 0; i < got.t.length; i++) {
-      worstT = Math.max(worstT, Math.abs(Math.abs(got.t[i]) - drawQuantile(q(lat), got.uLat[i])));
-      worstH = Math.max(worstH, Math.abs(got.h[i] - drawQuantile(q(hgt), got.uHgt[i])));
+      const rawT = asset0.where!.rightOfTravel > 0.5 ? 1 : -1;
+      const mag = Math.abs(drawQuantile(q(lat), got.uLat[i]));
+      const h = drawQuantile(q(hgt), got.uHgt[i]);
+      const fixed = resolveCorridor(
+        rawT * mag,
+        h - asset0.size.tall / 2,
+        asset0.size.across,
+        asset0.size.tall,
+      );
+      if (Math.abs(fixed.t) !== mag) moved++;
+      worstT = Math.max(worstT, Math.abs(got.t[i] - fixed.t));
+      worstH = Math.max(worstH, Math.abs(got.h[i] - (fixed.baseH + asset0.size.tall / 2)));
     }
+    // The fixture has to REACH Z-1's exit, or this is testing the
+    // quantile with extra steps.
+    expect(moved).toBeGreaterThan(0);
     // eslint-disable-next-line no-console
     console.log(
-      `vs drawQuantile: lateral worst ${worstT.toExponential(2)}, height worst ${worstH.toExponential(2)}`,
+      `vs drawQuantile then Z-1: ${moved} moved, lateral worst ${worstT.toExponential(2)}, height worst ${worstH.toExponential(2)}`,
     );
     // f32 columns against f64 arithmetic on values running to ~10, where
     // f32 spacing is about 1e-6.

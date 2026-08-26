@@ -2465,3 +2465,43 @@ And then the repair TAIL, which is a different problem: the sightline
 cull, D-4's second pass, false edges, tunnels and enclosure all run
 INSIDE `dressLap`'s bounded fixed point, so they cannot move one at a
 time the way these have.
+
+### Which rules actually fire, and what that does to this plan, 2026-08-26
+
+The remaining order in the entries above was written from the rule list
+rather than from the lap, and measuring it reorders everything. Eight
+seeds, shipped vocabulary, every stage graph-decided up to the corner
+language:
+
+| rule | moves per lap, seeds 1-8 |
+| --- | --- |
+| Z-1 corridor | 19, 21, 29, 33, 19, 28, 22, 24 |
+| **L-4 landmarks** | **0, 0, 1, 0, 0, 1, 0, 0** |
+| L-1 sightline cull | 42/0, 45/2, 57/3, 48/0, 56/11, 37/0, 70/14, 40/1 (pushed / dropped) |
+| Z-3 band mix | 25, 28, 41, 39, 27, 28, 48, 26 |
+| L-5 false edges | 0 on every seed |
+| D-4 inside `dressLap` | 0 on every seed |
+
+**L-4 was next on this plan and should not have been.** It fires once in
+eight laps. Porting it would move a rule that never runs, and the port
+would have no observable effect to test end to end -- the strongest test
+available for it would be a synthetic lap built to make it fire, which is
+worth doing eventually and is not worth doing NEXT. The same is true of
+L-5 and of D-4's second pass, which never fire at all on this vocabulary.
+
+**What does the work is Z-1, the cull and the mix.** Z-1 is the only one
+of the three that is PRELUDE; the other two live inside `dressLap`'s
+bounded fixed point.
+
+**And that loop is the real remaining problem, not a list of rules.**
+Every seam shipped so far works because the stage runs ONCE, before the
+loop, so an async cook can hand its answer to a synchronous `dressLap`.
+A rule inside the loop is re-run per round against placements the
+previous round changed, so the same trick would need a cook per round
+from synchronous code. The two ways out are the ones the slice-2 plan
+already names: make the whole tail one graph with a `repeatUntil`, or
+make `dressLap` async and ripple that through a dozen synchronous
+callers. Neither is a seam; both are the architecture.
+
+**So the prelude is finished** except Z-1, which is a pure per-placement
+function and belongs with the asset choice rather than with the repairs.
