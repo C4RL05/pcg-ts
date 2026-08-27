@@ -820,14 +820,35 @@ export function brakingRulersSatisfied(
     // every mark on every ruler reports missing, and L-3 fails on a lap
     // it built correctly. `SAME_STATION_W` is 1e-3W against a mark
     // spacing of 4.5W — four thousandths of the gap it has to tell apart.
-    const found = want.map((st) =>
-      marks.find(
-        (p) => apartW(p.station, st, lapW) < SAME_STATION_W && Math.sign(p.t) === c.outside,
-      ),
-    );
-    const missing = found.filter((m) => m === undefined).length;
-    if (missing > 0) {
-      failures.push(`corner ${ti}: ${missing} of ${BRAKING.count} marks missing or on the inside`);
+    // THE TWO HALVES ARE COUNTED APART, and the message says which fired.
+    //
+    // This used to be one `find` over the conjunction and one count, so
+    // every failure read "N of 3 marks missing or on the inside" whether
+    // the mark was absent or standing on the wrong side. Those have
+    // completely different causes -- absent is L-1's cull deleting a
+    // LOCKED mark (`immovable` spells "drop rather than move", so a
+    // blocked ruler element is removed instead of pushed), wrong-side is
+    // the placer or a push putting one across the centre line -- and a
+    // reader who cannot tell them apart has to re-cook the lap to find
+    // out which. Measured on the shipped vocabulary, seed 2's five broken
+    // rulers are five ABSENT marks and zero wrong-side ones, so the "or
+    // on the inside" half of that sentence was dead text on the lap it
+    // was actually being read about.
+    //
+    // The wrong-side count needs the station match on its own: a mark
+    // that is at the right station AND on the right side is fine, and
+    // what distinguishes "there is nothing here" from "there is something
+    // here facing the wrong way" is whether the station-only search finds
+    // anything at all.
+    const atStation = want.map((st) => marks.find((p) => apartW(p.station, st, lapW) < SAME_STATION_W));
+    const found = atStation.map((p) => (p !== undefined && Math.sign(p.t) === c.outside ? p : undefined));
+    const absent = atStation.filter((p) => p === undefined).length;
+    const inside = found.filter((m, k) => m === undefined && atStation[k] !== undefined).length;
+    if (absent > 0 || inside > 0) {
+      const parts: string[] = [];
+      if (absent > 0) parts.push(`${absent} missing`);
+      if (inside > 0) parts.push(`${inside} on the inside`);
+      failures.push(`corner ${ti}: ${parts.join(", ")} of ${BRAKING.count} marks`);
       continue;
     }
     const ts = found.map((m) => m!.t);

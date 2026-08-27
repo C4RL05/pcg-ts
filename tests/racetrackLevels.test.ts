@@ -36,14 +36,19 @@ import {
   PLACEMENT,
   buildDressGraph,
   dressLapByGraph,
+  placementAssetRows,
+  poseLibrary,
   poseAssetId,
   readEnclosure,
   type EnclosureReport,
 } from "../demos/racetrack/dressGraph.js";
 import { LEVELS, SECTOR_W, buildRacetrackLevels } from "../demos/racetrack/levels.js";
 import type { Lap } from "../demos/racetrack/lap.js";
-import type { StationedPlacement } from "../demos/racetrack/legibility.js";
+import { brakingRulersSatisfied, type StationedPlacement } from "../demos/racetrack/legibility.js";
 import { dressLap, reserveFor } from "../demos/racetrack/dress.js";
+import { SEVERITY, cornersOf } from "../demos/racetrack/corners.js";
+import { cookReserveMarkers } from "../demos/racetrack/cornerGraph.js";
+import type { PlaceableAsset } from "../demos/racetrack/assets.js";
 import { dressedLapFor, lapFor } from "./support/lap.js";
 import { shippedVocabulary } from "../demos/racetrack/vocabulary.js";
 
@@ -526,24 +531,172 @@ describe("racetrack levels: a sector does not depend on how it was reached", () 
  * both are read ONLY on this branch -- a suite that omitted them would
  * cook a lap with no corner vocabulary at a rate no slider can move, and
  * report that the mode works.
+ *
+ * AND THAT SENTENCE WAS HALF FALSE UNTIL THE MARKERS WERE FIXED, which is
+ * the more useful thing this comment can say. It used to take them from
+ * `reserveFor` -> `reserveMarkers`, describing that as "the one cook the
+ * page keeps". The page does not keep it: `main.ts` reserves through
+ * `cookReserveMarkers`, a graph cook off `randomField`, and the two draw
+ * from different streams and pick DIFFERENT ASSETS -- on seed 2 {38,0,12}
+ * against {0,12,10}, on seed 3 {0,17,20} against {17,36,10}, agreeing
+ * only on seed 1.
+ *
+ * THAT IS NOT COSMETIC, BECAUSE WHICH ASSET IS THE BRAKE MARK DECIDES
+ * WHETHER L-3 HOLDS. Its footprint is what blocks or clears L-1's sight
+ * cone, and a blocked braking mark is DROPPED rather than pushed --
+ * `immovable` is exactly that instruction. Measured on the same cook with
+ * only the reservation swapped: through `cookReserveMarkers`, what the
+ * page ships, seed 2 loses 5 of 36 braking marks and seed 3 is clean;
+ * through `reserveMarkers`, seed 2 is clean 36/36 and seed 3 loses one.
+ * So the old source did not merely fail to cover the page -- it reported
+ * a DIFFERENT lap's compliance, and would have gone on reporting it.
  */
 describe("racetrack levels: a lap the graph decided for itself", () => {
+  /**
+   * L-3 ON THE SETTLED LAP, ON THE PAGE'S OWN RESERVATION.
+   *
+   * THE HOLE THIS FILLS, because it is a specific one and it had two
+   * halves. `racetrackPlacementAssembly.test.ts` already gates
+   * `brakingRulersSatisfied` and it is green -- but it reads
+   * `got.placementsInput`, the list as ASSEMBLED, and it reserves through
+   * `reserveFor`. Both matter. The assembled list has all 36 marks on
+   * every seed; L-1's cull runs after it. And which asset the reservation
+   * picks for the brake mark decides whether that cull fires at all,
+   * because a mark's FOOTPRINT is what blocks the sight cone. So the
+   * shipped gate was measuring a different lap at a different moment, and
+   * a rule can be perfectly enforced at assembly and gone by the time
+   * anything is drawn.
+   *
+   * WHAT IS ASSERTED IS THE CONTRACT, NOT THE COUNT. `immovable` names
+   * the brake mark, which is the instruction "DROP a blocked ruler
+   * element rather than shove it to the verge" -- a braking reference in
+   * the wrong place is worse than none. So the things that must never
+   * happen are a BENT ruler and a WRONG-SIDE mark, and those are asserted
+   * flatly on every seed. How many marks the cull takes is a property of
+   * the spline and the reserved asset's footprint, so it is reported
+   * rather than pinned: gating it would freeze a number that is allowed
+   * to move and would say nothing about the rule.
+   *
+   * MEASURED WHEN THIS WAS WRITTEN, so a reader can tell a change from a
+   * regression: seed 2 loses 5 of its 36 marks, one each from tight
+   * corners 0, 1, 3, 6 and 9; seeds 1 and 3 lose none. Emptying
+   * `immovable` -- the control -- keeps all 36 and bends all five rulers
+   * instead, by 0.5W to 1.5W. That is the trade the contract makes, and
+   * it is why the drops are not a bug to be fixed here.
+   */
+  it(
+    "never bends a braking ruler, whatever the cull takes",
+    async () => {
+      const kit = shippedVocabulary();
+      const lost: string[] = [];
+      for (const seed of SEEDS) {
+        const { lap, frames } = await lapFor(seed);
+        const { pool, markers } = await cookReserveMarkers({
+          assets: (kit.assets as unknown as PlaceableAsset[]).filter((a) => a.where),
+          seed,
+        });
+        expect(markers, `seed ${seed}: the page's reservation found no markers`).toBeDefined();
+        if (!markers) continue;
+        const corners = cornersOf(lap);
+        const tight = corners.filter((c) => c.tightestW < SEVERITY.tightW);
+        expect(tight.length, `seed ${seed}: no tight corner, so L-3 placed nothing`).toBeGreaterThan(
+          0,
+        );
+
+        const got = await dressLapByGraph({
+          kit,
+          lap,
+          frames,
+          seed,
+          immovable: new Set([markers.brake.id]),
+          mixPinned: new Set([markers.sharp.id, markers.open.id, markers.brake.id]),
+          pool,
+          markers,
+        });
+
+        // THE SETTLED CLOUD, NOT THE ASSEMBLED ONE. `placements` is what
+        // the sectors spawn; `placementsInput` is what the repair loop was
+        // handed, and the difference between them is the whole subject.
+        const lib = poseLibrary(kit);
+        const rows = placementAssetRows(pool, markers);
+        const assetOfPose = new Map<number, (typeof rows)[number]>();
+        for (const a of rows) for (const q of lib.posesOf.get(a.id) ?? []) assetOfPose.set(q, a);
+        const pts = got.placements.attrs.point;
+        const pose = pts.require(PLACEMENT.pose);
+        const station = pts.require(PLACEMENT.station);
+        const t = pts.require(PLACEMENT.t);
+        const h = pts.require(PLACEMENT.h);
+        const list: StationedPlacement[] = [];
+        for (let i = 0; i < pts.count; i++) {
+          const a = assetOfPose.get(pose.get(i) as number);
+          if (!a) continue;
+          list.push({
+            asset: a,
+            station: station.get(i) as number,
+            t: t.get(i) as number,
+            h: h.get(i) as number,
+          });
+        }
+        expect(
+          list.length,
+          `seed ${seed}: no placement's pose named an asset, so nothing below is checked`,
+        ).toBeGreaterThan(200);
+
+        const ruled = brakingRulersSatisfied(list, corners, markers, lap.lengthW);
+
+        // NEVER BENT. The three marks of a ruler share one lateral by
+        // construction, and the only thing that can separate them is a
+        // push -- which `immovable` exists to forbid. A ruler that is
+        // still three marks must still be one line.
+        expect(
+          ruled.failures.filter((f) => f.includes("on one line")),
+          `seed ${seed}: a braking ruler was bent, so something pushed a locked mark`,
+        ).toEqual([]);
+
+        // AND NEVER ON THE INSIDE. A mark across the centre line is a
+        // braking reference pointing at the wrong apex.
+        expect(
+          ruled.failures.filter((f) => f.includes("on the inside")),
+          `seed ${seed}: a braking mark ended up on the inside of its corner`,
+        ).toEqual([]);
+
+        const marks = list.filter((p) => p.asset.id === markers.brake.id).length;
+        const want = tight.length * 3;
+        expect(
+          marks,
+          `seed ${seed}: the cull cannot ADD braking marks, so this is a placer bug`,
+        ).toBeLessThanOrEqual(want);
+        lost.push(`seed ${seed}: ${marks}/${want} marks, ${ruled.failures.length} rulers short`);
+      }
+      // Reported so a change shows up in the run rather than only in a
+      // failure -- the drops are allowed to move and a reader still wants
+      // to see them.
+      expect(lost.length, lost.join(" | ")).toBe(SEEDS.length);
+    },
+    LAP_MS,
+  );
+
   it(
     "streams a self-decided list, and the sectors partition it",
     async () => {
       for (const seed of SEEDS) {
         const { lap, frames } = await lapFor(seed);
         const kit = shippedVocabulary();
-        const { pool, markers } = reserveFor(kit, seed);
+        // THE PAGE'S OWN RESERVATION, SPELLED THE PAGE'S WAY. `main.ts`
+        // filters the kit to the placeable assets and cooks
+        // `cookReserveMarkers`; anything else here is a different lap.
+        const { pool, markers } = await cookReserveMarkers({
+          assets: (kit.assets as unknown as PlaceableAsset[]).filter((a) => a.where),
+          seed,
+        });
         const input = {
           kit,
           lap,
           frames,
-          // NO `placements`, AND NO PRELUDE BEHIND THEM. Everything below
-          // comes from `reserveMarkers`, which is the one cook the page
-          // keeps: it decides WHICH ASSETS EXIST before anything is
-          // dressed, so it cannot be a stage inside the graph that
-          // consumes its answer.
+          // NO `placements`, AND NO PRELUDE BEHIND THEM. The reservation
+          // above is the one cook the page keeps: it decides WHICH ASSETS
+          // EXIST before anything is dressed, so it cannot be a stage
+          // inside the graph that consumes its answer.
           seed,
           immovable: new Set(markers ? [markers.brake.id] : []),
           mixPinned: new Set(

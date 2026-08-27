@@ -4089,3 +4089,88 @@ different marker vocabulary and does not run the graph's second repair pass.
 So this is a pre-existing property of that pass, it was on screen before
 today, and it is a real defect worth its own unit: three marks are lost
 somewhere after L-6 has added cover. Seeds 1 and 3 are clean (27/27, 39/39).
+
+**SUPERSEDED 2026-08-28 -- the localisation in this paragraph is WRONG.**
+The marks are gone before the enclosure runs, dropped by L-1's cull in the
+FIRST pass, and it is the documented `immovable` contract rather than a
+defect. See "L-3's lost marks are L-1 doing its job" at the end of this
+file.
+
+### L-3's lost marks are L-1 doing its job, and the suite was watching a different lap, 2026-08-28
+
+**The entry above is wrong and this one supersedes it.** It said the five
+marks go missing "somewhere after L-6 has added cover", in the graph's
+second repair pass. They do not. Two agents derived the answer
+independently -- the second told only the symptom, never the first's
+conclusion -- and they agree on the mechanism and on every number.
+
+**THEY ARE GONE BEFORE THE ENCLOSURE RUNS.** Cooked on seed 2 with the
+page's exact input, stage by stage: `placementsInput` 324 points and 36
+brake marks, L-3 satisfied. `placementsFirst`, the end of the FIRST repair
+pass, 317 points and 31 marks, five corners failing. L-6 then adds 16 cover
+pieces (317 + 16 = 333) and the second pass removes nothing at all. The
+failing corners are 0, 1, 3, 6, 9 of 12 tight, each losing exactly one
+mark, at ruler index 1, 0, 2, 1, 2.
+
+**THE MECHANISM IS THE `immovable` CONTRACT WORKING AS SPECIFIED.**
+`main.ts` sets `immovable = {markers.brake.id}`; that writes
+`PLACEMENT.locked = 1`; `writeSightlineCull` spells the flag as
+`pushMax: select(attribute(PLACEMENT.locked), 0, ...)`. A locked placement
+has no rung to step to, so `occlusionCull` REMOVES it rather than pushing
+it outward -- which is exactly what `immovable` is for and what
+`dressGraph`'s own comment says it is for: a braking reference in the wrong
+place is worse than none.
+
+**THE CONTROL, PREDICTED BEFORE IT WAS RUN.** Empty `immovable`, change
+nothing else, and the five marks should survive and their rulers should
+bend instead. They do: 36 marks, drops fall 7 to 2, and all five corners
+now fail as `marks not on one line` at 0.500W, 1.500W, 0.500W, 0.500W,
+0.500W -- the pushed mark in each case being the one that had been absent,
+moved 1 or 3 rungs of `pushStepW`. So the trade is real and it is the one
+the contract chose: five corners with a two-mark ruler, or five corners
+with a bent one.
+
+**THE CHECKER'S MESSAGE WAS HIDING WHICH HALF FIRED.**
+`brakingRulersSatisfied` folded the station match and the outside test into
+one `find` and reported "N of 3 marks missing or on the inside" for either.
+Across all 36 pairs on seed 2 there are 31 ok, 5 absent and ZERO
+wrong-side, so the second half of that sentence was dead text on the lap it
+was being read about. The two halves are counted apart now and the message
+names the one that fired. Error messages are part of this library's API and
+that applies to a demo's rule gates too.
+
+**WHAT WAS ACTUALLY BROKEN IS THE COVERAGE, IN TWO INDEPENDENT WAYS.**
+Every `tests/racetrack*` suite reserved through `reserveMarkers`; the page
+reserves through `cookReserveMarkers`, a `randomField` graph cook, and the
+two draw different assets -- seed 2 {38,0,12} against {0,12,10}, seed 3
+{0,17,20} against {17,36,10}, agreeing only on seed 1. WHICH ASSET IS THE
+BRAKE MARK DECIDES THE ANSWER, because its footprint is what blocks or
+clears the sight cone: through the page's reservation seed 2 loses five
+marks and seed 3 is clean, through the suite's, seed 2 is clean 36/36 and
+seed 3 loses one. And separately, the one suite that DOES gate
+`brakingRulersSatisfied` reads `got.placementsInput` -- the list as
+assembled, before the cull -- where all 36 marks are present on every seed.
+So the gate was green on a different lap at a different moment, and either
+half alone was enough to hide this.
+
+Both are closed. `racetrackLevels.test.ts` now reserves the page's way, and
+carries a new gate on the SETTLED cloud that asserts the contract rather
+than the count: never a bent ruler, never a wrong-side mark, and the drop
+count reported rather than pinned, because it is a property of the spline
+and the reserved asset's footprint and is allowed to move. It was run
+against the control and FAILS there, naming all five corners.
+
+**WHAT IS LEFT IS A DECISION, NOT A DEFECT, AND IT WANTS A LOOK AT THE
+PICTURE.** A corner that has lost one of three marks still draws two, and
+two marks read as a broken ruler rather than as no ruler. The candidates:
+drop the whole ruler GROUP when the cull takes any of its marks, so a
+corner reports honestly (needs a ruler-group id on the placement cloud and
+a cull that can remove a group -- it changes how the lap fails, not the
+lap); or make L-3's per-corner lateral draw clear the sight cone AS A
+GROUP, which is the real fix and is a bigger one (ported in two places,
+needs the sightline test at draw time, probably an extra fixed-point
+round). Do NOT simply clear `immovable`: the control above is what that
+buys. Do NOT reconcile the two reservations either -- that divergence is
+deliberate and documented, and the reference one loses a mark on seed 3.
+This is a change to what is on screen, so it should be measured and LOOKED
+AT before it ships, the way Z-3's donor order still should be.
