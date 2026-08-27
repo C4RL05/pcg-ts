@@ -3345,4 +3345,34 @@ the repair loop holding 19 of its 25 markers -- Z-3 redrawing corner
 vocabulary into ordinary scenery, invisible. The case reads
 `placementsInput`, which is the list BEFORE any rule ran; it now also
 counts what survives the loop.
+**What the other half needs, scoped while the placement half was built.**
+Applying `buildCornerBookkeeping` is four operations and only one of them
+is hard.
+
+1. **CONVERT is already computed.** `addConvertStage` rewrites
+   `VICTIM.assetOrd` to the marker's ordinal INSIDE the loop -- it has to,
+   because the next corner's histogram must count the marker rather than
+   the asset it replaced -- and the ordinal is `-1 - row`. So applying it is
+   a select on the placement cloud, `ord = ordBase + (-1 - vAssetOrd)` where
+   `claimedBy >= 0`, plus a gather of that corner's decided lateral and
+   height from the marker cloud by `claimedBy`. The station stays the
+   placement's own, which is L-2's rule.
+2. **DISPLACE is a filter**, `displacedBy < 0`, run once after both loops --
+   which is exactly why the bookkeeping names victims by their index in the
+   list AS IT ARRIVED and removes nothing itself.
+3. **ADD is the hard one**, and it is the inverse of a gather: a marker row
+   is wanted only for a corner NO placement claimed, and the cloud that
+   knows is the PLACEMENTS while the cloud that needs to know is the
+   CORNERS. `transferByIndex` goes the wrong way. The idiom that fits is a
+   proximity transfer -- lay the claimants out at `P = [claimedBy, 0, 0]`,
+   lay the corners at `P = [index(), 0, 0]`, carry `claimedBy` across with
+   `transferAttribute`, and a corner is claimed iff what arrives equals its
+   own index. It needs a guard row for the lap that claimed nothing, the
+   way `mixPoseCloud` carries one. Worth measuring against the alternative
+   -- `pointsToPath` grouped by `claimedBy` and a scan -- before choosing.
+4. **The ord space has two spellings of "marker" now** and they should not
+   both survive: `VICTIM.assetOrd` says `-1 - row` and `placementAssetRows`
+   says `poolLength + row`. The first is the bookkeeping's own and predates
+   the second. Converting between them is one expression, but a reader
+   meeting both will assume they agree about something they do not.
 
