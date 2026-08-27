@@ -20,13 +20,28 @@
  * distributional gates the other two had to settle for — and the suite
  * makes exactly that comparison.
  *
- * WHAT IS STILL NOT HERE. Where the MARKERS go is a separate stage; this
- * module answers only "where are the corners and what are they like".
- * `placeCornerLanguage`'s convert-or-add is an order-dependent greedy
- * walk over a mutable list — it recomputes which asset is most repeated
- * after every change, and can delete — which is the same class of rule as
- * D-4's coverage repair and wants the same `repeatUntil` treatment. It
- * stays in TypeScript for one more pass.
+ * WHAT IS STILL NOT HERE, AND IT IS LESS THAN IT WAS. Where the MARKERS
+ * go is a separate stage; the section above answers only "where are the
+ * corners and what are they like".
+ *
+ * THE CONVERT-OR-ADD IS NO LONGER THE ANSWER TO THIS QUESTION. This
+ * paragraph used to end "it stays in TypeScript for one more pass",
+ * naming `placeCornerLanguage`'s order-dependent greedy walk over a
+ * mutable list — recomputing which asset is most repeated after every
+ * change, and able to delete — as the same class of rule as D-4's
+ * coverage repair. That pass happened, in this file:
+ * {@link cookCornerBookkeeping} and its in-graph form
+ * `addCornerBookkeepingApplied` decide, per placement, which corner
+ * converted it and which tight corner's ruler displaced it, as
+ * whole-cloud reductions rather than a walk. `addLapPlacements` runs the
+ * in-graph one, so the shipped page never takes the TypeScript path.
+ *
+ * WHAT `placeCornerLanguage` STILL OWNS is building the resulting LIST
+ * on the reference path — the marker's own asset, lateral and height —
+ * and that is a different thing from deciding the bookkeeping. On the
+ * graph path the assembly builds those rows instead, so
+ * `placeCornerLanguage` is reached only from `dress.ts`, which is the
+ * reference pipeline the comparison suites run.
  */
 import {
   type ExposedPin,
@@ -606,10 +621,12 @@ export interface CornerLanguagePlacements {
  * THREE DRAWS PER CORNER, one per quantity, exactly as `placeCornerLanguage`
  * makes them off three salts. What this stage does NOT decide is whether
  * the marker takes over an existing placement's slot or is added beside
- * it — that is a greedy walk over the whole placement list, it recomputes
- * which asset is most repeated after every change, and it stays in
- * TypeScript for now. When it converts, it keeps the victim's station and
- * this stage's station is discarded; when it adds, this one is used.
+ * it. That is {@link cookCornerBookkeeping}'s question — a separate cook
+ * because it needs the placement list this one has never seen — and it
+ * is answered in the graph, as whole-cloud reductions rather than the
+ * greedy walk this comment used to send a reader to TypeScript for. When
+ * it converts, the victim's station is kept and this stage's station is
+ * discarded; when it adds, this one is used.
  */
 function addMarkerStage(
   g: Graph,
@@ -945,12 +962,15 @@ export function readCornerLanguage(cooked: {
  * to the graph that already holds the stations and the asset choice,
  * because the endpoint is a lap LEVEL and a level is one graph.
  *
- * WHAT COMES BACK IS WHERE THINGS GO, NOT THE DRESSED LAP.
- * `placeCornerLanguage` still owns the convert-or-add and the
- * displacement, because both are greedy walks over a mutable list that
- * recompute a lap-wide histogram after every change. This decides the
- * three quantities L-2 draws and the one L-3 draws -- the half that
- * re-bases -- and hands them over.
+ * WHAT COMES BACK IS WHERE THINGS GO, NOT THE DRESSED LAP. This decides
+ * the three quantities L-2 draws and the one L-3 draws -- the half that
+ * re-bases -- and hands them over. The convert-or-add and the
+ * displacement are NOT here, and this comment used to say they were still
+ * in TypeScript, which they are not: {@link cookCornerBookkeeping} is
+ * them, below, and it is a second cook rather than more stages here
+ * because it needs the placement LIST, which this cook has never seen.
+ * Two cooks for two questions, the way `cookCorners` and this one
+ * already are.
  */
 export async function cookCornerLanguage(opts: {
   readonly lap: Lap;
