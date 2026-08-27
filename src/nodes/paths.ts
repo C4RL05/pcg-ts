@@ -42,6 +42,7 @@
  * these nodes uses.
  */
 import {
+  PRIMTYPE_ATTR,
   createPointCloud,
   setPolylineTopology,
   type Attribute,
@@ -336,25 +337,144 @@ export interface PathResampleParams {
   spacing: FieldParam;
   lengthAttr: string;
   stepAttr: string;
+  resampledLengthAttr: string;
+  sampleArcAttr: string;
 }
 
 /**
- * The two opt-in reports {@link pathResample} writes, checked against one
- * attribute set.
+ * The PER-PATH reports {@link pathResample} writes, in the order the
+ * refusals name them: the param, the name it resolved to, the name offered
+ * as the fix, and the words the duplicate-name refusal uses for what it
+ * holds. Built per call rather than kept as a module constant because the
+ * resolved name belongs in the row — the alternative is a lookup from param
+ * name back to param value, which is one `if` per slot that a fourth slot
+ * can silently fall through.
  *
- * BOTH LAND ON THE PRIMITIVE DOMAIN, and that is the whole design
- * decision. A path has ONE arc length, and in 'count' mode it has ONE
- * step — `count` samples divide that path's own length, so two paths of
- * different lengths get different steps and neither number varies from
- * sample to sample. A per-path value on the point domain would be the
- * same number repeated `count` times, which is not a cheaper spelling of
- * the fact but a weaker one: it says nothing about the path, it is free
- * to disagree with itself, and it costs a column the length of the cloud.
- * `connectPoints.lengthAttr` already writes a per-edge length on the
- * primitive domain for exactly this reason, and a resampled path's length
- * is the same kind of fact about the same kind of element. A field that
- * needs it per sample promotes it (promoteAttribute, primitive to point),
- * which is the route `pathSegments.radius` already documents.
+ * ALL THREE LAND ON THE PRIMITIVE DOMAIN, and that is the whole design
+ * decision. A path has ONE input arc length, ONE emitted length, and in
+ * 'count' mode ONE step — `count` samples divide that path's own length,
+ * so two paths of different lengths get different steps and no one of
+ * these numbers varies from sample to sample. A per-path value on the
+ * point domain would be the same number repeated `count` times, which is
+ * not a cheaper spelling of the fact but a weaker one: it says nothing
+ * about the path, it is free to disagree with itself, and it costs a
+ * column the length of the cloud. `connectPoints.lengthAttr` already
+ * writes a per-edge length on the primitive domain for exactly this
+ * reason, and a resampled path's length is the same kind of fact about
+ * the same kind of element. A field that needs it per sample promotes it
+ * (promoteAttribute, primitive to point), which is the route
+ * `pathSegments.radius` already documents.
+ *
+ * `sampleArcAttr` is deliberately NOT in this list. It is a fact about a
+ * SAMPLE — a different number for every point — so the argument above
+ * does not apply to it and neither does the domain: it is checked on its
+ * own, against the output's POINT domain, where the columns it could
+ * destroy actually live.
+ */
+function resamplePathReports(params: PathResampleParams) {
+  return [
+    {
+      param: "lengthAttr",
+      name: params.lengthAttr,
+      suggestion: "pathLength",
+      holds: "the input curve's length",
+    },
+    {
+      param: "stepAttr",
+      name: params.stepAttr,
+      suggestion: "sampleStep",
+      holds: "the step between samples",
+    },
+    {
+      param: "resampledLengthAttr",
+      name: params.resampledLengthAttr,
+      suggestion: "sampleLength",
+      holds: "the emitted polyline's length",
+    },
+  ] as const;
+}
+
+/**
+ * Refuse two per-path reports pointed at the same attribute.
+ *
+ * Every one of them is f32 tuple 1, so a shared name passes the shape
+ * check and the later write silently replaces the earlier — the same
+ * reason writeCurveFrame refuses two of its three names being equal.
+ * Pairwise over {@link resamplePathReports} rather than one hand-written
+ * comparison per pair: a fourth per-path report would otherwise ship with
+ * one of its three new pairs unchecked, and the pair that got missed would
+ * be the one nobody thought to test.
+ *
+ * `sampleArcAttr` is not in the sweep and cannot be: it is on the POINT
+ * domain, so it names a different column even under an identical name,
+ * and refusing that would refuse a graph in which nothing collides.
+ */
+function requireDistinctResampleReports(params: PathResampleParams): void {
+  const slots = resamplePathReports(params);
+  for (let i = 0; i < slots.length; i++) {
+    const a = slots[i];
+    if (a.name === "") continue;
+    for (let j = i + 1; j < slots.length; j++) {
+      const b = slots[j];
+      if (b.name !== a.name) continue;
+      throw new Error(
+        `pathResample: params "${a.param}" and "${b.param}" are both "${a.name}"; ${a.holds} and ${b.holds} are two values and need two attributes, or the second would overwrite the first with no complaint — every per-path report this node writes is f32 tuple 1, so the shape check cannot tell them apart`,
+      );
+    }
+  }
+}
+
+/**
+ * The two refusals `sampleArcAttr` owes that {@link requireReportSlot}
+ * cannot give it, both about columns that are not on the output's point
+ * domain YET when the slot is checked.
+ *
+ * `primtype` FIRST, from the param alone, because it is wrong whatever the
+ * input holds. It is a TYPE TAG rather than a value: `setPolylineTopology`
+ * stamps it on every path this node emits, `carryPrimitiveAttributes`
+ * refuses to carry it for that reason, and `polylineWalks` reads it to
+ * decide what is a polyline at all. An f32 POINT column under that name is
+ * inert today — every reader looks at the primitive domain — but it is a
+ * second meaning for a name the library resolves as a type, and one
+ * `promoteAttribute` point → primitive on it later replaces the string tag
+ * with a float and every path node downstream stops seeing a path. A slot
+ * whose only defence is that nothing currently reads the domain it lands
+ * on is a slot that fails the day something does.
+ *
+ * Then the INPUT'S PRIMITIVE columns, which is the asymmetry with
+ * `lengthAttr` worth stating out loud: those columns are all CARRIED onto
+ * this node's samples, so they end up on the output's POINT domain, where
+ * this report lands. The point-domain `requireReportSlot` below runs before
+ * the carry — it has to, since the carry must find the column already
+ * there to refuse it — so without this pre-check the collision is caught
+ * inside `carryPrimitiveAttributes`, whose message is about the CARRIED
+ * attribute: it never names `sampleArcAttr`, it sends the reader to the
+ * setAttribute or promoteAttribute that produced the input's column, and
+ * it says the name "is already the attribute this node writes itself" when
+ * that is only true because this param asked for it. Right refusal, wrong
+ * fix, and error messages are part of this library's agent API.
+ */
+function requireSampleArcSlot(attrs: AttributeSet, params: PathResampleParams): void {
+  const name = params.sampleArcAttr;
+  if (name === "") return;
+  const carried = attrs.get(name);
+  if (carried === undefined) return;
+  const shape = carried.tupleSize === 1 ? carried.type : `${carried.type}x${carried.tupleSize}`;
+  throw new Error(
+    `pathResample: sampleArcAttr "${name}" is also a PRIMITIVE attribute of the input (${shape}), and every primitive attribute is carried onto this node's samples — both would land on the same POINT column, and the one written second would take it. Primitive attributes come along automatically and there is no opt-out, so the fix here is to RENAME THE PARAM: give sampleArcAttr a name of its own (e.g. "sampleArc"). Renaming the input's column instead, or dropping it upstream with removeAttribute (domain "primitive", names ["${name}"]) if it is genuinely dead, works too — but it moves the author's own value to make room for a report, which is the wrong way round.`,
+  );
+}
+
+/** The `primtype` half of {@link requireSampleArcSlot}, param-only. */
+function requireSampleArcNotPrimtype(params: PathResampleParams): void {
+  if (params.sampleArcAttr !== PRIMTYPE_ATTR) return;
+  throw new Error(
+    `pathResample: sampleArcAttr may not be "${PRIMTYPE_ATTR}" — that name is the primitive TYPE TAG, not a report slot. This node stamps it on every path it emits, carryPrimitiveAttributes refuses to carry it for the same reason, and the path nodes read it to decide what is a polyline; an f32 POINT column under that name would be a second meaning for a name the library resolves as a type, and one promoteAttribute point → primitive on it would replace the tag with a float and leave every path node downstream unable to find a path. Give sampleArcAttr a name of its own (e.g. "sampleArc").`,
+  );
+}
+
+/**
+ * The per-path reports, checked against one attribute set.
  *
  * Run TWICE: once against the INPUT's primitive domain, where a refusal
  * costs nothing and where every column that is about to be carried onto
@@ -367,11 +487,7 @@ function requireResampleReports(
   params: PathResampleParams,
   on: "input" | "output",
 ): void {
-  const slots = [
-    ["lengthAttr", params.lengthAttr, "pathLength"],
-    ["stepAttr", params.stepAttr, "sampleStep"],
-  ] as const;
-  for (const [param, name, suggestion] of slots) {
+  for (const { param, name, suggestion } of resamplePathReports(params)) {
     if (name === "") continue;
     requireReportSlot({
       attrs,
@@ -461,7 +577,7 @@ export const pathResample = standardNode<PathResampleParams>({
   type: "pathResample",
   category: "sampler",
   description:
-    "Resamples every polyline primitive at even arc-length steps and emits a PATH, not a cloud: the new points carry polyline topology, and a path that was closed comes back closed. Unlike splineSample, each polyline is resampled on its own arc length rather than as one concatenated curve, so a graph with several paths keeps them separate. mode 'count' places exactly `count` samples per path (endpoints included on an open path; a closed path divides its length without duplicating the start). mode 'spacing' steps every `spacing` world units, keeping that step exact rather than stretching it to fit: an open path always ends on its true endpoint, so it never comes back shorter than it went in, and a closed path closes with a REMAINDER segment at the seam that is shorter than `spacing` (use 'count' to divide a loop evenly — see the `spacing` param). Output points are new: they carry the standard point-cloud attributes plus the unit segment `tangent` (f32 tuple 3) and `curveU` (f32, normalized position within that path), and the input's point attributes are NOT carried across. Its PRIMITIVE attributes ARE, in both directions: every attribute of the polyline a sample came from lands on that sample, and each output polyline keeps the attributes of the input polyline it replaces (output primitive i resamples input polyline i and nothing else), so a road resampled here comes back still a road rather than a nameless polyline. `primtype` is the one exception, being a type tag rather than a value, and there is no opt-out: a carried name that collides with one this node writes (P, tangent, curveU, seed, ...) is refused with an error naming the attribute and the fix. TWO OPT-IN REPORTS publish what the resampling already computed, so anything sized in units of the sampling can be stated as a multiple of it instead of retyped as a literal that the count knob then invalidates: `lengthAttr` writes each path's TRUE ARC LENGTH and `stepAttr` the distance between its samples, both on the PRIMITIVE domain because both are facts about a PATH. Both are empty by default and the output is byte-identical to a cook without them. Downstream, any node that can REMOVE points drops topology — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a resampled path that passes through one stops being a path. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
+    "Resamples every polyline primitive at even arc-length steps and emits a PATH, not a cloud: the new points carry polyline topology, and a path that was closed comes back closed. Unlike splineSample, each polyline is resampled on its own arc length rather than as one concatenated curve, so a graph with several paths keeps them separate. mode 'count' places exactly `count` samples per path (endpoints included on an open path; a closed path divides its length without duplicating the start). mode 'spacing' steps every `spacing` world units, keeping that step exact rather than stretching it to fit: an open path always ends on its true endpoint, so it never comes back shorter than it went in, and a closed path closes with a REMAINDER segment at the seam that is shorter than `spacing` (use 'count' to divide a loop evenly — see the `spacing` param). Output points are new: they carry the standard point-cloud attributes plus the unit segment `tangent` (f32 tuple 3) and `curveU` (f32, normalized position within that path), and the input's point attributes are NOT carried across. Its PRIMITIVE attributes ARE, in both directions: every attribute of the polyline a sample came from lands on that sample, and each output polyline keeps the attributes of the input polyline it replaces (output primitive i resamples input polyline i and nothing else), so a road resampled here comes back still a road rather than a nameless polyline. `primtype` is the one exception, being a type tag rather than a value, and there is no opt-out: a carried name that collides with one this node writes (P, tangent, curveU, seed, ...) is refused with an error naming the attribute and the fix. FOUR OPT-IN REPORTS publish what the resampling already computed, so anything sized in units of the sampling can be stated as a multiple of it instead of retyped as a literal that the count knob then invalidates. Three are facts about a PATH and land on the PRIMITIVE domain: `lengthAttr` writes each path's TRUE ARC LENGTH — the INPUT curve's — `stepAttr` the distance between its samples, and `resampledLengthAttr` the length of the polyline this node actually EMITS. THE TWO LENGTHS ARE DIFFERENT NUMBERS and the difference is why the second exists: a resample CUTS CORNERS, so the polyline through the samples is always shorter than the curve it approximates, and it is the shorter one that anything stepping, tiling or scattering over THIS output is walking. The fourth, `sampleArcAttr`, is a fact about a SAMPLE and lands on the POINT domain: each sample's own arc position along its path, in world units on that emitted polyline, so it composes directly with pathPointAt's 'distance' mode, transferAlongPath and arcTile. All four are empty by default and the output is byte-identical to a cook without them. Downstream, any node that can REMOVE points drops topology — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a resampled path that passes through one stops being a path. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -497,7 +613,19 @@ export const pathResample = standardNode<PathResampleParams>({
       type: "string",
       default: "",
       description:
-        "Name of an f32 PRIMITIVE attribute receiving the ARC-LENGTH STEP between consecutive samples on that path. Empty (the default) writes none. Per path and so on the PRIMITIVE domain for the same reason as `lengthAttr`: in 'count' mode the step is that path's OWN length divided by its divisions (length / (count - 1) on an open path, length / count on a closed one, the divisor that leaves no duplicate at the seam), so two paths of different lengths get different steps and neither varies from sample to sample. In 'spacing' mode it reports `spacing` itself, unchanged — or, when `spacing` is a field, that path's OWN resolved value, which is the same statement once the param is read per path — not a tautology but the point of reporting it at all: a downstream size written as a multiple of this attribute follows the sampling when the mode or the knob changes under it, instead of silently meaning something else. Note that in 'spacing' mode the LAST step is the remainder described under `spacing` and is SHORTER than the value reported here; this is the step the node takes, not what the path had left over. Same reporting-slot rule as `lengthAttr`, and the two params may not name the same attribute — the second write would overwrite the first with no complaint, since the shapes agree.",
+        "Name of an f32 PRIMITIVE attribute receiving the ARC-LENGTH STEP between consecutive samples on that path. Empty (the default) writes none. Per path and so on the PRIMITIVE domain for the same reason as `lengthAttr`: in 'count' mode the step is that path's OWN length divided by its divisions (length / (count - 1) on an open path, length / count on a closed one, the divisor that leaves no duplicate at the seam), so two paths of different lengths get different steps and neither varies from sample to sample. In 'spacing' mode it reports `spacing` itself, unchanged — or, when `spacing` is a field, that path's OWN resolved value, which is the same statement once the param is read per path — not a tautology but the point of reporting it at all: a downstream size written as a multiple of this attribute follows the sampling when the mode or the knob changes under it, instead of silently meaning something else. Note that in 'spacing' mode the LAST step is the remainder described under `spacing` and is SHORTER than the value reported here; this is the step the node takes, not what the path had left over. Same reporting-slot rule as `lengthAttr`, and no two of the per-path reports may name the same attribute — the second write would overwrite the first with no complaint, since the shapes agree.",
+    },
+    resampledLengthAttr: {
+      type: "string",
+      default: "",
+      description:
+        "Name of an f32 PRIMITIVE attribute receiving the length of the polyline this node EMITS for that path: the sum of the straight-line chords between consecutive samples, plus the closing chord from the last sample back to the first when the path is closed. Empty (the default) writes none. IT IS NOT `lengthAttr` AND THAT IS THE POINT. `lengthAttr` reports the INPUT curve, which is the right number to ask about the road and the wrong one to ask about this output: a resample CUTS CORNERS, so the polyline through the samples is always SHORTER than the curve it was cut from. On a real circuit lap the two read 3121.533 and 3121.366 — 0.0054% — which sounds ignorable until you notice it is NOT UNIFORM: every unit of it accrues over the bends and none of it over the straights, so no scale factor turns one into the other and a consumer that steps `lengthAttr` over these samples drifts, running off the end of the path or wrapping short of its own seam. Use `lengthAttr` when the question is about the CURVE (how long is this road, how many props does it deserve) and this one when the question is about THIS OUTPUT (how far can I walk on the polyline I am about to hand downstream). Measured from the f32 positions actually written, in the same order and with the same arithmetic `polylineArcTables` uses to re-measure them downstream, so the number a later pathResample, pathPointAt, arcTile or transferAlongPath computes for this path IS this number rather than a near miss — the column itself is f32 like every report here, so what a graph reads is that sum rounded to f32. Same reporting-slot rule as `lengthAttr` — a name on the output's primitive domain under a different shape is REFUSED rather than deleted and re-added, a same-shape one is RESET — and no two of the per-path reports may name the same attribute.",
+    },
+    sampleArcAttr: {
+      type: "string",
+      default: "",
+      description:
+        "Name of an f32 POINT attribute (tuple 1) receiving each sample's ARC POSITION from the start of ITS OWN path, measured along the EMITTED polyline: sample 0 of every path is 0, and each later sample adds the straight-line chord from the sample before it. Empty (the default) writes none. THE UNITS ARE WORLD UNITS, NOT A 0..1 FRACTION, and that is what makes it more than `curveU` under another name: `pathPointAt`'s 'distance' mode, `pointScatterOnPath.arcAttr`, `transferAlongPath.arcAttr` and `arcTile.startAttr` are all world-unit chord coordinates, so this column plugs into any of them with no multiply and nothing for the graph to get wrong. The fraction is one divide away (by `resampledLengthAttr`) while going back the other way needs the length anyway, so the coordinate that composes is the one written. `curveU` is still written beside it and still measures the INPUT curve's fraction; the two disagree by exactly the corner-cutting `resampledLengthAttr` reports. It lands on the POINT domain because it is a fact about a SAMPLE — a different number for every point — which is what makes it unlike the three per-path reports and why it is checked against the output's point domain rather than its primitive one. THE CLOSING CHORD OF A CLOSED PATH IS NOT IN THIS COLUMN: it runs from the last sample back to the first, so no sample holds it — it is in `resampledLengthAttr`, and the last sample's value plus that chord is the emitted length. On an open path the last sample's value IS the emitted length. The shape is this node's to pick (f32, tuple 1), so a name already on the OUTPUT's point domain under a different shape is REFUSED rather than deleted and re-added — P, scale, boundsMin, boundsMax and `tangent` (f32x3), rot and color (f32x4) and seed (u32) all reach that refusal — while `density` and `curveU` ARE f32 tuple 1, so naming either passes the shape check and RESETS it, silently overwriting a standard column with an arc length — and `curveU` is then gone rather than merely shadowed, since the two columns become one buffer and the arc is what stays in it. Give it a name of its own. TWO MORE NAMES ARE REFUSED OUTRIGHT. A name that is also a PRIMITIVE attribute of the INPUT is refused before the cook starts, whatever its shape: every primitive attribute is carried onto these samples, so it would land on this very column, and the refusal names this param rather than the carried attribute because renaming the report is the fix and moving the author's own value is not. And \"primtype\" is refused because it is a type tag rather than a value — this node stamps it on every path it emits, and an f32 point column under that name is a second meaning for a name the library resolves as a type, one promoteAttribute away from replacing the tag and hiding every path from the nodes that read it.",
     },
   },
   execute({ inputs, params, seed, checkCancelled }) {
@@ -516,19 +644,21 @@ export const pathResample = standardNode<PathResampleParams>({
     if (params.mode === "spacing" && scalarSpacing !== undefined && !(scalarSpacing > 0)) {
       throw new Error(`pathResample: spacing must be > 0 in 'spacing' mode, got ${scalarSpacing}`);
     }
-    // Both reports are f32 tuple 1, so a shared name passes the shape
-    // check and the second write silently replaces the first — the same
-    // reason writeCurveFrame refuses two of its three names being equal.
-    if (params.lengthAttr !== "" && params.lengthAttr === params.stepAttr) {
-      throw new Error(
-        `pathResample: params "lengthAttr" and "stepAttr" are both "${params.lengthAttr}"; a length and a step are two values and need two attributes, or the step would overwrite the length`,
-      );
-    }
+    requireDistinctResampleReports(params);
+    // Param-only, so it lands with the other checks that need no geometry.
+    requireSampleArcNotPrimtype(params);
     const geo = requireGeometry(inputs, "in", "pathResample");
     // Against the INPUT first, where a refusal costs nothing: its
     // primitive columns are the ones carried onto the output, so this
     // catches every collision except a `primtype` the input lacks.
     requireResampleReports(geo.attrs.primitive, params, "input");
+    // The same set, for the report that lands on the POINT domain: the
+    // carry puts every one of these columns there, so the input's
+    // primitive names are as much `sampleArcAttr`'s neighbours as the
+    // output's point names are. Without this the collision is real but the
+    // message is the carry's, which names the wrong param and offers the
+    // wrong fix — see requireSampleArcSlot.
+    requireSampleArcSlot(geo.attrs.primitive, params);
     const tables = polylineArcTables(geo, "pathResample");
     // Only needed to name a spacing that would fit the budget below.
     const totalLength = tables.reduce((sum, table) => sum + table.length, 0);
@@ -632,6 +762,51 @@ export const pathResample = standardNode<PathResampleParams>({
     const tangent = out.attrs.point.add("tangent", "f32", 3, [0, 0, 0]).data;
     const curveU = out.attrs.point.add("curveU", "f32", 1, 0).data;
     const seeds = out.attrs.point.require("seed").data;
+    // `sampleArcAttr` gets its OWN report-slot check rather than a fourth
+    // entry in requireResampleReports, and the domain is the reason:
+    // that helper's argument is that its slots are PER-PATH facts and
+    // therefore belong on the primitive domain, and this is a per-SAMPLE
+    // one — checking it against the primitive domain would guard the
+    // wrong columns entirely, waving through a name that is about to
+    // delete `tangent` while refusing one that collides with nothing.
+    // Checked HERE, the moment the columns it must not destroy exist and
+    // before the carry that can add more: this node builds a FRESH cloud
+    // rather than cloning, so the input's point attributes — which never
+    // reach the output — are the wrong set to check against, exactly as
+    // pointScatterOnPath.arcAttr documents for its own fresh cloud.
+    let sampleArc: Float32Array | undefined;
+    if (params.sampleArcAttr !== "") {
+      requireReportSlot({
+        attrs: out.attrs.point,
+        nodeType: "pathResample",
+        param: "sampleArcAttr",
+        name: params.sampleArcAttr,
+        type: "f32",
+        tupleSize: 1,
+        domain: "point",
+        suggestion: "sampleArc",
+        // The cloud is this node's own, so a refusal must name it: the
+        // input's point columns never reach here, and "remove it from the
+        // input" would send an author after a geometry it is not on.
+        on: "output",
+      });
+      sampleArc = out.attrs.point.replace(params.sampleArcAttr, "f32", 1, 0).data;
+    }
+    // The chord length of the EMITTED polyline, per path, and the only
+    // number in this node measured back OFF the samples rather than from
+    // the expression that placed them — because that is exactly what it
+    // is about: `lengthAttr` reports the curve, this reports what came
+    // out. Skipped when neither report asks for it, since it costs a
+    // square root per sample on top of the one the tangent already takes,
+    // and a report nobody named must not slow down the cook that does not
+    // use it.
+    // Allocated only for the report that publishes it, while the running
+    // sum itself is kept for either: `sampleArcAttr` alone needs the walk
+    // and not the total, and computing a closing chord nothing reads would
+    // be one square root per path spent on a number thrown away.
+    const resampledLengths =
+      params.resampledLengthAttr === "" ? undefined : new Float64Array(tables.length);
+    const wantChords = resampledLengths !== undefined || sampleArc !== undefined;
     // Which input polyline each sample came from, and which input polyline
     // each OUTPUT polyline replaces. The second is a structural 1:1 —
     // output primitive `ti` is a resampling of `tables[ti].prim` and of
@@ -645,6 +820,25 @@ export const pathResample = standardNode<PathResampleParams>({
       const positions = perPath[ti];
       const L = table.length;
       outPrimSrc[ti] = table.prim;
+      // The output index of this path's FIRST sample, kept for the closing
+      // chord below: a closed path's last segment runs back to it, and by
+      // the time the walk ends `w` is past the whole path.
+      const first = w;
+      // Chord distance from that first sample, in f64 over the f32
+      // positions the loop has just written. BOTH halves of that are
+      // load-bearing. Reading the values back out of `op` rather than
+      // accumulating the f64 expressions above them is what makes this
+      // number the one `polylineArcTables` recomputes for the same cloud
+      // downstream — it measures an f32 P column and nothing else, so an
+      // f64 sum here would be a slightly different length that no later
+      // node ever agrees with. Summing in f64 rather than in the f32
+      // column is the same rule from the other side: `cum` accumulates in
+      // f64 there, so rounding every partial sum to f32 here would drift
+      // away from it over a few thousand samples.
+      let arc = 0;
+      let px = 0;
+      let py = 0;
+      let pz = 0;
       for (let i = 0; i < positions.length; i++) {
         if ((w & 1023) === 0) checkCancelled();
         const s = positions[i];
@@ -657,6 +851,20 @@ export const pathResample = standardNode<PathResampleParams>({
         op[w * 3] = table.segStart[lo * 3] + dx * t;
         op[w * 3 + 1] = table.segStart[lo * 3 + 1] + dy * t;
         op[w * 3 + 2] = table.segStart[lo * 3 + 2] + dz * t;
+        if (wantChords) {
+          const x = op[w * 3];
+          const y = op[w * 3 + 1];
+          const z = op[w * 3 + 2];
+          if (i > 0) {
+            const cx = x - px;
+            const cy = y - py;
+            const cz = z - pz;
+            arc += Math.sqrt(cx * cx + cy * cy + cz * cz);
+          }
+          px = x;
+          py = y;
+          pz = z;
+        }
         const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (len > 0) {
           tangent[w * 3] = dx / len;
@@ -664,9 +872,38 @@ export const pathResample = standardNode<PathResampleParams>({
           tangent[w * 3 + 2] = dz / len;
         }
         curveU[w] = s / L;
+        // AFTER `curveU`, and that order is the one case where it matters:
+        // `curveU` is f32 tuple 1, so `sampleArcAttr: "curveU"` passes the
+        // shape check and `replace` hands back the SAME buffer. Written
+        // first, the arc would be overwritten by the fraction one line
+        // later and the column an author explicitly asked for the arc in
+        // would hold the other number — the exact plausible-looking cook
+        // the reporting-slot rule exists to avoid. Written last, the named
+        // param means what it says and the standard column is the one
+        // lost, which is the trade every same-shape reset in the library
+        // already makes (pointScatterOnPath.arcAttr over `density`).
+        // Sample 0 of every path is 0: the coordinate restarts per path,
+        // the way every other per-path measurement in this node does.
+        if (sampleArc !== undefined) sampleArc[w] = arc;
         seeds[w] = hashCombine(seed, w);
         samplePrim[w] = table.prim;
         w++;
+      }
+      if (resampledLengths !== undefined) {
+        // The closing chord belongs to the LENGTH and to no sample: the
+        // topology below repeats point `first` as the closed path's last
+        // vertex, so that segment is real and a length that left it out
+        // would be short by one side of the seam — but it starts at the
+        // last sample and ends where the arc coordinate already reads 0,
+        // so there is no sample it could be written on.
+        let closing = 0;
+        if (table.closed) {
+          const cx = op[first * 3] - px;
+          const cy = op[first * 3 + 1] - py;
+          const cz = op[first * 3 + 2] - pz;
+          closing = Math.sqrt(cx * cx + cy * cy + cz * cz);
+        }
+        resampledLengths[ti] = arc + closing;
       }
     }
     carryPrimitiveAttributes(
@@ -724,6 +961,15 @@ export const pathResample = standardNode<PathResampleParams>({
       // Output primitive `ti` resamples `tables[ti]` and nothing else, the
       // same 1:1 the primitive carry above relies on.
       for (let ti = 0; ti < tables.length; ti++) data[ti] = tables[ti].length;
+    }
+    if (resampledLengths !== undefined && params.resampledLengthAttr !== "") {
+      // Beside `lengthAttr` and on the same 1:1, so the two lengths of one
+      // path sit on the same primitive and can be compared in a field
+      // without a transfer. `resampledLengths` was measured in output
+      // order, which IS `ti` order — `tables[ti]` is what path `ti` came
+      // from — so no remap is needed here either.
+      const data = out.attrs.primitive.replace(params.resampledLengthAttr, "f32", 1, 0).data;
+      for (let ti = 0; ti < tables.length; ti++) data[ti] = resampledLengths[ti];
     }
     if (params.stepAttr !== "") {
       const data = out.attrs.primitive.replace(params.stepAttr, "f32", 1, 0).data;

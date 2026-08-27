@@ -1311,6 +1311,407 @@ describe("pathResample", () => {
     // points, exactly as every other primitive attribute does here.
     expect(twice.attrs.point.require("pathLength").get(0)).toBe(7);
   });
+
+  /**
+   * The chord length of the polyline each output primitive WALKS, path by
+   * path, measured off the topology rather than off the sample order.
+   *
+   * Deliberately not a copy of the node's own accumulation: it reads
+   * `vertexToPoint`, which repeats the first point as a closed path's last
+   * vertex, so the closing chord comes from the structure that declares the
+   * path closed rather than from a second `if (closed)` that could agree
+   * with the first while both are wrong.
+   */
+  function walkedChordSums(geo: Geometry): number[] {
+    const P = geo.attrs.point.require("P");
+    const sums: number[] = [];
+    for (let p = 0; p < geo.primitiveCount; p++) {
+      const start = geo.primVertexStart[p];
+      let sum = 0;
+      for (let v = start + 1; v < start + geo.primVertexCount[p]; v++) {
+        const a = geo.vertexToPoint[v - 1];
+        const b = geo.vertexToPoint[v];
+        const dx = P.get(b, 0) - P.get(a, 0);
+        const dy = P.get(b, 1) - P.get(a, 1);
+        const dz = P.get(b, 2) - P.get(a, 2);
+        sum += Math.sqrt(dx * dx + dy * dy + dz * dz);
+      }
+      sums.push(sum);
+    }
+    return sums;
+  }
+
+  /** The `name` column of every point, as a plain array. */
+  function scalarsOf(geo: Geometry, name: string): number[] {
+    const attr = geo.attrs.point.require(name);
+    return Array.from({ length: geo.pointCount }, (_, i) => attr.get(i));
+  }
+
+  /** Run pathResample over one geometry and return the output. */
+  async function resampled(params: Record<string, unknown>, src: Geometry): Promise<Geometry> {
+    return firstGeo((await runNode(pathResample, params, { in: [makeGeometryItem(src)] })).out);
+  }
+
+  it("reports the EMITTED polyline's length, which is SHORTER wherever the path bends", async () => {
+    // The right angle again: 3 along +X then 4 along +Y, arc 7. Three
+    // samples land at 0, 3.5 and 7, so the middle one sits half a unit up
+    // the second leg and the corner is CUT — the emitted polyline is
+    // hypot(3, 0.5) + 3.5, and that is what anything walking this output
+    // actually has to walk.
+    const bend = createPolyline([0, 0, 0, 3, 0, 0, 3, 4, 0]);
+    const geo = await resampled(
+      { mode: "count", count: 3, lengthAttr: "pathLength", resampledLengthAttr: "sampleLength" },
+      bend,
+    );
+    const curve = geo.attrs.primitive.require("pathLength").get(0);
+    const emitted = geo.attrs.primitive.require("sampleLength").get(0);
+    expect(curve).toBe(7);
+    // STRICTLY less. The whole reason the second report exists is that a
+    // consumer stepping `curve` over these samples runs off the end.
+    expect(emitted).toBeLessThan(curve);
+    expect(emitted).toBeCloseTo(Math.sqrt(9.25) + 3.5, 5);
+    // ...and it is the chord sum of the points actually emitted, to f32
+    // exactness — the column is f32, so the value a graph reads is that
+    // f64 sum rounded once on the way in and not a number near it.
+    expect(emitted).toBe(Math.fround(walkedChordSums(geo)[0]));
+    // On the primitive domain, one per path, and nowhere else.
+    expect(geo.attrs.point.has("sampleLength")).toBe(false);
+  });
+
+  it("reports the length the NEXT node measures, bit for bit", async () => {
+    // The load-bearing property, and the reason the sum is accumulated
+    // from the f32 positions just written rather than from the f64
+    // expressions above them: `polylineArcTables` re-measures an f32 P
+    // column downstream, so this number has to be the one IT arrives at.
+    // Resampling the output again puts that recomputation on the same
+    // column under a name we can compare — an f64 accumulation here would
+    // land a few ulps away and this would be a toBeCloseTo.
+    const bend = createPolyline([0, 0, 0, 3, 0, 0, 3, 4, 0]);
+    const once = await resampled({ mode: "count", count: 3, resampledLengthAttr: "emitted" }, bend);
+    const twice = await resampled({ mode: "count", count: 3, lengthAttr: "pathLength" }, once);
+    expect(twice.attrs.primitive.require("pathLength").get(0)).toBe(
+      once.attrs.primitive.require("emitted").get(0),
+    );
+  });
+
+  it("agrees with the true length on a straight path, which has no corner to cut", async () => {
+    const straight = createPolyline([0, 0, 0, 10, 0, 0]);
+    const geo = await resampled(
+      { mode: "count", count: 5, lengthAttr: "pathLength", resampledLengthAttr: "sampleLength" },
+      straight,
+    );
+    // Equal, not merely close: resampling a line loses nothing, so the gap
+    // between the two reports is exactly the corner-cutting and zero when
+    // there are no corners.
+    expect(geo.attrs.primitive.require("sampleLength").get(0)).toBe(10);
+    expect(geo.attrs.primitive.require("pathLength").get(0)).toBe(10);
+  });
+
+  it("writes each sample's own chord arc, starting at 0 on every path", async () => {
+    // Two bent paths of different lengths: 3 + 4 = 7, and 6 + 8 = 14. The
+    // arc has to restart per path, so the second path's first sample is 0
+    // and not 7 — a coordinate that kept running would place every prop on
+    // the second road as far along as the first road was long.
+    const cloud = createPointCloud(6);
+    const P = cloud.attrs.point.require("P");
+    P.setTuple(0, [0, 0, 0]);
+    P.setTuple(1, [3, 0, 0]);
+    P.setTuple(2, [3, 4, 0]);
+    P.setTuple(3, [10, 0, 0]);
+    P.setTuple(4, [10, 6, 0]);
+    P.setTuple(5, [18, 6, 0]);
+    setPolylineTopology(cloud, [0, 1, 2, 3, 4, 5], [0, 3], [3, 3]);
+    const geo = await resampled(
+      {
+        mode: "count",
+        count: 5,
+        lengthAttr: "pathLength",
+        resampledLengthAttr: "sampleLength",
+        sampleArcAttr: "sampleArc",
+      },
+      cloud,
+    );
+    const arcs = scalarsOf(geo, "sampleArc");
+    expect(arcs).toHaveLength(10);
+    expect([arcs[0], arcs[5]]).toEqual([0, 0]);
+    for (const path of [arcs.slice(0, 5), arcs.slice(5)]) {
+      for (let i = 1; i < path.length; i++) expect(path[i]).toBeGreaterThan(path[i - 1]);
+    }
+    // Each primitive gets its own two lengths, and both pairs disagree in
+    // the same direction: the curve is longer than what came out of it.
+    const curve = geo.attrs.primitive.require("pathLength");
+    const emitted = geo.attrs.primitive.require("sampleLength");
+    expect([curve.get(0), curve.get(1)]).toEqual([7, 14]);
+    expect(emitted.get(0)).toBeLessThan(7);
+    expect(emitted.get(1)).toBeLessThan(14);
+    // On an OPEN path the last sample IS the far end, so its arc is the
+    // whole emitted length — exactly, since both are the same f64 sum
+    // rounded to f32 once.
+    expect(arcs[4]).toBe(emitted.get(0));
+    expect(arcs[9]).toBe(emitted.get(1));
+    // World units, not a fraction: `curveU` is the fraction and it is the
+    // OTHER curve's. The two disagree by the corner-cutting above, which
+    // is why one is not a rescaling of the other.
+    const us = scalarsOf(geo, "curveU");
+    expect(us[4]).toBe(1);
+    expect(arcs[2] / emitted.get(0)).not.toBe(us[2]);
+  });
+
+  it("leaves a closed path's seam chord out of the arcs and inside the length", async () => {
+    // The unit square, arc 4, sampled 5 times: the step is 0.8 and no
+    // sample lands on a corner, so every one of the five chords is cut.
+    const square = createPolyline([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], { closed: true });
+    const geo = await resampled(
+      { mode: "count", count: 5, resampledLengthAttr: "sampleLength", sampleArcAttr: "sampleArc" },
+      square,
+    );
+    const arcs = scalarsOf(geo, "sampleArc");
+    const emitted = geo.attrs.primitive.require("sampleLength").get(0);
+    expect(arcs[0]).toBe(0);
+    expect(emitted).toBeLessThan(4);
+    expect(emitted).toBe(Math.fround(walkedChordSums(geo)[0]));
+    // The closing chord runs from the last sample at (0, 0.8, 0) back to
+    // the start, and no SAMPLE holds it: the arc coordinate stops at the
+    // last sample, and the length is that plus the seam. Close rather than
+    // exact because the node rounds the whole f64 sum to f32 once while
+    // this adds two numbers that were rounded separately.
+    const last = arcs[arcs.length - 1];
+    expect(last).toBeLessThan(emitted);
+    expect(last + 0.8).toBeCloseTo(emitted, 5);
+  });
+
+  it("closes the SECOND path's loop, not the first path's start", async () => {
+    // The seam chord runs from a path's last sample back to ITS OWN first
+    // sample, and the index of that first sample is only 0 for the first
+    // path. Every other closed-path test here has one path, so a closing
+    // chord measured to output point 0 would pass all of them and be off
+    // by the whole distance between two roads on this one — which is why
+    // the loop sits 100 units away from the open path in front of it.
+    const cloud = createPointCloud(7);
+    const P = cloud.attrs.point.require("P");
+    P.setTuple(0, [0, 0, 0]);
+    P.setTuple(1, [3, 0, 0]);
+    P.setTuple(2, [3, 4, 0]);
+    P.setTuple(3, [100, 0, 0]);
+    P.setTuple(4, [101, 0, 0]);
+    P.setTuple(5, [101, 1, 0]);
+    P.setTuple(6, [100, 1, 0]);
+    // Prim 0 open over points 0..2; prim 1 the unit square over 3..6,
+    // closed by repeating point 3 as its last vertex.
+    setPolylineTopology(cloud, [0, 1, 2, 3, 4, 5, 6, 3], [0, 3], [3, 5]);
+    const geo = await resampled(
+      { mode: "count", count: 5, resampledLengthAttr: "sampleLength", sampleArcAttr: "sampleArc" },
+      cloud,
+    );
+    const emitted = geo.attrs.primitive.require("sampleLength");
+    const walked = walkedChordSums(geo);
+    // Both paths, both measured off the topology — which for prim 1
+    // includes the seam because setPolylineTopology repeated its start.
+    expect(emitted.get(0)).toBe(Math.fround(walked[0]));
+    expect(emitted.get(1)).toBe(Math.fround(walked[1]));
+    // The loop is 4 units around and the samples cut it, so the emitted
+    // length is under 4 — and nowhere near the ~100 a seam measured to the
+    // wrong path's first sample would produce.
+    expect(emitted.get(1)).toBeGreaterThan(3);
+    expect(emitted.get(1)).toBeLessThan(4);
+    const arcs = scalarsOf(geo, "sampleArc");
+    expect(arcs[5]).toBe(0);
+    expect(arcs[9]).toBeLessThan(emitted.get(1));
+  });
+
+  it("measures what spacing mode emits, remainder segment and all", async () => {
+    // 'spacing' places its samples from a step rather than a division, and
+    // leaves a short last segment: on a closed path the seam remainder,
+    // on an open one the run to the true endpoint. Both are chords of the
+    // emitted polyline like any other, so the report has to include them.
+    const square = createPolyline([0, 0, 0, 10.75, 0, 0, 10.75, 10.75, 0, 0, 10.75, 0], {
+      closed: true,
+    });
+    const geo = await resampled(
+      {
+        mode: "spacing",
+        spacing: 5,
+        lengthAttr: "pathLength",
+        stepAttr: "sampleStep",
+        resampledLengthAttr: "sampleLength",
+        sampleArcAttr: "sampleArc",
+      },
+      square,
+    );
+    expect(geo.pointCount).toBe(9);
+    expect(geo.attrs.primitive.require("pathLength").get(0)).toBe(43);
+    expect(geo.attrs.primitive.require("sampleStep").get(0)).toBe(5);
+    const emitted = geo.attrs.primitive.require("sampleLength").get(0);
+    expect(emitted).toBe(Math.fround(walkedChordSums(geo)[0]));
+    expect(emitted).toBeLessThan(43);
+    // The arcs are NOT multiples of the step: a sample that steps 5 along
+    // the curve moves less than 5 across the corner it cut, which is the
+    // whole disagreement `resampledLengthAttr` exists to report.
+    const arcs = scalarsOf(geo, "sampleArc");
+    expect(arcs[0]).toBe(0);
+    expect(arcs[1]).toBe(5);
+    expect(arcs[3]).toBeLessThan(15);
+  });
+
+  it("gives the arc to the column the param named, even when that is curveU", async () => {
+    // `curveU` is f32 tuple 1, exactly this report's shape, so the slot
+    // rule RESETS it rather than refusing — and reset means the two names
+    // are one buffer. Which of the two writes lands last is therefore a
+    // real decision, not an implementation detail: a column an author
+    // explicitly pointed at the arc must not come back holding fractions,
+    // because that cook looks fine and answers the other question.
+    const geo = await resampled(
+      { mode: "count", count: 3, sampleArcAttr: "curveU" },
+      createPolyline([0, 0, 0, 3, 0, 0, 3, 4, 0]),
+    );
+    const values = scalarsOf(geo, "curveU");
+    expect(values[0]).toBe(0);
+    expect(values[1]).toBeCloseTo(Math.sqrt(9.25), 5);
+    // 0.5 and 1 are what the fraction would have been at those samples.
+    expect(values[1]).not.toBe(0.5);
+    expect(values[2]).not.toBe(1);
+  });
+
+  it("names sampleArcAttr itself when the carry would land on it", async () => {
+    // The collision is real either way — every primitive attribute is
+    // carried onto these samples, so "roadWidth" and this report want the
+    // same POINT column. What is pinned here is WHICH refusal fires:
+    // caught downstream by carryPrimitiveAttributes, the message is about
+    // the CARRIED attribute, never says "sampleArcAttr", and sends the
+    // reader to rename the setAttribute that produced roadWidth — when the
+    // fix is to rename the param that asked for the name.
+    const roads = withPrimValue(twoPaths(), "roadWidth", [2, 7]);
+    const msg = await rejection(
+      runNode(pathResample, { sampleArcAttr: "roadWidth" }, { in: [makeGeometryItem(roads)] }),
+    );
+    expect(msg).toContain('pathResample: sampleArcAttr "roadWidth"');
+    expect(msg).toContain("carried onto this node's samples");
+    expect(msg).toContain("RENAME THE PARAM");
+    expect(msg).toContain('"sampleArc"');
+    // The carry's own wording, which would mean the wrong refusal won.
+    expect(msg).not.toContain("is already the");
+    // A string column collides just as hard: the carry has no shape rule,
+    // so neither does this — the point is the NAME, not what would fit.
+    const kinds = withPrimString(twoPaths(), "roadKind", ["avenue", "lane"]);
+    const strMsg = await rejection(
+      runNode(pathResample, { sampleArcAttr: "roadKind" }, { in: [makeGeometryItem(kinds)] }),
+    );
+    expect(strMsg).toContain('pathResample: sampleArcAttr "roadKind"');
+    expect(strMsg).toContain("(string)");
+  });
+
+  it("refuses sampleArcAttr naming the type tag", async () => {
+    // Inert today — every reader of `primtype` looks at the PRIMITIVE
+    // domain, and setPolylineTopology restamps it there — which is exactly
+    // why it has to be refused rather than left to be discovered: one
+    // promoteAttribute point -> primitive on that name later replaces the
+    // string tag with a float and every path node stops seeing a path.
+    // Refused from the param alone, before any geometry is read.
+    const msg = await rejection(
+      runNode(
+        pathResample,
+        { sampleArcAttr: PRIMTYPE_ATTR },
+        { in: [makeGeometryItem(createPointCloud(0))] },
+      ),
+    );
+    expect(msg).toContain(`pathResample: sampleArcAttr may not be "${PRIMTYPE_ATTR}"`);
+    expect(msg).toContain("TYPE TAG");
+    expect(msg).toContain('"sampleArc"');
+    // And it does not become a point column on a real cook.
+    const ok = await resampled(
+      { mode: "count", count: 3, sampleArcAttr: "sampleArc" },
+      createPolyline([0, 0, 0, 4, 0, 0]),
+    );
+    expect(ok.attrs.point.has(PRIMTYPE_ATTR)).toBe(false);
+    expect(ok.attrs.primitive.require(PRIMTYPE_ATTR).getString(0)).toBe("polyline");
+  });
+
+  it("writes neither new report by default, and an empty name is not a name", async () => {
+    const src = withPrimValue(twoPaths(), "roadWidth", [2, 7]);
+    const byDefault = await resampled({ mode: "count", count: 5 }, src);
+    expect(byDefault.attrs.primitive.names()).toEqual([PRIMTYPE_ATTR, "roadWidth"]);
+    expect(byDefault.attrs.point.names()).toEqual([
+      "P",
+      "rot",
+      "scale",
+      "density",
+      "boundsMin",
+      "boundsMax",
+      "color",
+      "seed",
+      "tangent",
+      "curveU",
+      "roadWidth",
+    ]);
+    // Spelled out rather than compared: two runs that both leaked the
+    // columns would compare equal just as happily.
+    const named = await resampled(
+      { mode: "count", count: 5, resampledLengthAttr: "", sampleArcAttr: "" },
+      src,
+    );
+    expect(snapshotGeometry(named)).toEqual(snapshotGeometry(byDefault));
+  });
+
+  it("refuses a new report that would delete a differently shaped column", async () => {
+    // The primitive one is checked against the INPUT first, where the
+    // colliding column is the author's own and removeAttribute is a fix.
+    const roads = withPrimString(twoPaths(), "roadKind", ["avenue", "lane"]);
+    const primMsg = await rejection(
+      runNode(
+        pathResample,
+        { resampledLengthAttr: "roadKind" },
+        { in: [makeGeometryItem(roads)] },
+      ),
+    );
+    expect(primMsg).toContain('pathResample: resampledLengthAttr "roadKind"');
+    expect(primMsg).toContain("already exists on the input's primitive domain");
+    expect(primMsg).toContain('"sampleLength"');
+    // The per-sample one is checked against the OUTPUT'S POINT domain, and
+    // `tangent` is the column that proves it is the right set: it is f32x3
+    // and it does not exist on the input at all, so a check against the
+    // primitive domain would have waved this straight through.
+    const pointMsg = await rejection(
+      runNode(pathResample, { sampleArcAttr: "tangent" }, { in: [makeGeometryItem(twoPaths())] }),
+    );
+    expect(pointMsg).toContain('pathResample: sampleArcAttr "tangent"');
+    expect(pointMsg).toContain("already exists on the output's point domain");
+    expect(pointMsg).toContain("removeAttribute upstream cannot help here");
+  });
+
+  it("refuses two per-path reports naming one attribute, but not the per-sample one", async () => {
+    // All three per-path reports are f32 tuple 1, so a shared name passes
+    // the shape check and the later write silently replaces the earlier.
+    const clash = await rejection(
+      runNode(
+        pathResample,
+        { lengthAttr: "size", resampledLengthAttr: "size" },
+        { in: [makeGeometryItem(createPointCloud(0))] },
+      ),
+    );
+    expect(clash).toContain(
+      'pathResample: params "lengthAttr" and "resampledLengthAttr" are both "size"',
+    );
+    expect(clash).toContain("two attributes");
+    const pair = await rejection(
+      runNode(
+        pathResample,
+        { stepAttr: "size", resampledLengthAttr: "size" },
+        { in: [makeGeometryItem(createPointCloud(0))] },
+      ),
+    );
+    expect(pair).toContain(
+      'pathResample: params "stepAttr" and "resampledLengthAttr" are both "size"',
+    );
+    // `sampleArcAttr` is on the POINT domain, so the same name is a
+    // DIFFERENT column and nothing collides — refusing it would refuse a
+    // graph in which the two values coexist perfectly well.
+    const geo = await resampled(
+      { mode: "count", count: 3, lengthAttr: "size", sampleArcAttr: "size" },
+      createPolyline([0, 0, 0, 4, 0, 0]),
+    );
+    expect(geo.attrs.primitive.require("size").get(0)).toBe(4);
+    expect(scalarsOf(geo, "size")).toEqual([0, 2, 4]);
+  });
 });
 
 describe("pathSegments", () => {
