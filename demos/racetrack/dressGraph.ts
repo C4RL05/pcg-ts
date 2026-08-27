@@ -694,7 +694,7 @@ const MIN_EXTENT_WORLD = 1e-3;
  * in rather than restated: {@link EnclosureReport} is the one definition of
  * them, and the page reads the same four numbers off a cell.
  */
-export interface GraphDressing extends EnclosureReport {
+export interface GraphDressing extends EnclosureReport, RepairReport {
   /** One point per box, in `buildBoxes`' own order: placement, then pose box. */
   readonly boxes: Geometry;
   /** The placement cloud after Z-1 and the lift, before L-1 ran. */
@@ -722,28 +722,6 @@ export interface GraphDressing extends EnclosureReport {
    * one that did not has nowhere else to get it.
    */
   readonly placementsInput: Geometry;
-  /**
-   * How many placements L-1 pushed clear of the cone, and how many it
-   * removed because pushing could not clear them.
-   *
-   * THE SUM IS `cullSightlines`' `blocking`, and the node reports neither
-   * on its own — it answers with survivors, and everything about what it
-   * did is a difference between the list that went in and the cloud that
-   * came out. That is why `PLACEMENT.id` and `PLACEMENT.pushW` exist: a
-   * stage whose only visible effect is a shorter list is a stage nobody
-   * can tell from a stage that did nothing.
-   */
-  readonly pushed: number;
-  readonly dropped: number;
-  /**
-   * How many placements L-5 dropped below the edge band — ONE PASS of it.
-   *
-   * `repairFalseEdges` runs the detector up to eight times because
-   * breaking a run can leave two runs; this graph runs it once, so this is
-   * that pass's move count and not the rule's total. The test compares it
-   * against `repairFalseEdges(..., 1)` for exactly that reason.
-   */
-  readonly lowered: number;
   /**
    * How many rounds the repair loop ran, and whether it settled.
    *
@@ -4997,6 +4975,192 @@ export function readEnclosure(
   };
 }
 
+/**
+ * Which poses belong to L-2's markers and which to L-3's ruler mark.
+ *
+ * THE PLACEMENT CLOUD CARRIES NO ASSET ORD, only {@link PLACEMENT.pose}
+ * and a pose-keyed string, so a caller counting a vocabulary has to come
+ * at it from the library. `posesOf` is asset -> poses; this is the two
+ * sets that inversion is wanted for, built once per lap rather than per
+ * placement.
+ *
+ * L-2 IS TWO ASSETS AND L-3 IS ONE, which is the whole reason they are
+ * separate sets rather than one: the panel line says what each rule
+ * placed, and a marker and a braking mark are different claims about the
+ * lap. `reserveMarkers` holds back exactly these three.
+ */
+export function languagePoses(
+  lib: PoseLibrary,
+  markers: MarkerKit,
+): { readonly markerPoses: ReadonlySet<number>; readonly rulerPoses: ReadonlySet<number> } {
+  const of = (id: number): number[] => lib.posesOf.get(id) ?? [];
+  return {
+    markerPoses: new Set([...of(markers.sharp.id), ...of(markers.open.id)]),
+    rulerPoses: new Set(of(markers.brake.id)),
+  };
+}
+
+/** What the repairs did, as {@link readRepairs} can honestly report it. */
+export interface RepairReport {
+  /**
+   * L-1's push-aside and L-5's lowering, ON THE LAST ROUND ONLY.
+   *
+   * `pushed + dropped` USED TO BE `cullSightlines`' `blocking`, and that
+   * invariant is why both are reported: the node answers with survivors
+   * and says nothing about what it removed, so a stage whose only visible
+   * effect is a shorter list is a stage nobody can tell from a stage that
+   * did nothing. The identity itself stopped holding when L-6 was wired
+   * in -- `pushed` is a last-round count over a list that now contains
+   * cover -- which is recorded here rather than deleted, because it is the
+   * sentence anyone reconciling these two numbers will look for.
+   *
+   * `lowered` IS ONE PASS OF L-5 AND NOT THE RULE'S TOTAL, separately from
+   * the last-round point below. `repairFalseEdges` runs its detector up to
+   * eight times because breaking a run can leave two runs; this graph runs
+   * it once per round, which is why the test compares against
+   * `repairFalseEdges(..., 1)`.
+   *
+   * NOT THE RULE'S TOTAL, AND THE DIFFERENCE IS STRUCTURAL RATHER THAN AN
+   * OMISSION. Both are per-placement flags rewritten by every round of the
+   * repair loop, and `repeatUntil` publishes the last round's carry and
+   * nothing from the rounds before it -- so a sum over all rounds would
+   * have to be a running total threaded on the carry cloud, the way
+   * `writeSettleCount` threads its settle flag. `dressLap` adds these up
+   * in a local because a TypeScript loop has somewhere to put one.
+   *
+   * A LAST-ROUND FIGURE IS STILL WORTH PRINTING, and it is not the same
+   * statement: it says what the finished lap still has moved on it, which
+   * is what a viewer is looking at. It just is not "how much work the rule
+   * did", and a panel that implied otherwise would be wrong in the
+   * direction that flatters.
+   */
+  readonly pushed: number;
+  readonly lowered: number;
+  /**
+   * How many the cull removed, EXACTLY, across every round.
+   *
+   * THIS ONE IS A TOTAL AND NEEDS NO CARRY, because it is a difference
+   * between two published lists rather than a flag: the first pass only
+   * ever shrinks, so the count that entered it minus the count that left
+   * it is the whole of what L-1 dropped however many rounds it took.
+   */
+  readonly dropped: number;
+  /** The list as the assembly built it, and as the first pass left it. */
+  readonly assembled: number;
+  readonly settledFirst: number;
+  /**
+   * L-2's markers and L-3's marks: how many were PLACED, and how many
+   * survived the cull.
+   *
+   * COUNTED OFF THE CLOUDS RATHER THAN REPORTED BY THE STAGE, and that is
+   * a better measurement than the one it replaces. `dressLap` derives its
+   * equivalent by running `legibilityHealth` before and after the loop and
+   * subtracting -- a check of whether every corner still HAS a marker,
+   * which answers "is the rule satisfied" and only approximates "how many
+   * went". This counts the vocabulary on the two lists, which is the
+   * quantity the panel line claims to be showing.
+   *
+   * WHAT IT CANNOT SAY is L-2's converted/added split. A conversion and an
+   * addition leave the same marker on the same list; the difference lives
+   * in the bookkeeping stage and not in the cloud it produces. The panel
+   * prints the total and does not pretend to the split.
+   *
+   * ZERO WITH NO {@link MarkerKit}, which is a real lap and not a missing
+   * reading: `reserveMarkers` reports no kit when the vocabulary has fewer
+   * than three verticals to hold back, and such a lap has no corner
+   * language on it to count.
+   */
+  readonly markersPlaced: number;
+  readonly markersKept: number;
+  readonly rulersPlaced: number;
+  readonly rulersKept: number;
+}
+
+/**
+ * The repairs' numbers, off the same outputs {@link readEnclosure} reads.
+ *
+ * EXPORTED FOR THAT FUNCTION'S REASON, WHICH IS SCHEDULING. The page does
+ * not cook this graph, it streams it, so every figure on its panel has to
+ * be derivable from a cell's outputs. Anything the page derived for itself
+ * would be a second definition of a number a test also reads, and the
+ * point of publishing them at all is that the two are comparable.
+ *
+ * IT IS ALSO WHAT MAKES THE PRELUDE DELETABLE. The two panel lines that
+ * still read `DressStats` are the last thing on this page that needs
+ * `dressLap` to have run, and most of `DressStats` cannot come back: five
+ * of its fields are rules this graph does not contain (D-4's second pass,
+ * L-4) and the per-round counters are not what `repeatUntil` publishes.
+ * What CAN be said honestly is this, and the fields say which is which.
+ */
+export function readRepairs(
+  outputs: Readonly<Record<string, DataCollection | undefined>>,
+  language?: {
+    readonly markerPoses: ReadonlySet<number>;
+    readonly rulerPoses: ReadonlySet<number>;
+  },
+): RepairReport {
+  const placements = requireGeo(outputs[DRESS_OUTPUTS.placements], DRESS_OUTPUTS.placements);
+  const placementsFirst = requireGeo(
+    outputs[DRESS_OUTPUTS.placementsFirst],
+    DRESS_OUTPUTS.placementsFirst,
+  );
+  const placementsInput = requireGeo(
+    outputs[DRESS_OUTPUTS.placementsInput],
+    DRESS_OUTPUTS.placementsInput,
+  );
+
+  // WHAT L-1 DID, AS A DIFFERENCE BETWEEN TWO LISTS. `occlusionCull`
+  // answers with survivors and reports nothing about the ones it removed,
+  // which is the right contract for a node that knows nothing about what
+  // it is culling -- so the accounting happens here, off `PLACEMENT.pushW`
+  // (who moved) and the two counts (how many went).
+  const pushCol = placements.attrs.point.require(PLACEMENT.pushW);
+  let pushed = 0;
+  for (let i = 0; i < placements.pointCount; i++) {
+    if (pushCol.get(i) !== 0) pushed++;
+  }
+
+  const dropCol = placements.attrs.point.require(PLACEMENT.drop);
+  let lowered = 0;
+  for (let i = 0; i < placements.pointCount; i++) {
+    if (dropCol.get(i) !== 0) lowered++;
+  }
+
+  const count = (geo: Geometry, poses: ReadonlySet<number>): number => {
+    if (poses.size === 0) return 0;
+    const poseCol = geo.attrs.point.require(PLACEMENT.pose);
+    let n = 0;
+    for (let i = 0; i < geo.pointCount; i++) {
+      if (poses.has(poseCol.get(i))) n++;
+    }
+    return n;
+  };
+  const none: ReadonlySet<number> = new Set<number>();
+  const markerPoses = language?.markerPoses ?? none;
+  const rulerPoses = language?.rulerPoses ?? none;
+
+  return {
+    pushed,
+    lowered,
+    // AGAINST THE PASS THAT ONLY EVER SHRANK. Measuring this against the
+    // FINAL list gave a NEGATIVE count once L-6 was wired in -- -11 to -16
+    // on a bare lap -- because the final list has enclosure ADDED to it,
+    // and no arithmetic over a list that grew can say how much of it went.
+    dropped: placementsInput.pointCount - placementsFirst.pointCount,
+    assembled: placementsInput.pointCount,
+    settledFirst: placementsFirst.pointCount,
+    // PLACED IS COUNTED ON THE INPUT LIST AND KEPT ON THE FIRST PASS, not
+    // on the final one, for `dropped`'s reason: L-6 adds pieces after it,
+    // and a marker cannot be one -- but the pass boundary is where the
+    // cull's verdict was reached, and taking both counts from the same
+    // side of it is what makes the difference mean "the cull took these".
+    markersPlaced: count(placementsInput, markerPoses),
+    markersKept: count(placementsFirst, markerPoses),
+    rulersPlaced: count(placementsInput, rulerPoses),
+    rulersKept: count(placementsFirst, rulerPoses),
+  };
+}
+
 /** The one async thing here: build, cook, and read the columns back. */
 export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDressing> {
   const t0 = performance.now();
@@ -5020,23 +5184,18 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
   // consumer would have to keep its own copy of.
   const enclosure = readEnclosure(out, input.lap);
 
-  // WHAT L-1 DID, AS A DIFFERENCE BETWEEN TWO LISTS. `occlusionCull`
-  // answers with survivors and reports nothing about the ones it removed,
-  // which is the right contract for a node that knows nothing about what
-  // it is culling — so the accounting happens here, off `PLACEMENT.id`
-  // (who survived) and `PLACEMENT.pushW` (who moved). Their sum is
-  // `cullSightlines`' `blocking`.
-  const pushCol = placements.attrs.point.require(PLACEMENT.pushW);
-  let pushed = 0;
-  for (let i = 0; i < placements.pointCount; i++) {
-    if (pushCol.get(i) !== 0) pushed++;
-  }
-
-  const dropCol = placements.attrs.point.require(PLACEMENT.drop);
-  let lowered = 0;
-  for (let i = 0; i < placements.pointCount; i++) {
-    if (dropCol.get(i) !== 0) lowered++;
-  }
+  // THE SAME READING THE PAGE TAKES OFF ITS CELL. `pushed`, `dropped` and
+  // `lowered` were derived here by hand until the panel needed them from a
+  // stream; they are {@link readRepairs} now for {@link readEnclosure}'s
+  // reason, so a figure read off the panel is comparable with one read off
+  // a test rather than merely resembling it.
+  //
+  // NO `language` HERE, so the four corner-language counts come back zero.
+  // That is not a reading this function is refusing to take: the marker
+  // POSES are what the count needs and `input.markers` is optional, so a
+  // caller wanting them passes them to {@link readRepairs} itself. Nothing
+  // in the suites asks `dressLapByGraph` for them.
+  const repairs = readRepairs(out);
 
   return {
     boxes,
@@ -5044,20 +5203,7 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
     culled,
     placements,
     ...enclosure,
-    pushed,
-    // AGAINST THE PASS THAT ONLY EVER SHRANK. This measured the FINAL
-    // list until L-6 was wired in, and the final list has enclosure added
-    // to it -- so the count came out NEGATIVE, -11 to -16 on a bare lap,
-    // and the documented invariant below (`pushed + dropped` is
-    // `cullSightlines`' blocking count) quietly stopped holding. The cull
-    // is what drops, the first pass is where it dropped from, and no
-    // arithmetic over a list that grew can say how much of it went.
-    //
-    // AND THE INPUT COUNT COMES OFF THE GRAPH, not off `input.placements`.
-    // That was the caller's own array, which is a number nobody has once
-    // the graph is the thing that decides the list -- see
-    // `DRESS_OUTPUTS.placementsInput`.
-    dropped: placementsInput.pointCount - placementsFirst.pointCount,
+    ...repairs,
     // BOTH PASSES, SUMMED, because that is what the cook actually spent.
     // The two are published apart so a caller can tell which half a lap's
     // cost came from; a stat line wants the total.
@@ -5067,7 +5213,6 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
       requireNumber(out[DRESS_OUTPUTS.roundsFirst], DRESS_OUTPUTS.roundsFirst) +
       requireNumber(out[DRESS_OUTPUTS.rounds], DRESS_OUTPUTS.rounds),
     converged: requireNumber(out[DRESS_OUTPUTS.converged], DRESS_OUTPUTS.converged) !== 0,
-    lowered,
     stamped: boxes.pointCount,
     graph,
     cookMs: performance.now() - t0,
