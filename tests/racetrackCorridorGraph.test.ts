@@ -158,9 +158,19 @@ void (undefined as unknown as PlaceableAsset);
  * arithmetic instead of the rule, which is what `zones.ts` says at
  * length and what this file is now the end-to-end evidence for.
  *
- * BOTH PATHS, because they settle different laps. The graph decides its
- * own list and the TypeScript decides another, and a rule that holds on
- * one is not thereby holding on the other.
+ * BOTH PATHS, ON THE SAME LAP, and the shared population is the point
+ * rather than a shortcut. The cook below hands `dressLap`'s settled
+ * placements straight to `dressLapByGraph` — it does NOT take the branch
+ * where the graph decides its own list — so the two rules answer the same
+ * question about the same objects and any disagreement is the rule, not
+ * the lap. That is what isolates a transcription error, which is what
+ * this file is for; a comparison across two different laps could not tell
+ * a wrong rung from a different population.
+ *
+ * SO THIS FILE DOES NOT COVER THE GRAPH-DECIDED LIST, said plainly
+ * because an earlier version of this paragraph claimed it did. That path
+ * is `racetrackPlacementAssembly.test.ts`, which omits `placements`; here
+ * it would cost the comparison its whole diagnostic power.
  */
 describe("corridorGraph: the corridor on a lap that has settled", () => {
   it.each([1, 2, 3])(

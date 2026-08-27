@@ -2307,17 +2307,25 @@ function corridorFields(
   tall: Field,
   exempt: Field | number,
 ): { readonly wantT: Field; readonly wantBase: Field } {
-  // EVERY EDGE OF THE VOLUME CARRIES `SAME_PLACE_W`, AND THAT IS A REAL
-  // DIFFERENCE FROM `inCorridor`, NOT A TRANSCRIPTION SLIP.
+  // EVERY EDGE OF THE VOLUME CARRIES `SAME_PLACE_W`, AND SO DOES
+  // `inCorridor` NOW — the two are rung for rung identical, which is what
+  // makes the comparison suites mean anything.
   //
-  // `inCorridor` tests `|t| < 1`, `h >= 0` and `h < 1.2` with no
-  // tolerance at all, and it is the one boundary test in this demo's
-  // ladder without one — its sibling `bandOf`, which asks the same
-  // question of an already-placed lateral, spells every rung as
-  // `a < limit - SAME_PLACE_W`. `tolerance.ts` states the intent this
-  // file is applying: the boundaries here are hit EXACTLY, by
-  // construction rather than by luck, and a rule whose own placer lands
-  // on its own boundary has to agree with itself.
+  // THIS USED TO SAY THE OPPOSITE, and the correction is the interesting
+  // part. The tolerance arrived here first and this comment claimed it as
+  // "a real difference from `inCorridor`, not a transcription slip":
+  // `inCorridor` tested `|t| < 1`, `h >= 0` and `h < 1.2` with no
+  // tolerance at all and was the one boundary test in this demo's ladder
+  // without one, against its sibling `bandOf` spelling every rung as
+  // `a < limit - SAME_PLACE_W`. `zones.ts:131` has since taken the same
+  // three rungs, for the same reason and at length. So the difference is
+  // closed, and a reader comparing the two should find them agreeing
+  // rather than be told in advance that they will not.
+  //
+  // The argument below is why BOTH of them carry it, and it is unchanged.
+  // `tolerance.ts` states the intent: the boundaries here are hit
+  // EXACTLY, by construction rather than by luck, and a rule whose own
+  // placer lands on its own boundary has to agree with itself.
   //
   // WITHOUT IT THIS GRAPH MOVES EVERY GANTRY OFF THE ROAD, and that is
   // measured rather than feared. Z-3's `over` band takes its height from

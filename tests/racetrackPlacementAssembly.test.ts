@@ -489,19 +489,30 @@ describe("the lap's placement list, as a graph", () => {
  * The whole dress graph, deciding its own list.
  *
  * THIS IS THE CAMPAIGN'S POINT, so it is worth saying exactly what it does
- * and does not yet prove. `dressLapByGraph` with no `placements` builds the
+ * and does not prove. `dressLapByGraph` with no `placements` builds the
  * stations, D-4's repair, the asset choice and the assembly from the road
  * graph's own frames, then runs every rule over the result. Nothing about
  * the lap is data in the graph any more except the spline.
  *
- * WHAT IS STILL MISSING IS THE CORNER LANGUAGE. `dressLap` merges L-2's
- * markers and L-3's ruler marks into the list at its step 4, and
- * `addLapPlacements` stops before that -- so a lap decided here carries no
- * corner vocabulary. The language IS already a graph (`addCornerLanguage`,
- * which `cookLapPlacements` cooks in the same graph as the stations); what
- * is missing is the merge. That is the next unit, and until it lands this
- * suite must not pretend otherwise, which is why nothing below counts a
- * marker.
+ * THE CORNER LANGUAGE USED TO BE THE MISSING PIECE HERE AND IS NOT ANY
+ * MORE. This comment said the merge was the next unit; it landed (PLAN.md,
+ * "The corner language is finished, 2026-08-27"). `addLapPlacements` takes
+ * an optional `language`, runs `addCornerLanguage` for L-2's markers and
+ * L-3's ruler marks, applies `addCornerBookkeepingApplied` for the CONVERT
+ * and the DISPLACE, and assembles the language's own rows through the same
+ * assembly nodes -- so a lap decided by the graph can carry the whole corner
+ * vocabulary, and the suite below no longer has anything to be silent about.
+ *
+ * WHAT THESE CASES STILL DO NOT COUNT IS A MARKER, AND THAT IS NOW A CHOICE
+ * RATHER THAN A GAP. They hand `dressLapByGraph` no `markers`, so they are
+ * the NO-LANGUAGE branch on purpose: it is the branch where the list is
+ * exactly `placementsBeforeLanguage`'s and can be compared to it row for
+ * row, where `PLACEMENT.id` is written by a single assembly, and where the
+ * density case's proportion comes out clean because nothing places per
+ * corner. The language branch is the last describe in this file, which
+ * checks the same column set so that between them both branches are pinned.
+ * The one thing genuinely uncovered anywhere in the file is the pose
+ * EQUALITY, which the re-basing makes unstatable -- see the header.
  */
 describe("the dress graph, deciding its own list", () => {
   const SEEDS_E2E = [1, 2, 3] as const;
@@ -611,18 +622,50 @@ describe("the dress graph, deciding its own list", () => {
       expect(pieceIds.size, `seed ${seed}: no cover piece to check an id on`).toBe(coverPieces);
       expect(placementIds, `seed ${seed}: every row is cover`).toBeGreaterThan(0);
 
-      // THERE IS NO Z-1 ASSERTION HERE, AND THE FIRST DRAFT HAD ONE. It
-      // counted placements sitting inside the corridor and expected zero,
-      // and three of seed 1's 340 do. They are not this stage's doing: a
-      // lap dressed from a HANDED-IN list has the same thing at the same
-      // rate -- 3, 7 and 4 of ~350 against 3, 5 and 3 here -- so what the
-      // assertion found is a property of the dressed lap in both modes,
-      // and not a difference between them. L-5 is not the cause either
-      // (`edgeDrop` is 0 on every one of them). It belongs to whatever
-      // rule puts them there, with a reference to compare against; a
-      // suite about where the LIST comes from is the wrong place to
-      // discover it, and a bound tuned to make it pass here would bury
-      // it. Recorded in PLAN.md instead.
+      // THERE IS NO Z-1 ASSERTION HERE, AND IT IS OWNED ELSEWHERE RATHER
+      // THAN OPEN. The first draft had one: it counted placements sitting
+      // inside the corridor and expected zero, and got 3, 5 and 3 of ~340.
+      // This comment used to read those as a live defect belonging to
+      // whatever rule put them there. THAT WAS THE COMMENT'S OWN
+      // MEASUREMENT AT FAULT, and PLAN.md's entry is struck accordingly
+      // ("~~A settled lap has placements inside the corridor~~ -- NOT A
+      // DEFECT, 2026-08-27").
+      //
+      // THE TWO PREDICATES ARE NOT THE SAME PREDICATE, WHICH IS THE WHOLE
+      // OF IT. The figures above came from a hand-written `|t| < 1W &&
+      // base < CORRIDOR.ceilingW`. The rule's own predicate is
+      // `inCorridor` in `zones.ts`, and all three of its rungs carry
+      // `SAME_PLACE_W` -- each in the direction that keeps the f64 answer
+      // for a value sitting exactly on a face, so exactly at the ceiling
+      // and exactly at |t| = 1W are OUTSIDE and exactly at the floor is
+      // IN. It also has a FLOOR, which the restatement did not have at
+      // all. Run with the real predicate the count is ZERO on seeds
+      // 1/2/3, on the self-decided list and on a handed-in one alike.
+      //
+      // AND THE RESTATEMENT IS STRICTLY THE MORE INCLUSIVE OF THE TWO,
+      // which is why this resolves as "no defect" rather than "a smaller
+      // defect". Everything `inCorridor` calls inside, the restatement
+      // calls inside too, and never the reverse -- so the rows it flagged
+      // were false positives entire, not the visible part of a real
+      // population.
+      //
+      // AND THE TOLERANCE IS WHAT THE ROUND TRIP NEEDS, NOT SLACK HIDING
+      // A VIOLATION. Z-3's `over` fill stores `h = 1.2 + tall/2` so that
+      // the base IS the ceiling; recovering it as `h - tall/2` lands an
+      // ulp under, ~1e-7 in the f32 columns. A restatement without the
+      // epsilon therefore reads a gantry standing correctly ON the
+      // corridor as standing IN it, which is most of what it flags; the
+      // rest sit with their bases below the deck, which is Z8's
+      // exemption and a term the restatement had no expression for at
+      // all. PLAN.md's struck entry carries the per-family counts.
+      //
+      // THE ASSERTION THE DRAFT WANTED EXISTS, in
+      // `tests/racetrackCorridorGraph.test.ts`: the corridor checked with
+      // `inCorridor` on a lap that has SETTLED, on both paths. It passes,
+      // so it is a regression guard rather than a repair -- and it still
+      // does not belong here, because a suite about where the LIST comes
+      // from is the wrong place for a claim about what the rules leave
+      // behind.
     }
 
     console.log(
@@ -715,23 +758,34 @@ describe("the dress graph, deciding its own list", () => {
 /**
  * L-2 and L-3, placed by the graph.
  *
- * WHAT THIS UNIT DOES AND WHAT IT POINTEDLY DOES NOT. `placeCornerLanguage`
+ * WHAT THIS UNIT DOES, WHICH IS NOW ALL OF IT. `placeCornerLanguage`
  * does four things with the corner language: it CONVERTS an ordinary
  * placement into a marker where the window holds a good victim, ADDS a
  * marker where it does not, places L-3's three ruler marks per tight
  * corner, and DISPLACES what those marks pay for. Two of the four are pure
- * placement and are what `addLapPlacements` does now: every corner gets its
- * marker and every tight corner gets its three marks.
+ * placement, and were the first two `addLapPlacements` did: every corner
+ * gets its marker and every tight corner gets its three marks.
  *
- * THE OTHER TWO ARE THE BOOKKEEPING and are not wired yet. `buildCornerBookkeeping`
- * already decides both -- which placement each corner claims, and which
- * each ruler displaces -- as columns on the placement cloud; what is
- * missing is applying them. So a lap from this path carries MORE
- * placements than the reference: a conversion becomes an addition, and
- * nothing is removed to pay for a ruler. That is a difference this suite
- * states rather than tolerates, and the count is asserted in the direction
- * it must be wrong in, so that wiring the bookkeeping is visible here as a
- * change rather than as continued silence.
+ * THE OTHER TWO ARE THE BOOKKEEPING, AND THEY ARE WIRED NOW -- so all four
+ * of the rule's operations are graph stages and this case owns the whole
+ * merge rather than half of it. `addCornerBookkeepingApplied` runs the two
+ * loops inside `addLapPlacements`, under its "L-2's CONVERT AND L-3's
+ * DISPLACEMENT, IF THERE IS A LANGUAGE" header and BEFORE the assembly, so a
+ * converted placement's new asset is looked up once; what used to be missing
+ * was only the applying, and `buildCornerBookkeeping` had already been
+ * deciding both answers as columns all along.
+ *
+ * SO THE COUNT IS AN EQUALITY NOW, NOT A DIRECTION, AND NOTHING PASSED BY
+ * ACCIDENT ON THE WAY. While only the placements were wired, a lap from this
+ * path carried MORE rows than the reference -- a conversion became an
+ * addition and nothing was removed to pay for a ruler -- and the assertion
+ * was a count identity stated in exactly that wrong direction. It did not
+ * quietly survive the wiring: it FAILED the moment the loops were applied
+ * (seed 1 went from 375 rows to 341), which is what forced the comparison
+ * that stands there today -- the exact count `placeCornerLanguage` builds,
+ * plus a placement-for-placement multiset keyed on station, asset, lateral
+ * and height. See the long note at that assertion for what the comparison
+ * does and does not own.
  */
 describe("the corner language, placed by the graph", () => {
   it("marks every corner and rules every tight one", async () => {
