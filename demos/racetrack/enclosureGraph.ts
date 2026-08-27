@@ -232,6 +232,24 @@ export const COVER_ASSET = {
   baseH: "coverBaseH",
   /** How many copies sit side by side to span the corridor. */
   columns: "coverColumns",
+  /**
+   * The asset's RAW extents, unfloored.
+   *
+   * BESIDE THE FLOORED ONES AND NOT INSTEAD OF THEM, because the two are
+   * asked different questions. `alongW` and `acrossW` carry the floors the
+   * tiling needs -- an asset measured at zero along would tile for ever --
+   * while a PLACEMENT carries what the asset actually measures, which is
+   * what its boxes are built from. Floor the placement's extents and every
+   * cover piece narrower than 0.2W is drawn wider than it is.
+   */
+  rawAcross: "coverRawAcross",
+  rawAlong: "coverRawAlong",
+  /** Where this asset's recorded poses begin in the flat pose table. */
+  poseOff: "coverPoseOff",
+  /** And how many it has. Zero where the kit recorded none. */
+  poseCount: "coverPoseCount",
+  /** The flat table's own column: one recorded pose id per row. */
+  poseId: "coverPoseId",
 } as const;
 
 /** What the tiler writes onto each piece. */
@@ -461,8 +479,18 @@ export function writeCornerTests(
 export interface PlanOptions {
   readonly lapW: number;
   readonly halfWidth: number;
-  /** How much lap to put under cover, in W: `longCoverBudgetW`'s answer. */
-  readonly budgetW: number;
+  /**
+   * The FRAMES column holding how much lap to put under cover, in W.
+   *
+   * A COLUMN AND NOT A NUMBER, because the budget is `longCoverBudgetW`'s
+   * answer and that is a function of what the lap already carries -- which
+   * is only known once the rays have been cast, and the rays are cast in
+   * the same graph. A number here would mean building the planner after
+   * cooking the dressing, which is the shape this whole port exists to
+   * get rid of. {@link writeCoverBudget} writes it; the candidates gather
+   * it alongside the two corner columns, at no extra node.
+   */
+  readonly budgetAttr: string;
   /** The lowest quantile a length may be drawn from. */
   readonly minQuantile: number;
   /**
@@ -540,7 +568,13 @@ export function addEnclosureCandidates(
 
   const sampled = g.add(
     transferAlongPath,
-    { arcAttr: SCRATCH.bcast, attributes: [PLAN.tightAtStart, PLAN.beforeTightW] },
+    {
+      arcAttr: SCRATCH.bcast,
+      // THE BUDGET RIDES IN ON THE SAME GATHER. It is constant along the
+      // path, so where a candidate samples it does not matter -- and one
+      // more name in this list is cheaper than a second traversal.
+      attributes: [PLAN.tightAtStart, PLAN.beforeTightW, opts.budgetAttr],
+    },
     `${tag}_atStart`,
   );
   g.connect(frames, "out", sampled, "path");
@@ -660,7 +694,7 @@ export function buildPlanBody(opts: PlanOptions): {
   inputs: ExposedPin[];
   outputs: ExposedPin[];
 } {
-  const { lapW, budgetW, attempts } = opts;
+  const { lapW, budgetAttr, attempts } = opts;
   // The body's seed is never rotated per round -- see `repeatUntil` -- and
   // it does not need to be. Every draw this loop makes was made BEFORE it
   // started, keyed on an attempt number, which is exactly the arrangement
@@ -681,6 +715,7 @@ export function buildPlanBody(opts: PlanOptions): {
   // reduction never touches L-6's own runs. The reference measured one
   // overshooting draw taking a lap to 26.3% against a 25% ceiling, and
   // this is that clamp, transcribed.
+  const budgetW = attribute(budgetAttr);
   const room = max(ENCLOSE.minLengthW, sub(budgetW, attribute(PLAN.coveredW)));
   const lenK = b.add(
     setAttribute,
@@ -847,7 +882,18 @@ export function addEnclosurePlan(
  * whose points all sit at the origin is ONE identity to anything that
  * keys on P, and leaving that trap set costs nothing to avoid.
  */
-export function coverCloud(cover: readonly PlaceableAsset[]): Geometry {
+export function coverCloud(
+  cover: readonly PlaceableAsset[],
+  /**
+   * Each candidate's recorded pose ids, parallel to `cover`.
+   *
+   * PASSED IN RATHER THAN LOOKED UP, and the reason is a cycle: the pose
+   * library lives in `dressGraph`, which is the module that will import
+   * this one to wire L-6 into the placement list. Handing the ids over as
+   * plain arrays keeps the rule independent of the graph that consumes it.
+   */
+  poses: readonly (readonly number[])[],
+): Geometry {
   const geo = createPointCloud(Math.max(1, cover.length));
   const pts = geo.attrs.point;
   const P = pts.require("P");
@@ -858,6 +904,11 @@ export function coverCloud(cover: readonly PlaceableAsset[]): Geometry {
   const tall = pts.add(COVER_ASSET.tallW, "f32", 1);
   const baseH = pts.add(COVER_ASSET.baseH, "f32", 1);
   const columns = pts.add(COVER_ASSET.columns, "f32", 1);
+  const rawAcross = pts.add(COVER_ASSET.rawAcross, "f32", 1);
+  const rawAlong = pts.add(COVER_ASSET.rawAlong, "f32", 1);
+  const poseOff = pts.add(COVER_ASSET.poseOff, "f32", 1);
+  const poseCount = pts.add(COVER_ASSET.poseCount, "f32", 1);
+  let flat = 0;
 
   for (let i = 0; i < cover.length; i++) {
     const a = cover[i] as PlaceableAsset;
@@ -870,6 +921,11 @@ export function coverCloud(cover: readonly PlaceableAsset[]): Geometry {
     const acrossW = Math.max(0.2, a.size.across);
     along.set(i, alongW);
     across.set(i, acrossW);
+    rawAcross.set(i, a.size.across);
+    rawAlong.set(i, a.size.along);
+    poseOff.set(i, flat);
+    poseCount.set(i, (poses[i] ?? []).length);
+    flat += (poses[i] ?? []).length;
     tall.set(i, a.size.tall);
     baseH.set(i, Math.max(a.where?.height.median ?? 2, CORRIDOR.ceilingW + a.size.tall / 2));
     // ONE MORE COLUMN THAN THE SPAN STRICTLY NEEDS, and only for a piece
@@ -882,6 +938,31 @@ export function coverCloud(cover: readonly PlaceableAsset[]): Geometry {
       Math.max(1, Math.ceil((2 * ENCLOSE.coverW) / acrossW)) +
         (a.size.across < 2 * ENCLOSE.coverW ? 1 : 0),
     );
+  }
+  return geo;
+}
+
+/**
+ * The cover candidates' recorded poses, flattened -- what
+ * {@link COVER_ASSET.poseOff} indexes into.
+ *
+ * A ROW EVEN WHEN THERE IS NOTHING TO PUT IN IT: over an EMPTY source
+ * `transferByIndex` misses every point under all three settings, and a
+ * miss leaves the destination's PRIOR value, which here would be a pose
+ * belonging to whatever the column last held. `mixPoseCloud` carries the
+ * same single-row floor for the same reason.
+ */
+export function coverPoseCloud(poses: readonly (readonly number[])[]): Geometry {
+  const ids: number[] = [];
+  for (const list of poses) for (const id of list) ids.push(id);
+  const geo = createPointCloud(Math.max(1, ids.length));
+  const P = geo.attrs.point.require("P");
+  const col = geo.attrs.point.add(COVER_ASSET.poseId, "f32", 1);
+  for (let i = 0; i < geo.attrs.point.count; i++) {
+    P.setTuple(i, [i, 0, 0]);
+    // A pose of -1 is `poseFor`'s answer when the vocabulary has nothing,
+    // and it is what `poseAssetId` turns into a name a map can refuse.
+    col.set(i, ids[i] ?? -1);
   }
   return geo;
 }
@@ -1005,6 +1086,10 @@ export function addEnclosureTiles(
         COVER_ASSET.tallW,
         COVER_ASSET.baseH,
         COVER_ASSET.columns,
+        COVER_ASSET.rawAcross,
+        COVER_ASSET.rawAlong,
+        COVER_ASSET.poseOff,
+        COVER_ASSET.poseCount,
       ],
       outOfRange: "clamp",
     },
@@ -1075,6 +1160,10 @@ export function addEnclosureTiles(
         COVER_ASSET.tallW,
         COVER_ASSET.baseH,
         COVER_ASSET.columns,
+        COVER_ASSET.rawAcross,
+        COVER_ASSET.rawAlong,
+        COVER_ASSET.poseOff,
+        COVER_ASSET.poseCount,
       ],
     },
     `${tag}_tile`,
@@ -1103,6 +1192,10 @@ export function addEnclosureTiles(
         COVER_ASSET.tallW,
         COVER_ASSET.baseH,
         COVER_ASSET.columns,
+        COVER_ASSET.rawAcross,
+        COVER_ASSET.rawAlong,
+        COVER_ASSET.poseOff,
+        COVER_ASSET.poseCount,
       ],
       topology: "drop",
     },

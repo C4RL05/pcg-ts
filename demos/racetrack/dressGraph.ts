@@ -147,6 +147,8 @@ import {
   makeGeometryItem,
   max,
   min,
+  mergePoints,
+  mod,
   mul,
   occlusionCull,
   orientAlongVector,
@@ -156,6 +158,7 @@ import {
   promoteAttribute,
   quotaRebalance,
   randomField,
+  randomFrom,
   removeAttribute,
   repeatUntilNode,
   runFit,
@@ -178,6 +181,23 @@ import { BAND_T, Z3, lateralReach, type Band } from "./assets.js";
 import { ASSET, assetCloud, quantileField } from "./assetGraph.js";
 import type { PlaceableAsset } from "./assets.js";
 import { CORRIDOR, OVERHEAD, fitsOverhead } from "./zones.js";
+import {
+  BUDGET,
+  COVER_ASSET,
+  PIECE,
+  PLAN,
+  PLAN_PIN,
+  addEnclosurePlan,
+  addEnclosureTiles,
+  coverCloud,
+  coverPoseCloud,
+  maxColumns,
+  slotCloud,
+  writeCornerTests,
+  writeCoverBudget,
+  type PlanOptions,
+} from "./enclosureGraph.js";
+import { LONG_QUANTILE, coverCandidates } from "./tunnels.js";
 
 /**
  * The station in WORLD units, which is the only unit `transferAlongPath`
@@ -185,6 +205,20 @@ import { CORRIDOR, OVERHEAD, fitsOverhead } from "./zones.js";
  * the gather and stripped just after, so it never rides the carry.
  */
 const FRAME_ARC_WORLD = "frameArcWorld";
+
+/**
+ * How many enclosure candidates the planner builds.
+ *
+ * REPORTED RATHER THAN HIDDEN, as the param it feeds says: every attempt
+ * is a POINT that exists whether or not the loop reaches it. Measured, a
+ * lap at a real budget makes 1 to 50 attempts and accepts 1 to 4, so this
+ * is five times the worst seen -- and the loop publishes how many it
+ * spent, so a plan that ran out of candidates says so.
+ */
+const L6_ATTEMPTS = 256;
+
+/** Scratch the cover conversion writes and strips again. */
+const SCRATCH_POSE = "l6PoseScratch";
 
 /** The named outputs a cook of this graph produces. */
 export const DRESS_OUTPUTS = {
@@ -202,6 +236,32 @@ export const DRESS_OUTPUTS = {
    */
   rounds: "rounds",
   converged: "converged",
+  /**
+   * The same two for the FIRST repair pass -- the one that runs before
+   * L-6 has added anything.
+   *
+   * BOTH PASSES ARE PUBLISHED BECAUSE THEY ANSWER DIFFERENT QUESTIONS, and
+   * one number could only answer the second. `rounds` is what the lap that
+   * came OUT cost to settle, which is what a caller budgeting a cook wants.
+   * These are what the lap cost before enclosure existed, which is the only
+   * figure comparable with a reference loop run over the same list -- and
+   * that comparison is the one thing that can catch a settle signal
+   * counting the wrong thing.
+   */
+  roundsFirst: "roundsFirst",
+  convergedFirst: "convergedFirst",
+  /**
+   * The settled list BEFORE L-6, one point per surviving placement.
+   *
+   * THE ONLY OUTPUT COMPARABLE WITH A LOOP THAT HAS NO ENCLOSURE IN IT.
+   * `placements` is the lap as it finished -- Z-1, L-1 and L-5 run a second
+   * time over a population that now contains tunnels, and a tunnel is an
+   * occluder, so the cull's verdict on an ordinary placement legitimately
+   * differs from what it was before one was built beside it. That is the
+   * rule working, not drift; but it means a reference that never saw cover
+   * can only be compared against the pass that had not seen it either.
+   */
+  placementsFirst: "placementsFirst",
   /**
    * One point per placement, after Z-1 and lifted into the world, before
    * L-1 has removed or moved anything.
@@ -576,6 +636,16 @@ export interface GraphDressing {
   readonly culled: Geometry;
   /** And after L-5: the same survivors, at the heights it left them. */
   readonly placements: Geometry;
+  /**
+   * The settled list BEFORE L-6 added anything -- see
+   * {@link DRESS_OUTPUTS.placementsFirst}.
+   *
+   * Published so that what enclosure DID is a difference between two
+   * clouds rather than a number this file would otherwise have to report
+   * on its own. It is the same argument `placed` and `culled` are here
+   * for: a stage's effect is legible when both sides of it are.
+   */
+  readonly placementsFirst: Geometry;
   /** Per lap frame: is it under cover? */
   readonly covered: boolean[];
   /** Per lap frame: how many of the six rays hit anything. */
@@ -2998,6 +3068,17 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   const lib = poseLibrary(kit);
   const library = poseCloud(lib, lap.halfWidth);
 
+  // L-6 DRAWS FROM THE WHOLE KIT, NOT FROM THE POOL. `dressLap` passes
+  // `all` to `placeEnclosure` -- every asset the source placed somewhere --
+  // where the ordinary dressing draws from `pool`, which has had L-2 and
+  // L-3's corner vocabulary reserved out of it. Cover is a different
+  // question from scenery and a marker's exclusion from one says nothing
+  // about the other.
+  const coverPool = coverCandidates(
+    (kit.assets as unknown as PlaceableAsset[]).filter((a) => a.where),
+  );
+  const coverPoses = coverPool.map((a) => lib.posesOf.get(a.id) ?? []);
+
   const posesIn = g.add(dataInput, {}, "poseLibrary");
   g.setParam(posesIn, "items", [makeGeometryItem(library)]);
 
@@ -3051,10 +3132,110 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   g.connect(mixAssetsIn, "out", repair, "mixAssets");
   g.connect(mixPosesIn, "out", repair, "mixPoses");
 
+  // THE FIRST PASS'S BOXES, which are what L-6 measures against. Named
+  // apart from the final ones because they are not the same lap: enclosure
+  // has not been added yet, and the whole point of measuring here is to
+  // find out how much of it to add.
+  const firstBoxes = writeBoxes(
+    g,
+    posesIn,
+    writeCopyScale(g, repair, lap.halfWidth, "dressFirst", "carry"),
+    "dressFirst",
+  );
+  const firstCoverage = writeCoverage(g, framesIn, firstBoxes, lap.halfWidth, "l6first");
+
+  // ---- L-6, BETWEEN THE TWO PASSES ---------------------------------------
+  //
+  // OUTSIDE THE LOOP AND NOT INSIDE IT, which `buildRepairBody` already
+  // argued and this arrangement honours: `placeEnclosure` draws from `seed
+  // + rounds`, and a body whose seed varies per round has no fixed point.
+  // `PLAN.md` priced the split at one mix move and one cull move per lap on
+  // two seeds of six.
+  //
+  // AND A SECOND REPAIR PASS AFTER IT, because `dressLap` adds cover INSIDE
+  // its loop and the rounds that follow repair what it added. Running the
+  // loop again over the extended list is that, rescheduled: the same body,
+  // the same fixed point, with the cover pieces now in the population the
+  // cull and the mix can see. Z-1 leaves them alone on its own -- that is
+  // what `PLACEMENT.cover` is for -- so what the second pass actually buys
+  // is the cull's verdict on a lap that has tunnels in it.
+  const budget = writeCoverBudget(g, firstCoverage, "covered", lap.lengthW, "l6budget");
+  const l6Frames = writeCornerTests(g, budget, lap.lengthW, "l6frames");
+  const planOpts: PlanOptions = {
+    lapW: lap.lengthW,
+    halfWidth: lap.halfWidth,
+    budgetAttr: BUDGET.budgetW,
+    minQuantile: LONG_QUANTILE,
+    attempts: L6_ATTEMPTS,
+  };
+  const coverIn = g.add(dataInput, {}, "coverAssets");
+  g.setParam(coverIn, "items", [makeGeometryItem(coverCloud(coverPool, coverPoses))]);
+  const coverPosesIn = g.add(dataInput, {}, "coverPoses");
+  g.setParam(coverPosesIn, "items", [makeGeometryItem(coverPoseCloud(coverPoses))]);
+  const slotsIn = g.add(dataInput, {}, "coverSlots");
+  g.setParam(slotsIn, "items", [makeGeometryItem(slotCloud(maxColumns(coverPool)))]);
+
+  const plan = addEnclosurePlan(g, l6Frames, planOpts, "l6");
+  const tiled = addEnclosureTiles(
+    g,
+    l6Frames,
+    plan,
+    coverIn,
+    slotsIn,
+    planOpts,
+    coverPool.map((a) => a.instances),
+    "l6tile",
+  );
+  const pieces = writeCoverPlacements(g, tiled, mixPoseIds(lib), "l6place");
+  g.connect(coverPosesIn, "out", pieces.poses, "source");
+  // The frame, on the pieces, exactly as the placement list got it: they
+  // arrive holding a station and nothing about the world, which is the
+  // whole claim `placementCloudInTrackCoords` makes about a placement.
+  const placedPieces = sampleTrackFrame(g, framesIn, pieces.tail, lap.halfWidth, "l6place");
+
+  const merged = g.add(mergePoints, {}, "l6merge");
+  // ORDER MATTERS AND IT IS THIS ONE: `mergePoints` concatenates, so the
+  // settled placements keep the indices they had and the pieces follow.
+  // Nothing downstream depends on that today -- the numbering is redone
+  // below -- but a list whose original members move when cover is added
+  // would make every before-and-after comparison read as churn.
+  g.connect(repair, "carry", merged, "in");
+  g.connect(placedPieces, "out", merged, "in");
+
+  // THE NUMBERING IS REDONE OVER THE WHOLE LIST. `PLACEMENT.id` is a
+  // position in the placement list and the list has just changed, so a
+  // piece carrying -1 and a placement carrying its old index are both
+  // wrong about a list that now holds them together.
+  const renumbered = g.add(
+    setAttribute,
+    { name: PLACEMENT.id, tupleSize: 1, value: index() },
+    "l6renumber",
+  );
+  g.connect(merged, "out", renumbered, "in");
+
+  // A SECOND BODY, NOT THE SAME ONE TWICE. `repeatUntilNode` injects its
+  // portal nodes INTO the graph it is handed, so wrapping one body twice
+  // collides on the id it gives the carry pin. Two builds of the same
+  // function are the same rules either way -- the body carries no state
+  // and no randomness, which `buildRepairBody` says in its own words.
+  const secondBody = buildRepairBody(lap, {
+    bandPools: mixBandPools(pool, lib, mixPinned),
+    poseIds: mixPoseIds(lib),
+  });
+  const second = g.add(
+    repeatUntilNode(secondBody.graph, secondBody.inputs, secondBody.outputs),
+    { maxRounds: MAX_ROUNDS, settleAttr: SETTLE_ATTR },
+    "repairWithCover",
+  );
+  g.connect(renumbered, "out", second, "carry");
+  g.connect(framesIn, "out", second, "sight");
+  g.connect(mixAssetsIn, "out", second, "mixAssets");
+  g.connect(mixPosesIn, "out", second, "mixPoses");
+
   const boxes = writeBoxes(
     g,
     posesIn,
-    writeCopyScale(g, repair, lap.halfWidth, "dress", "carry"),
+    writeCopyScale(g, second, lap.halfWidth, "dress", "carry"),
     "dress",
   );
   const coverage = writeCoverage(g, framesIn, boxes, lap.halfWidth, "l6");
@@ -3064,18 +3245,32 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   // The copy scale is written on a branch of its own so that what this
   // output publishes is a placement — position, orientation, size —
   // rather than an argument to `copyToPoints`.
-  g.output(repair, "carry", DRESS_OUTPUTS.placements);
+  //
+  // EVERY ONE OF THESE IS THE SECOND PASS'S, and that is the point of
+  // there being a second pass: the first one settles a lap that has no
+  // enclosure in it yet, so its verdicts are about a population L-6 is
+  // still about to change. What a caller wants is the lap as it finished.
+  g.output(second, "carry", DRESS_OUTPUTS.placements);
   // The final round's intermediates, which are a settled lap's and so say
   // what the rules did LAST rather than what they did at all. A test that
   // wants a rule's verdict on an unsettled population cooks the body once.
-  g.output(repair, "placed", DRESS_OUTPUTS.placed);
-  g.output(repair, "culled", DRESS_OUTPUTS.culled);
+  g.output(second, "placed", DRESS_OUTPUTS.placed);
+  g.output(second, "culled", DRESS_OUTPUTS.culled);
   // WHETHER IT SETTLED, AND IN HOW MANY ROUNDS. `dressLap` reports the
   // same two in a stat line; here they are graph outputs, which is the
   // difference between a bounded repair that says it ran out and one whose
   // caller has to know to look.
-  g.output(repair, "rounds", DRESS_OUTPUTS.rounds);
-  g.output(repair, "converged", DRESS_OUTPUTS.converged);
+  //
+  // THE COUNT IS THE SECOND PASS'S ALONE and is therefore a FLOOR on the
+  // work, not the whole of it -- the first pass's rounds are spent before
+  // L-6 has said anything and are not published. `converged` has no such
+  // caveat: it is a claim about the lap that came out, and that lap is
+  // this one.
+  g.output(second, "rounds", DRESS_OUTPUTS.rounds);
+  g.output(second, "converged", DRESS_OUTPUTS.converged);
+  g.output(repair, "rounds", DRESS_OUTPUTS.roundsFirst);
+  g.output(repair, "converged", DRESS_OUTPUTS.convergedFirst);
+  g.output(repair, "carry", DRESS_OUTPUTS.placementsFirst);
   g.output(coverage, "out", DRESS_OUTPUTS.coverage);
   return { graph: g };
 }
@@ -3303,7 +3498,16 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
     share: arcW / lap.lengthW,
     pushed,
     dropped: input.placements.length - placements.pointCount,
-    rounds: requireNumber(out[DRESS_OUTPUTS.rounds], DRESS_OUTPUTS.rounds),
+    // BOTH PASSES, SUMMED, because that is what the cook actually spent.
+    // The two are published apart so a caller can tell which half a lap's
+    // cost came from; a stat line wants the total.
+    placementsFirst: requireGeo(
+      out[DRESS_OUTPUTS.placementsFirst],
+      DRESS_OUTPUTS.placementsFirst,
+    ),
+    rounds:
+      requireNumber(out[DRESS_OUTPUTS.roundsFirst], DRESS_OUTPUTS.roundsFirst) +
+      requireNumber(out[DRESS_OUTPUTS.rounds], DRESS_OUTPUTS.rounds),
     converged: requireNumber(out[DRESS_OUTPUTS.converged], DRESS_OUTPUTS.converged) !== 0,
     lowered,
     stamped: boxes.pointCount,
@@ -3331,4 +3535,149 @@ function requireGeo(collection: DataCollection | undefined, name: string): Geome
   const geo = firstGeometry(collection ?? []);
   if (!geo) throw new Error(`dressGraph: output "${name}" carried no geometry`);
   return geo;
+}
+
+/**
+ * L-6's pieces, given the columns that make them placements.
+ *
+ * WHAT A TILE IS SHORT OF, and it is not much: the tiler already writes a
+ * station, a lateral and a height, which is where a placement sits. What
+ * it does not carry is the bookkeeping every other placement has -- the
+ * asset's own extents, the flags the repairs read, and the asset id
+ * string a spawner groups by.
+ *
+ * THE COVER FLAG IS THE WHOLE OF THE SPECIAL CASE, which is worth saying
+ * because it looks as though there should be more. Setting it to 1 makes
+ * Z-1 leave the piece alone (it is already clear of the corridor by
+ * construction, which is what `coverBaseH` computed), keeps the band mix
+ * from redrawing it, and selects the `cover:` half of the asset id table.
+ * Three rules, one column, and none of them needed a branch adding for
+ * enclosure.
+ *
+ * THE POSE IS DRAWN ONCE PER RUN, not once per piece, and that is a rule
+ * rather than an economy: "a tunnel is the same segment repeated; varying
+ * the shape along it reopens the seams the overlap was added to close",
+ * measured at a 17W covered stretch falling back to 8W when poses were
+ * drawn per piece. Keyed on the run's own start, so every piece of one run
+ * draws the same number and two runs draw independently.
+ */
+function writeCoverPlacements(
+  g: Graph,
+  tiles: NodeHandle,
+  poseIds: readonly string[],
+  tag: string,
+): { readonly tail: NodeHandle; readonly poses: NodeHandle } {
+  // The raw draw, then the asset's own pose list indexed by it. This is
+  // `poseFor`'s arithmetic -- `ids[k % ids.length]` -- with the modulo
+  // written out, and it is the same shape Z-3's redraw uses to give a
+  // replacement a pose from a different asset's list.
+  const drawn = g.add(
+    setAttribute,
+    {
+      name: SCRATCH_POSE,
+      tupleSize: 1,
+      value: floor(mul(randomFrom(attribute(PLAN.startW), "l6.pose"), 1024)),
+    },
+    `${tag}_poseDraw`,
+  );
+  g.connect(tiles, "out", drawn, "in");
+
+  const row = g.add(
+    setAttribute,
+    {
+      name: SCRATCH_POSE,
+      tupleSize: 1,
+      // A candidate the kit recorded no pose for indexes its own offset,
+      // which is the next asset's first row -- so the count is floored at
+      // one and the pose that comes back is refused downstream by name
+      // rather than by reaching off the end of the table.
+      value: add(
+        attribute(COVER_ASSET.poseOff),
+        mod(attribute(SCRATCH_POSE), max(1, attribute(COVER_ASSET.poseCount))),
+      ),
+    },
+    `${tag}_poseRow`,
+  );
+  g.connect(drawn, "out", row, "in");
+
+  const posed = g.add(
+    transferByIndex,
+    { index: attribute(SCRATCH_POSE), attributes: [COVER_ASSET.poseId], outOfRange: "clamp" },
+    `${tag}_pose`,
+  );
+  g.connect(row, "out", posed, "in");
+
+  let out: NodeHandle = posed;
+  const writes: [string, Field | number][] = [
+    [PLACEMENT.pose, attribute(COVER_ASSET.poseId)],
+    // THE ASSET'S OWN EXTENTS, not the floored ones the tiling used.
+    [PLACEMENT.sizeAcross, attribute(COVER_ASSET.rawAcross)],
+    [PLACEMENT.sizeAlong, attribute(COVER_ASSET.rawAlong)],
+    [PLACEMENT.sizeTall, attribute(COVER_ASSET.tallW)],
+    [PLACEMENT.cover, 1],
+    // NOT LOCKED AND NOT PINNED: the first is L-3's braking mark and the
+    // second is the mix's protect set, and cover is neither -- it is
+    // excluded from the mix by its own flag, which is a different thing
+    // from being protected within it.
+    [PLACEMENT.locked, 0],
+    [PLACEMENT.mixPinned, 0],
+    [PLACEMENT.mixTried, 0],
+    // The id is rewritten after the merge, where the list is whole; until
+    // then a piece has no place in a numbering that does not include it.
+    [PLACEMENT.id, -1],
+  ];
+  for (const [name, value] of writes) {
+    const n = g.add(setAttribute, { name, tupleSize: 1, value }, `${tag}_w_${name}`);
+    g.connect(out, "out", n, "in");
+    out = n;
+  }
+
+  const half = poseIds.length / 2;
+  const named = g.add(
+    setAttribute,
+    {
+      name: PLACEMENT.asset,
+      tupleSize: 1,
+      type: "string",
+      values: poseIds as string[],
+      // The cover half, chosen by the same expression the redraw uses --
+      // `pose + 1` past the -1 row, plus the half-table offset.
+      value: add(add(attribute(PLACEMENT.pose), 1), half),
+    },
+    `${tag}_assetId`,
+  );
+  g.connect(out, "out", named, "in");
+
+  const cleaned = g.add(
+    removeAttribute,
+    {
+      names: [
+        SCRATCH_POSE,
+        COVER_ASSET.ord,
+        COVER_ASSET.id,
+        COVER_ASSET.alongW,
+        COVER_ASSET.acrossW,
+        COVER_ASSET.tallW,
+        COVER_ASSET.baseH,
+        COVER_ASSET.columns,
+        COVER_ASSET.rawAcross,
+        COVER_ASSET.rawAlong,
+        COVER_ASSET.poseOff,
+        COVER_ASSET.poseCount,
+        COVER_ASSET.poseId,
+        PIECE.slot,
+        PIECE.tile,
+        PIECE.tiles,
+        PIECE.ramp,
+        PLAN.startW,
+        PLAN.lengthW,
+      ],
+      // A tile carries every one of these, but the list is long and a
+      // rename upstream should not take a cook down over a strip.
+      strict: false,
+    },
+    `${tag}_strip`,
+  );
+  g.connect(named, "out", cleaned, "in");
+  return { tail: cleaned, poses: posed };
 }

@@ -71,7 +71,8 @@ import { buildRoadGraph, OUTPUTS } from "../demos/racetrack/graph.js";
 import { makeTrackSpline } from "../demos/racetrack/spline.js";
 import { shippedVocabulary } from "../demos/racetrack/vocabulary.js";
 import { ENCLOSURE, enclosureMask, measureEnclosure } from "../demos/racetrack/enclosure.js";
-import { resolveCorridor } from "../demos/racetrack/zones.js";
+import { CORRIDOR, resolveCorridor } from "../demos/racetrack/zones.js";
+import { ENCLOSE } from "../demos/racetrack/tunnels.js";
 import { FALSE_EDGE, falseEdges, repairFalseEdges } from "../demos/racetrack/falseEdges.js";
 import {
   SIGHTLINE,
@@ -743,13 +744,21 @@ describe("racetrack dressing, as a graph", () => {
       });
       const out = (
         await cook(g, {
-          outputs: [DRESS_OUTPUTS.placements, DRESS_OUTPUTS.rounds, DRESS_OUTPUTS.converged],
+          // THE FIRST PASS'S COUNT, which is the one comparable with a
+          // reference loop over the same list: the graph runs a SECOND
+          // pass after L-6 has added enclosure, and the reference has no
+          // enclosure to add.
+          outputs: [
+            DRESS_OUTPUTS.placementsFirst,
+            DRESS_OUTPUTS.roundsFirst,
+            DRESS_OUTPUTS.convergedFirst,
+          ],
         })
       ).outputs;
-      const after = firstGeometry(out[DRESS_OUTPUTS.placements] ?? []);
+      const after = firstGeometry(out[DRESS_OUTPUTS.placementsFirst] ?? []);
       if (!after) throw new Error("the dress graph produced no placements");
-      const rounds = numberOf(out[DRESS_OUTPUTS.rounds]);
-      const converged = numberOf(out[DRESS_OUTPUTS.converged]) !== 0;
+      const rounds = numberOf(out[DRESS_OUTPUTS.roundsFirst]);
+      const converged = numberOf(out[DRESS_OUTPUTS.convergedFirst]) !== 0;
 
       const ref = repairReference(lap, src, immovable);
       seeds++;
@@ -1214,6 +1223,149 @@ describe("racetrack dressing, as a graph", () => {
         `along ${worstPar.toExponential(2)} vs perpendicular ${worstPerp.toExponential(2)}` +
         `; the station itself is ${worstStationUlps.toFixed(3)} spacings out, ` +
         `worst arc ${worstArc.toFixed(0)}`,
+    );
+  }, FOUR_LAP_MS);
+
+  /**
+   * L-6 RUNS, and this is the assertion the whole assembly rests on.
+   *
+   * WHY IT NEEDS SAYING SEPARATELY. Wiring enclosure into the dress graph
+   * broke nothing — 5639 tests stayed green through it — and a suite that
+   * stays green is not evidence that a new stage did anything at all. The
+   * budget could have come out zero on every lap, the planner could have
+   * rejected every candidate, the merge could have appended an empty
+   * cloud, and every existing assertion would still hold, because every
+   * one of them is about the placements that were there before.
+   *
+   * So this checks the difference the stage makes, at both ends: that the
+   * list GREW, and that what it grew by is cover — clear of the corridor
+   * by its own construction, and long enough to be the tunnel the rule
+   * asks for rather than another overhang.
+   *
+   * THE INPUT HAS ITS COVER STRIPPED, and the first draft of this test did
+   * not do that and was measuring nothing. `dressLap` runs L-6 itself, so
+   * the fixture's list ALREADY holds sixteen cover pieces; the graph then
+   * measures a lap that is already enclosed, computes a budget of zero,
+   * correctly adds nothing, and a test counting cover placements finds the
+   * sixteen that came IN. Deleting the merge outright left all fifteen
+   * tests passing.
+   *
+   * Stripping them is also the honest input. The whole point of porting
+   * L-6 is that a caller need not have run it — hand the graph a list that
+   * has never seen enclosure and it should build its own, which is exactly
+   * what a game with a spline and a kit would be doing.
+   */
+  it("builds enclosure into the lap, and the lap still settles", async () => {
+    let totalCover = 0;
+    let longest = 0;
+
+    for (const seed of SEEDS) {
+      const { lap, frames, dressing } = await cookLap(seed);
+      const bare = dressing.placements.filter((p) => !p.cover);
+      expect(
+        bare.length,
+        `seed ${seed}: the fixture had no cover to strip, so this input is not bare`,
+      ).toBeLessThan(dressing.placements.length);
+      const got = await dressLapByGraph({
+        kit: shippedVocabulary(),
+        lap,
+        frames,
+        placements: bare,
+        mixPinned: noMix(seed),
+        seed,
+        immovable: brakeOf(seed),
+        pool: dressingPool(seed),
+      });
+
+      const pts = got.placements.attrs.point;
+      const cover = pts.require(PLACEMENT.cover);
+      const h = pts.require(PLACEMENT.h);
+      const tall = pts.require(PLACEMENT.sizeTall);
+      const station = pts.require(PLACEMENT.station);
+      let pieces = 0;
+      let lowestBase = Infinity;
+      for (let i = 0; i < pts.count; i++) {
+        if (cover.get(i) <= 0) continue;
+        pieces++;
+        lowestBase = Math.min(lowestBase, h.get(i) - tall.get(i) / 2);
+        // A station off the lap would mean the modulo was wrong and the
+        // piece is nowhere — which the lift would then resolve by wrapping
+        // it somewhere plausible, so nothing downstream would complain.
+        expect(station.get(i), `seed ${seed}: cover station off the lap`).toBeGreaterThanOrEqual(0);
+        expect(station.get(i), `seed ${seed}: cover station off the lap`).toBeLessThan(
+          lap.lengthW,
+        );
+      }
+      totalCover += pieces;
+
+      // IT FIRED, and the list is LONGER than the pass that had no
+      // enclosure in it. This is the assertion the merge cannot survive
+      // being deleted: the second pass only ever culls, so without pieces
+      // to add the final list can only be shorter.
+      expect(pieces, `seed ${seed}: enclosure built nothing`).toBeGreaterThan(0);
+      expect(
+        got.placements.pointCount,
+        `seed ${seed}: the lap did not grow, so nothing was merged into it`,
+      ).toBeGreaterThan(got.placementsFirst.pointCount);
+      // And by no more than it built — a merge that appended the original
+      // list twice would sail through the test above.
+      expect(
+        got.placements.pointCount,
+        `seed ${seed}: the merged list is longer than the first pass plus its cover`,
+      ).toBeLessThanOrEqual(got.placementsFirst.pointCount + pieces);
+
+      // EVERY PIECE CLEARS THE CORRIDOR BY ITS OWN BASE, which is what
+      // makes cover exempt from Z-1 honest: it is exempt because it is
+      // already clear, not because it is special. A piece that dipped
+      // under would be stood off by Z-1 and put a hole in the roof exactly
+      // over the racing line.
+      expect(lowestBase, `seed ${seed}: a cover piece reaches below the ceiling`)
+        .toBeGreaterThanOrEqual(CORRIDOR.ceilingW - 1e-3);
+
+      // AND THE LAP STILL SETTLES WITH TUNNELS IN IT. The second pass runs
+      // the cull over a population that now contains large occluders,
+      // which is the one thing about this arrangement that could fail to
+      // converge.
+      expect(got.converged, `seed ${seed}: the lap did not settle after enclosure`).toBe(true);
+
+      // AND IT PUT ABOUT AS MUCH LAP UNDER COVER AS THE RULE DOES.
+      // Compared against the REFERENCE's own share on this same lap rather
+      // than against a number chosen here: the two draw different stretches
+      // from one seed, so the claim available is a neighbourhood, and half
+      // to double is a neighbourhood that a stage adding one tunnel where
+      // the rule adds four would fall out of.
+      const refShare = measureEnclosure(lap, dressing.boxes).share;
+      expect(got.share, `seed ${seed}: far less cover than the rule lays down`)
+        .toBeGreaterThan(refShare * 0.5);
+      expect(got.share, `seed ${seed}: past L-6's own ceiling`).toBeLessThanOrEqual(
+        ENCLOSE.ruleShare[1],
+      );
+
+      // A MEASURED STRETCH IS SHORTER THAN THE PLANNED ONE, which is worth
+      // recording because the obvious assertion here is wrong. A stretch
+      // is planned at 10W or more — that is what `LONG_QUANTILE` draws —
+      // but the rays only count a frame as covered when three of six hit,
+      // and the flare deliberately LIFTS the roof over the first and last
+      // 2.5W of every run. So a 10W tunnel measures about 5W of cover in
+      // its middle, and requiring 10W here failed at 7.3W against a rule
+      // that was working. What is checked instead is that the longest run
+      // is a run rather than a speck.
+      let run = 0;
+      let best = 0;
+      for (let i = 0; i < got.covered.length * 2; i++) {
+        const at = i % got.covered.length;
+        run = got.covered[at] ? run + (lap.s[at + 1] - lap.s[at]) / lap.halfWidth : 0;
+        best = Math.max(best, run);
+      }
+      longest = Math.max(longest, best);
+      expect(best, `seed ${seed}: the longest covered run is not a stretch`).toBeGreaterThan(
+        ENCLOSE.flareW,
+      );
+    }
+
+    console.log(
+      `dress graph L-6: ${totalCover} cover pieces over ${SEEDS.length} seeds, ` +
+        `longest covered run ${longest.toFixed(1)}W`,
     );
   }, FOUR_LAP_MS);
 

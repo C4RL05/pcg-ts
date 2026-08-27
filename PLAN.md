@@ -3017,3 +3017,41 @@ Measured against `measureEnclosure` and `longCoverBudgetW` on four laps,
 in both branches -- a dressed lap already holds its cover and asks for
 nothing, a bare lap asks for the population's median share: worst
 |dCovered| 5.4e-3W, |dLong| 1.6e-3W, |dBudget| 1.6e-6W.
+
+### L-6 is wired into the dress graph, 2026-08-27
+
+The planner, the tiler and the budget now run inside `buildDressGraph`,
+between two passes of the repair loop: settle, measure the cover the lap
+already has, plan and tile what it is short of, merge, settle again. The
+second pass is `dressLap`'s own arrangement rescheduled -- it adds cover
+INSIDE its loop and the rounds after repair what it added -- and it is
+what gives the pieces the cull's verdict on a lap that now has tunnels in
+it. Z-1 leaves them alone by itself, which is what `PLACEMENT.cover` is
+for.
+
+**Measured on a lap with its cover stripped out: 11, 16, 16 and 4 pieces
+over four seeds**, covered share 7.3 to 14.7% against the reference's 8.8%
+on the same laps, converging every time.
+
+**AND IT IS A NO-OP IN THE PAGE TODAY, which is worth stating plainly.**
+`main.ts` hands `buildDressGraph` the list `dressLap` returns, and
+`dressLap` has already run L-6 -- so the graph measures an enclosed lap,
+computes a budget of zero, correctly adds nothing, and the picture is
+byte-identical. The value is for the caller who has NOT run it, which is
+the caller this whole port exists for. Wiring the page to stop running L-6
+in TypeScript is a separate change and a bigger one, because `dressLap`
+threads cover through the rest of its loop.
+
+**That no-op is also what made the first version of the test worthless.**
+It counted cover placements on the graph's output and found sixteen --
+every one of them arriving in the INPUT. Deleting the merge outright left
+all fifteen tests green. The test now strips cover from the input, which
+is both the honest input and the only one where the stage has anything to
+do, and asserts the list GREW; the merge cannot be deleted under it.
+
+One assertion had to be withdrawn rather than fixed: a MEASURED covered
+stretch is shorter than the PLANNED one. A stretch is planned at 10W or
+more, but the rays count a frame only when three of six hit and the flare
+deliberately lifts the roof over the first and last 2.5W of every run, so
+a 10W tunnel measures about 5W in its middle. Requiring 10W failed at 7.3W
+against a rule that was working correctly.

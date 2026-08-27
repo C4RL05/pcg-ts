@@ -35,6 +35,7 @@ import {
   firstGeometry,
   index,
   makeGeometryItem,
+  setAttribute,
   transferByIndex,
   type Geometry,
 } from "pcg-ts";
@@ -70,6 +71,7 @@ import {
   measureEnclosure,
 } from "../demos/racetrack/enclosure.js";
 import { TRACK_FRAME } from "../demos/racetrack/graph.js";
+import { poseLibrary } from "../demos/racetrack/dressGraph.js";
 import type { PlaceableAsset } from "../demos/racetrack/assets.js";
 import { beforeEntryW, cornersOf, radiusAtW } from "../demos/racetrack/corners.js";
 import { dressedLapFor } from "./support/lap.js";
@@ -127,14 +129,24 @@ async function planOf(
   const opts: PlanOptions = {
     lapW: lap.lengthW,
     halfWidth: lap.halfWidth,
-    budgetW,
+    budgetAttr: BUDGET.budgetW,
     minQuantile: LONG_QUANTILE,
     attempts,
   };
   const g = new Graph(seed);
   const framesIn = g.add(dataInput, {}, "frames");
   g.setParam(framesIn, "items", [makeGeometryItem(frames)]);
-  const out = addEnclosurePlan(g, framesIn, opts, "l6");
+  // THE BUDGET AS A COLUMN, which is how the assembly supplies it — from
+  // `writeCoverBudget`, off a coverage measurement in the same graph. A
+  // constant here is the same shape with the measurement stood in for, so
+  // these tests exercise the path the demo uses rather than a second one.
+  const withBudget = g.add(
+    setAttribute,
+    { name: BUDGET.budgetW, tupleSize: 1, value: budgetW },
+    "budget",
+  );
+  g.connect(framesIn, "out", withBudget, "in");
+  const out = addEnclosurePlan(g, withBudget, opts, "l6");
   g.output(out, PLAN_PIN, "plan");
 
   const geo = firstGeometry((await cook(g)).outputs["plan"]);
@@ -433,7 +445,7 @@ async function tilesOf(
   const opts: PlanOptions = {
     lapW: lap.lengthW,
     halfWidth: lap.halfWidth,
-    budgetW,
+    budgetAttr: BUDGET.budgetW,
     minQuantile: LONG_QUANTILE,
     attempts,
   };
@@ -441,12 +453,23 @@ async function tilesOf(
   const framesIn = g.add(dataInput, {}, "frames");
   g.setParam(framesIn, "items", [makeGeometryItem(frames)]);
   const coverIn = g.add(dataInput, {}, "cover");
-  g.setParam(coverIn, "items", [makeGeometryItem(coverCloud(cover))]);
+  // The pose ids the kit recorded for each candidate — the same lookup
+  // `poseLibrary` builds, which this suite reaches through its own copy
+  // rather than importing the graph that will consume this stage.
+  const lib = poseLibrary(shippedVocabulary());
+  const poses = cover.map((a) => lib.posesOf.get(a.id) ?? []);
+  g.setParam(coverIn, "items", [makeGeometryItem(coverCloud(cover, poses))]);
   const slotsIn = g.add(dataInput, {}, "slots");
   g.setParam(slotsIn, "items", [makeGeometryItem(slotCloud(maxColumns(cover)))]);
 
-  const withTests = writeCornerTests(g, framesIn, lap.lengthW, "f");
-  const plan = addEnclosurePlan(g, framesIn, opts, "l6");
+  const withBudget = g.add(
+    setAttribute,
+    { name: BUDGET.budgetW, tupleSize: 1, value: budgetW },
+    "budget",
+  );
+  g.connect(framesIn, "out", withBudget, "in");
+  const withTests = writeCornerTests(g, withBudget, lap.lengthW, "f");
+  const plan = addEnclosurePlan(g, withBudget, opts, "l6");
   const out = addEnclosureTiles(
     g,
     withTests,
