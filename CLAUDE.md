@@ -109,12 +109,19 @@ a parent — these are three different kinds of thing and the old single
   `road`. Unnumbered on purpose: they encode no order. Each exists
   because what it shows needs a host — a streamed world, a device-resident
   renderer, a spline the page was handed rather than made. `racetrack` is
-  the one the placement rules run on; `road` is a deliberate COPY of it
-  rather than a mode of it, kept as the version with no placement rules in
-  it. Their module names are identical so the diff between them reads as
-  what the rules added. (A different `racetrack` demo held the name until
-  2026-08-23 — a scored, host-corrected circuit, retired and archived; see
-  PLAN.md for what it established.) Each also shows the
+  the one the placement rules run on. `road` BEGAN as a copy of it, kept as
+  the version with no placement rules in it, and the claim used to be that
+  their identical module names made the diff between them read as what the
+  rules added. THAT IS NO LONGER TRUE and the two are independent demos:
+  `main.ts` shares not one line (505 against 1287), `graph.ts` and `lap.ts`
+  have diverged in BOTH directions — road has its own `dressVerges` and a
+  simpler `Lap` with no corner model, 95 and 27 lines racetrack does not
+  have — and only `spline.ts` is still identical. Read them as two demos
+  that share a spline and a naming scheme; do not change one expecting the
+  other to follow, and do not read a diff between them as a feature list.
+  See PLAN.md, "road and racetrack are two demos". (A different `racetrack`
+  demo held the name until 2026-08-23 — a scored, host-corrected circuit,
+  retired and archived; see PLAN.md for what it established.) Each also shows the
   graph behind it, read-only, as a thumbnail in its own control panel that
   opens full-screen (`shared/graph/`, mounted through `Overlay.addSlot`).
   `racetrack` is also the only consumer of `cellMode: "path"`: it runs two

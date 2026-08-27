@@ -392,6 +392,50 @@ compare against -- most likely L-1's lateral push, which moves a placement
 after Z-1 has resolved it and is inside the same fixed point. Then assert
 the corridor on the SETTLED cloud, in the suite that owns Z-1.
 
+### road and racetrack are two demos, 2026-08-27
+
+`demos/road` was made as a copy of `demos/racetrack` with the placement
+rules taken out, and CLAUDE.md carried the consequence as a promise: the
+module names are identical, so the diff between them reads as what the
+rules added. The promise has expired and pretending otherwise costs more
+than admitting it.
+
+**Measured, on the day this was written:**
+
+| module | road | racetrack | only in road | only in racetrack |
+| --- | --- | --- | --- | --- |
+| `spline.ts` | 289 | 289 | 0 | 0 |
+| `lap.ts` | 112 | 234 | 27 | 149 |
+| `graph.ts` | 211 | 463 | 95 | 347 |
+| `main.ts` | 505 | 1287 | 505 | 1287 |
+
+**`main.ts` SHARES NOT ONE LINE.** They are different files with the same
+name. And the other two diverged in BOTH directions, which is the part that
+kills the promise outright: road has 95 lines of `graph.ts` and 27 of
+`lap.ts` that racetrack does not have -- its own `dressVerges`, and a
+simpler `Lap` that carries no corner model -- so the diff is not "what the
+rules added", it is two files that grew apart. Only `spline.ts` still
+holds, and it holds because it is byte-identical.
+
+**Why this is a decision and not just a note.** The promise implied an
+obligation -- change racetrack, port it to road, keep the diff meaningful --
+and that obligation was never being met, so it was a cost with no benefit:
+a reader trusting the claim would take the diff for a feature list and be
+wrong about three files of four. The decision is to stop: they are two
+demos that share a spline and a naming scheme.
+
+**What that means in practice.** A change to `demos/racetrack` implies
+nothing about `demos/road`, and neither needs porting to the other.
+`spline.ts` is the one place where a change should be made twice or moved
+to `shared/`, and it is identical today, which is worth keeping. If the two
+ever need to share more than a spline, the answer is `shared/`, not a copy
+whose divergence nobody is tracking.
+
+**This session did not cause it and did not touch it.** None of the eight
+commits changed `demos/road` or racetrack's `graph.ts`, `lap.ts` or
+`spline.ts`; the divergence predates them. It is recorded now because it
+lived only in a CLAUDE.md sentence that had quietly become false.
+
 ### Two arc lengths, one parameter: `pathPointAt` on a resampled path, 2026-08-19
 
 Found while building `tests/trackDressing.test.ts`, and it cost most of a
