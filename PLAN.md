@@ -4193,3 +4193,63 @@ buys. Do NOT reconcile the two reservations either -- that divergence is
 deliberate and documented, and the reference one loses a mark on seed 3.
 This is a change to what is on screen, so it should be measured and LOOKED
 AT before it ships, the way Z-3's donor order still should be.
+
+### The corpus's own runFit demo has the two-rulers bug, and fixing it breaks what it teaches, 2026-08-28
+
+Found while shipping `splineSample`'s length reports. `graphs/basics-fit-runs.json`
+contains exactly the pattern PLAN's ruler entry describes: `pathResample`
+writes `lengthAttr: "lapLength"` — the INPUT curve's length — a `promoteAttribute`
+carries it to the points, `station = mul(curveU, lapLength)`, and `runFit` reads
+that `station` with `period: attribute("lapLength")`. Two rulers in one
+expression, in the graph the corpus uses to teach run fitting.
+
+**MEASURED BEFORE TOUCHING IT, and the measurement is why it is still there.**
+Both numbers below were re-derived independently, with the arc column checked
+against a hand-walked `P` polyline (agreeing to 1.5e-5, f32 noise) and the
+closing chord accounted for on the closed path.
+
+- max |station − emitted arc| = 0.044136 = **0.01405%** of the lap length
+- RMS = 0.025429 = 0.00810%
+- It is a near-uniform **140 ppm RESCALE** (emitted/input = 0.99985948),
+  accumulating almost linearly and peaking at the seam — not a local wobble.
+- `runFit` output changes on **80 of 82 points**: `runSlope` 60, `runResidual` 60,
+  `runSpan` 80, `runStart` all 82 by up to 0.0431. `runId` 0. **Colour 0 of 82.**
+
+So the picture is unchanged and the NUMBERS ARE NOT, which is the awkward
+case. The rule for this was "identical or do not ship", and it is not
+identical, so the file is untouched.
+
+**AND TWO OF THE GRAPH'S OWN TEACHING CLAIMS WOULD BREAK, which is the real
+reason this is a decision rather than a chore.** `meta.description` carries a
+titled paragraph, "THE ARC COORDINATE IS THE ROAD'S, NOT THE PROPS' OWN",
+whose whole job is to explain `station` as `curveU` times the lap length and
+to defend the two `promoteAttribute` nodes it costs. It quotes 0.303833,
+3.762408, 179.70, 305.31 and "a residual of 0". Under the fix:
+
+- the seam row's residual goes from 3.2199e-7 — which is "0" at any sane
+  display precision — to 1.797e-4, about 560x larger, and the sentence
+  stops being true;
+- the translation-invariance demonstration fails at the 5th digit
+  (0.303882 against the stated 0.303833), because the ruler swap is a
+  SCALE and invariance covers a translation. The demonstration is not
+  wrong; it is being asked the wrong question by the new column.
+
+That prose is mirrored verbatim into the committed `docs/graphs.json` and
+`docs/graphs.md`, so the fix is a graph edit, a rewrite of the paragraph,
+five re-measured figures and a `npm run docs`. `tests/graphs.golden.json`
+would move too — it pins per-domain attribute presence and the `road`
+output's points would gain `station:f32`.
+
+**What the fix would be**, so it is not re-derived: `resampledLengthAttr` for
+the emitted total, `sampleArcAttr: "station"` for the coordinate, which
+deletes the `station` setAttribute and both `promoteAttribute` nodes; and
+`runFit`'s `period` must move to the emitted length in the same edit, since
+the period IS that coordinate's wrap length and the two cannot be mixed.
+
+**Recommendation: take it, but as its own unit with the prose rewritten
+deliberately.** The graph currently teaches the mistake the library just
+grew the parts to avoid, and it teaches it in a paragraph that argues FOR
+the two-rulers expression by name. That is worse than a stale number. It was
+not taken unattended only because a teaching graph's quoted figures are
+content, not output, and rewriting five of them silently is not a thing to
+do without the author looking at the result.
