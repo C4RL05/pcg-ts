@@ -832,11 +832,30 @@ export interface DressGraphInput {
    * REQUIRED FOR `immovable`'s REASON — an omitted set does not fail, it
    * quietly produces a different mix — and it is a SNAPSHOT, which is the
    * one place this port is not the rule. `dressLap` rebuilds its protect
-   * set every round, because L-4 re-draws landmarks as the loop runs; the
-   * graph is handed one set and holds it for every round. Round one does
-   * essentially all of the mix's work (measured: `mix` is 0 in round two
-   * on every seed of six), so what the later rounds hold is round one's
-   * answer to a question they were not going to ask.
+   * set every round; the graph is handed one set and holds it for every
+   * round.
+   *
+   * MEASURED ACROSS EIGHT SEEDS, THE SNAPSHOT COSTS NOTHING: running the
+   * repair body round by round with the set fixed and again with it
+   * recomputed each round gives **0 differing placements** on all eight,
+   * compared by asset, station, lateral and height. That is the claim
+   * worth making, and it replaces two weaker ones that were here and are
+   * both wrong.
+   *
+   * The first was "`mix` is 0 in round two on every seed of six". It is 0
+   * on seeds 1-7 and **1 on seed 8**, so the mix does run after round one
+   * and the snapshot is not protected by the loop stopping. The second was
+   * the reason given for `dressLap` rebuilding at all — "L-4 re-draws
+   * landmarks as the loop runs" — and L-4 moves **0 in every round on all
+   * eight seeds**, so on this vocabulary the rebuild answers a question
+   * nothing asks.
+   *
+   * WHAT THE SNAPSHOT ACTUALLY RISKS is narrower than either: the set does
+   * drift once (seed 2, round 2, one landmark id in and one out), and the
+   * mix does target placements after round one (seeds 4 and 8), but the
+   * two never coincided. A seed where they did would diverge. Deriving the
+   * set in-graph would close that, and was measured and declined — see
+   * `PLAN.md`, "Stretch: `mixPinned` derived in-graph".
    */
   readonly mixPinned: ReadonlySet<number>;
   /**

@@ -3718,3 +3718,67 @@ nobody can tell from a rule that is missing.
 **What is left of the lap prelude.** `mixPinned` still reaches the graph
 three ways and could be derived in-graph; `mixBandPools` is a build-time
 literal by design. Both halves of L-6 are now graph stages.
+
+### Stretch: `mixPinned` derived in-graph — MEASURED AND DECLINED, 2026-08-27
+
+The last thing in the racetrack's lap prelude that reached the graph as
+bound data rather than as a decision the graph makes. `mixPinned` is
+`reserved ∪ landmarkAssets(settled list)` — the asset ids Z-3 may not move
+or redraw — and it arrives FOUR ways: a per-placement column from
+`placementCloudInTrackCoords`, a per-asset `pinned` column from both
+`mixAssetCloud` and `placementAssetCloud`, and `mixBandPools` as a
+build-time boolean list.
+
+**What deriving it would buy: nothing measurable.** Running the repair body
+round by round with the set fixed, and again with it recomputed every round,
+gives **0 differing placements on all eight seeds**, compared by asset,
+station, lateral and height.
+
+**What it would cost** is L-4's rule as a per-round stage: a uniqueness pass
+over the whole cloud (an asset that appears exactly once) and a min-reduce
+per tenth of the lap (the lowest-id unique asset in each). Both are
+groupings on a whole-number key, so both are buildable with the idiom L-6's
+trim already uses. The obstacle is smaller and more annoying than the rules:
+**the settled cloud carries no numeric asset id.** `PLACEMENT.asset` is the
+string `pose:N` that the spawner groups batches by, and recovering the kit id
+from it means inverting `poseLibrary().posesOf`. Deriving the set in-graph
+means first putting an id on the cloud that nothing else needs.
+
+**Two claims in the code were wrong and are corrected rather than deleted**,
+because the design rests on them. `DressGraphInput.mixPinned` said "`mix` is
+0 in round two on every seed of six" — it is 0 on seeds 1-7 and **1 on seed
+8**, so the mix does run after round one. And it gave `dressLap`'s reason
+for rebuilding as "L-4 re-draws landmarks as the loop runs", while L-4 moves
+**0 in every round on all eight seeds**: the rebuild answers a question
+nothing on this vocabulary asks.
+
+**The real exposure, stated precisely.** The set drifts exactly once in
+eight seeds (seed 2, round 2: one landmark id in, one out) and the mix
+targets placements after round one on seeds 4 and 8. Neither event is rare
+on its own; they never coincided. A seed where they did would give the graph
+a different lap from the rules. That is the whole of what a port would fix,
+and it is not worth a stage plus a new id column until something makes it
+happen.
+
+**Sizes, for whoever picks this up.** Identical on every seed: `|reserved|`
+is 3, `|landmarkAssets|` is 10, `|mixPinned|` is 13, and the two halves
+never intersect — the reserved markers are held out of the pool, so they
+cannot be landmarks. The flag gates 46-73 placements a lap (13-20% of the
+list) and 10 of 226 pool assets. `mixBandPools` is `[1,1,1,1,1,0]` on every
+seed: one band has no donor regardless of the set, which is a fact about the
+vocabulary and not about this decision.
+
+### Where the lap prelude stands, 2026-08-27
+
+Every rule that decides the racetrack's lap is a graph stage. The station
+process, D-4's coverage repair, asset choice, Z-1, L-1, L-5, Z-3, the corner
+model, the marker vocabulary, the reservation, the corner language and its
+bookkeeping, and both halves of L-6 — the top-up and, as of today, the trim.
+`DressGraphInput.placements` is optional and the page leaves it out; nothing
+about the lap is data in the graph except the spline.
+
+What remains is not rules. `mixPinned` is bound data and staying that way,
+measured above. `mixBandPools` is a build-time literal by design. The two
+open items are a library gap (`pathResample`'s two arc lengths, above) and a
+design question (`inCorridor`'s lateral centre-vs-extent, above), and
+neither is a rule waiting to be ported.
