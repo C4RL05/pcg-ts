@@ -5,11 +5,11 @@
  * the whole set, and the shapes that test that — an open set, two open
  * sets, a spawner with no ids, a graph with no spawner — are exactly the
  * ones no corpus graph is guaranteed to contain. So the formatting is
- * driven directly, and the end-to-end suite below runs the real walk when
- * it is available.
+ * driven directly, and the end-to-end suite below runs the real walk
+ * through `runCli` against graphs written out in this file.
  */
 import { describe, expect, it } from "vitest";
-import { type DescribedSpawner, describeGraphAssets, deserializeGraph } from "../index.js";
+import type { DescribedSpawner } from "../index.js";
 import { assetsReport } from "./commands.js";
 import { EXIT_FAILURE, EXIT_OK, EXIT_USAGE, runCli } from "./index.js";
 import type { CliIo } from "./io.js";
@@ -304,53 +304,49 @@ describe("pcg assets — the command line", () => {
 });
 
 /**
- * The walk is landing separately; until its body exists the suite below
- * reports SKIPPED rather than failing on someone else's half of the work.
+ * THIS SUITE USED TO GATE ITSELF and does not any more, which is the
+ * point of saying so here. `describeGraphAssets` was landing separately,
+ * so the block below probed it for a "not implemented" throw and rendered
+ * the gap in its own title — `(SKIPPED: describeGraphAssets has no body
+ * yet)`. The walk landed; `src/nodes/graphAssets.test.ts` is its suite and
+ * all three tests here have been passing ever since.
+ *
+ * THE TITLE OUTLIVED THE GAP, which is the failure mode a self-describing
+ * skip invites: a runtime probe reads as a live hole to anyone GREPPING,
+ * and it says the opposite of what the run says. A gate for work in
+ * flight is worth having; it is only worth having while the work is in
+ * flight, and taking it out is the last step of landing the thing.
  */
-const walkLanded = ((): boolean => {
-  try {
-    describeGraphAssets(deserializeGraph(JSON.parse(NO_SPAWNER_GRAPH)));
-    return true;
-  } catch (err) {
-    return !(err instanceof Error && err.message.includes("not implemented"));
-  }
-})();
+describe("pcg assets — against real graphs", () => {
+  it("reports the ids an authored string table can emit", async () => {
+    const io = fakeIo({ "/g.json": SPAWN_GRAPH });
+    expect(await runCli(["assets", "/g.json"], io.io)).toBe(EXIT_OK);
+    const text = io.stdout();
+    expect(text).toContain("assets  /g.json");
+    expect(text).toContain("spawn");
+    expect(text).toContain("pine");
+    expect(text).toContain("birch");
+  });
 
-describe.skipIf(!walkLanded)(
-  walkLanded
-    ? "pcg assets — against real graphs"
-    : "pcg assets — against real graphs (SKIPPED: describeGraphAssets has no body yet)",
-  () => {
-    it("reports the ids an authored string table can emit", async () => {
-      const io = fakeIo({ "/g.json": SPAWN_GRAPH });
-      expect(await runCli(["assets", "/g.json"], io.io)).toBe(EXIT_OK);
-      const text = io.stdout();
-      expect(text).toContain("assets  /g.json");
-      expect(text).toContain("spawn");
-      expect(text).toContain("pine");
-      expect(text).toContain("birch");
-    });
+  it("reports a graph with no spawner", async () => {
+    const io = fakeIo({ "/g.json": NO_SPAWNER_GRAPH });
+    expect(await runCli(["assets", "/g.json"], io.io)).toBe(EXIT_OK);
+    expect(io.stdout()).toContain("no spawnInstances node in this graph");
+  });
 
-    it("reports a graph with no spawner", async () => {
-      const io = fakeIo({ "/g.json": NO_SPAWNER_GRAPH });
-      expect(await runCli(["assets", "/g.json"], io.io)).toBe(EXIT_OK);
-      expect(io.stdout()).toContain("no spawnInstances node in this graph");
-    });
-
-    it("--json is the machine-readable half of the same run", async () => {
-      const io = fakeIo({ "/g.json": SPAWN_GRAPH });
-      expect(await runCli(["assets", "/g.json", "--json"], io.io)).toBe(EXIT_OK);
-      const json = JSON.parse(io.stdout()) as {
-        path: string;
-        spawnerCount: number;
-        ids: string[];
-        spawners: DescribedSpawner[];
-      };
-      expect(json.path).toBe("/g.json");
-      expect(json.spawnerCount).toBe(1);
-      expect(json.spawners[0].node).toBe("spawn");
-      expect(json.spawners[0].assetAttr).toBe("species");
-      expect(json.ids).toContain("birch");
-    });
-  },
-);
+  it("--json is the machine-readable half of the same run", async () => {
+    const io = fakeIo({ "/g.json": SPAWN_GRAPH });
+    expect(await runCli(["assets", "/g.json", "--json"], io.io)).toBe(EXIT_OK);
+    const json = JSON.parse(io.stdout()) as {
+      path: string;
+      spawnerCount: number;
+      ids: string[];
+      spawners: DescribedSpawner[];
+    };
+    expect(json.path).toBe("/g.json");
+    expect(json.spawnerCount).toBe(1);
+    expect(json.spawners[0].node).toBe("spawn");
+    expect(json.spawners[0].assetAttr).toBe("species");
+    expect(json.ids).toContain("birch");
+  });
+});
