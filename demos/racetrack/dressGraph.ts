@@ -294,6 +294,16 @@ export const DRESS_OUTPUTS = {
   placements: "placements",
   /** The lap's frames, one column wider: `covered` and `coverHits`. */
   coverage: "coverage",
+  /**
+   * The same, measured BEFORE L-6 added anything.
+   *
+   * WHAT ENCLOSURE DID IS A DIFFERENCE and a caller cannot take it from
+   * one number. The lap arrives with incidental cover -- overhangs the
+   * ordinary dressing happens to produce -- and the rule's whole job is to
+   * lift that to a share held in long stretches, so "8.8% of lap" means
+   * nothing without the "0.6%" it started from.
+   */
+  coverageFirst: "coverageFirst",
 } as const;
 
 /**
@@ -574,6 +584,16 @@ export const PLACEMENT = {
    * round one does essentially all of the work and never asks twice.
    */
   mixTried: "mixTried",
+  /**
+   * The start station of the enclosure run a cover piece came from, in W;
+   * -1 on everything else.
+   *
+   * A RUN IS WHAT A READER COUNTS. Sixteen pieces is a fact about tiling
+   * and three runs is a fact about the lap, and only one of them is what
+   * somebody looking at the track would say. `dressLap` reports the same
+   * two numbers side by side for the same reason.
+   */
+  coverRun: "coverRun",
   /** 1 where Z-1 moved this placement this round. See {@link writeCorridor}. */
   corridorMoved: "corridorMoved",
   /**
@@ -652,6 +672,11 @@ export interface GraphDressing {
   readonly hits: Uint32Array;
   /** Covered arc length over lap length. */
   readonly share: number;
+  /** The same, before L-6 added anything -- see `DRESS_OUTPUTS.coverageFirst`. */
+  readonly shareBefore: number;
+  /** How many cover pieces L-6 built, and how many runs they tile. */
+  readonly coverPieces: number;
+  readonly coverStretches: number;
   /**
    * How many placements L-1 pushed clear of the cone, and how many it
    * removed because pushing could not clear them.
@@ -1014,6 +1039,12 @@ function placementCloudInTrackCoords(
   // Created here rather than by the stage that sets it: the quota reads
   // it in round one, BEFORE the redraw has run even once.
   pts.add(PLACEMENT.mixTried, "f32", 1);
+  // AND THIS ONE SO THAT THE MERGE DOES NOT INVENT A RUN. An ordinary
+  // placement belongs to no enclosure run, and a column filled by
+  // `mergePoints`' default would say it belongs to the one starting at
+  // station zero. -1 is the same "no such thing" this file uses for a
+  // pose the kit never recorded.
+  const noRun = pts.add(PLACEMENT.coverRun, "f32", 1);
   const asset = pts.add(PLACEMENT.asset, "string", 1);
 
   for (let i = 0; i < placements.length; i++) {
@@ -1037,6 +1068,7 @@ function placementCloudInTrackCoords(
     // so this reads back as itself for any list under 16.7 million. A lap
     // carries a few hundred.
     id.set(i, i);
+    noRun.set(i, -1);
     locked.set(i, immovable.has(p.asset.id) ? 1 : 0);
     mixPinned.set(i, mixPinnedIds.has(p.asset.id) ? 1 : 0);
     // `poseFor`'s own draw, taken here so the graph can spend it on a
@@ -3262,6 +3294,7 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   g.output(repair, "converged", DRESS_OUTPUTS.convergedFirst);
   g.output(repair, "carry", DRESS_OUTPUTS.placementsFirst);
   g.output(coverage, "out", DRESS_OUTPUTS.coverage);
+  g.output(firstCoverage, "out", DRESS_OUTPUTS.coverageFirst);
   return { graph: g };
 }
 
@@ -3438,6 +3471,10 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
     DRESS_OUTPUTS.placementsFirst,
   );
   const coverage = requireGeo(out[DRESS_OUTPUTS.coverage], DRESS_OUTPUTS.coverage);
+  const coverageFirst = requireGeo(
+    out[DRESS_OUTPUTS.coverageFirst],
+    DRESS_OUTPUTS.coverageFirst,
+  );
 
   const lap = input.lap;
   const coveredAttr = coverage.attrs.point.require("covered");
@@ -3462,6 +3499,27 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
   let arcW = 0;
   for (let i = 0; i < lap.count; i++) {
     if (covered[i]) arcW += (lap.s[i + 1] - lap.s[i]) / lap.halfWidth;
+  }
+
+  // THE SAME SUM OVER THE PASS BEFORE ENCLOSURE, so that what L-6 did is
+  // a difference rather than a number a reader has to take on trust.
+  const firstCoveredAttr = coverageFirst.attrs.point.require("covered");
+  let arcBeforeW = 0;
+  for (let i = 0; i < lap.count; i++) {
+    if (firstCoveredAttr.get(i) !== 0) arcBeforeW += (lap.s[i + 1] - lap.s[i]) / lap.halfWidth;
+  }
+
+  // AND WHAT IT BUILT: pieces, and the runs they were tiled from. A run is
+  // identified by its start station, which is unique because the planner
+  // keeps runs `separationW` apart.
+  const coverCol = placements.attrs.point.require(PLACEMENT.cover);
+  const runCol = placements.attrs.point.require(PLACEMENT.coverRun);
+  const runs = new Set<number>();
+  let coverPieces = 0;
+  for (let i = 0; i < placements.attrs.point.count; i++) {
+    if (coverCol.get(i) <= 0) continue;
+    coverPieces++;
+    runs.add(runCol.get(i));
   }
 
   // WHAT L-1 DID, AS A DIFFERENCE BETWEEN TWO LISTS. `occlusionCull`
@@ -3489,6 +3547,9 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
     placements,
     covered,
     hits,
+    shareBefore: arcBeforeW / lap.lengthW,
+    coverPieces,
+    coverStretches: runs.size,
     share: arcW / lap.lengthW,
     pushed,
     // AGAINST THE PASS THAT ONLY EVER SHRANK. This measured the FINAL
@@ -3641,6 +3702,13 @@ function writeCoverPlacements(
     [PLACEMENT.locked, 0],
     [PLACEMENT.mixPinned, 0],
     [PLACEMENT.mixTried, 0],
+    // WHICH RUN THIS PIECE BELONGS TO, kept rather than stripped with the
+    // rest of the planner's columns. A run is a fact about a piece and not
+    // scratch: it is what lets a caller say "three tunnels" instead of
+    // "forty-one pieces", which is the number a reader of the lap cares
+    // about. Its value is the run's start station, which is unique because
+    // the clash test keeps runs `separationW` apart.
+    [PLACEMENT.coverRun, attribute(PLAN.startW)],
     // `PLACEMENT.poseU` IS DELIBERATELY NOT HERE, and it is the one column
     // a piece lacks that the body reads. It arrives 0 through the merge's
     // default and is consumed only where `mixTarget >= 0`, which cover

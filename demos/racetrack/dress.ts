@@ -222,6 +222,28 @@ export interface DressOptions {
    * Omitted, the TypeScript search runs as it always has.
    */
   readonly bookkeeping?: CornerBookkeepingResult;
+  /**
+   * Who builds L-6's enclosure.
+   *
+   * "rules" (the default) is this function, as it always has. "deferred"
+   * means DO NOT ADD COVER -- something downstream will -- and it exists
+   * because the racetrack's enclosure now runs as a graph stage inside
+   * `buildDressGraph`, which cooks AFTER this returns.
+   *
+   * IT IS A SKIP AND NOT A HAND-IN, which is where it parts company with
+   * every other option here. `stations`, `choices`, `language` and
+   * `bookkeeping` all take a graph's ANSWER and let this function stay the
+   * authority on the list; enclosure cannot work that way round, because
+   * the budget it spends is measured from boxes built out of the settled
+   * list -- which does not exist until this function has finished. So the
+   * graph runs later and this one stands aside.
+   *
+   * A lap dressed with it deferred and never handed to the graph is a lap
+   * with no tunnels on it. That is a legitimate thing to ask for and it is
+   * why the option is named for WHO does the work rather than for whether
+   * it happens.
+   */
+  readonly enclosure?: "rules" | "deferred";
 }
 
 /**
@@ -824,7 +846,7 @@ export function dressLap(
     const budgetW = longCoverBudgetW(coveredW, already.heavyTailShare * coveredW, lap.lengthW);
     let addedCover = 0;
     let coverChangedPlacements = false;
-    if (budgetW > 0) {
+    if (budgetW > 0 && opts.enclosure !== "deferred") {
       const add = placeEnclosure(
         all,
         lap.lengthW,

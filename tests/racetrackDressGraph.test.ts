@@ -1242,8 +1242,12 @@ describe("racetrack dressing, as a graph", () => {
    * by its own construction, and long enough to be the tunnel the rule
    * asks for rather than another overhang.
    *
-   * THE INPUT HAS ITS COVER STRIPPED, and the first draft of this test did
-   * not do that and was measuring nothing. `dressLap` runs L-6 itself, so
+   * THE INPUT IS DRESSED WITH `enclosure: "deferred"`, which is the real
+   * API a caller uses to say "the graph will do it" — not a list this test
+   * filtered by hand. The two produce the same input; only one of them
+   * proves the option works.
+   *
+   * The first draft did neither and was measuring nothing. `dressLap` runs L-6 itself, so
    * the fixture's list ALREADY holds sixteen cover pieces; the graph then
    * measures a lap that is already enclosed, computes a budget of zero,
    * correctly adds nothing, and a test counting cover placements finds the
@@ -1261,11 +1265,19 @@ describe("racetrack dressing, as a graph", () => {
 
     for (const seed of SEEDS) {
       const { lap, frames, dressing } = await cookLap(seed);
-      const bare = dressing.placements.filter((p) => !p.cover);
+      const deferred = dressLap(shippedVocabulary(), lap, seed, {
+        enclosure: "deferred",
+        reservation: { markers: dressing.markers, pool: dressing.pool },
+      });
+      const bare = deferred.placements;
       expect(
-        bare.length,
-        `seed ${seed}: the fixture had no cover to strip, so this input is not bare`,
-      ).toBeLessThan(dressing.placements.length);
+        bare.some((p) => p.cover),
+        `seed ${seed}: "deferred" still added cover`,
+      ).toBe(false);
+      expect(
+        dressing.placements.some((p) => p.cover),
+        `seed ${seed}: the rules path added no cover, so there is nothing to defer`,
+      ).toBe(true);
       const got = await dressLapByGraph({
         kit: shippedVocabulary(),
         lap,
@@ -1380,6 +1392,15 @@ describe("racetrack dressing, as a graph", () => {
       const refShare = measureEnclosure(lap, dressing.boxes).share;
       expect(got.share, `seed ${seed}: far less cover than the rule lays down`)
         .toBeGreaterThan(refShare * 0.5);
+      // AND IT RAISED THE SHARE, which is the claim `shareBefore` exists
+      // to let this test make. Without it the assertion above passes on a
+      // lap whose incidental overhangs happen to reach half the
+      // reference's figure — which is exactly how a stage that adds
+      // nothing slips through.
+      expect(
+        got.share,
+        `seed ${seed}: enclosure did not raise the covered share`,
+      ).toBeGreaterThan(got.shareBefore);
       expect(got.share, `seed ${seed}: past L-6's own ceiling`).toBeLessThanOrEqual(
         ENCLOSE.ruleShare[1],
       );

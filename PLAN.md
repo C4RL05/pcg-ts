@@ -3098,3 +3098,29 @@ cost of 3 to 4 rounds a lap. It is insurance against a tunnel blocking a
 sightline, which the measurements say does not happen on this kit. Worth
 knowing before anyone optimises it away: the argument for it is
 correctness on a kit whose cover sits lower, not a measured effect here.
+
+### `enclosure: "deferred"`, and what still stands between the port and the page, 2026-08-27
+
+`dressLap` takes an option saying who builds L-6: itself, or something
+downstream. It is a SKIP rather than a hand-in, which is where it parts
+company with `stations`, `choices`, `language` and `bookkeeping` -- those
+take a graph's ANSWER and leave `dressLap` the authority on the list.
+Enclosure cannot work that way round: the budget it spends is measured
+from boxes built out of the SETTLED list, which does not exist until
+`dressLap` has finished. So the graph runs later and `dressLap` stands
+aside.
+
+The graph now also reports what enclosure did rather than leaving a caller
+to infer it: `shareBefore` beside `share`, and the pieces and runs it
+built. A run is identified by its start station, which is unique because
+the planner keeps runs `separationW` apart -- sixteen pieces is a fact
+about tiling, three runs is the fact a reader of the lap would state.
+
+**THE PAGE STILL RUNS L-6 IN TYPESCRIPT, and the reason is scheduling
+rather than correctness.** `main.ts` prints its enclosure stat
+synchronously, straight after `dressLap` returns; the graph's L-6 runs
+inside the lap LEVEL, which the World cooks later and asynchronously. So
+switching the page over means moving when that stat appears, which is page
+chrome and touches the streaming path. The rule is ported, tested against
+the reference on four laps, and exercised through the real option -- what
+is left is where the number is printed.
