@@ -352,7 +352,18 @@ const DEMOS = [
       window.pcgRacetrack.seek(250);
       window.pcgRacetrack.pause(true);
     },
-    ready: (s, has) => has(s["dressing"]) && has(s["enclosure"]) && has(s["corner language"]),
+    // AND "cooking the lap" IS NOT READY, which needs saying because it is
+    // a non-empty string and `has` would take it. The dressing and
+    // enclosure lines are filled by the lap LEVEL, which cooks
+    // asynchronously; between the prelude returning and that cell landing
+    // they carry that phrase, and a shot taken then is of a lap with no
+    // tunnels on it.
+    ready: (s, has) =>
+      has(s["dressing"]) &&
+      has(s["enclosure"]) &&
+      has(s["corner language"]) &&
+      !/cooking the lap/.test(s["dressing"]) &&
+      !/cooking the lap/.test(s["enclosure"]),
   },
   {
     id: "road",

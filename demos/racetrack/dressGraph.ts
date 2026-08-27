@@ -686,8 +686,12 @@ const BOX = {
  */
 const MIN_EXTENT_WORLD = 1e-3;
 
-/** What {@link dressLapByGraph} answers with. */
-export interface GraphDressing {
+/**
+ * What {@link dressLapByGraph} answers with, WITH L-6's own figures folded
+ * in rather than restated: {@link EnclosureReport} is the one definition of
+ * them, and the page reads the same four numbers off a cell.
+ */
+export interface GraphDressing extends EnclosureReport {
   /** One point per box, in `buildBoxes`' own order: placement, then pose box. */
   readonly boxes: Geometry;
   /** The placement cloud after Z-1 and the lift, before L-1 ran. */
@@ -715,17 +719,6 @@ export interface GraphDressing {
    * one that did not has nowhere else to get it.
    */
   readonly placementsInput: Geometry;
-  /** Per lap frame: is it under cover? */
-  readonly covered: boolean[];
-  /** Per lap frame: how many of the six rays hit anything. */
-  readonly hits: Uint32Array;
-  /** Covered arc length over lap length. */
-  readonly share: number;
-  /** The same, before L-6 added anything -- see `DRESS_OUTPUTS.coverageFirst`. */
-  readonly shareBefore: number;
-  /** How many cover pieces L-6 built, and how many runs they tile. */
-  readonly coverPieces: number;
-  readonly coverStretches: number;
   /**
    * How many placements L-1 pushed clear of the cone, and how many it
    * removed because pushing could not clear them.
@@ -4664,31 +4657,51 @@ export async function cookBandRedraw(input: DressGraphInput): Promise<BandRedraw
   return { band, target, applied, t, h, tall, pose, asset };
 }
 
-/** The one async thing here: build, cook, and read the columns back. */
-export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDressing> {
-  const t0 = performance.now();
-  const { graph } = assemble(input);
-  const out = (await cook(graph)).outputs;
+/** L-6's numbers, as {@link readEnclosure} reads them off a cook. */
+export interface EnclosureReport {
+  /** Per lap frame: is it under cover? */
+  readonly covered: boolean[];
+  /** Per lap frame: how many of the six rays hit anything. */
+  readonly hits: Uint32Array;
+  /** Covered arc length over lap length. */
+  readonly share: number;
+  /** The same, before L-6 added anything -- see `DRESS_OUTPUTS.coverageFirst`. */
+  readonly shareBefore: number;
+  /** How many cover pieces L-6 built, and how many runs they tile. */
+  readonly coverPieces: number;
+  readonly coverStretches: number;
+}
 
-  const boxes = requireGeo(out[DRESS_OUTPUTS.boxes], DRESS_OUTPUTS.boxes);
-  const placed = requireGeo(out[DRESS_OUTPUTS.placed], DRESS_OUTPUTS.placed);
-  const culled = requireGeo(out[DRESS_OUTPUTS.culled], DRESS_OUTPUTS.culled);
-  const placements = requireGeo(out[DRESS_OUTPUTS.placements], DRESS_OUTPUTS.placements);
-  const placementsFirst = requireGeo(
-    out[DRESS_OUTPUTS.placementsFirst],
-    DRESS_OUTPUTS.placementsFirst,
-  );
-  const placementsInput = requireGeo(
-    out[DRESS_OUTPUTS.placementsInput],
-    DRESS_OUTPUTS.placementsInput,
-  );
-  const coverage = requireGeo(out[DRESS_OUTPUTS.coverage], DRESS_OUTPUTS.coverage);
+/**
+ * L-6's numbers, given the outputs of a cook of this graph.
+ *
+ * EXPORTED BECAUSE THE PAGE DOES NOT COOK THIS GRAPH -- IT STREAMS IT.
+ * {@link dressLapByGraph} cooks and returns, so its caller has the figures
+ * on the next line; `demos/racetrack/main.ts` hands the SAME graph to a
+ * `World` as the lap LEVEL and gets its outputs back in `onCellReady`,
+ * later and on another turn. Both want the same four numbers out of the
+ * same three outputs, so the reading lives here rather than in either
+ * caller -- a page that re-derived it would be a second definition of
+ * "covered arc over lap length", and the whole value of the before/after
+ * pair is that a figure read off the panel is comparable with one read off
+ * a test. `tests/racetrackLevels.test.ts` pins the two schedules equal.
+ *
+ * IT READS THE RECORD AND THE LAP AND NOTHING ELSE, which is what makes it
+ * usable from a cell. A caller holding `CellOutputs` has no
+ * {@link DressGraphInput} to fall back on, so anything this needed from the
+ * input would be a number the page could not produce.
+ */
+export function readEnclosure(
+  outputs: Readonly<Record<string, DataCollection | undefined>>,
+  lap: Lap,
+): EnclosureReport {
+  const coverage = requireGeo(outputs[DRESS_OUTPUTS.coverage], DRESS_OUTPUTS.coverage);
   const coverageFirst = requireGeo(
-    out[DRESS_OUTPUTS.coverageFirst],
+    outputs[DRESS_OUTPUTS.coverageFirst],
     DRESS_OUTPUTS.coverageFirst,
   );
+  const placements = requireGeo(outputs[DRESS_OUTPUTS.placements], DRESS_OUTPUTS.placements);
 
-  const lap = input.lap;
   const coveredAttr = coverage.attrs.point.require("covered");
   const hitsAttr = coverage.attrs.point.require("coverHits");
   const covered = new Array<boolean>(lap.count);
@@ -4734,6 +4747,39 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
     runs.add(runCol.get(i));
   }
 
+  return {
+    covered,
+    hits,
+    share: arcW / lap.lengthW,
+    shareBefore: arcBeforeW / lap.lengthW,
+    coverPieces,
+    coverStretches: runs.size,
+  };
+}
+
+/** The one async thing here: build, cook, and read the columns back. */
+export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDressing> {
+  const t0 = performance.now();
+  const { graph } = assemble(input);
+  const out = (await cook(graph)).outputs;
+
+  const boxes = requireGeo(out[DRESS_OUTPUTS.boxes], DRESS_OUTPUTS.boxes);
+  const placed = requireGeo(out[DRESS_OUTPUTS.placed], DRESS_OUTPUTS.placed);
+  const culled = requireGeo(out[DRESS_OUTPUTS.culled], DRESS_OUTPUTS.culled);
+  const placements = requireGeo(out[DRESS_OUTPUTS.placements], DRESS_OUTPUTS.placements);
+  const placementsFirst = requireGeo(
+    out[DRESS_OUTPUTS.placementsFirst],
+    DRESS_OUTPUTS.placementsFirst,
+  );
+  const placementsInput = requireGeo(
+    out[DRESS_OUTPUTS.placementsInput],
+    DRESS_OUTPUTS.placementsInput,
+  );
+  // L-6, THROUGH THE SAME READER THE PAGE USES. Everything it reports is
+  // in the outputs, so this is a call rather than fifty lines a level
+  // consumer would have to keep its own copy of.
+  const enclosure = readEnclosure(out, input.lap);
+
   // WHAT L-1 DID, AS A DIFFERENCE BETWEEN TWO LISTS. `occlusionCull`
   // answers with survivors and reports nothing about the ones it removed,
   // which is the right contract for a node that knows nothing about what
@@ -4757,12 +4803,7 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
     placed,
     culled,
     placements,
-    covered,
-    hits,
-    shareBefore: arcBeforeW / lap.lengthW,
-    coverPieces,
-    coverStretches: runs.size,
-    share: arcW / lap.lengthW,
+    ...enclosure,
     pushed,
     // AGAINST THE PASS THAT ONLY EVER SHRANK. This measured the FINAL
     // list until L-6 was wired in, and the final list has enclosure added

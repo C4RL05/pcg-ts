@@ -35,8 +35,12 @@ import {
   DRESS_OUTPUTS,
   PLACEMENT,
   buildDressGraph,
+  dressLapByGraph,
   poseAssetId,
+  readEnclosure,
+  type EnclosureReport,
 } from "../demos/racetrack/dressGraph.js";
+import { dressLap } from "../demos/racetrack/dress.js";
 import { LEVELS, SECTOR_W, buildRacetrackLevels } from "../demos/racetrack/levels.js";
 import type { Lap } from "../demos/racetrack/lap.js";
 import type { StationedPlacement } from "../demos/racetrack/legibility.js";
@@ -183,6 +187,130 @@ async function driveLap(
   }
   return { bySector, sectorCount: built.sectorCount, lap };
 }
+
+/**
+ * L-6's figures, off the lap LEVEL rather than off a cook.
+ *
+ * WHAT THIS IS ACTUALLY ABOUT, which is scheduling and not enclosure.
+ * `dressLapByGraph` cooks the dress graph and hands its caller the four
+ * enclosure numbers on the next line. The page does not cook it: it hands
+ * the same graph to a `World` as the lap level, so the numbers arrive in
+ * `onCellReady`, asynchronously, some frames after the panel was drawn.
+ * That difference is the last thing that kept `demos/racetrack/main.ts`
+ * running L-6 in TypeScript -- the rule was ported and tested, and what
+ * was left was WHERE the stat is printed.
+ *
+ * SO THE CLAIM IS AN EQUALITY BETWEEN TWO SCHEDULES. Cook the graph and
+ * read it; stream the graph and read the cell; the two report the same
+ * lap. If they ever stop agreeing, the page is printing a number about a
+ * lap it is not drawing, which is precisely the failure the TypeScript
+ * stat had.
+ *
+ * THE INPUT IS DRESSED WITH `enclosure: "deferred"`, which is what the
+ * page passes now. Without it `dressLap` builds the cover itself, the
+ * level measures a lap that is already enclosed, its budget comes out
+ * zero and it correctly adds nothing -- so every assertion here would
+ * hold while the level's L-6 did no work at all. The bare-list check
+ * below is what keeps that from passing quietly.
+ */
+describe("racetrack levels: the lap level reports the enclosure it built", () => {
+  it(
+    "publishes L-6's own figures, and a cook of the same graph agrees",
+    async () => {
+      for (const seed of SEEDS) {
+        const { lap, frames, dressing } = await dressedLapFor(seed);
+        const deferred = dressLap(shippedVocabulary(), lap, seed, {
+          enclosure: "deferred",
+          reservation: { markers: dressing.markers, pool: dressing.pool },
+        });
+        expect(
+          deferred.placements.some((p) => p.cover),
+          `seed ${seed}: "deferred" still added cover, so the level has nothing left to build`,
+        ).toBe(false);
+
+        const input = {
+          kit: shippedVocabulary(),
+          lap,
+          frames,
+          placements: deferred.placements,
+          seed,
+          immovable: new Set<number>(),
+          mixPinned: dressing.mixPinned,
+          pool: dressing.pool,
+        };
+        const built = buildRacetrackLevels(input);
+
+        // THE LEVEL, READ THE WAY THE PAGE READS IT. `onCellReady` is the
+        // page's only handle on the lap level's outputs, so the test takes
+        // the same one rather than reaching into the World.
+        let report: EnclosureReport | undefined;
+        let reports = 0;
+        const world = new World({
+          seed,
+          levels: built.levels,
+          maxCellsPerLevel: built.sectorCount + 8,
+          onCellReady(levelName, _coord, outputs) {
+            if (levelName !== LEVELS.lap) return;
+            reports++;
+            report = readEnclosure(outputs, lap);
+          },
+        });
+        // The lap level is one unbounded cell and it cooks on the first
+        // update it is given room for; a handful of updates is slack, not
+        // a poll for something that might never arrive.
+        for (let i = 0; i < 4 && report === undefined; i++) {
+          await world.update([0, 0, 0], { anchors: { [LEVELS.dressing]: 0 } });
+        }
+        expect(report, `seed ${seed}: the lap level never published its outputs`).toBeDefined();
+        const got = report as EnclosureReport;
+        expect(reports, `seed ${seed}: the unbounded lap level cooked more than once`).toBe(1);
+
+        // L-6 DID SOMETHING, which is the assertion a green suite does not
+        // otherwise make: a level that added no cover reports a share equal
+        // to the one it started from and every other check here still holds.
+        expect(got.coverPieces, `seed ${seed}: the lap level built no cover`).toBeGreaterThan(0);
+        expect(got.coverStretches, `seed ${seed}: the pieces tile no run`).toBeGreaterThan(0);
+        expect(
+          got.share,
+          `seed ${seed}: cover was built and the covered share did not rise`,
+        ).toBeGreaterThan(got.shareBefore);
+
+        // AND THE TWO SCHEDULES AGREE, exactly. Same graph, same input, one
+        // cooked and one streamed: a tolerance here would be admitting that
+        // the page and the suite measure different laps.
+        const cooked = await dressLapByGraph(input);
+        expect(got.share, `seed ${seed}: share`).toBe(cooked.share);
+        expect(got.shareBefore, `seed ${seed}: shareBefore`).toBe(cooked.shareBefore);
+        expect(got.coverPieces, `seed ${seed}: coverPieces`).toBe(cooked.coverPieces);
+        expect(got.coverStretches, `seed ${seed}: coverStretches`).toBe(cooked.coverStretches);
+        expect(Array.from(got.hits), `seed ${seed}: per-frame ray hits`).toEqual(
+          Array.from(cooked.hits),
+        );
+        expect(got.covered, `seed ${seed}: per-frame cover mask`).toEqual(cooked.covered);
+
+        // AND THE PANEL'S OTHER LINE HAS TO COME FROM HERE TOO, which is
+        // the second half of the same scheduling problem. `dressLap` with
+        // enclosure deferred hands over a SHORTER list than the level
+        // settles -- short by the cover the level is about to build -- so
+        // a page printing the prelude's count beside the level's cover
+        // share would be describing two laps, and the count is what D-1's
+        // verdict is computed from.
+        expect(
+          cooked.placements.pointCount,
+          `seed ${seed}: the level settled no more than the prelude handed it, so nothing ` +
+            `stops the panel taking its count from the prelude`,
+        ).toBeGreaterThan(deferred.stats.placed);
+        console.log(
+          `seed ${seed}: prelude ${deferred.stats.placed} placements, level ` +
+            `${cooked.placements.pointCount}; cover ${(100 * got.shareBefore).toFixed(1)}% -> ` +
+            `${(100 * got.share).toFixed(1)}% in ${got.coverStretches} runs of ` +
+            `${got.coverPieces} pieces; trims ${deferred.stats.enclosureTrims}`,
+        );
+      }
+    },
+    LAP_MS,
+  );
+});
 
 describe("racetrack levels: the placement cloud carries its own asset id", () => {
   it(

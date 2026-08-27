@@ -99,7 +99,12 @@ import { shippedVocabulary } from "./vocabulary.js";
 import { type Lap, placeAt, poseAt, readLap } from "./lap.js";
 import { type Spline, makeTrackSpline, splineBounds } from "./spline.js";
 import { ASSET_ATTR, DEFAULT_ASSET, boxCloud } from "./spawn.js";
-import { poseLibrary } from "./dressGraph.js";
+import {
+  DRESS_OUTPUTS,
+  poseLibrary,
+  readEnclosure,
+  type EnclosureReport,
+} from "./dressGraph.js";
 import {
   AHEAD_SECTORS,
   BEHIND_SECTORS,
@@ -561,6 +566,26 @@ let referenceMeshes: readonly InstancedMesh[] = [];
 /** What the last dressing pass had to repair, for the readouts. */
 let lastStats: DressStats | undefined;
 
+/**
+ * What the LAP LEVEL decided, which is a different lap from the one above.
+ *
+ * THE PRELUDE NO LONGER BUILDS L-6 AND THIS IS WHERE IT WENT. `dressLap`
+ * is called with `enclosure: "deferred"` -- it settles the list and stands
+ * aside, because the budget enclosure spends is measured from boxes built
+ * out of the SETTLED list, which does not exist until it has finished. The
+ * lap level's graph runs L-6 over that list, and it cooks asynchronously,
+ * so its figures arrive some frames after the panel was first drawn.
+ *
+ * WHICH IS THE WHOLE REASON THIS VARIABLE EXISTS. Both readouts below
+ * describe the lap the page DRAWS, and until the level has cooked, nothing
+ * on this page knows what that is: `lastStats` describes the list as the
+ * prelude left it, which is short by exactly the cover the level is about
+ * to build (measured: 11, 16 and 16 pieces on seeds 1-3). Printing it as
+ * the finished lap would put a placement count and a D-1 verdict on screen
+ * for a lap with no tunnels in it.
+ */
+let lastLap: { readonly enclosure: EnclosureReport; readonly placed: number } | undefined;
+
 // ------------------------------------------------------------------ //
 // The streamed dressing.
 // ------------------------------------------------------------------ //
@@ -740,6 +765,19 @@ function buildStreamedDressing(circuit: Circuit, dressed: Dressing): {
       if (rig.disposed) return;
       binding.cellReady(level, coord, outputs);
       if (level === LEVELS.dressing) rig.live.add(coord[0]);
+      // THE LAP LEVEL'S CELL IS WHERE THE ENCLOSURE STAT COMES FROM NOW.
+      // `readEnclosure` is the same reader `dressLapByGraph` uses, so the
+      // number on the panel is the number a test measures -- see
+      // `tests/racetrackLevels.test.ts`, which pins the two schedules
+      // equal. There is exactly one cell on an unbounded level, so this
+      // fires once per world.
+      if (level === LEVELS.lap) {
+        lastLap = {
+          enclosure: readEnclosure(outputs, circuit.lap),
+          placed: requirePlacementCount(outputs),
+        };
+        showLapStats();
+      }
     },
     onCellEvicted(level, coord) {
       if (rig.disposed) return;
@@ -749,6 +787,12 @@ function buildStreamedDressing(circuit: Circuit, dressed: Dressing): {
   });
   streamed = rig;
   lastPending = undefined;
+  // The outgoing world's figures describe the outgoing lap. Clearing this
+  // here rather than in `cookAndBuild` keeps it tied to the world it is
+  // about: a seed typed mid-cook rebuilds through this function, and a
+  // stale report surviving one frame of that is a readout describing a lap
+  // that has already been disposed.
+  lastLap = undefined;
   // Kick the first update before the first frame, so the lap level is
   // already cooking rather than waiting a frame to be asked.
   runUpdate(rig, FIRST_BUDGET_MS);
@@ -932,6 +976,104 @@ const statCorners = overlay.addStat("corner language");
 const statRules = overlay.addStat("repairs");
 const statCook = overlay.addStat("cook");
 
+/**
+ * How many placements the lap level settled, off its own output.
+ *
+ * A THROW RATHER THAN A FALLBACK, for the reason the dressing level's bind
+ * gives about the same output: a page that quietly printed 0 placements
+ * would look like a lap the rules emptied, which is a different failure
+ * from a graph that stopped publishing its list.
+ */
+function requirePlacementCount(
+  outputs: Readonly<Record<string, DataCollection | undefined>>,
+): number {
+  const settled = firstGeometry(outputs[DRESS_OUTPUTS.placements] ?? []);
+  if (!settled) {
+    throw new Error(
+      `racetrack: the lap level published no "${DRESS_OUTPUTS.placements}" geometry, so the ` +
+        `page cannot say what it is drawing. Check that the dress graph still declares that ` +
+        `output.`,
+    );
+  }
+  return settled.pointCount;
+}
+
+/**
+ * The two readouts that describe the lap ON SCREEN, from the level that
+ * decided it.
+ *
+ * CALLED TWICE PER COOK, AND THAT IS THE POINT OF THE FUNCTION. The
+ * prelude finishes synchronously and the lap level cooks later, so between
+ * the two there is a window — a second or so — in which the page has a
+ * settled list and no enclosure and no final count. It used to fill that
+ * window with `dressLap`'s own numbers, which were true of a lap the page
+ * was no longer drawing. Now it says it is still cooking, in the same
+ * words the sectors readout already uses, and both lines land together
+ * when the level answers.
+ *
+ * THE COUNT AND THE COVER COME FROM THE SAME CELL because they are two
+ * views of one list: L-6's pieces ARE placements, so a count taken before
+ * enclosure and a cover share taken after it would not add up. Measured on
+ * the shipped vocabulary, the level's list is the prelude's plus exactly
+ * the pieces it built — 11, 16 and 16 on seeds 1-3 — which is a 3-5% error
+ * in `/W` and enough to move the D-1 verdict.
+ *
+ * THE MILLISECONDS ARE STILL THE PRELUDE'S and are not the whole cost of
+ * the lap. They are the part the page BLOCKS on: nothing streams until the
+ * prelude returns, whereas the level's own cook is budgeted across frames
+ * and is what the `sectors` line is watching.
+ */
+function showLapStats(): void {
+  const s = lastStats;
+  if (!s || !circuit) return;
+  const level = lastLap;
+  if (!level) {
+    statProps(`cooking the lap · prelude ${s.cookMs.toFixed(0)} ms`);
+    statCover("cooking the lap");
+    return;
+  }
+
+  // D-1 in its own units, with the verdict rather than just the number,
+  // READ FROM THE SPEC rather than restated here: this line carried
+  // 0.6-1.2 by hand while DENSITY says 0.71-1.54, so the verdict on screen
+  // was wrong at both edges. `unfinished` is a third verdict and not a
+  // synonym for the floor — below it a lap is unfinished rather than
+  // sparse, which is the word the spec asks for.
+  const perW = level.placed / circuit.lap.lengthW;
+  const band =
+    perW < DENSITY.unfinished
+      ? " — unfinished"
+      : perW < DENSITY.min
+        ? " — under D-1"
+        : perW > DENSITY.max
+          ? " — over D-1"
+          : " — inside D-1";
+  statProps(`${level.placed} placements, ${perW.toFixed(2)}/W${band}, ${s.cookMs.toFixed(0)} ms`);
+
+  // MEASURED, not planned. L-6's only real claim is what a ray cast finds,
+  // and the dressing already encloses a good deal of lap before any
+  // enclosure run is placed — so the interesting numbers are the before
+  // and after, not the intent.
+  //
+  // THE TRIM IS STILL THE PRELUDE'S, and it is the one half of L-6 that
+  // has not moved into the graph. `dressLap` runs `reduceEnclosure`
+  // whatever `enclosure` says, because a kit whose vocabulary is half
+  // overhead pieces can sail past the rule's ceiling with no enclosure
+  // pass having run at all. What it trims is therefore incidental
+  // overhead, which is what the wording says; on the shipped vocabulary it
+  // finds nothing to trim on any seed.
+  const e = level.enclosure;
+  statCover(
+    `${(100 * e.shareBefore).toFixed(1)}% -> ${(100 * e.share).toFixed(1)}% of lap · ` +
+      `+${e.coverStretches} runs (${e.coverPieces} pieces) · ${s.enclosureTrims} trimmed` +
+      (s.enclosureBlocked
+        ? " · held back by Z-3"
+        : s.enclosureNothingToTrim
+          ? " · no incidental overhead to trim"
+          : ""),
+  );
+}
+
 // The slot is claimed HERE, where the panel is built, so this page decides
 // where in its own panel the graph sits — under the readouts.
 const graphSlot = overlay.addSlot();
@@ -1025,7 +1167,24 @@ async function cookAndBuild(): Promise<void> {
       corners: await cookCorners({ lap: next.lap }),
       lapW: next.lap.lengthW,
     });
-    const dressed = dressLap(kit, next.lap, state.seed, { ...dressOpts, bookkeeping });
+    // AND L-6 IS DEFERRED, which is the last thing the page ran in
+    // TypeScript. `enclosure: "deferred"` is a SKIP and not a hand-in,
+    // unlike every other option above: the budget enclosure spends is
+    // measured from boxes built out of the settled list, so it cannot be
+    // handed an answer decided beforehand. The lap level's graph runs it,
+    // over the list this call settles.
+    //
+    // WHAT WAS ACTUALLY WRONG BEFORE, since it was not a missing rule. The
+    // graph has run L-6 since it was ported; it just never had anything to
+    // do, because `dressLap` had already enclosed the lap and the budget
+    // came out zero — so every tunnel on screen was the TypeScript one's
+    // and the ported stage was inert. Deferring makes the graph the one
+    // that builds them, and `showLapStats` reads what it built.
+    const dressed = dressLap(kit, next.lap, state.seed, {
+      ...dressOpts,
+      bookkeeping,
+      enclosure: "deferred",
+    });
     lastStats = dressed.stats;
     buildCircuit(next);
     const graphs = buildStreamedDressing(next, dressed);
@@ -1033,43 +1192,12 @@ async function cookAndBuild(): Promise<void> {
     statLap(`${next.lap.lengthW.toFixed(1)} W (${next.lap.length.toFixed(0)} u)`);
     if (lastStats) {
       const s = lastStats;
-      // D-1 in its own units, with the verdict rather than just the
-      // number, READ FROM THE SPEC rather than restated here: this line
-      // carried 0.6-1.2 by hand while DENSITY says 0.71-1.54, so the
-      // verdict on screen was wrong at both edges. `unfinished` is a
-      // third verdict and not a synonym for the floor — below it a lap is
-      // unfinished rather than sparse, which is the word the spec asks
-      // for.
-      const band =
-        s.perW < DENSITY.unfinished
-          ? " — unfinished"
-          : s.perW < DENSITY.min
-            ? " — under D-1"
-            : s.perW > DENSITY.max
-              ? " — over D-1"
-              : " — inside D-1";
-      statProps(
-        `${s.placed} placements, ${s.perW.toFixed(2)}/W${band}, ${s.cookMs.toFixed(0)} ms`,
-      );
       // The corner language gets its own line: L-2 and L-3 are the only
       // rules that ADD placements, so their two counts are what makes
       // D-1's budget drift explicable rather than mysterious. The losses
       // to the cull are on the same line because L-1 runs after them and
       // has the last word — a marker can be placed correctly and still
       // not survive.
-      // MEASURED, not planned. L-6's only real claim is what a ray cast
-      // finds, and the dressing already encloses a good deal of lap
-      // before any enclosure run is placed — so the interesting numbers
-      // are the before and after, not the intent.
-      statCover(
-        `${(100 * s.enclosureBefore).toFixed(1)}% -> ${(100 * s.enclosureAfter).toFixed(1)}% of lap · ` +
-          `+${s.coverStretches} runs (${s.coverPieces} pieces) · ${s.enclosureTrims} trimmed` +
-          (s.enclosureBlocked
-            ? " · held back by Z-3"
-            : s.enclosureNothingToTrim
-              ? " · no incidental overhead to trim"
-              : ""),
-      );
       statCorners(
         `${s.corners} corners (${s.tightCorners} tight) · ` +
           `L-2 ${s.markersConverted}+${s.markersAdded} · ` +
@@ -1083,6 +1211,11 @@ async function cookAndBuild(): Promise<void> {
           `mix ${s.mixMoves}`,
       );
     }
+    // AND THE TWO LINES ABOUT THE LAP THE PAGE DRAWS, which nothing knows
+    // yet: the lap level has been asked to cook and has not answered. This
+    // renders the waiting state; `onCellReady` calls it again with the
+    // answer.
+    showLapStats();
     statCook(`${next.cookMs.toFixed(0)} ms`);
     // Called only when the graphs CHANGED — it re-serializes and re-lays
     // out, which is not free and is wasted every frame.

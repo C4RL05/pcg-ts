@@ -3493,3 +3493,63 @@ is the remaining piece, and it is a scheduling question rather than a rule:
 `main.ts` prints the enclosure stat synchronously while the graph's L-6
 cooks later.
 
+
+### The page runs the graph's L-6, 2026-08-27
+
+`main.ts` passes `enclosure: "deferred"` now, and the two panel lines that
+describe the drawn lap are filled from the lap LEVEL's cell rather than
+from `dressLap`. That was the last thing the page ran in TypeScript, and
+the entry above was right that what remained was scheduling: the rule
+needed no work at all.
+
+**WHAT WAS ACTUALLY WRONG WAS WORSE THAN A MISPRINTED NUMBER.** The graph
+has run L-6 since it was ported, and on the page it was INERT -- `dressLap`
+enclosed the lap first, so the level measured a lap that was already
+covered, computed a budget of zero and correctly added nothing. Every
+tunnel on screen was the TypeScript one's. The dress-graph suite had
+written that failure mode down when it hit it in a fixture
+(`racetrackDressGraph.test.ts`: "deleting the merge outright left all
+fifteen tests passing") and the page was living in it. Deferring is what
+makes the ported stage the one that builds them; the visible difference on
+seed 1 is one run of 16 pieces becoming two of 11.
+
+**THE STAT IS NOW A DIFFERENT MEASUREMENT AND THE "BEFORE" MOVED MOST.**
+0.6% -> 8.8% became 4.8% -> 8.3%. The after is the same quantity read by
+the same ray cast; the before is not. `dressLap` reports the incidental
+cover it measured on its FIRST round, before its own repairs ran; the graph
+reports `coverageFirst`, which is the settled list -- Z-1, L-1, L-5 and Z-3
+at their fixed point -- with no enclosure in it. Both are honest answers to
+"what did this path start from" and they are not the same question, which
+is worth knowing before anyone reads the drop as a regression.
+
+**THE PLACEMENT COUNT HAD TO MOVE WITH IT, and that is not decoration.**
+L-6's pieces ARE placements, so a count taken from the prelude beside a
+cover share taken from the level describes two laps: measured, the level
+settles the prelude's list plus exactly the pieces it built -- 11, 16 and
+16 on seeds 1-3 -- which is 3-5% of `/W`, enough to move the D-1 verdict
+printed next to it. Both lines now say `cooking the lap` until the cell
+lands, in the same words the `sectors` readout already used, rather than
+filling the window with numbers about a lap the page is not drawing.
+`scripts/capture-demos.mjs` learned that phrase too: it is a non-empty
+string, so the readiness rule would have taken it and photographed a lap
+with no tunnels on it.
+
+**`readEnclosure` IS THE ONE READING, and the test is an equality between
+two schedules.** `dressLapByGraph` cooks the graph and has the figures on
+the next line; the page hands the same graph to a `World` and gets them in
+`onCellReady`. `tests/racetrackLevels.test.ts` drives the World, reads the
+cell through the page's own handle, and asserts the four numbers and both
+per-frame arrays equal a cook of the same input -- exactly, since a
+tolerance there would be admitting the page and the suite measure different
+laps.
+
+**What is left of the lap prelude.** `mixPinned` still reaches the graph
+three ways and could be derived in-graph; `mixBandPools` is a build-time
+literal by design. L-6's TRIM is the one half of the rule still in
+TypeScript -- `dressLap` runs `reduceEnclosure` whatever `enclosure` says,
+because a kit whose vocabulary is half overhead pieces can pass the rule's
+ceiling with no enclosure pass having run. It is not urgent: the graph's
+own budget subtracts what is already covered from the ceiling, so it cannot
+push a lap past it, and on the shipped vocabulary the trim finds nothing to
+do on any seed. What it protects is the case where the ORDINARY dressing is
+already over, which is a property of a kit rather than of this one.
