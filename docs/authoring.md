@@ -1978,6 +1978,40 @@ Two nodes read a path and they do different things with it:
 
 The two columns on the right pull in opposite directions and both matter.
 
+**Both nodes emit a polyline through the samples, and neither one's
+`curveU` measures it.** `curveU` is a fraction of the arc length of the
+INPUT CURVE; what gets handed downstream is the chord path through the
+samples, and sampling cuts corners. The two agree on straights and diverge
+wherever the curve bends — which is exactly where a rule that reads a
+station is looking. So `curveU * someLength` is two rulers in one
+expression, and scaling `curveU` by the emitted length does not fix it: it
+corrects the total and leaves every station between the ends on the input
+curve's parameterization.
+
+Each node therefore publishes the ruler its own output is measured in, as
+opt-in reports that default to `""` and write nothing unset — the output
+is byte-identical to a cook without them:
+
+| | The emitted total | Each sample's own arc |
+| --- | --- | --- |
+| `splineSample` | `sampledLengthAttr` → **detail** (one number: every polyline is one curve here), closing chord included when every input polyline is closed | `sampleArcAttr` → **point**, world units, ONE running coordinate over the whole output — a sample crossing between polylines adds the joining chord |
+| `pathResample` | `resampledLengthAttr` → **primitive**, per output polyline, closing chord included when that polyline is closed | `sampleArcAttr` → **point**, world units, restarting at each path |
+
+Take the per-sample arc, not the total. The per-frame arcs telescope, so
+their sum equals the length under *any* station column and a total-only
+check has no diagnostic power at all — the racetrack carried a 4.8% error
+on the one frame crossing its start line for as long as the two rulers
+coexisted, with a total that was always right. `sampleArcAttr` is also the
+coordinate `pathPointAt`'s `distance` mode, `transferAlongPath` and
+`arcTile` already read, so taking it is usually one param rather than an
+expression.
+
+`splineSample`'s total lands on **detail** rather than primitive because
+it concatenates every polyline into one curve and emits a cloud with no
+primitives at all — there is one emitted length and nothing to hang it on.
+A detail attribute is not readable from a point field; broadcast it with
+`promoteAttribute` (`from: "detail"`, `to: "point"`) if a field needs it.
+
 **Point attributes are lost, because the points are new.** When the
 points already mean something — a species, a scale, an index other
 geometry refers to — do not resample: `writeTangents` writes a `tangent`
