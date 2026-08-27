@@ -362,35 +362,94 @@ shipped primitive is a loop body. Fixing it means one shared inference
 helper reachable from both the CLI and the docs generator, which is why it
 was left rather than patched twice.
 
-### A settled lap has placements inside the corridor, 2026-08-27
+### ~~A settled lap has placements inside the corridor~~ — NOT A DEFECT, 2026-08-27
 
-Found by an assertion written for something else and then removed from it,
-because it is not that change's doing and a suite about where the placement
-LIST comes from is the wrong place to discover it.
+**The entry was wrong, and its own measurement was the thing at fault.** It
+reported 3 to 5 non-cover placements a lap inside the corridor, counted with
+a hand-written `|t| < 1W && base < CORRIDOR.ceilingW`. Run with `inCorridor`
+— the rule's OWN predicate, tolerance included — the count is **zero**, on
+seeds 1/2/3, on both the TypeScript and the graph path. Independently
+re-derived twice.
 
-**The measurement.** On a settled lap, counting non-cover placements with
-`|t|` under 1W and a base below `CORRIDOR.ceilingW`: 3 of 340 on seed 1, 5
-of 326 on seed 2, 3 of 342 on seed 3. A lap dressed from a HANDED-IN list
-has the same thing at the same rate -- 3, 7 and 4 of ~350 -- so it is a
-property of the dressed lap in both modes and not a difference between
-them.
+**What the hand-written test was measuring was the arithmetic.** Z-3's
+`over` fill stores `h = 1.2 + tall/2` so that the base IS the ceiling;
+recovering it as `h - tall/2` lands an ulp under, ~1e-7 in the f32 columns.
+`inCorridor` carries `SAME_PLACE_W` for exactly that round trip and
+`zones.ts` explains why at length. A restatement without it reads a gantry
+standing correctly ON the corridor as standing IN it. That family was 7/12/8
+of the flagged placements. The rest had bases below the deck — Z8's
+exemption, which the entry's test had no term for.
 
-**What it is not.** Not L-5 lowering a raised placement back under the
-ceiling: `edgeDrop` is 0 on every one of them. Not the assembly, per the
-handed-in figures above. Z-1 is compared against `resolveCorridor` in two
-suites and agrees, but BOTH compare pre-cull clouds -- nothing in the repo
-asserts the corridor on a lap that has settled, which is exactly the gap
-this fell into.
+**And the hypothesis was wrong too.** It blamed L-1's lateral push. On the
+settled lap `conePushW` is 0 and `edgeDrop` is 0 on every flagged placement:
+neither L-1 nor L-5 had touched any of them. It is also structurally
+impossible — Z-1 re-runs at the top of every round and `corridorMoved` is in
+the convergence test, so a push into the corridor would prevent the lap from
+settling, and all three seeds converged.
 
-**Why it matters.** Z-1 is the rule that keeps the racing line clear, and
-a placement inside the corridor is an object the car drives through. Three
-per lap is small enough to be invisible in a screenshot and large enough
-to be a real rule failure.
+**What came out of it that was worth having** is the assertion the entry
+asked for, now in `tests/racetrackCorridorGraph.test.ts`: the corridor,
+checked on a lap that has SETTLED, on both paths. Z-1 was compared against
+`resolveCorridor` in two suites and both compared pre-cull clouds — "Z-1
+resolved correctly" and "the finished lap has nothing on the racing line"
+are different claims and only the second is the promise. It passes, so it is
+a regression guard rather than a repair, and the gap it closes was real even
+though the defect was not.
 
-**What to do.** Find which stage puts them there, with a reference to
-compare against -- most likely L-1's lateral push, which moves a placement
-after Z-1 has resolved it and is inside the same fixed point. Then assert
-the corridor on the SETTLED cloud, in the suite that owns Z-1.
+### Stretch: the corridor's floor as an EXTENT test — MEASURED AND REJECTED, 2026-08-27
+
+The one finding that survived the correction above looked real: a 0.75 x
+0.52W object at |t| = 0.93 with its base 0.064W under the deck and its top
+0.45W above it — knee-high on the racing line, exempt because `inCorridor`'s
+floor rung reads the BASE. Z8 exempts what is under the deck, and read on
+the base alone that reaches anything merely SUNK into the terrain. The fix
+looks obvious: `baseH + tallW > floorW` in place of `baseH >= floorW`.
+
+**Built, measured, and backed out.** It moves **5 to 13 placements a lap**,
+mean 9.2 across ten seeds — not the 0-2 the settled-lap count implied — and
+raises Z-1's move count by 25-45%, each move a 2-6W lateral shove or a 1.26W
+lift. Then look at WHAT it moves: `shell-02` and `shell-04` (2.6W across,
+lateral median 0.02-0.05), `panel-28` (**9.8W across**, lateral median 0.03,
+height median **-0.43**), `panel-33` (3.4W across). Wide flat pieces centred
+on the racing line with their mass at or under the deck. **They are the
+road** — surface shells and deck panels — and the floor exemption is what
+lets them exist inside the corridor's footprint at all. An extent test
+shoves the road surface to the verge.
+
+**So the floor rung is right as written**, and the "sunk piece" it admits is
+`panel-03`, whose own recorded `where.lateral.median` is 0.9323 — it is
+placed at the lateral the source measured for it, at the edge of the
+corridor, which is where a roadside panel goes. There is no defect here to
+fix, and the shape of the rule is load-bearing: the ceiling asks where a
+piece STARTS because an overhead piece spans from outside, and the floor
+asks the same because the things below it are the deck itself.
+
+**A separate consequence, recorded because it cost a probe to find.** The
+`under` branch of `lateralFor` draws a base in [-2.5, -0.5] with no regard
+to the asset's height, so a 0.8W-tall pylon there pokes 0.3W through the
+deck. Unreachable today (`UNDER_SHARE` is 0 — this spline has relief but no
+elevated stretches) and only visible because the extent test above asked the
+placer and the predicate to agree. If Z8 is ever switched on, the draw
+should set the piece's TOP rather than its base.
+
+### The corridor is tested on a CENTRE laterally and resolved on an EXTENT, 2026-08-27
+
+Left open deliberately. `inCorridor` tests `|t| < 1W` on the placement's
+centre, while `resolveCorridor`'s large-art exit moves the object's NEAR
+FACE to the edge — "its edge goes to the corridor edge, not its centre",
+which `zones.ts` argues is the fifth time in this demo that a centre was
+used where an extent was meant. The entry side has not been changed to
+match, and the reason is a measurement: **15 / 22 / 33 non-cover placements
+a lap** have their centre outside 1W, their near face inside it, and their
+vertical extent inside [0, 1.2). Z-1 never considers them.
+
+Making the entry test an extent test would therefore move an order of
+magnitude more than the floor change did, and it would reshape the verge
+band — the archetypes reaching inside 1W are the same ones filling 1.0-1.5W,
+which is the argument `resolveCorridor` already makes for having two exits.
+That is a design decision with a measurement behind it, not a bug fix to
+fold into another change, and it wants a look at the pictures before the
+numbers.
 
 ### road and racetrack are two demos, 2026-08-27
 

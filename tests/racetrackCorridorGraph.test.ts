@@ -18,7 +18,8 @@ import { SAME_PLACE_W } from "../demos/racetrack/tolerance.js";
 import type { PlaceableAsset } from "../demos/racetrack/assets.js";
 import { reserveFor } from "../demos/racetrack/dress.js";
 import { shippedVocabulary } from "../demos/racetrack/vocabulary.js";
-import { lapFor } from "./support/lap.js";
+import { dressLapByGraph, PLACEMENT } from "../demos/racetrack/dressGraph.js";
+import { dressedLapFor, lapFor } from "./support/lap.js";
 
 const KIT = shippedVocabulary();
 
@@ -134,3 +135,71 @@ describe("corridorGraph: Z-1 in the lap cook", () => {
 });
 
 void (undefined as unknown as PlaceableAsset);
+
+/**
+ * Z-1 ON A LAP THAT HAS SETTLED, which nothing asserted until now.
+ *
+ * THE GAP THIS CLOSES. Z-1 is compared against `resolveCorridor` in two
+ * suites and agrees in both -- but BOTH compare a cloud the cull has not
+ * run on. Every rule after Z-1 can move a placement: L-1 pushes one
+ * aside, L-5 lowers one, Z-3 redraws one for a different asset with
+ * different extents. "Z-1 resolved correctly" and "the finished lap has
+ * nothing on the racing line" are different claims, and only the second
+ * is what the demo promises. `PLAN.md` recorded the second as unchecked
+ * and suspected it was also untrue; it is checked now, and it holds.
+ *
+ * IT IS THE RULE'S OWN PREDICATE AND NOT A RESTATEMENT OF IT, which is
+ * the whole reason this passes where a hand-written version did not.
+ * `PLAN.md` reported 3 to 5 violations a lap from `|t| < 1 && base <
+ * 1.2`, and they were the test's: Z-3's `over` fill stores `h = 1.2 +
+ * tall/2` so that the base IS the ceiling, and recovering it as `h -
+ * tall/2` lands an ulp under. `inCorridor` carries `SAME_PLACE_W` for
+ * exactly that round trip. A restatement without it measures the
+ * arithmetic instead of the rule, which is what `zones.ts` says at
+ * length and what this file is now the end-to-end evidence for.
+ *
+ * BOTH PATHS, because they settle different laps. The graph decides its
+ * own list and the TypeScript decides another, and a rule that holds on
+ * one is not thereby holding on the other.
+ */
+describe("corridorGraph: the corridor on a lap that has settled", () => {
+  it.each([1, 2, 3])(
+    "leaves nothing inside the protected volume (seed %i)",
+    async (seed) => {
+      const { lap, frames, dressing } = await dressedLapFor(seed);
+
+      // COVER IS EXEMPT AND ONLY COVER. L-6's pieces are placed clear of
+      // the corridor by construction and Z-1 is told to leave them alone,
+      // so they are not evidence either way; everything else on the lap
+      // is what the rule is about.
+      const offenders = dressing.placements
+        .filter((pl) => pl.cover !== true && inCorridor(pl.t, pl.h - pl.asset.size.tall / 2))
+        .map((pl) => ({ t: pl.t, base: pl.h - pl.asset.size.tall / 2, asset: pl.asset.id }));
+      expect(offenders, `seed ${seed}: dressLap left geometry on the racing line`).toEqual([]);
+
+      const got = await dressLapByGraph({
+        kit: KIT,
+        lap,
+        frames,
+        placements: dressing.placements,
+        seed,
+        immovable: new Set<number>(),
+        mixPinned: dressing.mixPinned,
+        pool: dressing.pool,
+      });
+      const pts = got.placements.attrs.point;
+      const t = pts.require(PLACEMENT.t);
+      const h = pts.require(PLACEMENT.h);
+      const tall = pts.require(PLACEMENT.sizeTall);
+      const cover = pts.require(PLACEMENT.cover);
+      const bad: { t: number; base: number }[] = [];
+      for (let i = 0; i < pts.count; i++) {
+        if (cover.get(i) > 0) continue;
+        const base = h.get(i) - tall.get(i) / 2;
+        if (inCorridor(t.get(i), base)) bad.push({ t: t.get(i), base });
+      }
+      expect(bad, `seed ${seed}: the lap graph left geometry on the racing line`).toEqual([]);
+    },
+    120000,
+  );
+});
