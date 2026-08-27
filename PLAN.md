@@ -4021,3 +4021,41 @@ settled cloud whole.
 
 **On screen: 352 placements at 1.01/W, inside D-1, 19 markers on 19
 corners.** The count is unchanged from the prelude's lap.
+
+### What verification found after the prelude went, 2026-08-27
+
+An agent that was not told the answer rebuilt the page's exact input, cooked
+it, and checked the settled lap against the rules' OWN predicates rather
+than against a description of them. Seeds 1-3, L-6 cover pieces excluded,
+three reference laps: the old prelude's list, that list handed back through
+`dressLapByGraph` the way HEAD's `buildStreamedDressing` did (**the lap the
+old page actually drew**), and a plain `dressedLapFor`.
+
+**DROPPING THE PRELUDE LOST NO RULE, and the strongest form of that is an
+equality.** The graph-decided lap and the lap the old page drew agree
+EXACTLY on every figure: 341 / 317 / 343 placements, the same cover counts,
+the same L-3 corner ids. L-2 marks every corner on every seed. D-1 comes out
+0.983 / 0.966 / 0.994 per W, inside `[0.71, 1.54]` and within 0.01 of the
+0.95 target. Controls were run rather than assumed -- an empty list makes
+`cornerMarkersSatisfied` report every corner missing, so the gate can fail.
+
+**Z-1 IS CLEAN, AND THE BASELINE THIS FILE AND
+`tests/racetrackPlacementAssembly.test.ts` BOTH QUOTE IS ABOUT A DIFFERENT
+PREDICATE.** That suite records "3 of seed 1's 340 sit inside the corridor"
+and PLAN repeated it. Measured with `inCorridor` itself (`zones.ts`,
+`SAME_PLACE_W` included), the count is **0 on all three seeds and on all
+three references**. The 3/5/3 belongs to a tolerance-free restatement --
+`|t| < 1 && 0 <= base < 1.2` -- which scores 6/3/5 on the page's lap and
+6/6/6 under that suite's own config. The counter is live either way: a
+deliberately wrong base (centre height instead of bottom) scores 5/10/13. So
+the rule holds and the recorded number was never the rule's.
+
+**L-3 LOSES 5 OF 12 TIGHT CORNERS ON SEED 2, AND IT IS NOT THIS CHANGE.**
+The page's lap fails corners 0, 1, 3, 6 and 9, each one mark short or with a
+mark on the inside, keeping 31 of 36 braking marks. The lap the OLD page
+drew fails the same five with the same 31/36. It only reads as a regression
+against `dressLap` run on its own (0 failures, 36/36) -- which is a
+different marker vocabulary and does not run the graph's second repair pass.
+So this is a pre-existing property of that pass, it was on screen before
+today, and it is a real defect worth its own unit: three marks are lost
+somewhere after L-6 has added cover. Seeds 1 and 3 are clean (27/27, 39/39).
