@@ -1515,11 +1515,21 @@ function buildSubgraphNode(
   // `type`. That leaves one way to reach the wrong answer through
   // well-formed JSON: point a `subgraph` node at a body written to be
   // iterated, and it cooks once over the concatenated collection and emits
-  // one item where the author expected K. Checked HERE rather than in
-  // `subgraphNode`, because a forEach body is a perfectly good thing to
-  // REGISTER — the registry canonicalizes every recipe through a probe
-  // typed "subgraph", so refusing at construction would make such a body
-  // unregisterable. What is refused is the confusion, not the body.
+  // one item where the author expected K. What is refused is the
+  // confusion, not the body: a forEach body is a perfectly good thing to
+  // write and to REGISTER, and `registerSubgraph` probes one as a forEach
+  // (its canonicalizing probe reads the kind off these same reserved names
+  // through `inferWrapperKind`), so nothing here makes such a body
+  // unregisterable.
+  //
+  // Checked HERE rather than in `subgraphNode` because the mistake being
+  // caught only EXISTS in the serialized form. A code-first author picked a
+  // constructor — `forEachNode` or `subgraphNode` — and cannot have paired
+  // the wrong one with a body silently; a JSON author wrote a `type` key
+  // beside a payload, and those two can disagree. Only the loader holds
+  // both halves plus the node id and the `ref` name the message has to
+  // quote, which is why the refusal can say "the type is the mistake" at
+  // all.
   const recipeNote =
     ref === undefined ? "" : ` (the recipe "${ref.name}" itself is fine — the type is the mistake)`;
   if (wrapper !== "forEach") {

@@ -174,6 +174,7 @@ describe("pcg run — the synthesized wrapper", () => {
     expect(
       buildWrapperGraph({
         name: "test/scatter",
+        exposedInputs: [],
         boundInputs: [],
         outputs: ["points"],
         params: { count: 5 },
@@ -190,6 +191,7 @@ describe("pcg run — the synthesized wrapper", () => {
   it("wires a dataInput per bound pin, and only per bound pin", () => {
     const wrapper = buildWrapperGraph({
       name: "test/passthrough",
+      exposedInputs: ["values"],
       boundInputs: ["values"],
       outputs: ["out"],
       params: {},

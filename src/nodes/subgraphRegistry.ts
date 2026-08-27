@@ -24,7 +24,7 @@
  * `import "pcg-ts"` costing nothing.
  */
 import { Graph, type GraphMeta, type NodeHandle } from "../graph/index.js";
-import { CARRIED_PIN_NAMES, ITERATED_PIN_NAMES, type WrapperKind } from "../graph/subgraph.js";
+import { inferWrapperKind, type WrapperKind } from "../graph/subgraph.js";
 import { hashCombine, hashString } from "../random/index.js";
 import {
   deserializeGraph,
@@ -320,20 +320,14 @@ function canonicalize(name: string, raw: SerializedSubgraph): SerializedSubgraph
   // refuse it at registration (the loader rejects those combinations as the
   // one way to reach a silent one-pass cook), making a forEach or
   // repeatUntil body unregisterable — which is why the type is INFERRED
-  // here from the pins instead of being fixed at "subgraph".
+  // from the pins instead of being fixed at "subgraph".
   //
-  // The carried name is checked on both sides and takes precedence, because
-  // it is reserved on both sides: a body carrying `carry` AND `each` is
-  // neither loop, and the repeatUntil probe is the one that says so by
-  // name. Every other refusal the two wrappers make is the author's to fix
-  // and reaches them with the offending inner node named.
-  const wrapper: WrapperKind = [...raw.inputs, ...raw.outputs].some((p) =>
-    CARRIED_PIN_NAMES.has(p.name),
-  )
-    ? "repeatUntil"
-    : raw.inputs.some((p) => ITERATED_PIN_NAMES.has(p.name))
-      ? "forEach"
-      : "subgraph";
+  // `inferWrapperKind` is shared with the two OTHER places that materialize
+  // a recipe (`pcg run`'s wrapper and the primitive catalog's probe), which
+  // both hardcoded "subgraph" until this was factored out of here. The
+  // registry was the only one that got it right, and it got it right in
+  // private.
+  const wrapper: WrapperKind = inferWrapperKind(raw);
   const probe: SerializedGraph = {
     formatVersion: 1,
     seed: 0,

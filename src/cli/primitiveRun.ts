@@ -30,6 +30,7 @@ import {
   type SerializedGraph,
   type SerializedNode,
   type SerializedOutput,
+  inferWrapperKind,
   makeValueItem,
 } from "../index.js";
 import { CliUsageError, parseNumberValue } from "./args.js";
@@ -51,6 +52,17 @@ export function inputNodeId(pin: string): string {
 export interface WrapperShape {
   /** Registered subgraph name, referenced by `ref` rather than embedded. */
   readonly name: string;
+  /**
+   * EVERY exposed input pin of the primitive, bound or not, as the
+   * registry records them.
+   *
+   * Separate from {@link WrapperShape.boundInputs} because the wrapper's
+   * node TYPE is read off the full interface while the `dataInput` nodes
+   * are wired only for what `--in` actually binds. Inferring from the bound
+   * subset would make `pcg run <forEach body>` a `subgraph` whenever the
+   * caller passed no `--in`, which is the common case and the wrong answer.
+   */
+  readonly exposedInputs: readonly string[];
   /** Exposed input pins to feed from a synthesized `dataInput`. */
   readonly boundInputs: readonly string[];
   /** Exposed output pins, each declared as an output of the same name. */
@@ -64,10 +76,24 @@ export interface WrapperShape {
  * Nothing about it is derived from the primitive's contents — only from
  * its exposed interface — so an unregistered name fails at
  * `deserializeGraph` with the registry's own message.
+ *
+ * THE NODE TYPE IS PART OF THAT INTERFACE and is inferred, not fixed. A
+ * registered recipe records a body and its exposed pins and nothing about
+ * which wrapper cooks them, so a body exposing a reserved name (`each` on
+ * a forEach body, `carry` on a repeatUntil one) was written to be cooked by
+ * the wrapper that owns the name. Hardcoding "subgraph" here made every
+ * such primitive unrunnable — `pcg run` refused it with the reserved-name
+ * guard, quoting a node called "main" the caller never wrote. The same
+ * inference runs at registration and in the catalog; see
+ * {@link inferWrapperKind}.
  */
 export function buildWrapperGraph(shape: WrapperShape): SerializedGraph {
+  const wrapper = inferWrapperKind({
+    inputs: shape.exposedInputs.map((name) => ({ name })),
+    outputs: shape.outputs.map((name) => ({ name })),
+  });
   const nodes: SerializedNode[] = [
-    { id: WRAPPER_NODE_ID, type: "subgraph", params: { ...shape.params }, ref: { name: shape.name } },
+    { id: WRAPPER_NODE_ID, type: wrapper, params: { ...shape.params }, ref: { name: shape.name } },
   ];
   const connections: SerializedConnection[] = [];
   for (const pin of shape.boundInputs) {

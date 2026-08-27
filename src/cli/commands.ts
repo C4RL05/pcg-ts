@@ -1109,6 +1109,10 @@ const runCommand: Command = {
       inPath === undefined ? [] : readInputBindings(io, inPath, name, exposedInputs);
     const shape = {
       name,
+      // The FULL exposed input list, not `boundInputs`: it is what decides
+      // the wrapper's node type, and a forEach body run with no --in
+      // exposes `each` while binding nothing.
+      exposedInputs,
       boundInputs: bindings.map((b) => b.pin),
       outputs: exposedOutputs,
       params: {},

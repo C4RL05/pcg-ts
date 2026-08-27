@@ -148,6 +148,61 @@ export const ITERATED_PIN_NAMES: ReadonlySet<string> = new Set(["each", "eachPoi
 export const CARRIED_PIN_NAMES: ReadonlySet<string> = new Set(["carry"]);
 
 /**
+ * The exposed interface {@link inferWrapperKind} reads: pin NAMES only,
+ * in the two directions the reserved names distinguish.
+ *
+ * Structural rather than one of the named pin types, because the callers
+ * hold three different spellings of the same fact — `SerializedExposedPin`
+ * from a registry recipe, `DescribedSubgraphPin` from a live def, and the
+ * bare name lists the CLI carries — and none of those types may be
+ * imported here: `src/graph` is below `src/nodes`, where the serialized
+ * shapes live.
+ */
+export interface ExposedPinNames {
+  readonly inputs: readonly { readonly name: string }[];
+  readonly outputs: readonly { readonly name: string }[];
+}
+
+/**
+ * Which wrapper a recipe was written for, read off its exposed pin names.
+ *
+ * A REGISTERED RECIPE RECORDS A BODY AND ITS EXPOSED PINS AND NOTHING
+ * ABOUT WHICH WRAPPER COOKS THEM — see {@link ITERATED_PIN_NAMES} for why
+ * that is the design and not an oversight. So every consumer that has to
+ * MATERIALIZE a recipe has to supply the node type itself, and the reserved
+ * names are the only evidence there is. Three do: `registerSubgraph`, which
+ * canonicalizes by materializing; `pcg run`, which synthesizes a one-node
+ * wrapper; and the primitive catalog, which probes each entry to read its
+ * derived param schemas. All three answer the question with this function
+ * so that they cannot answer it differently.
+ *
+ * They used to. Two of them wrote `type: "subgraph"` as a literal, which
+ * made every loop body unrunnable and undocumentable — refused by the
+ * reserved-name guard, with a message about a node the caller never wrote.
+ * It stayed latent only because no shipped primitive is a loop body, so
+ * neither call site ever saw a recipe that could expose the mistake.
+ *
+ * THE CARRIED NAME WINS when a body carries both, and that is deliberate
+ * rather than an ordering accident: `carry` is reserved on both sides while
+ * the iterated names are reserved on the input side only, so a body
+ * exposing `carry` AND `each` is neither loop, and the `repeatUntil` probe
+ * is the one whose refusal names the collision. Reversing the two would
+ * report the same body as a bad `forEach` and send the author to the wrong
+ * pin.
+ *
+ * Pure and total: every recipe gets an answer, and "no reserved name
+ * anywhere" is a plain `subgraph`. It decides what the recipe was WRITTEN
+ * for, never whether it is well-formed — materializing is what checks that,
+ * and it reports with the offending inner node named.
+ */
+export function inferWrapperKind(exposed: ExposedPinNames): WrapperKind {
+  for (const pin of exposed.inputs) if (CARRIED_PIN_NAMES.has(pin.name)) return "repeatUntil";
+  for (const pin of exposed.outputs) if (CARRIED_PIN_NAMES.has(pin.name)) return "repeatUntil";
+  for (const pin of exposed.inputs) if (ITERATED_PIN_NAMES.has(pin.name)) return "forEach";
+  return "subgraph";
+}
+
+/**
  * The recorded composition of a def created by {@link subgraphNode}: the
  * wrapped inner graph and the exposed pin mappings, exactly as passed in
  * (detached copies). Serialization reads this to emit the nested payload;

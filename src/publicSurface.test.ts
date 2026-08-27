@@ -40,7 +40,13 @@ const ROOT_SURFACE = [
   "getFieldSpec",
   "getNodeType", "getRegisteredSubgraph", "graphParamBindings", "getSubgraphPlumbing", "getSubgraphSpec", "gt",
   "hasNodeType", "hasRegisteredSubgraph", "hashCombine", "hashFloat", "hashString",
-  "index", "inlineParamMetaOf", "inlineParamSchema", "inlineParamValuesOf", "isDeviceInstanceBatch", "isDeviceResidentInstances", "isField", "jitterPoints",
+  "index",
+  // Which wrapper a registered recipe was written for, read off its
+  // reserved exposed-pin names. Public because building a node around a
+  // registered recipe is something outside code does, and the recipe
+  // deliberately does not record the answer.
+  "inferWrapperKind",
+  "inlineParamMetaOf", "inlineParamSchema", "inlineParamValuesOf", "isDeviceInstanceBatch", "isDeviceResidentInstances", "isField", "jitterPoints",
   "keyNum", "keyRef", "le", "length", "lerp", "liveParamValueError", "listFieldFnInfos", "listFieldFns",
   "listNodeTypes", "listSubgraphs", "log",
   "lt", "makeDeviceInstancesItem", "makeField",

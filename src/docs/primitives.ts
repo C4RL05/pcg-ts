@@ -37,6 +37,7 @@ import {
   describeSubgraphParams,
   describeSubgraphPins,
   deserializeGraph,
+  inferWrapperKind,
 } from "../index.js";
 
 /** One rendered catalog: the bytes of each generated file. */
@@ -78,7 +79,18 @@ export function describePrimitive(entry: RegisteredSubgraph): PrimitiveInfo {
   const probe = deserializeGraph({
     formatVersion: 1,
     seed: 0,
-    nodes: [{ id: "probe", type: "subgraph", params: {}, ref: { name: entry.name } }],
+    // The probe's TYPE is inferred, never fixed at "subgraph". A recipe
+    // records a body and its exposed pins and nothing about which wrapper
+    // cooks them, so a body exposing a reserved name — `each` on a forEach
+    // body, `carry` on a repeatUntil one — is refused outright when probed
+    // as a plain subgraph, and the primitive becomes uncatalogable. That is
+    // not a documentation-only failure: this probe is how the catalog reads
+    // the DERIVED param schemas, so it is also the check that the shipped
+    // primitives still load, and it would have failed the whole `npm run
+    // docs` chain on the first loop-body primitive anyone registered.
+    nodes: [
+      { id: "probe", type: inferWrapperKind(entry.subgraph), params: {}, ref: { name: entry.name } },
+    ],
     connections: [],
     outputs: [],
   });

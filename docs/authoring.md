@@ -312,6 +312,20 @@ Editing a referenced primitive's inner graph in place and then saving is
 refused, naming the node: writing the reference back out would write the
 *registry's* content and silently discard the edit.
 
+**A recipe does not record which wrapper cooks it** — that lives in the
+referencing node's `type`, and nowhere else. So anything that builds a
+node around a registered recipe has to supply the type itself, and the
+reserved pin names are the only evidence there is: a body exposing
+`each`/`eachPoint` was written for a `forEach`, one exposing `carry` for
+a `repeatUntil`, and the loader refuses either under any other type.
+`inferWrapperKind({ inputs, outputs })` is that reading, exported so a
+caller does not have to reimplement it: pass the recipe's exposed pins
+(`getRegisteredSubgraph(name).subgraph`) and it returns the `type` to
+write. `registerSubgraph`'s own canonicalizing probe, `pcg run`'s
+synthesized wrapper and the primitive catalog all go through it, which
+is why a loop body is registerable, runnable and documentable rather
+than refused by a guard quoting a node the caller never wrote.
+
 ### Pinning: the optional content hash
 
 `hash` in a `ref` is **optional**, and the two modes are the whole design:

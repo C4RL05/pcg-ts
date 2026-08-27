@@ -374,19 +374,38 @@ complained about and broke the one nobody had stated. "It converges" and
 "it works" are different claims, and a repair can be made to pass the
 first at the cost of the second without anything going red.
 
-### Probing a registered recipe assumes it is a `subgraph`, 2026-08-24
+### ~~Probing a registered recipe assumes it is a `subgraph`~~ — FIXED 2026-08-28
 
 `src/cli/primitiveRun.ts:70` and `src/docs/primitives.ts:81` both
-materialize a registered recipe with a hardcoded `type: "subgraph"`. A
-recipe whose body exposes a wrapper's reserved pin is then refused by the
-reserved-name guard — the same hazard fixed in `subgraphRegistry.ts` when
-`repeatUntil` landed, where the inference now covers all three kinds.
+materialized a registered recipe with a hardcoded `type: "subgraph"`. A
+recipe whose body exposes a wrapper's reserved pin was then refused by the
+reserved-name guard — the same hazard fixed in the registry when
+`repeatUntil` landed, where the inference already covered all three kinds.
 
-It predates the loop node: a `forEach` body breaks these two identically,
-and has been able to since `forEach` shipped. It is latent only because no
-shipped primitive is a loop body. Fixing it means one shared inference
-helper reachable from both the CLI and the docs generator, which is why it
-was left rather than patched twice.
+It predated the loop node: a `forEach` body broke these two identically.
+It was latent only because no shipped primitive is a loop body. The fix is
+one shared inference helper reachable from both the CLI and the docs
+generator, which is why it was left rather than patched twice.
+
+**Two corrections to the entry as first written.** It cited the registry as
+`src/graph/subgraphRegistry.ts`; there is no such file and it is
+`src/nodes/subgraphRegistry.ts`. And "has been able to since `forEach`
+shipped" was never verified — it depends on when `each`/`eachPoint` became
+globally reserved, which is a different date. The mechanism is what the
+shipped comments state; the dating is dropped.
+
+**What shipped.** `inferWrapperKind(exposed)` in `src/graph/subgraph.ts`,
+beside the three facts it reads, FACTORED OUT of the registry's existing
+inference rather than written a third time — `canonicalize`'s inline
+ternary is gone and all three materialization sites now share one answer.
+It is public, because `registerSubgraph` ships and a recipe deliberately
+does not record its wrapper, so any third party building a node around one
+asks the identical question.
+
+A 342,225-combination differential sweep of the helper against the exact
+ternary it replaced found zero disagreements — and the sweep was shown able
+to detect one, by seeding a deliberately wrong port. So no primitive
+content hash moves.
 
 ### ~~A settled lap has placements inside the corridor~~ — NOT A DEFECT, 2026-08-27
 
