@@ -82,6 +82,7 @@ import {
   type Occluder,
 } from "../demos/racetrack/sightline.js";
 import { SAME_PLACE_W, SAME_STATION_W } from "../demos/racetrack/tolerance.js";
+import { rand } from "../demos/racetrack/rand.js";
 import { bucketOf, placeAsset, type PlaceableAsset } from "../demos/racetrack/assets.js";
 import { radiusAtW } from "../demos/racetrack/corners.js";
 import { reserveMarkers, type StationedPlacement } from "../demos/racetrack/legibility.js";
@@ -2322,3 +2323,156 @@ describe("racetrack dressing, as a graph", () => {
 
 const dot3 = (a: readonly number[], b: readonly number[]): number =>
   a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+/**
+ * THE GRAPH'S ANSWER DOES NOT DEPEND ON THE ORDER OF THE LIST IT IS HANDED.
+ *
+ * WHY THIS IS A LOAD-BEARING CLAIM AND NOT A TIDINESS ONE. The list
+ * arrives station-ordered today because `dressLap` builds it that way --
+ * `cookLapPlacements` SORTS its rows in TypeScript, and that sort is one
+ * of the last pieces of the prelude. What replaces it is the asset choice
+ * stage's own output, and that cloud is NOT station-ordered: the stations
+ * come off `pointScatterOnPath` in scatter order, measured at 165
+ * descents in 329 points on seed 1, and neither the coverage repair nor
+ * the copy reorders them.
+ *
+ * So the assembly can only feed the repair loop directly if the loop does
+ * not care. Every place that DOES care already says so in its own
+ * arguments -- `pointsToPath` takes an `orderAttr` and L-5's ring and the
+ * coverage ring both pass the station to it, and `quotaRebalance` takes
+ * its visit order as a param for the same reason. This test is what turns
+ * that reading of the code into a measurement.
+ *
+ * Z-3 IS ON HERE, WHICH IS THE POINT. Every other case in this file pins
+ * the whole pool to switch the mix off, because a redraw mid-comparison is
+ * a different lap. Here it is exactly what needs testing: the quota takes
+ * "the first k eligible members" of an over-full band, and if "first"
+ * meant the first ROW rather than the lowest station, this is the test
+ * that would fail.
+ */
+describe("dress graph order invariance", () => {
+  /** Fisher-Yates on the demo's own stream, so the shuffle is a fixture. */
+  function shuffled<T>(items: readonly T[], seed: number): { out: T[]; from: number[] } {
+    const out = items.slice();
+    const from = items.map((_, i) => i);
+    for (let i = out.length - 1; i > 0; i--) {
+      const j = Math.floor(rand(seed, i, 0x51de) * (i + 1));
+      [out[i], out[j]] = [out[j], out[i]];
+      [from[i], from[j]] = [from[j], from[i]];
+    }
+    return { out, from };
+  }
+
+  /** Every column of the placement output, keyed by `PLACEMENT.id`. */
+  function rowsById(geo: Geometry): Map<number, number[]> {
+    const pts = geo.attrs.point;
+    const cols = [
+      PLACEMENT.station,
+      PLACEMENT.t,
+      PLACEMENT.h,
+      PLACEMENT.pose,
+      PLACEMENT.cover,
+      PLACEMENT.sizeAcross,
+      PLACEMENT.sizeTall,
+    ].map((n) => pts.require(n));
+    const id = pts.require(PLACEMENT.id);
+    const out = new Map<number, number[]>();
+    for (let i = 0; i < pts.count; i++) {
+      out.set(id.get(i) as number, cols.map((c) => c.get(i) as number));
+    }
+    return out;
+  }
+
+  it("dresses a shuffled list into the same lap", async () => {
+    const names = [
+      PLACEMENT.station,
+      PLACEMENT.t,
+      PLACEMENT.h,
+      PLACEMENT.pose,
+      PLACEMENT.cover,
+      PLACEMENT.sizeAcross,
+      PLACEMENT.sizeTall,
+    ];
+    let compared = 0;
+
+    for (const seed of SEEDS) {
+      const { lap, frames, dressing } = await cookLap(seed);
+      const { out: mixedUp, from } = shuffled(dressing.placements, seed);
+
+      // THE PREMISE, ASSERTED. A shuffle that happened to be the identity
+      // -- or nearly one -- would make every comparison below hold for a
+      // graph that reads row order everywhere. `from[i]` is which original
+      // row now sits at row i, so a fixed point is `from[i] === i`.
+      const moved = from.filter((v, i) => v !== i).length;
+      expect(
+        moved,
+        `seed ${seed}: the shuffle left ${from.length - moved} of ${from.length} rows in place, ` +
+          "so this test cannot tell an order-dependent graph from an order-free one",
+      ).toBeGreaterThan(from.length * 0.9);
+
+      const common = {
+        kit: shippedVocabulary(),
+        lap,
+        frames,
+        seed,
+        immovable: brakeOf(seed),
+        // Z-3 ON: nothing pinned but L-3's braking mark, which is the set
+        // `dressLap` itself passes.
+        mixPinned: brakeOf(seed),
+        pool: dressingPool(seed),
+      };
+      const straight = await dressLapByGraph({ ...common, placements: dressing.placements });
+      const jumbled = await dressLapByGraph({ ...common, placements: mixedUp });
+
+      const a = rowsById(straight.placements);
+      const b = rowsById(jumbled.placements);
+
+      // THE SURVIVOR SETS ARE THE SAME PLACEMENTS. `PLACEMENT.id` is the
+      // ROW the placement came in on, so the shuffled run names row i what
+      // the straight run names row `from[i]` -- and cover pieces, whose ids
+      // start past the end of the list, name themselves the same way in
+      // both because the planner runs on the FRAMES and never sees the
+      // list at all.
+      const n = dressing.placements.length;
+      const translate = (id: number): number => (id < n ? from[id] : id);
+      const gotA = [...a.keys()].sort((x, y) => x - y);
+      const gotB = [...b.keys()].map(translate).sort((x, y) => x - y);
+      expect(gotA.length, `seed ${seed}: the two runs kept different numbers of placements`).toBe(
+        gotB.length,
+      );
+      expect(gotB, `seed ${seed}: the two runs kept a different SET of placements`).toEqual(gotA);
+      expect(gotA.length, `seed ${seed}: nothing survived, so nothing was compared`).toBeGreaterThan(
+        100,
+      );
+
+      for (const [id, rowB] of b) {
+        const rowA = a.get(translate(id));
+        expect(rowA, `seed ${seed}: placement ${translate(id)} is missing from the straight run`)
+          .toBeDefined();
+        if (!rowA) continue;
+        for (let c = 0; c < names.length; c++) {
+          // EXACTLY EQUAL, NOT WITHIN A TOLERANCE. Determinism is the
+          // library's hard invariant and the two runs cook the same
+          // arithmetic on the same values; a difference of one ulp here
+          // would mean a stage read the row order, which is the thing
+          // being measured. A bound would hide exactly that.
+          expect(
+            rowB[c],
+            `seed ${seed}: placement ${translate(id)} differs in ${names[c]} ` +
+              `(straight ${rowA[c]}, shuffled ${rowB[c]})`,
+          ).toBe(rowA[c]);
+        }
+        compared++;
+      }
+
+      // AND THE LAP AS A WHOLE, which catches a stage that moved something
+      // and something else back.
+      expect(jumbled.covered, `seed ${seed}: the covered mask differs`).toEqual(straight.covered);
+      expect(jumbled.converged, `seed ${seed}: one run settled and the other did not`).toBe(
+        straight.converged,
+      );
+    }
+
+    console.log(`dress graph order invariance: ${compared} placements matched across ${SEEDS.length} shuffled laps`);
+  }, FOUR_LAP_MS);
+});
