@@ -362,6 +362,36 @@ shipped primitive is a loop body. Fixing it means one shared inference
 helper reachable from both the CLI and the docs generator, which is why it
 was left rather than patched twice.
 
+### A settled lap has placements inside the corridor, 2026-08-27
+
+Found by an assertion written for something else and then removed from it,
+because it is not that change's doing and a suite about where the placement
+LIST comes from is the wrong place to discover it.
+
+**The measurement.** On a settled lap, counting non-cover placements with
+`|t|` under 1W and a base below `CORRIDOR.ceilingW`: 3 of 340 on seed 1, 5
+of 326 on seed 2, 3 of 342 on seed 3. A lap dressed from a HANDED-IN list
+has the same thing at the same rate -- 3, 7 and 4 of ~350 -- so it is a
+property of the dressed lap in both modes and not a difference between
+them.
+
+**What it is not.** Not L-5 lowering a raised placement back under the
+ceiling: `edgeDrop` is 0 on every one of them. Not the assembly, per the
+handed-in figures above. Z-1 is compared against `resolveCorridor` in two
+suites and agrees, but BOTH compare pre-cull clouds -- nothing in the repo
+asserts the corridor on a lap that has settled, which is exactly the gap
+this fell into.
+
+**Why it matters.** Z-1 is the rule that keeps the racing line clear, and
+a placement inside the corridor is an object the car drives through. Three
+per lap is small enough to be invisible in a screenshot and large enough
+to be a real rule failure.
+
+**What to do.** Find which stage puts them there, with a reference to
+compare against -- most likely L-1's lateral push, which moves a placement
+after Z-1 has resolved it and is inside the same fixed point. Then assert
+the corridor on the SETTLED cloud, in the suite that owns Z-1.
+
 ### Two arc lengths, one parameter: `pathPointAt` on a resampled path, 2026-08-19
 
 Found while building `tests/trackDressing.test.ts`, and it cost most of a
@@ -383,6 +413,16 @@ gap:
   cannot be fixed by scaling because the two parameterizations differ
   NON-uniformly — they agree on straights and diverge wherever the curve
   bends, which is exactly where a corner rule reads them.
+
+**A SECOND CALLER, 2026-08-27.** The racetrack's placement assembly hit
+the same disagreement from the other end: scattering stations on the road
+graph's frames reads `lapLen` as the CURVE length, which decides the
+station populations, and every station on seed 1 landed 0.018585W from
+where the chord length puts it. Worked around the same way -- by handing
+the stage a polyline whose length attribute is the chord sum
+(`lapAsPath`) -- which is a second reconstruction that the fix below would
+delete. See "`placements` has left the `dataInput` list" at the end of this
+file.
 
 **Why it is not just a docs problem.** Both modes are individually
 correct and documented. What is missing is a way to say "the sample one
@@ -3159,3 +3199,80 @@ join itself: `cookLapPlacements` already puts stations, the coverage
 repair, asset choice, Z-1 and the corner language in ONE graph with one
 cook, and `buildDressGraph` builds a second. Joining them is now a wiring
 question rather than a topology one.
+
+### `placements` has left the `dataInput` list, 2026-08-27
+
+`DressGraphInput.placements` is OPTIONAL now. Left out, `assemble` builds
+the stations, D-4's coverage repair, the asset choice and the assembly from
+the lap path and runs every rule over the result; nothing about the lap is
+data in the graph except the path itself, which is what `graph.ts` has
+always said it should be. Measured: the list the dress graph decides is
+EXACTLY the list `cookLapPlacements` decides, station for station, on three
+seeds -- 969 placements, no list handed in, settling and stamping and
+building cover.
+
+**Three findings, in the order they cost time.**
+
+**1. The order of the list is not read anywhere, and that had never been
+measured.** The assembly's cloud comes out in the scatter's order --
+`pointScatterOnPath` lays stations down with no relation to arc position,
+165 descents in 329 points on seed 1, before the repair -- where
+`cookLapPlacements` sorts its rows in TypeScript. Every stage that cares
+takes the order as a parameter (`pointsToPath`'s `orderAttr`,
+`quotaRebalance`'s priority) and both already passed the station. Shuffling
+the list with Fisher-Yates and dressing both ways gives 1411 placements
+agreeing exactly across four laps with Z-3 on. This nearly cost a new
+library node: there is no node that sorts a cloud by an attribute, and
+`gatherPoints` (`src/nodes/util.ts:867`) plus `canonicalPointRanks`
+(`src/data/identity.ts:239`) is the recipe if one is ever wanted --
+`gatherPoints` already accepts a permutation, and the repo's tie-break
+convention is to end every comparator in the point index.
+
+**2. `ASSET.id` and `PLACEMENT.asset` are the same string, `"assetId"`.**
+The kit's numeric id and the pose name a spawner keys batches by. Nothing
+had ever put both on one cloud, so nothing had noticed; the assembly does,
+and stripping the numeric one after writing the string deletes the string.
+The strip runs first.
+
+**3. The frames are not the path the stations want -- AND THIS IS THE
+KNOWN GAP, MET FROM THE OTHER END.** `assemble` first scattered on the road
+graph's own frames, since `readLap` reads the lap out of them: one fewer
+reconstruction. Every station came out 0.018585W from where
+`cookLapPlacements` puts it, which is 0.1673 world units, which is exactly
+the difference between the two lengths the same geometry reports --
+3121.533 and 3121.365 on seed 1, 0.0054%.
+
+That is "Two arc lengths, one parameter" above, found on 2026-08-19 and
+still open: `pathResample` reports `lengthAttr` for the CURVE it sampled
+while emitting the polyline THROUGH the samples, which is shorter. That
+entry met it as a slide that landed two frames ahead; this meets it as a
+population count, because `lapLen` decides how many stations there are and
+0.0054% re-lays the whole scatter. `lapAsPath` writes the chord length,
+which is what `lap.lengthW` is and what every rule speaks in, so the
+stations scatter on that.
+
+**It now has a second caller, which is the argument for fixing it.** The
+fix that entry names -- `pathResample` publishing the parameterization it
+emits, a `resampledLengthAttr` or a `sampleU` -- is exactly what would let
+the stations scatter on the frames directly and delete `lapAsPath`. It was
+parked as helping only a caller who already knew to look; there are two of
+those now, and the second one is on the path to the endpoint.
+
+**What is left.**
+
+1. **The corner language.** `dressLap` merges L-2's markers and L-3's ruler
+   marks into the list at its step 4; `addLapPlacements` stops before that,
+   so a self-decided lap carries no corner vocabulary. The language is
+   already a graph -- `addCornerLanguage`, which `cookLapPlacements` cooks
+   beside the stations -- so what is missing is the merge, not a rule. This
+   is the next unit.
+2. **`mixPinned` and `mixBandPools`.** The first reaches the graph three
+   ways and should be derived in-graph; the second is a build-time literal
+   by design and probably stays one.
+3. **The page.** `main.ts` prints the enclosure stat synchronously and the
+   graph's L-6 runs in the lap level, cooked later. A scheduling question,
+   untouched.
+
+**And an observation the assembly surfaced without explaining**, written
+up as its own Backlog entry above -- "A settled lap has placements inside
+the corridor".

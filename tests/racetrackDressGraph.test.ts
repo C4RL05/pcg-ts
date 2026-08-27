@@ -2434,7 +2434,11 @@ describe("dress graph order invariance", () => {
       // both because the planner runs on the FRAMES and never sees the
       // list at all.
       const n = dressing.placements.length;
-      const translate = (id: number): number => (id < n ? from[id] : id);
+      // A COVER PIECE'S ID IS NEGATIVE and names no row of either list, so
+      // it translates to itself. The bound has to be checked at BOTH ends:
+      // `id < n` alone is true of -2 as well, and would index the
+      // permutation off the front and hand back `undefined`.
+      const translate = (id: number): number => (id >= 0 && id < n ? from[id] : id);
       const gotA = [...a.keys()].sort((x, y) => x - y);
       const gotB = [...b.keys()].map(translate).sort((x, y) => x - y);
       expect(gotA.length, `seed ${seed}: the two runs kept different numbers of placements`).toBe(

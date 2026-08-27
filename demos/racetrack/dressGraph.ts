@@ -189,6 +189,7 @@ import {
   STATION_LENGTH_ATTR,
   addCoverageRepair,
   addStationStage,
+  lapAsPath,
 } from "./stationGraph.js";
 import type { StationParams } from "./stations.js";
 import type { PlaceableAsset } from "./assets.js";
@@ -262,6 +263,22 @@ export const DRESS_OUTPUTS = {
    */
   roundsFirst: "roundsFirst",
   convergedFirst: "convergedFirst",
+  /**
+   * The list as it ENTERED the first repair pass -- before any rule ran.
+   *
+   * PUBLISHED BECAUSE THE COUNT STOPPED BEING SOMETHING THE CALLER HAS.
+   * `dropped` is how many the cull removed, which is the input count minus
+   * the first pass's, and the input count used to be `input.placements.length`
+   * -- a number the caller was holding because the caller had built the
+   * list. Once the graph can decide the list, nobody outside it knows how
+   * long it is, so the graph says.
+   *
+   * IT IS ALSO THE ONLY WAY TO SEE WHAT THE ASSEMBLY BUILT. Every other
+   * placement output is post-repair, so a lap whose stations all drew
+   * nothing and a lap whose rules culled everything look identical from
+   * outside. These are different failures and they should not read the same.
+   */
+  placementsInput: "placementsInput",
   /**
    * The settled list BEFORE L-6, one point per surviving placement.
    *
@@ -678,6 +695,15 @@ export interface GraphDressing {
    * for: a stage's effect is legible when both sides of it are.
    */
   readonly placementsFirst: Geometry;
+  /**
+   * The list as it ENTERED the first pass -- see
+   * {@link DRESS_OUTPUTS.placementsInput}.
+   *
+   * The only view of what the assembly built, and the count `dropped` is
+   * measured against. A caller that handed a list in already has this and
+   * one that did not has nowhere else to get it.
+   */
+  readonly placementsInput: Geometry;
   /** Per lap frame: is it under cover? */
   readonly covered: boolean[];
   /** Per lap frame: how many of the six rays hit anything. */
@@ -757,7 +783,23 @@ export interface DressGraphInput {
    * lap from and the two cannot drift.
    */
   readonly frames: Geometry;
-  readonly placements: readonly StationedPlacement[];
+  /**
+   * The list to dress, or ABSENT to have the graph decide it.
+   *
+   * OPTIONAL, AND THE OPTION IS THE POINT OF THE WHOLE PORT. A list handed
+   * in is bound with `dataInput`, which makes the graph a picture of ONE
+   * lap: the placements are data in it and the placements are the answer,
+   * so it cannot be serialized and re-run against another spline. Left out,
+   * {@link addLapPlacements} decides them from the path -- stations, D-4's
+   * coverage repair, the asset choice, the assembly -- and nothing about
+   * the lap is data any more except the spline.
+   *
+   * THE TWO PRODUCE THE SAME COLUMNS AND NO STAGE BELOW CAN TELL, which is
+   * what keeps the comparison suites meaningful: they hand a list in
+   * because they measure a rule against its reference on a KNOWN
+   * population, and what they measure is this same graph.
+   */
+  readonly placements?: readonly StationedPlacement[];
   /** The stream `buildBoxes` draws poses from. Must match, or the boxes do not. */
   readonly seed: number;
   /**
@@ -3459,6 +3501,36 @@ function writeCoverage(
 }
 
 /**
+ * The placement list, for the three entry points that cannot decide one.
+ *
+ * `DressGraphInput.placements` IS OPTIONAL FOR EXACTLY ONE CALLER. The
+ * whole dress graph can decide its own list, because it is handed the path
+ * the stations are scattered on; these three cook ONE STAGE over a list
+ * that already exists, which is what makes them comparable against the
+ * rule they port -- there is no path in them to decide anything from, and
+ * a stage's verdict on a population nobody chose is not a measurement.
+ *
+ * A THROW RATHER THAN A NARROWER TYPE, and it is a real trade. Splitting
+ * the interface in two would catch this at compile time and would also
+ * split every helper that builds one; these three are the minority case
+ * and the error can say the whole of what is wrong, which a type cannot.
+ */
+function requireList(
+  placements: readonly StationedPlacement[] | undefined,
+  who: string,
+): readonly StationedPlacement[] {
+  if (placements !== undefined) return placements;
+  throw new Error(
+    `${who}: needs a placement list and was handed none. \`DressGraphInput.placements\` is ` +
+      "optional only for `buildDressGraph` and `dressLapByGraph`, which are given the lap's path " +
+      "and can decide the list themselves through `addLapPlacements`. This cooks a single stage " +
+      "over a KNOWN list so that its answer can be compared against the rule it ports, and it has " +
+      "no path to decide one from. Pass `placements`, or cook the whole graph with " +
+      "`dressLapByGraph` and read the stage's column off its output.",
+  );
+}
+
+/**
  * The repair body as a graph that runs it ONCE, over a bound placement list.
  *
  * WHY A SECOND ENTRY POINT EXISTS AT ALL. Wrapping the three repairs in
@@ -3487,7 +3559,8 @@ export function buildRoundGraph(input: DressGraphInput): Graph {
   // which is the machinery telling the truth: a body belongs to one
   // wrapper, and running it bare is a different graph rather than the same
   // graph with the loop switched off.
-  const { kit, lap, placements, seed, immovable, mixPinned, pool } = input;
+  const { kit, lap, seed, immovable, mixPinned, pool } = input;
+  const placements = requireList(input.placements, "buildRoundGraph");
   const lib = poseLibrary(kit);
   const body = buildRepairBody(lap, {
     bandPools: mixBandPools(pool, lib, mixPinned),
@@ -3590,13 +3663,6 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   const posesIn = g.add(dataInput, {}, "poseLibrary");
   g.setParam(posesIn, "items", [makeGeometryItem(library)]);
 
-  const placementsIn = g.add(dataInput, {}, "placements");
-  g.setParam(placementsIn, "items", [
-    makeGeometryItem(
-      placementCloudInTrackCoords(placements, lib, seed, immovable, input.mixPinned),
-    ),
-  ]);
-
   const framesIn = g.add(dataInput, {}, "lap");
   g.setParam(framesIn, "items", [makeGeometryItem(frames)]);
 
@@ -3621,6 +3687,77 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   ]);
   const mixPosesIn = g.add(dataInput, {}, "mixPoses");
   g.setParam(mixPosesIn, "items", [makeGeometryItem(mixPoseCloud(pool, lib))]);
+
+  // ---- WHERE THE LIST COMES FROM -----------------------------------------
+  //
+  // TWO WAYS IN, AND THE DIFFERENCE IS THE WHOLE CAMPAIGN. Handed a list,
+  // this binds it with `dataInput` and the graph is a picture of ONE lap:
+  // the placements are data in it, and the placements are the answer.
+  // Handed none, {@link addLapPlacements} decides them from the path --
+  // stations, D-4's coverage repair, the asset choice, the assembly -- and
+  // the graph becomes a thing that can be serialized and re-run against
+  // another spline, which is the only version of it a game could ship.
+  //
+  // NOT A MODE, AND THE STAGES BELOW CANNOT TELL. Both branches end on a
+  // cloud carrying exactly the same columns -- asserted, in
+  // `tests/racetrackPlacementAssembly.test.ts` -- so nothing downstream
+  // takes a branch, and the rules do not acquire a second spelling. That is
+  // the property that makes the comparison suites still worth anything:
+  // they hand a list in, and what they measure is the same graph.
+  //
+  // THE STATIONS RUN ON `lapAsPath`, NOT ON THE FRAMES, AND THE FIRST DRAFT
+  // HAD IT THE OTHER WAY.
+  //
+  // The frames ARE the path -- the road graph's own output, which `readLap`
+  // reads the lap out of -- so scattering on them looked like one fewer
+  // reconstruction. It is not the same path in the one respect the stations
+  // care about: `lapLen`. `pathResample` reports the length of the CURVE it
+  // sampled; `lap.s` and `createPolyline` measure the POLYLINE through
+  // those samples, which is shorter by the chord-versus-arc deficit --
+  // 3121.533 against 3121.365 on seed 1, 0.0054%. `lapAsPath` writes the
+  // chord length, and the chord length is what every rule in this demo
+  // speaks in, because `lap.lengthW` is that number.
+  //
+  // THE DIFFERENCE IS NOT IN THE NOISE. `lapLen` decides the station
+  // POPULATIONS -- `round(superRate * lapW)` -- so a length 0.0054% out
+  // re-lays the whole scatter, and every station on seed 1 came out
+  // 0.018585W from where `cookLapPlacements` puts it, which is 0.1673 world
+  // units, which is the length difference exactly. Measured by the test
+  // below, which is why it compares the two lists rather than merely
+  // checking that one exists.
+  //
+  // AND A PATH `dataInput` IS NOT WHAT THIS PORT IS TRYING TO REMOVE.
+  // `graph.ts` opens by saying the spline arrives as DATA; a lap the graph
+  // is handed is the question, and the placements were the answer. Binding
+  // the first has never been the problem.
+  let placementsIn: NodeHandle;
+  if (placements === undefined) {
+    const assetsIn = g.add(dataInput, {}, "assetTable");
+    g.setParam(assetsIn, "items", [makeGeometryItem(assetCloud(pool))]);
+    const pathIn = g.add(dataInput, {}, "lapPath");
+    g.setParam(pathIn, "items", [makeGeometryItem(lapAsPath(lap))]);
+    placementsIn = addLapPlacements(
+      g,
+      { node: pathIn, pin: "out" },
+      {
+        assets: { node: assetsIn, pin: "out" },
+        mixAssets: { node: mixAssetsIn, pin: "out" },
+        mixPoses: { node: mixPosesIn, pin: "out" },
+      },
+      { halfWidth: lap.halfWidth, assetCount: pool.length, poseIds: mixPoseIds(lib) },
+      "lap",
+    ).out;
+  } else {
+    const handed = g.add(dataInput, {}, "placements");
+    g.setParam(handed, "items", [
+      makeGeometryItem(
+        placementCloudInTrackCoords(placements, lib, seed, immovable, input.mixPinned),
+      ),
+    ]);
+    placementsIn = handed;
+  }
+
+  g.output(placementsIn, "out", DRESS_OUTPUTS.placementsInput);
 
   const body = buildRepairBody(lap, {
     bandPools: mixBandPools(pool, lib, mixPinned),
@@ -3694,7 +3831,7 @@ function assemble(input: DressGraphInput): { graph: Graph } {
     coverPool.map((a) => a.instances),
     "l6tile",
   );
-  const pieces = writeCoverPlacements(g, tiled, mixPoseIds(lib), placements.length, "l6place");
+  const pieces = writeCoverPlacements(g, tiled, mixPoseIds(lib), "l6place");
   g.connect(coverPosesIn, "out", pieces.poses, "source");
   // The frame, on the pieces, exactly as the placement list got it: they
   // arrive holding a station and nothing about the world, which is the
@@ -3811,7 +3948,8 @@ function framesOf(g: Graph, input: DressGraphInput): NodeHandle {
  * stage and read its columns back as plain arrays.
  */
 export async function cookBandMix(input: DressGraphInput): Promise<BandMixDecision> {
-  const { kit, lap, placements, seed, immovable, mixPinned } = input;
+  const { kit, lap, seed, immovable, mixPinned } = input;
+  const placements = requireList(input.placements, "cookBandMix");
   const g = new Graph(seed);
   const cloud = g.add(dataInput, {}, "placements");
   g.setParam(cloud, "items", [
@@ -3872,7 +4010,8 @@ export interface BandRedrawResult extends BandMixDecision {
  * stage in the band it was sent to, holding an asset that reaches there.
  */
 export async function cookBandRedraw(input: DressGraphInput): Promise<BandRedrawResult> {
-  const { kit, lap, placements, seed, immovable, mixPinned, pool } = input;
+  const { kit, lap, seed, immovable, mixPinned, pool } = input;
+  const placements = requireList(input.placements, "cookBandRedraw");
   const lib = poseLibrary(kit);
   const g = new Graph(seed);
   const cloud = g.add(dataInput, {}, "placements");
@@ -3945,6 +4084,10 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
   const placementsFirst = requireGeo(
     out[DRESS_OUTPUTS.placementsFirst],
     DRESS_OUTPUTS.placementsFirst,
+  );
+  const placementsInput = requireGeo(
+    out[DRESS_OUTPUTS.placementsInput],
+    DRESS_OUTPUTS.placementsInput,
   );
   const coverage = requireGeo(out[DRESS_OUTPUTS.coverage], DRESS_OUTPUTS.coverage);
   const coverageFirst = requireGeo(
@@ -4035,11 +4178,17 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
     // `cullSightlines`' blocking count) quietly stopped holding. The cull
     // is what drops, the first pass is where it dropped from, and no
     // arithmetic over a list that grew can say how much of it went.
-    dropped: input.placements.length - placementsFirst.pointCount,
+    //
+    // AND THE INPUT COUNT COMES OFF THE GRAPH, not off `input.placements`.
+    // That was the caller's own array, which is a number nobody has once
+    // the graph is the thing that decides the list -- see
+    // `DRESS_OUTPUTS.placementsInput`.
+    dropped: placementsInput.pointCount - placementsFirst.pointCount,
     // BOTH PASSES, SUMMED, because that is what the cook actually spent.
     // The two are published apart so a caller can tell which half a lap's
     // cost came from; a stat line wants the total.
     placementsFirst,
+    placementsInput,
     rounds:
       requireNumber(out[DRESS_OUTPUTS.roundsFirst], DRESS_OUTPUTS.roundsFirst) +
       requireNumber(out[DRESS_OUTPUTS.rounds], DRESS_OUTPUTS.rounds),
@@ -4100,8 +4249,6 @@ function writeCoverPlacements(
   g: Graph,
   tiles: NodeHandle,
   poseIds: readonly string[],
-  /** How many placements the graph was handed -- see `PLACEMENT.id` below. */
-  inputCount: number,
   tag: string,
 ): { readonly tail: NodeHandle; readonly poses: NodeHandle } {
   // The raw draw, then the asset's own pose list indexed by it. This is
@@ -4191,19 +4338,29 @@ function writeCoverPlacements(
     // never reaches -- the mix's `include` excludes it. So it is inert
     // today and it is the single thing to write first if cover is ever
     // made mix-eligible.
-    // AN ID PAST THE END OF THE INPUT LIST, and the first draft renumbered
+    // A NEGATIVE ID, COUNTING DOWN FROM -2, and the first draft renumbered
     // the MERGED list instead, which was a real defect. `PLACEMENT.id` is
     // "where this placement sat in the list the graph was handed" -- that
     // is what the cull's own reporting subtracts against -- and rewriting
     // it after a pass that has already dropped members makes every
     // surviving placement name the wrong entry. Measured on seed 5, 337 of
     // the survivors pointed at the wrong input row, the worst 9.4W away,
-    // and it happened on laps where L-6 added nothing at all.
+    // and it happened on laps where L-6 added nothing at all. So the
+    // originals keep the numbers they came in with.
     //
-    // So the originals keep the numbers they came in with and a piece gets
-    // the next number after the list, which is unique, ordered, and
-    // truthful about a piece having no row in a list it was not in.
-    [PLACEMENT.id, add(inputCount, index())],
+    // WHAT CHANGED IS THE NUMBER A PIECE GETS. It used to be
+    // `inputCount + index()`, the next one after the list -- which needed
+    // the list's LENGTH at graph-build time, and once the list is something
+    // the graph decides there is no such number to have. Counting down from
+    // -2 needs nothing: it is unique, it is ordered, and it is read the only
+    // way this column is ever read, as set membership -- the accounting in
+    // `readDressing` asks WHO survived, never what the number is worth.
+    //
+    // AND IT IS THE MORE TRUTHFUL OF THE TWO. `inputCount + index()` looks
+    // like a row of the input list and is not one; -2 cannot be mistaken for
+    // a row of anything. -1 is left alone because this file already spends
+    // it on "no such thing" in three other columns.
+    [PLACEMENT.id, sub(-2, index())],
   ];
   for (const [name, value] of writes) {
     const n = g.add(setAttribute, { name, tupleSize: 1, value }, `${tag}_w_${name}`);

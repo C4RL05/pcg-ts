@@ -245,6 +245,14 @@ export function buildDressingGraph(opts: {
  * The lap level needs no `bind`: its graph carries the frames, the pose
  * library and the placement list as bound data already, and an unbounded
  * level has exactly one cell, so there is nothing left for a bind to vary.
+ *
+ * THE PLACEMENT LIST IS OPTIONAL NOW, and this function passes `input`
+ * straight through, so leaving it out is all it takes for the lap level to
+ * decide its own dressing from the path -- see
+ * {@link DressGraphInput.placements}. Nothing here has to change for that;
+ * it is written down because "carries the placement list as bound data" is
+ * a statement about how the CALLER built the input, not about this
+ * function, and the page is currently the caller that hands one in.
  */
 export function buildRacetrackLevels(input: RacetrackLevelsInput): RacetrackLevels {
   const { lap, seed } = input;
