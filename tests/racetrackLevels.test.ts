@@ -40,11 +40,11 @@ import {
   readEnclosure,
   type EnclosureReport,
 } from "../demos/racetrack/dressGraph.js";
-import { dressLap } from "../demos/racetrack/dress.js";
 import { LEVELS, SECTOR_W, buildRacetrackLevels } from "../demos/racetrack/levels.js";
 import type { Lap } from "../demos/racetrack/lap.js";
 import type { StationedPlacement } from "../demos/racetrack/legibility.js";
-import { dressedLapFor } from "./support/lap.js";
+import { dressLap, reserveFor } from "../demos/racetrack/dress.js";
+import { dressedLapFor, lapFor } from "./support/lap.js";
 import { shippedVocabulary } from "../demos/racetrack/vocabulary.js";
 
 /** Cooking a lap and then driving a World round it is not a 5 s operation. */
@@ -492,6 +492,123 @@ describe("racetrack levels: a sector does not depend on how it was reached", () 
         // wanted it, not of what had been cooked before it, and not of the
         // order the World happened to cook in.
         expect(sortedKeys(backward.bySector.get(sector) ?? [])).toEqual(sortedKeys(list));
+      }
+    },
+    LAP_MS,
+  );
+});
+
+/**
+ * THE MODE THE PAGE IS ABOUT TO SWITCH TO, AND NOTHING ELSE IN THE REPO
+ * COOKS IT.
+ *
+ * `buildRacetrackLevels` is called in exactly two places outside this
+ * block -- `driveLap` above and `demos/racetrack/main.ts` -- and both hand
+ * a placement list in. `DressGraphInput.placements` has been optional
+ * since the port, and `racetrackPlacementAssembly.test.ts` exercises the
+ * omitted branch through `dressLapByGraph`, which COOKS the graph. So the
+ * two-level path -- the lap level settling a list it decided, the dressing
+ * level reading that list off `ctx.parent.outputs` -- has never run on
+ * anything but a bound `dataInput`, and the handoff is where a
+ * self-decided list would fail differently: the parent's cloud is now
+ * produced by a chain of stages rather than restated from an item the
+ * caller built.
+ *
+ * SO THE ASSERTIONS ARE ABOUT THE HANDOFF, NOT ABOUT THE RULES. What the
+ * list contains is `racetrackPlacementAssembly.test.ts`' subject and is
+ * measured there against `cookLapPlacements`. What is measured here is
+ * that the list reaches the sectors intact and partitioned: every
+ * placement spawned once, by one sector, and the union bit-identical to
+ * spawning the whole lap in one piece.
+ *
+ * IT IS THE PAGE'S INPUT AND NOT A CONVENIENT ONE. `markers` and
+ * `densityScale` are both passed, because both are things the page has and
+ * both are read ONLY on this branch -- a suite that omitted them would
+ * cook a lap with no corner vocabulary at a rate no slider can move, and
+ * report that the mode works.
+ */
+describe("racetrack levels: a lap the graph decided for itself", () => {
+  it(
+    "streams a self-decided list, and the sectors partition it",
+    async () => {
+      for (const seed of SEEDS) {
+        const { lap, frames } = await lapFor(seed);
+        const kit = shippedVocabulary();
+        const { pool, markers } = reserveFor(kit, seed);
+        const input = {
+          kit,
+          lap,
+          frames,
+          // NO `placements`, AND NO PRELUDE BEHIND THEM. Everything below
+          // comes from `reserveMarkers`, which is the one cook the page
+          // keeps: it decides WHICH ASSETS EXIST before anything is
+          // dressed, so it cannot be a stage inside the graph that
+          // consumes its answer.
+          seed,
+          immovable: new Set(markers ? [markers.brake.id] : []),
+          mixPinned: new Set(
+            markers ? [markers.sharp.id, markers.open.id, markers.brake.id] : [],
+          ),
+          pool,
+          markers,
+          densityScale: 1,
+        };
+        const built = buildRacetrackLevels(input);
+
+        let settledCount = 0;
+        let lapCells = 0;
+        const bySector = new Map<number, Instance[]>();
+        const world = new World({
+          seed,
+          levels: built.levels,
+          maxCellsPerLevel: built.sectorCount + 8,
+          onCellReady(levelName, coord, outputs) {
+            if (levelName === LEVELS.lap) {
+              lapCells++;
+              const settled = firstGeometry(outputs[DRESS_OUTPUTS.placements] ?? []);
+              settledCount = settled?.pointCount ?? 0;
+              return;
+            }
+            if (levelName !== LEVELS.dressing) return;
+            bySector.set(coord[0], instancesOf(outputs["instances"] ?? []));
+          },
+        });
+
+        const steps = built.sectorCount * 2;
+        for (let i = 0; i < steps; i++) {
+          await world.update([0, 0, 0], {
+            anchors: { [LEVELS.dressing]: (i / steps) * lap.lengthW },
+          });
+        }
+
+        expect(lapCells, `seed ${seed}: the unbounded lap level did not cook exactly once`).toBe(1);
+        expect(
+          settledCount,
+          `seed ${seed}: the lap level settled ${settledCount} placements, which is not a lap`,
+        ).toBeGreaterThan(200);
+        expect(bySector.size, `seed ${seed}: not every sector cooked`).toBe(built.sectorCount);
+
+        // EXACTLY ONCE EACH, which is the half-open seam rule holding on a
+        // list whose stations came out of the station process rather than
+        // out of an array the test wrote.
+        const total = [...bySector.values()].reduce((n, v) => n + v.length, 0);
+        expect(
+          total,
+          `seed ${seed}: ${total} instances spawned across the sectors against ` +
+            `${settledCount} settled placements`,
+        ).toBe(settledCount);
+
+        // AND THE SAME INSTANCES, bit for bit, as spawning the whole
+        // settled cloud in one piece. The cook is a second schedule for
+        // the same graph, the way the enclosure case above is.
+        const cooked = await dressLapByGraph(input);
+        const streamed = sortedKeys([...bySector.values()].flat());
+        expect(streamed).toEqual(sortedKeys(await spawnWhole(cooked.placements, lap)));
+
+        console.log(
+          `seed ${seed}: self-decided lap settled ${settledCount} placements into ` +
+            `${built.sectorCount} sectors, ${total} instances`,
+        );
       }
     },
     LAP_MS,
