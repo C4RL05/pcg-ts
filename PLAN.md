@@ -3768,20 +3768,52 @@ list) and 10 of 226 pool assets. `mixBandPools` is `[1,1,1,1,1,0]` on every
 seed: one band has no donor regardless of the set, which is a fact about the
 vocabulary and not about this decision.
 
-### Where the lap prelude stands, 2026-08-27
+### Where the lap prelude stands — CORRECTED, 2026-08-27
 
 Every rule that decides the racetrack's lap is a graph stage. The station
 process, D-4's coverage repair, asset choice, Z-1, L-1, L-5, Z-3, the corner
 model, the marker vocabulary, the reservation, the corner language and its
 bookkeeping, and both halves of L-6 — the top-up and, as of today, the trim.
-`DressGraphInput.placements` is optional and the page leaves it out; nothing
-about the lap is data in the graph except the spline.
+`DressGraphInput.placements` is OPTIONAL: left out, `addLapPlacements`
+decides the whole list from the path.
 
-What remains is not rules. `mixPinned` is bound data and staying that way,
-measured above. `mixBandPools` is a build-time literal by design. The two
-open items are a library gap (`pathResample`'s two arc lengths, above) and a
-design question (`inCorridor`'s lateral centre-vs-extent, above), and
-neither is a rule waiting to be ported.
+**AND THE PAGE STILL HANDS ONE IN, WHICH AN EARLIER DRAFT OF THIS ENTRY
+DENIED.** It claimed "the page leaves it out; nothing about the lap is data
+in the graph except the spline". That is true of the library capability and
+of the suites that exercise it, and false of the demo:
+`demos/racetrack/main.ts:725` passes `placements: dressed.placements`, and
+above it the page still runs `cookLapPlacements`, `placementsBeforeLanguage`,
+`cookCorners`, `cookCornerBookkeeping` and `dressLap`. The prelude is
+PORTABLE, not yet PORTED, and the difference is the whole remaining unit.
+
+**What stands between the two** — being scoped as this is written, so the
+list is provisional and the ranking is not settled:
+
+1. **`mixPinned`, and the decline above answered the wrong question.** It is
+   REQUIRED on `DressGraphInput`, and it is `reserved ∪ landmarkAssets(THE
+   SETTLED LIST)` — the list the graph would be deciding. So a page that
+   omits `placements` cannot compute it without first running `dressLap`,
+   which is circular. The Stretch entry above measured "does recomputing it
+   per round change any placement" (no, over eight seeds) when the
+   load-bearing question is "can the page omit the list at all without it".
+   Those are different questions and only the second one blocks anything.
+2. **The panel's other two lines.** `statCorners` and `statRules` still read
+   `dressLap`'s stats. Dropping the prelude means moving them onto the lap
+   level's outputs — the same scheduling move `dressing` and `enclosure`
+   already took, twice more, and probably some new `DRESS_OUTPUTS` for the
+   repair counts.
+3. **The prelude deletion itself.** `cookReserveMarkers` stays — it decides
+   WHICH ASSETS EXIST before anything else and is deliberately its own cook.
+   Everything else leaves `main.ts`.
+
+Also worth checking: whether the suites that omit `placements` take
+`mixPinned` from a `dressLap` result. If they do, "the graph decides the
+list" has only ever been exercised with a TypeScript-derived protect set.
+
+What is NOT left is rules. `mixBandPools` is a build-time literal by design.
+The other two open items are a library gap (`splineSample`'s
+curve-versus-chord, above) and a design question (`inCorridor`'s lateral
+centre-vs-extent, above), and neither is a rule waiting to be ported.
 
 ### The two arc lengths are one ruler now, and it was hiding a seam, 2026-08-27
 
