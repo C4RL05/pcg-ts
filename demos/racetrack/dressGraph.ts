@@ -886,6 +886,28 @@ export interface DressGraphInput {
    * verticals to hold back.
    */
   readonly markers?: MarkerKit;
+  /**
+   * D-1's density, scaled. `1` -- the default -- is the fitted rate.
+   *
+   * READ ONLY WHEN `placements` IS ABSENT, for `markers`' reason: a list
+   * handed in was already laid at some density and rescaling it here would
+   * mean re-deciding the stations that produced it.
+   *
+   * IT IS HERE BECAUSE ITS ABSENCE WAS THE ONE THING BLOCKING THE DEMO
+   * PAGE FROM OMITTING THE LIST, and the failure would not have looked
+   * like a missing feature. The page has a density slider; it reaches the
+   * stations through `cookLapPlacements`, which takes this. Without the
+   * same door on this side, a page that stopped handing placements in
+   * would keep the slider, keep the readout, and silently dress every lap
+   * at x1.00 — a control that moves nothing, which is worse than one that
+   * is not there.
+   *
+   * `StationParams` is NOT exposed alongside it even though
+   * {@link addLapPlacements} and `cookLapPlacements` both take one. That
+   * option has no caller anywhere, so there is nothing to keep at parity
+   * yet; add it when something wants it.
+   */
+  readonly densityScale?: number;
 }
 
 /**
@@ -4487,6 +4509,7 @@ function assemble(input: DressGraphInput): { graph: Graph } {
         halfWidth: lap.halfWidth,
         assetCount: pool.length,
         poseIds: mixPoseIds(lib),
+        densityScale: input.densityScale,
         language: input.markers ? { markers: input.markers, lap } : undefined,
       },
       "lap",

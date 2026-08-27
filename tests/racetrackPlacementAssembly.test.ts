@@ -630,6 +630,86 @@ describe("the dress graph, deciding its own list", () => {
         "no list handed in",
     );
   }, FOUR_LAP_MS);
+
+  /**
+   * D-1's density, through the door the page's slider needs.
+   *
+   * THE COMPARISON IS THE TEST AND THE COUNT IS WHAT THE COMPARISON CANNOT
+   * SEE. `cookLapPlacements` takes `densityScale` and so does
+   * {@link addLapPlacements}; the equality below fails the moment
+   * `assemble` stops forwarding it, because the reference would thin and
+   * the graph would not. What it would NOT catch is the option going inert
+   * in both at once -- a rename inside `addStationStage`, say -- which
+   * reads as two lists agreeing perfectly at the fitted rate. So the count
+   * is asserted to have MOVED as well, and in the direction asked for.
+   *
+   * IT IS VERY NEARLY HALF, WHICH WAS NOT THE EXPECTED ANSWER. D-4's
+   * coverage repair runs after the stations and adds back wherever the
+   * thinning opened a gap wider than it allows, so a lap at x0.5 could
+   * reasonably have come out well above half; measured, seed 1 lays 165
+   * against 329, which is 0.501. So the repair is not what decides this
+   * population's size at either rate, and the band below is asserted
+   * rather than a bare direction -- a lap that came back at 0.8 would be
+   * D-4 having become the binding constraint, which is a real finding and
+   * not a tolerance to widen.
+   *
+   * THE LAP HERE CARRIES NO CORNER LANGUAGE (no `markers`), and that is
+   * why the proportion is this clean. L-2 and L-3 place per CORNER, not
+   * per station, so a lap with a marker kit thins by less than its rate.
+   */
+  it("takes the density scale the page's slider sets", async () => {
+    const seed = 1;
+    const { lap, frames } = await lapFor(seed);
+    const kit = shippedVocabulary();
+    const { pool } = reserveFor(kit, seed);
+    const densityScale = 0.5;
+
+    const got = await dressLapByGraph({
+      kit,
+      lap,
+      frames,
+      seed,
+      immovable: new Set(),
+      mixPinned: new Set(),
+      pool,
+      densityScale,
+    });
+
+    const cooked = await cookLapPlacements({ lap, seed, pool, densityScale });
+    const reference = placementsBeforeLanguage(lap, seed, pool, {
+      stations: cooked.stations,
+      choices: cooked.choices,
+    }).placements;
+
+    const col = got.placementsInput.attrs.point.require(PLACEMENT.station);
+    const mine: number[] = [];
+    for (let i = 0; i < got.placementsInput.pointCount; i++) mine.push(col.get(i) as number);
+    expect(
+      mine.slice().sort((a, b) => a - b),
+      "the graph ignored densityScale, or scaled by something else",
+    ).toEqual(reference.map((p) => p.station).sort((a, b) => a - b));
+
+    const full = await cookLapPlacements({ lap, seed, pool });
+    const fullCount = placementsBeforeLanguage(lap, seed, pool, {
+      stations: full.stations,
+      choices: full.choices,
+    }).placements.length;
+    const ratio = mine.length / fullCount;
+    expect(
+      ratio,
+      `x${densityScale} laid ${mine.length} placements against x1.00's ${fullCount}, ` +
+        `a ratio of ${ratio.toFixed(3)} where 0.5 is asked for`,
+    ).toBeGreaterThan(0.4);
+    expect(
+      ratio,
+      `x${densityScale} laid ${mine.length} placements against x1.00's ${fullCount}, ` +
+        `a ratio of ${ratio.toFixed(3)}: the scale moved little or nothing`,
+    ).toBeLessThan(0.6);
+
+    console.log(
+      `density scale: x${densityScale} -> ${mine.length} placements, x1.00 -> ${fullCount}`,
+    );
+  }, FOUR_LAP_MS);
 });
 
 /**
