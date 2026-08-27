@@ -22,20 +22,28 @@
  * within 12W on every seed measured, with the worst case 2.4x clear.
  *
  * WHAT THE LAP LEVEL CANNOT DO, stated because it is the honest limit of
- * this arrangement. Its graph is BUILT from a cooked `Lap` — `dressGraph`
- * turns the placement LIST into a cloud in TypeScript — so the level
- * cannot be constructed before the list is decided, and the page cooks
- * the road first and hands the result in. A track measured in kilometres
- * would pay that whole prelude at load rather than streaming it.
+ * this arrangement, and it is SMALLER THAN IT WAS, TWICE OVER. Both
+ * halves this paragraph used to name are gone. The frame lookup went
+ * first: the cloud was once built THROUGH the lap's own lookup, which
+ * made the graph a picture of one lap rather than a list, and
+ * `dressGraph`'s `sampleTrackFrame` is that lookup as a stage now, so a
+ * placement carries a station and the graph resolves it. The LIST went
+ * second, the way this file said it would — the station process was
+ * already a node, in `stationGraph.ts`, and `addLapPlacements` joined it
+ * up. `placements` is OPTIONAL on `DressGraphInput`, the page omits it,
+ * and the level decides its own placements.
  *
- * THE FRAME LOOKUP USED TO BE HALF OF THAT SENTENCE AND IS NOT ANY MORE.
- * The cloud was built THROUGH the lap's own frame lookup, which made it a
- * picture of one lap rather than a list; `dressGraph`'s `sampleTrackFrame`
- * is that lookup as a stage now, so a placement carries a station and the
- * graph resolves it. What is left of the limit is the LIST, which is the
- * smaller half and the one this file has always named: make the station
- * process a node — it already is, in `stationGraph.ts` — and join it up,
- * rather than moving this cut.
+ * WHAT IS LEFT IS THE ROAD, and it is a different shape of limit.
+ * `DressGraphInput` still REQUIRES a cooked `Lap` and the level-0
+ * `frames` it was read from — the half-width, the length in W, the path
+ * table, the corner model — and those are TypeScript readings of a
+ * geometry rather than pins. So the road cooks once, before this level
+ * can be CONSTRUCTED at all, and the panel's `ready in ~1.2 s` is that
+ * cost made visible. What it buys is that the prelude is now FIXED rather
+ * than proportional: it pays for one spline, not for a placement list
+ * that grows with the track. A circuit measured in kilometres would still
+ * pay it at load rather than streaming it, which is why it stays named
+ * here.
  *
  * ONE INSTANCE PER PLACEMENT, NOT PER BOX. `spawnInstances` groups
  * batches by a STRING point attribute, and the cheapest way to fill one

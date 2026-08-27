@@ -9,7 +9,7 @@
  *   2. assets        which asset, from its own measured behaviour
  *   3. corridor      Z-1, by size
  *   4. language      L-2's markers and L-3's rulers
- *   5. landmarks     L-4
+ *   5. landmarks     L-4        — REFERENCE ONLY, see the last paragraph
  *   6. sightline     L-1's cull — MOVES AND DROPS THINGS
  *   7. coverage      D-4 — closes the gaps the cull opened
  *   8. band mix      Z-3 — fixes the bands the cull moved
@@ -35,6 +35,32 @@
  * runs is indistinguishable from a compliant generator at the assertion
  * level, and a repair that overshoots satisfies every bound while being
  * wrong — so each stage says how much it had to do.
+ *
+ * STEP 5 IS NOT ON THE SHIPPED PAGE, AND THAT IS A DECISION RATHER THAN A
+ * DEFERRAL. This file is the reference pipeline and the comparison suites
+ * run it, but `demos/racetrack/main.ts` does not: the page omits
+ * `placements` and the lap level's graph decides the list, and
+ * `repairLandmarks` — L-4 — HAS NO GRAPH STAGE and is not going to get
+ * one. Every other rule in the list above does; L-4 alone is missing.
+ *
+ * IT IS MISSING BECAUSE PORTING IT WOULD MAKE THE PICTURE WORSE, measured
+ * before it was decided. L-4's actual guarantee is stretch coverage —
+ * every tenth of the lap holds an asset that appears nowhere else on it —
+ * and the only thing the graph path would need from it is `mixPinned`'s
+ * landmark half, protecting those assets from Z-3's redraw. Over six
+ * seeds, against a two-pass reconstruction of the reference's full 13-id
+ * pin set, the covered-stretch count is IDENTICAL on seeds 1-5 (10, 10,
+ * 9, 10, 10) and the reserved-only lap is strictly BETTER on seed 6, 10
+ * against 9. Pinning costs a donor and a draw — a pinned id leaves both
+ * the quota's eligible set and the redraw pool — so withholding ten more
+ * assets from a ~226-asset pool pushes the mix onto more-repeated
+ * replacements, and that destroys uniqueness elsewhere faster than the
+ * pin preserves it here. The reference's pin is also answering a
+ * situation the graph does not have: there, L-4 runs again next round and
+ * restores what the mix broke, so the pin is one half of a fight. In the
+ * graph there is no second half, and a purely defensive pin is not worth
+ * its cost. `main.ts` carries the same argument at the call site; this is
+ * the copy a reader of the RULE LIST will reach first.
  */
 import {
   type AssetPlacement,

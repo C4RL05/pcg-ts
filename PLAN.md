@@ -35,9 +35,25 @@ existed, so the discipline is to let the consumer specify the mechanism
 rather than guess at it. Each entry carries the analysis, because
 re-deriving it is the expensive part.
 
-### Killing the racetrack's TypeScript prelude: four library gaps, scoped 2026-08-25
+A ~~struck~~ heading here means the entry SHIPPED and is no longer
+waiting for anything. Its body stays because the analysis under it is
+what the outcome tested — several of these scored badly, and a survey
+that guessed wrong is worth more to the next survey than a deleted one.
 
-`demos/racetrack/levels.ts` records the honest limit of the streamed
+### ~~Killing the racetrack's TypeScript prelude: four library gaps~~ — DONE 2026-08-27
+
+**THE PRELUDE IS GONE.** `demos/racetrack/main.ts` cooks
+`cookReserveMarkers` and the road, and nothing else: `placements` is
+omitted, the lap level decides the list, and the panel reads the level's
+outputs. See "The page has no prelude, 2026-08-27" and "What verification
+found after the prelude went, 2026-08-27" below for what shipped and what
+an independent pass then found in it. Kept here rather than deleted
+because the survey below is what the outcome tested, and it scored badly
+enough to be worth remembering: three of its four gaps were wrong, and the
+thing that actually blocked the page in the end (`densityScale` having
+nowhere to go on `DressGraphInput`) is not in the list at all.
+
+`demos/racetrack/levels.ts` recorded the honest limit of the streamed
 racetrack: its graph is BUILT from a cooked `Lap`, so the World cannot be
 constructed until the road has cooked and the placement list is decided. A
 kilometre of track pays that whole rule pass at load instead of streaming
@@ -177,10 +193,20 @@ already what `placementCloudInTrackFrame` and `poseLibrary` do for the
 five ported stages, and it is the pattern the rest would follow: the kit
 is 229 assets x ~16 numeric columns, which is a small cloud.
 
-### The station process as a graph -- the shape the three probes imply, 2026-08-25
+### ~~The station process as a graph -- the shape the three probes imply~~ — BUILT 2026-08-25
 
-Not built. Written down because it FOLLOWS from the corrected gaps above
-and would otherwise be re-derived from scratch. `makeStationsDetailed`
+**It is `stationGraph.ts`**, and `addLapPlacements` calls it, which is how
+the entry above came to be struck too. "The graph and TypeScript station
+processes, measured side by side, 2026-08-25" records what the built one
+agreed with and what it could not: the port is distributionally equal and
+NOT bit-identical, deliberately, for the reason "The station port cannot
+be bit-identical, and why that is the design, 2026-08-25" gives. Kept
+because the over-generate-then-cut pattern below is the shape three later
+stages took as well, and it is cheaper to read here than to re-derive.
+
+Written down before building because it FOLLOWED from the corrected gaps
+above and would otherwise have been re-derived from scratch.
+`makeStationsDetailed`
 (`demos/racetrack/stations.ts:180-225`) is Neyman-Scott: supers uniform on
 the lap, clusters gaussian about each super, instances gaussian about a
 cluster drawn uniformly WITH REPLACEMENT, plus a uniform background
@@ -803,6 +829,10 @@ wrong about its own shape is worth being able to read back:
   producer — the exact trap this entry fell into the first time.
   `shared/assets.ts` now exports `PLACEHOLDER_ASSET_IDS`, so the compare
   is a line of shell today; a format can wait for a second consumer.
+  RE-CONFIRMED 2026-08-27, and the check is cheap enough to repeat: the
+  string `--against` appears in this file and NOWHERE ELSE in the
+  repository — not in `src/cli`, not in a test, not in a script. There is
+  still exactly one consumer and it is this paragraph. Do not build it.
 
 ### Release state, corrected 2026-08-17
 
