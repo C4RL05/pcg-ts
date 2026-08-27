@@ -3186,7 +3186,7 @@ function assemble(input: DressGraphInput): { graph: Graph } {
     coverPool.map((a) => a.instances),
     "l6tile",
   );
-  const pieces = writeCoverPlacements(g, tiled, mixPoseIds(lib), "l6place");
+  const pieces = writeCoverPlacements(g, tiled, mixPoseIds(lib), placements.length, "l6place");
   g.connect(coverPosesIn, "out", pieces.poses, "source");
   // The frame, on the pieces, exactly as the placement list got it: they
   // arrive holding a station and nothing about the world, which is the
@@ -3202,16 +3202,6 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   g.connect(repair, "carry", merged, "in");
   g.connect(placedPieces, "out", merged, "in");
 
-  // THE NUMBERING IS REDONE OVER THE WHOLE LIST. `PLACEMENT.id` is a
-  // position in the placement list and the list has just changed, so a
-  // piece carrying -1 and a placement carrying its old index are both
-  // wrong about a list that now holds them together.
-  const renumbered = g.add(
-    setAttribute,
-    { name: PLACEMENT.id, tupleSize: 1, value: index() },
-    "l6renumber",
-  );
-  g.connect(merged, "out", renumbered, "in");
 
   // A SECOND BODY, NOT THE SAME ONE TWICE. `repeatUntilNode` injects its
   // portal nodes INTO the graph it is handed, so wrapping one body twice
@@ -3227,7 +3217,7 @@ function assemble(input: DressGraphInput): { graph: Graph } {
     { maxRounds: MAX_ROUNDS, settleAttr: SETTLE_ATTR },
     "repairWithCover",
   );
-  g.connect(renumbered, "out", second, "carry");
+  g.connect(merged, "out", second, "carry");
   g.connect(framesIn, "out", second, "sight");
   g.connect(mixAssetsIn, "out", second, "mixAssets");
   g.connect(mixPosesIn, "out", second, "mixPoses");
@@ -3443,6 +3433,10 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
   const placed = requireGeo(out[DRESS_OUTPUTS.placed], DRESS_OUTPUTS.placed);
   const culled = requireGeo(out[DRESS_OUTPUTS.culled], DRESS_OUTPUTS.culled);
   const placements = requireGeo(out[DRESS_OUTPUTS.placements], DRESS_OUTPUTS.placements);
+  const placementsFirst = requireGeo(
+    out[DRESS_OUTPUTS.placementsFirst],
+    DRESS_OUTPUTS.placementsFirst,
+  );
   const coverage = requireGeo(out[DRESS_OUTPUTS.coverage], DRESS_OUTPUTS.coverage);
 
   const lap = input.lap;
@@ -3497,14 +3491,18 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
     hits,
     share: arcW / lap.lengthW,
     pushed,
-    dropped: input.placements.length - placements.pointCount,
+    // AGAINST THE PASS THAT ONLY EVER SHRANK. This measured the FINAL
+    // list until L-6 was wired in, and the final list has enclosure added
+    // to it -- so the count came out NEGATIVE, -11 to -16 on a bare lap,
+    // and the documented invariant below (`pushed + dropped` is
+    // `cullSightlines`' blocking count) quietly stopped holding. The cull
+    // is what drops, the first pass is where it dropped from, and no
+    // arithmetic over a list that grew can say how much of it went.
+    dropped: input.placements.length - placementsFirst.pointCount,
     // BOTH PASSES, SUMMED, because that is what the cook actually spent.
     // The two are published apart so a caller can tell which half a lap's
     // cost came from; a stat line wants the total.
-    placementsFirst: requireGeo(
-      out[DRESS_OUTPUTS.placementsFirst],
-      DRESS_OUTPUTS.placementsFirst,
-    ),
+    placementsFirst,
     rounds:
       requireNumber(out[DRESS_OUTPUTS.roundsFirst], DRESS_OUTPUTS.roundsFirst) +
       requireNumber(out[DRESS_OUTPUTS.rounds], DRESS_OUTPUTS.rounds),
@@ -3565,12 +3563,21 @@ function writeCoverPlacements(
   g: Graph,
   tiles: NodeHandle,
   poseIds: readonly string[],
+  /** How many placements the graph was handed -- see `PLACEMENT.id` below. */
+  inputCount: number,
   tag: string,
 ): { readonly tail: NodeHandle; readonly poses: NodeHandle } {
   // The raw draw, then the asset's own pose list indexed by it. This is
   // `poseFor`'s arithmetic -- `ids[k % ids.length]` -- with the modulo
   // written out, and it is the same shape Z-3's redraw uses to give a
   // replacement a pose from a different asset's list.
+  //
+  // `floor(u * 1024) % n` IS BIASED WHENEVER n DOES NOT DIVIDE 1024, and
+  // it is kept because it is the REFERENCE's bias rather than one
+  // introduced here: `coverPlacements` draws `floor(rand * 1024)` into
+  // `p.pose` and `poseFor` then answers `ids[p.pose % ids.length]`. Drawing
+  // `floor(u * n)` would be uniform and would be a different rule. Inert on
+  // the shipped kit, where every cover candidate has exactly one pose.
   const drawn = g.add(
     setAttribute,
     {
@@ -3587,13 +3594,25 @@ function writeCoverPlacements(
     {
       name: SCRATCH_POSE,
       tupleSize: 1,
-      // A candidate the kit recorded no pose for indexes its own offset,
-      // which is the next asset's first row -- so the count is floored at
-      // one and the pose that comes back is refused downstream by name
-      // rather than by reaching off the end of the table.
-      value: add(
-        attribute(COVER_ASSET.poseOff),
-        mod(attribute(SCRATCH_POSE), max(1, attribute(COVER_ASSET.poseCount))),
+      // A CANDIDATE THE KIT RECORDED NO POSE FOR IS SENT TO ROW -1, not to
+      // its own offset. The first draft floored the count at one and let
+      // the modulo produce 0, which indexes `poseOff` exactly -- the NEXT
+      // candidate's first pose, a real pose id belonging to a different
+      // asset, drawn at this one's extents. The comment claimed it was
+      // "refused downstream by name" and nothing refused it. Unreachable on
+      // the shipped kit, where both candidates have one pose each, and a
+      // silent wrong answer on any kit where it is not.
+      //
+      // Row -1 misses the gather under `clamp` and leaves `poseId` at the
+      // table's own -1 default, which `poseAssetId` turns into
+      // `cover:pose:-1` -- a name no asset map has, so it fails loudly.
+      value: select(
+        le(attribute(COVER_ASSET.poseCount), 0),
+        -1,
+        add(
+          attribute(COVER_ASSET.poseOff),
+          mod(attribute(SCRATCH_POSE), max(1, attribute(COVER_ASSET.poseCount))),
+        ),
       ),
     },
     `${tag}_poseRow`,
@@ -3622,9 +3641,25 @@ function writeCoverPlacements(
     [PLACEMENT.locked, 0],
     [PLACEMENT.mixPinned, 0],
     [PLACEMENT.mixTried, 0],
-    // The id is rewritten after the merge, where the list is whole; until
-    // then a piece has no place in a numbering that does not include it.
-    [PLACEMENT.id, -1],
+    // `PLACEMENT.poseU` IS DELIBERATELY NOT HERE, and it is the one column
+    // a piece lacks that the body reads. It arrives 0 through the merge's
+    // default and is consumed only where `mixTarget >= 0`, which cover
+    // never reaches -- the mix's `include` excludes it. So it is inert
+    // today and it is the single thing to write first if cover is ever
+    // made mix-eligible.
+    // AN ID PAST THE END OF THE INPUT LIST, and the first draft renumbered
+    // the MERGED list instead, which was a real defect. `PLACEMENT.id` is
+    // "where this placement sat in the list the graph was handed" -- that
+    // is what the cull's own reporting subtracts against -- and rewriting
+    // it after a pass that has already dropped members makes every
+    // surviving placement name the wrong entry. Measured on seed 5, 337 of
+    // the survivors pointed at the wrong input row, the worst 9.4W away,
+    // and it happened on laps where L-6 added nothing at all.
+    //
+    // So the originals keep the numbers they came in with and a piece gets
+    // the next number after the list, which is unique, ordered, and
+    // truthful about a piece having no row in a list it was not in.
+    [PLACEMENT.id, add(inputCount, index())],
   ];
   for (const [name, value] of writes) {
     const n = g.add(setAttribute, { name, tupleSize: 1, value }, `${tag}_w_${name}`);
@@ -3642,6 +3677,15 @@ function writeCoverPlacements(
       values: poseIds as string[],
       // The cover half, chosen by the same expression the redraw uses --
       // `pose + 1` past the -1 row, plus the half-table offset.
+      //
+      // AND THE REDRAW IS WHAT ACTUALLY LANDS. `writeBandRedraw` re-derives
+      // this column from the pose on EVERY round, for every point, so what
+      // this write does is make the merge well-formed -- give the pieces
+      // the column the settled side has, so a piece is never nameless even
+      // for one stage -- rather than name them. Mutating it is invisible;
+      // mutating the redraw's is caught. Kept because a column filled by a
+      // default is a column somebody will read before the loop one day,
+      // and stated because an untestable write looks like a defect.
       value: add(add(attribute(PLACEMENT.pose), 1), half),
     },
     `${tag}_assetId`,

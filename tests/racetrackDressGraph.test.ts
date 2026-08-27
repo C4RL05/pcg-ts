@@ -1282,11 +1282,45 @@ describe("racetrack dressing, as a graph", () => {
       const h = pts.require(PLACEMENT.h);
       const tall = pts.require(PLACEMENT.sizeTall);
       const station = pts.require(PLACEMENT.station);
+      const P = pts.require("P");
+      const assetId = pts.require(PLACEMENT.asset);
+      const frameAt = frameLookup(lap);
+      const seen = new Set<number>();
       let pieces = 0;
       let lowestBase = Infinity;
       for (let i = 0; i < pts.count; i++) {
         if (cover.get(i) <= 0) continue;
         pieces++;
+        seen.add(Math.round(station.get(i) * 1e3));
+
+        // IT IS WHERE ITS STATION SAYS, which is the assertion that would
+        // have caught the frame never being sampled at all: without it the
+        // pieces sit at the world origin, and every other check here —
+        // count, base height, share, convergence — passes with a tunnel in
+        // the middle of nowhere. Injected and measured: 11 of 11 pieces at
+        // (0,0,0), nine assertions green.
+        const f = frameAt(station.get(i), 0, 0);
+        const away = Math.hypot(
+          P.get(i, 0) - f.p[0],
+          P.get(i, 1) - f.p[1],
+          P.get(i, 2) - f.p[2],
+        );
+        // A piece is offset laterally and lifted, so it is not ON the
+        // centreline — the bound is the reach those two allow, in world
+        // units, and a piece at the origin is a whole lap away from it.
+        expect(away, `seed ${seed}: a cover piece is nowhere near its station`).toBeLessThan(
+          (ENCLOSE.coverW + CORRIDOR.ceilingW + 4) * lap.halfWidth,
+        );
+
+        // AND IT IS NAMED AS COVER. `poseAssetId` puts cover in its own
+        // half of the id table, and dropping the offset spawns every
+        // tunnel under the SCENERY id for the same pose — a name that
+        // exists, so nothing throws, and the asset map hands back the
+        // wrong mesh. Nothing else in this suite reads the id at all.
+        expect(
+          assetId.getString(i),
+          `seed ${seed}: a cover piece is not named as cover`,
+        ).toMatch(/^cover:pose:/);
         lowestBase = Math.min(lowestBase, h.get(i) - tall.get(i) / 2);
         // A station off the lap would mean the modulo was wrong and the
         // piece is nowhere — which the lift would then resolve by wrapping
@@ -1297,6 +1331,15 @@ describe("racetrack dressing, as a graph", () => {
         );
       }
       totalCover += pieces;
+
+      // THE PIECES ARE SPREAD ALONG THEIR RUNS, not stacked at one
+      // station. A tiler that emitted every tile at its run's start
+      // collapses sixteen pieces into a single box and passes every count,
+      // height and share check above — measured, on seed 2, as a 13m cube.
+      expect(
+        seen.size,
+        `seed ${seed}: the cover pieces share too few stations to be tiled`,
+      ).toBeGreaterThan(1);
 
       // IT FIRED, and the list is LONGER than the pass that had no
       // enclosure in it. This is the assertion the merge cannot survive

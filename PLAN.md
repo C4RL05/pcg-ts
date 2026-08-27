@@ -3055,3 +3055,46 @@ more, but the rays count a frame only when three of six hit and the flare
 deliberately lifts the roof over the first and last 2.5W of every run, so
 a 10W tunnel measures about 5W in its middle. Requiring 10W failed at 7.3W
 against a rule that was working correctly.
+
+### What verification found in the assembly, 2026-08-27
+
+**A regression I introduced, and it fired where L-6 does nothing.**
+Renumbering `PLACEMENT.id` over the MERGED list destroyed what that column
+means -- "where this placement sat in the list the graph was handed",
+which is what the cull's own reporting subtracts against. It ran after a
+pass that had already dropped members, so on seed 5, 337 of the survivors
+named the wrong input row, the worst 9.4W away; seed 7, 21 rows; seed 8,
+330. Seeds 1-4 drop nothing in the first pass, so the ids coincidentally
+lined up and every test passed. It also silently corrupted the frame
+suite's own `dressing.placements[idOf.get(i)]` lookup, whose
+`toBeDefined()` guard cannot catch an off-by-k. The originals keep their
+numbers now and a piece takes the next number past the list.
+
+**`GraphDressing.dropped` had gone negative** -- -11 to -16 on a bare lap
+-- because it measured a list that had grown. The invariant it documents
+(`pushed + dropped` is the cull's blocking count) had quietly stopped
+holding and nothing asserted it. Measured against the first pass now.
+
+**Three of four mutants passed the new test.** Dropping the frame sample
+put every piece at the world origin -- 11 of 11, 16 of 16 -- and all nine
+assertions stayed green, because `share` reads the ordinary dressing's own
+cover and the `> refShare * 0.5` bound is loose. Emitting every tile at
+its run's start collapsed sixteen pieces into a 13m box and passed.
+Pinning columns to 1 passed here (the enclosure suite catches it). Each
+now has an assertion sized against what it must catch, and each was
+re-injected to prove it fails.
+
+**Two latent hazards, named rather than fixed.** L-1 has NO cover
+exemption, so a blocking piece would be pushed up to 6.5W along `across` --
+the same hole in the roof Z-1 exempts cover to avoid -- and nothing
+reaches it only because a tunnel's base sits above the eye. And
+`PLACEMENT.poseU` is the one column a piece lacks that the body reads; it
+is inert because the mix excludes cover, and it is the first thing to
+write if that ever changes.
+
+**The second repair pass has never paid out.** Over 16 seeds it moved
+nothing, dropped nothing, and `final === first + planned` exactly -- at a
+cost of 3 to 4 rounds a lap. It is insurance against a tunnel blocking a
+sightline, which the measurements say does not happen on this kit. Worth
+knowing before anyone optimises it away: the argument for it is
+correctness on a kit whose cover sits lower, not a measured effect here.
