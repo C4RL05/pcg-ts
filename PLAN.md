@@ -495,7 +495,7 @@ commits changed `demos/road` or racetrack's `graph.ts`, `lap.ts` or
 `spline.ts`; the divergence predates them. It is recorded now because it
 lived only in a CLAUDE.md sentence that had quietly become false.
 
-### Two arc lengths, one parameter: `pathPointAt` on a resampled path, 2026-08-19
+### ~~Two arc lengths, one parameter: `pathPointAt` on a resampled path~~ — FIXED 2026-08-27
 
 Found while building `tests/trackDressing.test.ts`, and it cost most of a
 debugging session because both wrong answers look right.
@@ -3782,3 +3782,57 @@ measured above. `mixBandPools` is a build-time literal by design. The two
 open items are a library gap (`pathResample`'s two arc lengths, above) and a
 design question (`inCorridor`'s lateral centre-vs-extent, above), and
 neither is a rule waiting to be ported.
+
+### The two arc lengths are one ruler now, and it was hiding a seam, 2026-08-27
+
+`pathResample` publishes what it EMITS: `resampledLengthAttr` (the chord sum
+of the polyline through the samples, closing chord included) and
+`sampleArcAttr` (each sample's own chord arc, in world units). Both are
+additive, default `""`, and write nothing unset. The racetrack takes both:
+the frames' `lapLen` IS `lap.lengthW` and their `stationW` IS
+`lap.s / halfWidth`, verified at 2.6e-5 W — one f32 ulp of a column holding
+347.
+
+**THE 0.0054% WAS NEVER THE INTERESTING PART.** It is invisible: the demo's
+capture is pixel-stable across the change and every stat is identical — 352
+placements, 1.01/W, enclosure 4.8% -> 8.3%, 19 corners. The populations
+could not move either, and not merely by luck: every station stage runs on
+`lapAsPath`, which already wrote the chord length, and `dressLap` sizes in
+TypeScript off `lap.lengthW`. Neither ever read the frames' `lapLen`.
+
+**WHAT IT WAS ACTUALLY HIDING IS A SEAM.** L-6's budget takes each frame's
+own arc as `next.station - station` and wraps the last one by adding
+`lap.lengthW` — a CHORD length added to a difference of CURVE stations. The
+frame that crosses the start line therefore reported **0.3668 W against a
+true 0.3854 W, 4.8% out on seed 1** and 5.2-6.3% on seeds 2-4. Every lap,
+one frame, for as long as the two rulers coexisted.
+
+**AND THE TOTAL WAS ALWAYS RIGHT, WHICH IS WHY NOTHING CAUGHT IT.** The ring
+difference telescopes to zero and the wrap adds `lapW` exactly once, so the
+sum of the per-frame arcs equals the lap length under ANY station column.
+A total-only check has zero diagnostic power here. The per-frame comparison
+is what finds it, and that is now the shape of the check.
+
+**`curveU * lapLen` WAS TWO RULERS IN ONE EXPRESSION**, and scaling `curveU`
+by the chord length — the obvious smaller fix — would have corrected the
+total and left every station between the ends on the curve's
+parameterization. The two agree on straights and diverge wherever the road
+bends, which is exactly where a corner rule reads them. The per-sample arc is
+the ruler itself, so the demo takes that.
+
+**`lapAsPath` STAYS, and the entry above was wrong to say it would go.**
+`cookCorners` takes a bare `Lap` and `tests/racetrackCornerGraph.test.ts`
+builds circle and stadium laps out of raw arrays with no cook behind them —
+there are no frames to hand it. What the fix removed is the DISAGREEMENT
+between the two paths, not the reconstruction. The dress graph could now
+scatter on `framesIn` directly; it buys one `dataInput` and costs naming the
+frames' sample arc `arcW`, which is live scratch in three modules and one
+rename from meaning two things on one cloud. Not taken.
+
+**Still standing, for whoever wants it.** `splineSample`
+(`src/nodes/samplers.ts`) has the identical curve-versus-chord gap and
+reports no length at all, so the second offender is untouched. And
+`pointScatterOnPath`'s description used to teach the bug outright — telling
+readers to size `count` from `lengthAttr` "which writes each path's true arc
+length", in the same paragraph that says its own arc coordinate is the chord
+one. That is corrected in the same commit as the reports.

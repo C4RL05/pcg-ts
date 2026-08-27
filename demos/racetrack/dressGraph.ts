@@ -4429,21 +4429,30 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   //
   // The frames ARE the path -- the road graph's own output, which `readLap`
   // reads the lap out of -- so scattering on them looked like one fewer
-  // reconstruction. It is not the same path in the one respect the stations
-  // care about: `lapLen`. `pathResample` reports the length of the CURVE it
-  // sampled; `lap.s` and `createPolyline` measure the POLYLINE through
-  // those samples, which is shorter by the chord-versus-arc deficit --
-  // 3121.533 against 3121.365 on seed 1, 0.0054%. `lapAsPath` writes the
-  // chord length, and the chord length is what every rule in this demo
-  // speaks in, because `lap.lengthW` is that number.
+  // reconstruction. It was not the same path in the one respect the
+  // stations care about: `lapLen`. `pathResample` reported the length of
+  // the CURVE it sampled while `lap.s` and `createPolyline` measure the
+  // POLYLINE through those samples, shorter by the chord-versus-arc deficit
+  // -- 3121.533 against 3121.365 on seed 1, 0.0054%. That difference was
+  // not in the noise: `lapLen` decides the station POPULATIONS, so a length
+  // 0.0054% out re-lays the whole scatter, and every station came out
+  // 0.018585W from where `cookLapPlacements` puts it.
   //
-  // THE DIFFERENCE IS NOT IN THE NOISE. `lapLen` decides the station
-  // POPULATIONS -- `round(superRate * lapW)` -- so a length 0.0054% out
-  // re-lays the whole scatter, and every station on seed 1 came out
-  // 0.018585W from where `cookLapPlacements` puts it, which is 0.1673 world
-  // units, which is the length difference exactly. Measured by the test
-  // below, which is why it compares the two lists rather than merely
-  // checking that one exists.
+  // THE LENGTHS AGREE NOW, AND THE REASON IS A LIBRARY FIX RATHER THAN A
+  // WORKAROUND. `pathResample` publishes `resampledLengthAttr` and
+  // `sampleArcAttr` -- the chord length of the polyline it emits, and each
+  // sample's own arc along it -- and `graph.ts` takes both, so the frames'
+  // `lapLen` IS `lap.lengthW` and their `stationW` IS `lap.s / halfWidth`.
+  //
+  // AND `lapAsPath` STAYS ANYWAY, WHICH IS WORTH SAYING SO NOBODY REMOVES
+  // IT EXPECTING THE ABOVE TO COVER IT. `cookCorners` takes a bare `Lap`,
+  // and `tests/racetrackCornerGraph.test.ts` builds circle and stadium laps
+  // out of raw arrays with no cook behind them -- there are no frames to
+  // hand it. What the fix removed is the DISAGREEMENT, not the
+  // reconstruction: this stage could now scatter on `framesIn` directly,
+  // and the only thing it would buy is one `dataInput`, at the price of
+  // naming the frames' sample arc `arcW` -- which is live scratch in three
+  // modules and one rename from meaning two things on one cloud.
   //
   // AND A PATH `dataInput` IS NOT WHAT THIS PORT IS TRYING TO REMOVE.
   // `graph.ts` opens by saying the spline arrives as DATA; a lap the graph

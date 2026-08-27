@@ -196,10 +196,16 @@ const ACROSS = normalize(cross(attribute("tangent", 3), vec(0, 1, 0)));
  * there by hand is how the two copies drift, so the derivation lives
  * here and every path that needs the frame calls this.
  *
- * The input must carry `curveU` and `tangent` (every `pathResample`
- * output does) and a PRIMITIVE `lapLen` — which is carried across a
- * resample in both directions, so one measurement at the top of the graph
- * reaches every path below it.
+ * The input must carry `sampleArc` and `tangent`, and a PRIMITIVE
+ * `lapLen` — which is carried across a resample in both directions, so one
+ * measurement at the top of the graph reaches every path below it.
+ *
+ * `sampleArc` AND NOT `curveU`, which every `pathResample` output does
+ * carry and which this used to name. A fraction of the CURVE is not a
+ * position on the polyline that was emitted, and the station is the one
+ * number every rule in this demo agrees on — see the ruler below. It is an
+ * opt-in report (`sampleArcAttr`), so a caller who forgets it gets a
+ * missing-attribute refusal rather than a lap measured on the wrong thing.
  */
 function writeTrackFrame(g: Graph, path: NodeHandle, halfWidth: number, tag: string): NodeHandle {
   // The length report lands on the PRIMITIVE domain, being a fact about a
@@ -218,17 +224,32 @@ function writeTrackFrame(g: Graph, path: NodeHandle, halfWidth: number, tag: str
   );
   g.connect(lapLen, "out", halfW, "in");
 
-  // Arc length in half-widths, from the MEASURED lap length rather than
-  // from the frame count: `curveU` is the fraction of the path a sample
-  // sits at and `lapLen` is what that path actually measures, so the
-  // product is a distance whatever the resampling was asked for. Turning
-  // the frame count no longer moves any station.
+  // Arc length in half-widths, off the sample's OWN chord arc.
+  //
+  // THIS USED TO BE `curveU * lapLen` AND THAT WAS TWO RULERS IN ONE
+  // EXPRESSION. `curveU` is the fraction of the CURVE a sample sits at and
+  // the geometry is the polyline through the samples; the two
+  // parameterizations agree on straights and diverge wherever the road
+  // bends, so the product was a distance along a curve this cloud does not
+  // describe. Measured against `lap.s` -- the chord ruler every rule in
+  // this demo actually speaks in -- it drifted to 0.0186 to 0.0242 W by the
+  // seam on seeds 1 to 4, zero at the start line and accruing at the bends.
+  //
+  // WHAT IT COST WAS NOT THE DRIFT, WHICH IS INVISIBLE, BUT A SEAM. L-6's
+  // budget takes each frame's own arc as `next.station - station` and wraps
+  // the last one by adding `lap.lengthW` -- a CHORD length added to a
+  // difference of CURVE stations. One frame a lap came out 0.3668 W against
+  // a true 0.3854 W, a 4.8% error on the frame that crosses the start line,
+  // every lap. One ruler removes it rather than correcting it.
+  //
+  // Turning the frame count still moves no station: the arc is measured,
+  // not counted.
   const station = g.add(
     setAttribute,
     {
       name: TRACK_FRAME.station,
       tupleSize: 1,
-      value: mul(attribute("curveU"), div(attribute("lapLen"), halfWidth)),
+      value: div(attribute("sampleArc"), halfWidth),
     },
     `${tag}_stationW`,
   );
@@ -400,13 +421,33 @@ export function buildRoadGraph(opts: RoadOptions): Graph {
     makeGeometryItem(createPolyline(spline.positions, { closed: spline.closed })),
   ]);
 
-  // Both REPORTS are asked for, and they are what makes this a tool
-  // rather than a rendering: `lapLen` is how long the lap actually is and
-  // `stepLen` is how far apart the frames landed. Anything sized in units
-  // of the sampling reads those instead of restating the count.
+  // FOUR REPORTS, AND WHICH LENGTH IS CALLED `lapLen` IS THE WHOLE POINT.
+  //
+  // `pathResample` measures `curveU` and `lengthAttr` on the CURVE it was
+  // handed while emitting the polyline THROUGH its samples, which is
+  // shorter -- a resample cuts corners. Every rule in this demo speaks in
+  // the polyline's length, because `lap.lengthW` is what `readLap` sums off
+  // the frames' own positions. So the chord length takes the name
+  // everything reads and the curve's keeps a name of its own, which is not
+  // dead: `curveU` is a fraction OF THAT CURVE, and a reader who meets the
+  // two together should be able to see which ruler each belongs to.
+  //
+  // `sampleArc` IS THE OTHER HALF AND IT IS THE ONE THAT MATTERS. Scaling
+  // `curveU` by the chord length would fix the TOTAL and leave every
+  // station in between on the curve's parameterization -- the two disagree
+  // non-uniformly, agreeing on straights and diverging wherever the road
+  // bends, which is exactly where a corner rule reads them. The per-sample
+  // chord arc is the ruler itself.
   const centre = g.add(
     pathResample,
-    { mode: "count", count: frameCount, lengthAttr: "lapLen", stepAttr: "stepLen" },
+    {
+      mode: "count",
+      count: frameCount,
+      lengthAttr: "curveLen",
+      resampledLengthAttr: "lapLen",
+      sampleArcAttr: "sampleArc",
+      stepAttr: "stepLen",
+    },
     "centre",
   );
   g.connect(splineIn, "out", centre, "in");
