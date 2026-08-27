@@ -37,6 +37,7 @@ import type { PlaceableAsset } from "../demos/racetrack/assets.js";
 import { dressLap, reserveFor } from "../demos/racetrack/dress.js";
 import { resolveCorridor } from "../demos/racetrack/zones.js";
 import { cookLapPlacements } from "../demos/racetrack/assetGraph.js";
+import { rand } from "../demos/racetrack/rand.js";
 import { shippedVocabulary } from "../demos/racetrack/vocabulary.js";
 import { lapFor } from "./support/lap.js";
 
@@ -402,4 +403,110 @@ describe("corner bookkeeping topology", () => {
         shapes.map((s) => `${s.corners}c/${s.tight}t`).join(", "),
     );
   }, 120000);
+});
+
+/**
+ * THE ANSWER IS A FACT ABOUT THE LAP, NOT ABOUT HOW THE CLOUD WAS STORED.
+ *
+ * WHY THIS EXISTS. `placeCornerLanguage` scans its list with a strict `>`,
+ * so it keeps the FIRST occurrence of the maximum count -- in the order
+ * that list is held, which is STATION order. The graph used to rank by row
+ * index, which says the same thing only while the cloud happens to be
+ * sorted. The dress graph's is not: `pointScatterOnPath` lays stations down
+ * in an order unrelated to arc position, and the placements reach the
+ * bookkeeping in it.
+ *
+ * WHAT THAT COST, MEASURED BEFORE THE FIX. Shuffling one lap's placements
+ * left the same corners claiming the same NUMBER of victims but a different
+ * SET -- two to six rows moved -- and moved L-3's displacement count as
+ * well, 34 or 35 on seed 3, because a different pick leaves a different
+ * candidate in the next window and a window that runs out stops early. Four
+ * of six shuffles gave 34 where the station-ordered reference gives 35.
+ *
+ * So this is not a tidiness property. Until it held, the graph's answer and
+ * the rule's answer differed by a placement on a real lap, and neither was
+ * wrong -- they were answering with different orders.
+ */
+describe("cornerBookkeeping: the order of the list does not decide the answer", () => {
+  it("gives the same claims and displacements however the list is ordered", async () => {
+    let rowsCompared = 0;
+
+    for (const seed of [1, 2, 3, 4]) {
+      const { placements, corners, lapW } = await lapPlacements(seed);
+      const straight = await cookCornerBookkeeping({ placements, corners, lapW });
+
+      // Fisher-Yates on the demo's own stream, so the shuffle is a fixture.
+      const perm = placements.map((_, i) => i);
+      for (let i = perm.length - 1; i > 0; i--) {
+        const j = Math.floor(rand(seed, i, 0x9e11) * (i + 1));
+        [perm[i], perm[j]] = [perm[j], perm[i]];
+      }
+      // THE PREMISE, ASSERTED. A shuffle that left the list alone would make
+      // every comparison below hold for a stage that reads row order.
+      const moved = perm.filter((v, i) => v !== i).length;
+      expect(
+        moved,
+        `seed ${seed}: the shuffle left ${perm.length - moved} of ${perm.length} rows in place`,
+      ).toBeGreaterThan(perm.length * 0.9);
+
+      const jumbled = await cookCornerBookkeeping({
+        placements: perm.map((k) => placements[k]),
+        corners,
+        lapW,
+      });
+
+      // MATCHED THROUGH THE PERMUTATION. Row i of the shuffled run is row
+      // `perm[i]` of the straight one, so these are the same placements
+      // asked the same question in a different order.
+      for (let i = 0; i < perm.length; i++) {
+        expect(
+          jumbled.claimedBy[i],
+          `seed ${seed}: placement ${perm[i]} is claimed by a different corner`,
+        ).toBe(straight.claimedBy[perm[i]]);
+        expect(
+          jumbled.displacedBy[i],
+          `seed ${seed}: placement ${perm[i]} is displaced by a different ruler`,
+        ).toBe(straight.displacedBy[perm[i]]);
+        rowsCompared++;
+      }
+
+      // AND THE RULE FIRED, so the agreement is not two empty answers.
+      expect(
+        straight.claimedBy.filter((v) => v >= 0).length,
+        `seed ${seed}: nothing was claimed`,
+      ).toBeGreaterThan(3);
+      expect(
+        straight.displacedBy.filter((v) => v >= 0).length,
+        `seed ${seed}: nothing was displaced`,
+      ).toBeGreaterThan(3);
+    }
+
+    // eslint-disable-next-line no-console
+    console.log(`cornerBookkeeping order invariance: ${rowsCompared} placements matched`);
+  }, 120000);
+});
+
+/**
+ * TWO CONSTANTS CUT THE SAME SET OF CORNERS, and nothing said so.
+ *
+ * `cornerGraph` filters tight corners with `SEVERITY.tightW` and
+ * `placeCornerLanguage` filters them with `BRAKING.tighterThanW`. They are
+ * both 8 and they are declared in different files, so the agreement is a
+ * coincidence that has held rather than a fact anything checks.
+ *
+ * WHAT WOULD HAPPEN IF THEY DIVERGED is worse than a count being off:
+ * `VICTIM.displacedBy` holds an index into the TIGHT corner list, so the
+ * two sides would number that list differently and a ruler's victim would
+ * be attributed to a different corner -- with both sides still running,
+ * both answers still plausible, and every existing comparison in this file
+ * comparing two lists that no longer mean the same thing.
+ */
+describe("cornerBookkeeping: the two tight-corner thresholds", () => {
+  it("are the same number", () => {
+    expect(
+      SEVERITY.tightW,
+      "cornerGraph and legibility disagree about which corners are tight, " +
+        "so `displacedBy` indexes two different lists",
+    ).toBe(BRAKING.tighterThanW);
+  });
 });

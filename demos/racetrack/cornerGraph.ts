@@ -1345,6 +1345,8 @@ const VICTIM_SCORE = "vScore";
 const VICTIM_INDEX = "vIndex";
 const BEST_COUNT = "vBest";
 const CHOSEN_INDEX = "vChosen";
+const VICTIM_STATION = "vRankSt";
+const CHOSEN_STATION = "vChosenSt";
 
 /** The marker ord for a row of the marker kit: 0 sharp, 1 open, 2 brake. */
 function markerOrdOf(row: number): number {
@@ -1525,12 +1527,64 @@ function addVictimSearch(
     BEST_COUNT,
     `${tag}Best`,
   );
-  const ranked = put(
+  // WHICH OF THE MAXIMA, AND THE ANSWER IS THE LOWEST STATION -- NOT THE
+  // LOWEST ROW.
+  //
+  // `placeCornerLanguage` scans its list with a strict `>`, so it keeps the
+  // FIRST occurrence of the maximum count in the order that list is held --
+  // and every caller holds it in STATION order, because `stations.ts` sorts
+  // every path into `dressLap`. That is a property of the CALLERS and not
+  // of the function: `legibility.ts` takes any `StationedPlacement[]` and
+  // says nothing about ordering anywhere. Stating it the other way round
+  // would leave the next caller free to hand it an unsorted list and get
+  // two answers from two functions that both claim to state one rule.
+  //
+  // Ranking by row index says the same thing only while the cloud happens
+  // to be sorted, which the graph's is not: `pointScatterOnPath` lays
+  // stations down in an order unrelated to arc position.
+  //
+  // AND THE DIFFERENCE IS NOT COSMETIC. Measured on seed 3 over six
+  // shuffles of one lap: the same corners claim the same NUMBER of
+  // placements but a different SET -- two to six rows move -- and L-3's
+  // displacement count itself moves, 34 or 35, because a different pick
+  // leaves a different candidate in the next window and a window that runs
+  // out stops early. So the rule's answer depended on how the cloud was
+  // stored. Ranking by the station makes it a fact about the LAP.
+  //
+  // THE ROW INDEX IS STILL THE SECOND KEY, and it earns its place: two
+  // placements at one station with the same count would both match the
+  // chosen station and both be converted, so a corner would claim two.
+  // `cookLapPlacements` refuses a station that kept two assets, which makes
+  // that unreachable through the demo -- and this function takes any list a
+  // caller hands it, so unreachable-through-one-caller is not a guarantee.
+  const rankedStation = put(
     g,
     { node: best, pin: "out" },
-    VICTIM_INDEX,
+    VICTIM_STATION,
     select(
       mul(attribute(ELIGIBLE), eq(attribute(VICTIM.count), attribute(BEST_COUNT))),
+      attribute(VICTIM.stationW),
+      NO_VICTIM,
+    ),
+    `${tag}RankSt`,
+  );
+  const bestStation = broadcastOver(
+    g,
+    { node: rankedStation, pin: "out" },
+    VICTIM_STATION,
+    "min",
+    CHOSEN_STATION,
+    `${tag}ChosenSt`,
+  );
+  const ranked = put(
+    g,
+    { node: bestStation, pin: "out" },
+    VICTIM_INDEX,
+    select(
+      mul(
+        mul(attribute(ELIGIBLE), eq(attribute(VICTIM.count), attribute(BEST_COUNT))),
+        eq(attribute(VICTIM.stationW), attribute(CHOSEN_STATION)),
+      ),
       index(),
       NO_VICTIM,
     ),
@@ -1732,16 +1786,44 @@ export function buildCornerBookkeeping(opts: {
   const g = new Graph(opts.seed ?? 1);
   const inCloud = g.add(dataInput, {}, "placements");
   g.setParam(inCloud, "items", [makeGeometryItem(bookkeepingCloud(placements))]);
+  const done = addCornerBookkeeping(g, { node: inCloud, pin: "out" }, corners, lapW, "bk");
+  g.output(done.node, done.pin, "placements");
+  return g;
+}
 
+/**
+ * L-2's convert-or-add and L-3's displacement, as stages on a cloud that
+ * already exists.
+ *
+ * SPLIT FROM {@link buildCornerBookkeeping} BECAUSE THE CLOUD CAN COME FROM
+ * TWO PLACES. That function binds a `VictimPlacement[]` with `dataInput`,
+ * which is what a suite comparing this against `placeCornerLanguage` wants:
+ * a KNOWN list, and an answer about it. `dressGraph` has no list to bind --
+ * the placements are something its own stages decided -- so it needs the
+ * same nodes over a cloud it already holds. One definition, two callers,
+ * and the graph is the same graph either way.
+ *
+ * WHAT THE CLOUD MUST CARRY is {@link VICTIM}'s three inputs --
+ * `assetOrd`, `stationW` and `t` -- plus `claimedBy` and `displacedBy`
+ * initialised to -1. {@link addBookkeepingColumns} writes all five from a
+ * placement cloud; `bookkeepingCloud` writes them from a list.
+ */
+export function addCornerBookkeeping(
+  g: Graph,
+  from: { readonly node: NodeHandle; readonly pin: string },
+  corners: readonly Corner[],
+  lapW: number,
+  pre: string,
+): { readonly node: NodeHandle; readonly pin: string } {
   // L-2 FIRST, EVERY CORNER, THEN L-3. That order is
   // `placeCornerLanguage`'s and it is load-bearing: L-3's histogram sees
   // the markers L-2 made, so a ruler pays for itself out of a lap that
   // already speaks the corner language rather than one that is about to.
-  let at: NodeHandle = inCloud;
+  let at: NodeHandle = from.node;
   // WHICH PIN `at` PUBLISHES ON, tracked rather than assumed: `repeatUntil`
-  // names its outputs after the body's exposed ones, so the loop below
-  // hands back "carry" where every other stage here hands back "out".
-  let atPin = "out";
+  // names its outputs after the body's exposed ones, so the loops below
+  // hand back "carry" where every other stage here hands back "out".
+  let atPin = from.pin;
   if (corners.length > 0) {
     // THE ROUND COUNTER STARTS AT ZERO ON EVERY PLACEMENT. It is loop
     // state kept on the point domain, for `enclosureGraph`'s reason: a
@@ -1750,11 +1832,11 @@ export function buildCornerBookkeeping(opts: {
     const zeroed = g.add(
       setAttribute,
       { name: CONVERT.round, tupleSize: 1, value: 0 },
-      "bkRound0",
+      `${pre}Round0`,
     );
-    g.connect(at, "out", zeroed, "in");
+    g.connect(at, atPin, zeroed, "in");
 
-    const cornersIn = g.add(dataInput, {}, "corners");
+    const cornersIn = g.add(dataInput, {}, `${pre}Corners`);
     g.setParam(cornersIn, "items", [makeGeometryItem(cornerCloud(corners))]);
 
     const body = buildConvertBody(lapW, corners.length);
@@ -1762,12 +1844,9 @@ export function buildCornerBookkeeping(opts: {
       repeatUntilNode(body.graph, body.inputs, body.outputs),
       // ONE ROUND PER CORNER, and the cap is a ceiling rather than the
       // mechanism: the body stops itself when the counter reaches the
-      // corner count it reads off the cloud. It is stated as the count
-      // here because that is what this caller knows; a caller whose
-      // corners arrive at cook time would state an upper bound instead,
-      // and the graph would be the same graph.
+      // corner count it reads off the cloud.
       { maxRounds: corners.length, settleAttr: CONVERT_SETTLE },
-      "bkConvert",
+      `${pre}Convert`,
     );
     g.connect(zeroed, "out", loop, "carry");
     g.connect(cornersIn, "out", loop, "corners");
@@ -1781,26 +1860,25 @@ export function buildCornerBookkeeping(opts: {
     const zeroed = g.add(
       setAttribute,
       { name: CONVERT.round, tupleSize: 1, value: 0 },
-      "bkdRound0",
+      `${pre}dRound0`,
     );
     g.connect(at, atPin, zeroed, "in");
 
-    const tightIn = g.add(dataInput, {}, "tightCorners");
+    const tightIn = g.add(dataInput, {}, `${pre}TightCorners`);
     g.setParam(tightIn, "items", [makeGeometryItem(tightCornerCloud(corners))]);
 
     const body = buildDisplaceBody(lapW);
     const loop = g.add(
       repeatUntilNode(body.graph, body.inputs, body.outputs),
       { maxRounds: tight.length * BRAKING.count, settleAttr: CONVERT_SETTLE },
-      "bkDisplace",
+      `${pre}Displace`,
     );
     g.connect(zeroed, "out", loop, "carry");
     g.connect(tightIn, "out", loop, "corners");
     at = loop;
     atPin = "carry";
   }
-  g.output(at, atPin, "placements");
-  return g;
+  return { node: at, pin: atPin };
 }
 
 /** The three lists {@link cookCornerBookkeeping} reads off the cooked cloud. */
@@ -1847,6 +1925,40 @@ const CONVERT = {
 
 /** The detail attribute the convert loop settles on. */
 export const CONVERT_SETTLE = "bkWorking";
+
+/**
+ * Everything {@link addCornerBookkeeping} leaves on the cloud it walks.
+ *
+ * THE PRODUCER STATES IT, for {@link CORNER_LANGUAGE_SCRATCH}'s reason.
+ * These loops keep their working on the POINT domain because a
+ * `repeatUntil` body cannot read a detail attribute, so a histogram, a
+ * running scan, a round counter and a per-corner row all ride the
+ * placements -- twenty-one columns of it. A caller cooking this standalone
+ * reads two of them and throws the cloud away; a caller merging the cloud
+ * into a lap has to drop the rest, and enumerating them at that end would
+ * be a second list to keep true.
+ *
+ * `VICTIM.claimedBy` AND `VICTIM.displacedBy` ARE IN IT, unlike
+ * {@link PLACED}, and that is the difference between the two lists: those
+ * two are the ANSWER, and an answer that has been applied is scratch. The
+ * caller that wants them reads them before it strips.
+ */
+export const CORNER_BOOKKEEPING_SCRATCH: readonly string[] = [
+  HIST_ONE,
+  HIST_TOTAL,
+  "vHistScan",
+  ELIGIBLE,
+  VICTIM_SCORE,
+  VICTIM_INDEX,
+  BEST_COUNT,
+  CHOSEN_INDEX,
+  VICTIM_STATION,
+  CHOSEN_STATION,
+  CONVERT_SETTLE,
+  ...Object.values(VICTIM),
+  ...Object.values(CONVERT),
+  ...Object.values(CORNER_ROW),
+];
 
 /**
  * The corners as a cloud, one point each.

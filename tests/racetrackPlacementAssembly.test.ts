@@ -53,7 +53,8 @@ import {
   type StationedPlacement,
 } from "../demos/racetrack/legibility.js";
 import { SEVERITY, cornersOf } from "../demos/racetrack/corners.js";
-import { BRAKING } from "../demos/racetrack/legibility.js";
+import { BRAKING, placeCornerLanguage } from "../demos/racetrack/legibility.js";
+import { cookCornerBookkeeping, type VictimPlacement } from "../demos/racetrack/cornerGraph.js";
 import { placementsBeforeLanguage, reserveFor } from "../demos/racetrack/dress.js";
 import { shippedVocabulary } from "../demos/racetrack/vocabulary.js";
 import { lapFor } from "./support/lap.js";
@@ -657,6 +658,8 @@ describe("the corner language, placed by the graph", () => {
     const kit = shippedVocabulary();
     let markersPlaced = 0;
     let rulerMarks = 0;
+    let converted = 0;
+    let displaced = 0;
 
     for (const seed of [1, 2, 3] as const) {
       const { lap, frames } = await lapFor(seed);
@@ -816,24 +819,126 @@ describe("the corner language, placed by the graph", () => {
         `seed ${seed}: only ${survivingBrake} of ${tight.length * BRAKING.count} brake marks survived`,
       ).toBeGreaterThanOrEqual(tight.length * BRAKING.count - 2);
 
-      // AND THE COUNT SAYS EXACTLY WHICH HALF IS WIRED. With no
-      // bookkeeping applied, every corner ADDS its marker rather than
-      // converting an existing placement, and no ruler displaces anything
-      // to pay for itself -- so the list is the chosen placements plus one
-      // per corner plus three per tight corner, exactly. Asserting the
-      // equality rather than an inequality is what makes wiring the
-      // bookkeeping show up here as a failure instead of as silence: the
-      // moment a conversion replaces an addition this number drops.
-      const cooked = await cookLapPlacements({ lap, seed, pool });
+      // AND THE LIST IS THE LIST `placeCornerLanguage` BUILDS. This
+      // replaced a count identity -- chosen plus one per corner plus three
+      // per tight corner -- which was exactly right while only the
+      // PLACEMENTS were wired and is exactly wrong now that the bookkeeping
+      // is: a conversion replaces an addition and a displacement removes a
+      // row, so seed 1 went from 375 to 341 the moment the loops were
+      // applied. That assertion did its job by failing.
+      //
+      // WHAT THIS COMPARISON CAN AND CANNOT CATCH, WHICH IS WORTH STATING
+      // BECAUSE IT LOOKS LIKE MORE THAN IT IS. The reference below is
+      // `placeCornerLanguage` fed `booked` from `cookCornerBookkeeping` --
+      // which runs the SAME `addVictimSearch` this graph does. So a defect
+      // in the victim search moves both sides and this stays green:
+      // measured, flipping the station rank from min to max leaves this
+      // case failing only on its own premise assertion, and for the wrong
+      // reason. What owns the search is
+      // `tests/racetrackCornerBookkeeping.test.ts`, which compares against a
+      // hand-written TypeScript `reference()` -- an independent
+      // implementation -- and does catch that flip.
+      //
+      // WHAT THIS OWNS IS THE APPLICATION: given a claim and a
+      // displacement, does the right placement become the right marker,
+      // does the right row go, and does an unclaimed corner get its marker
+      // added. Those are all in `dressGraph` and the reference does them
+      // in TypeScript, so the two sides really are independent there.
+      //
+      // THE REFERENCE IS THE RULE RUN WITH BOTH GRAPH ANSWERS HANDED TO IT.
+      // `placeCornerLanguage` takes `drawn` (where the marks go) and
+      // `booked` (who was claimed, who was displaced) precisely so a caller
+      // that cooked those can compare; given both it does nothing but the
+      // bookkeeping, which is what this stage does too.
+      const cooked = await cookLapPlacements({ lap, seed, pool, markers });
       const chosen = placementsBeforeLanguage(lap, seed, pool, {
         stations: cooked.stations,
         choices: cooked.choices,
-      }).placements.length;
+      }).placements;
+      const victims: VictimPlacement[] = [];
+      for (let i = 0; i < cooked.stations.stations.length; i++) {
+        const ch = cooked.choices[i];
+        if (!ch) continue;
+        victims.push({ assetOrd: ch.assetIndex, station: cooked.stations.stations[i], t: ch.t });
+      }
+      const booked = await cookCornerBookkeeping({
+        placements: victims,
+        corners,
+        lapW: lap.lengthW,
+      });
+      const reference = placeCornerLanguage(
+        chosen,
+        corners,
+        markers,
+        lap.lengthW,
+        seed,
+        cooked.language,
+        booked,
+      );
       expect(
         got.placementsInput.pointCount,
-        `seed ${seed}: the list is not the chosen placements plus one marker per corner ` +
-          `plus ${BRAKING.count} marks per tight corner`,
-      ).toBe(chosen + corners.length + tight.length * BRAKING.count);
+        `seed ${seed}: the graph built ${got.placementsInput.pointCount} placements where ` +
+          `placeCornerLanguage builds ${reference.placements.length}`,
+      ).toBe(reference.placements.length);
+
+      // AND PLACEMENT FOR PLACEMENT, NOT JUST COUNT FOR COUNT. A count
+      // survives any mutation that moves a row rather than adding or
+      // removing one -- converting the wrong victim, giving a marker the
+      // wrong corner's lateral, displacing a different placement. Every one
+      // of those keeps the total and changes the lap.
+      //
+      // KEYED ON (station, asset), WHICH IS WHAT IDENTIFIES A PLACEMENT
+      // HERE. The row ORDER differs by construction -- the graph's cloud is
+      // in the scatter's order and the reference's list is in station order
+      // -- so position would compare unrelated rows. A conversion keeps the
+      // victim's station and changes its asset, so the pair moves exactly
+      // when a conversion lands somewhere else.
+      // THE LATERAL AND THE HEIGHT ARE IN THE KEY, and they are not padding.
+      // Without them, SWAPPING the drawn lateral and height between two
+      // conversions whose corners share severity and side is invisible to
+      // this entire case: the multiset is byte-identical, and both rule
+      // gates still pass, because `cornerMarkersSatisfied` checks only the
+      // SIGN of the lateral and that the height is in the marker band --
+      // and every marker's height is drawn from that same band. Seeds 1, 2
+      // and 3 each have such a pair (corners 1/15, 1/7 and 3/12). So a
+      // gather that fetched the wrong corner's row for a whole class of
+      // pairs would have read as correct.
+      const key = (station: number, id: number, t: number, h: number): string =>
+        `${station.toFixed(4)}:${id}:${t.toFixed(4)}:${h.toFixed(4)}`;
+      const wantKeys = reference.placements
+        .map((p) => key(p.station, p.asset.id, p.t, p.h))
+        .sort();
+      const gotKeys: string[] = [];
+      for (let i = 0; i < pts.count; i++) {
+        const a = assetOfPose.get(pose.get(i) as number);
+        if (!a) continue;
+        gotKeys.push(
+          key(station.get(i) as number, a.id, t.get(i) as number, h.get(i) as number),
+        );
+      }
+      gotKeys.sort();
+      expect(
+        gotKeys.length,
+        `seed ${seed}: ${pts.count - gotKeys.length} placements have a pose no asset owns`,
+      ).toBe(reference.placements.length);
+      expect(
+        gotKeys,
+        `seed ${seed}: the graph's lap is not the lap placeCornerLanguage builds`,
+      ).toEqual(wantKeys);
+
+      // AND THE FIXTURE EXERCISES BOTH HALVES, which a count comparison
+      // cannot show on its own: a lap where nothing converted and nothing
+      // displaced agrees with a stage that applied neither.
+      expect(
+        reference.converted,
+        `seed ${seed}: no corner converted a placement, so CONVERT is untested here`,
+      ).toBeGreaterThan(0);
+      expect(
+        reference.brakeDisplaced,
+        `seed ${seed}: no ruler displaced anything, so DISPLACE is untested here`,
+      ).toBeGreaterThan(0);
+      converted += reference.converted;
+      displaced += reference.brakeDisplaced;
 
       // AND THE LAP STILL SETTLES WITH THE LANGUAGE IN IT. The markers are
       // pinned against Z-3 and the brake marks are locked against L-1, so
@@ -844,7 +949,8 @@ describe("the corner language, placed by the graph", () => {
 
     console.log(
       `corner language in the graph: ${markersPlaced} corners marked, ` +
-        `${rulerMarks} ruler marks placed over 3 laps`,
+        `${rulerMarks} ruler marks over 3 laps; ` +
+        `${converted} converted, ${displaced} displaced`,
     );
   }, FOUR_LAP_MS);
 });

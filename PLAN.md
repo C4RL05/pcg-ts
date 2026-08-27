@@ -3376,3 +3376,76 @@ is hard.
    the second. Converting between them is one expression, but a reader
    meeting both will assume they agree about something they do not.
 
+### The corner language is finished, 2026-08-27
+
+All four of `placeCornerLanguage`'s operations are graph stages now --
+CONVERT, ADD, the ruler marks, and DISPLACE. The lap the graph builds
+matches the lap the rule builds placement for placement, keyed on station,
+asset, lateral and height, on three seeds.
+
+**The interesting part was an off-by-one that turned out not to be a bug.**
+Seed 3 built 348 where the reference built 347. Every marker matched -- 8
+sharp, 17 open, 39 brake -- and the extra was an ORDINARY placement, so one
+displacement had not happened.
+
+**The rule is not order-invariant, and the graph and the reference were
+visiting in different orders.** `placeCornerLanguage` scans with a strict
+`>`, keeping the first maximum in the order its list is held, and every
+caller holds it in station order. `addVictimSearch` ranked by ROW INDEX,
+which says the same thing only while the cloud is sorted -- and the dress
+graph's is not, because `pointScatterOnPath` lays stations down in an order
+unrelated to arc position. Measured over six shuffles of one lap: the same
+corners claim the same NUMBER of victims but a different SET, two to six
+rows moving, and L-3's displacement count itself moves between 34 and 35,
+because a different pick leaves a different candidate in the next window and
+a window that runs out stops early.
+
+So the answer depended on how the cloud was stored. The rank is the STATION
+now, with the row index kept as a second key -- two placements at one
+station with equal counts would otherwise both match and a corner would
+claim two, which `cookLapPlacements` makes unreachable through this demo
+but which the function cannot assume, since it takes any list a caller hands
+it. Order invariance is a permanent test in
+`tests/racetrackCornerBookkeeping.test.ts`, and it separates the two rules
+on all four seeds (2/8, 2/4, 2/2 and 0/6 rows moving under index rank).
+
+**A mutation exposed a limit in the new comparison, which is now stated in
+the test.** The corner-language case compares against `placeCornerLanguage`
+fed `booked` from `cookCornerBookkeeping` -- which runs the SAME
+`addVictimSearch` the graph does. So a defect in the victim search moves
+both sides and that case stays green: flipping the station rank from min to
+max leaves it failing only on its own premise assertion, for the wrong
+reason. What owns the search is the bookkeeping suite's hand-written
+TypeScript `reference()`, an independent implementation, and it does catch
+the flip. The case owns the APPLICATION instead, where the two sides really
+are independent.
+
+**And the comparison key needed two more columns.** Verification found that
+swapping the drawn lateral and height between two conversions whose corners
+share severity and side is invisible to the whole case: the multiset is
+byte-identical and both rule gates still pass, because
+`cornerMarkersSatisfied` checks only the SIGN of the lateral and that the
+height is in the marker band -- and every marker's height is drawn from that
+band. Seeds 1, 2 and 3 each have such a pair. The key carries `t` and `h`
+now.
+
+**Three smaller things it also found.** The unclaimed-corner test clobbers
+`P` to a corner ordinal to ask its proximity question, and the added markers
+were being published with that ordinal still in `P` -- inert, because
+`sampleTrackFrame` overwrites `P` before anything reads it, which is exactly
+why it would not have been noticed; the answer is carried back onto the
+untouched rows now. A lap where L-3 displaced every surviving placement
+would take the cook down with a library-level message that names neither
+this demo nor the fix; it is unreachable and named rather than guarded. And
+`SEVERITY.tightW` and `BRAKING.tighterThanW` cut the same set of corners
+from two different files, equal by coincidence -- `displacedBy` indexes the
+TIGHT corner list, so a divergence would attribute a ruler's victim to a
+different corner with both sides still running. One assertion pins them.
+
+**What is left of the lap prelude.** The rules are done and so is the
+assembly. `mixPinned` still reaches the graph three ways and could be
+derived in-graph; `mixBandPools` is a build-time literal by design. The page
+is the remaining piece, and it is a scheduling question rather than a rule:
+`main.ts` prints the enclosure stat synchronously while the graph's L-6
+cooks later.
+

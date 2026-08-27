@@ -164,6 +164,7 @@ import {
   runFit,
   select,
   transferAlongPath,
+  transferAttribute,
   transferByIndex,
   setAttribute,
   sub,
@@ -175,11 +176,15 @@ import type { Kit } from "./kit.js";
 import type { Lap } from "./lap.js";
 import type { MarkerKit, StationedPlacement } from "./legibility.js";
 import {
+  CORNER_BOOKKEEPING_SCRATCH,
   CORNER_LANGUAGE_OUTPUTS,
   CORNER_LANGUAGE_SCRATCH,
   PLACED,
+  VICTIM,
+  addCornerBookkeeping,
   addCornerLanguage,
 } from "./cornerGraph.js";
+import { cornersOf, type Corner } from "./corners.js";
 import { FALSE_EDGE } from "./falseEdges.js";
 import { SIGHTLINE } from "./sightline.js";
 import { SAME_PLACE_W } from "./tolerance.js";
@@ -1330,21 +1335,6 @@ export function addPlacementAssembly(
   g: Graph,
   chosen: { readonly node: NodeHandle; readonly pin: string },
   opts: {
-    /**
-     * The station cloud the choice's copies were laid over, when the rows
-     * came from a choice.
-     *
-     * ABSENT WHEN THE ROWS ALREADY KNOW WHERE THEY ARE. A chosen row
-     * carries a station INDEX, because `copyToPoints` writes the target's
-     * index and not its columns, so the arc position has to be gathered
-     * back. L-2's markers and L-3's ruler marks carry a station VALUE --
-     * the corner language decided it, from the corner's entry -- and there
-     * is no station cloud they are copies of. Omitting this says the rows
-     * bring their own {@link PLACEMENT.station} and the gather is skipped.
-     */
-    readonly stations?: { readonly node: NodeHandle; readonly pin: string };
-    /** What that cloud calls its arc column — see {@link PLACEMENT.station}. */
-    readonly stationAttr?: string;
     /** {@link mixPoseIds}, the two-half table the string column indexes. */
     readonly poseIds: readonly string[];
   },
@@ -1362,20 +1352,6 @@ export function addPlacementAssembly(
   //    belongs to and not where that station is. `cookLapPlacements` reads
   //    the arc column off the station cloud and pairs the two lists in
   //    TypeScript for the same reason; this is that pairing as a gather.
-  let station: NodeHandle | undefined;
-  if (opts.stations) {
-    station = g.add(
-      transferByIndex,
-      {
-        index: attribute(CHOICE.stationIdx),
-        attributes: [opts.stationAttr ?? PLACEMENT.station],
-        outOfRange: "clamp",
-      },
-      `${tag}Station`,
-    );
-    g.connect(chosen.node, chosen.pin, station, "in");
-    g.connect(opts.stations.node, opts.stations.pin, station, "source");
-  }
 
   // A RENAME ONLY IF THE NAMES DIFFER. `addStationStage` defaults its arc
   // column to the same `stationW` this file calls `PLACEMENT.station`, so
@@ -1383,23 +1359,8 @@ export function addPlacementAssembly(
   // takes the name as a param, and a graph that silently dropped the
   // column when a caller renamed it would be wrong in a way no type
   // catches.
-  let head: NodeHandle = station ?? chosen.node;
-  let headPin = station ? "out" : chosen.pin;
-  const renamed = station !== undefined && opts.stationAttr !== undefined &&
-    opts.stationAttr !== PLACEMENT.station;
-  if (renamed) {
-    head = g.add(
-      setAttribute,
-      {
-        name: PLACEMENT.station,
-        tupleSize: 1,
-        value: attribute(opts.stationAttr as string),
-      },
-      `${tag}StationName`,
-    );
-    g.connect(station as NodeHandle, "out", head, "in");
-    headPin = "out";
-  }
+  const head: NodeHandle = chosen.node;
+  const headPin = chosen.pin;
 
   // 2. THE ASSET'S OWN ROW — the three facts a choice never needed.
   //    `assetCloud` carries `across` and `tall` because Z-1 resolves the
@@ -1544,14 +1505,6 @@ export function addPlacementAssembly(
     removeAttribute,
     {
       names: [
-        // THE ARC COLUMN'S OTHER NAME, WHEN THERE IS ONE. `setAttribute`
-        // WRITES a column, it does not MOVE one, so the rename above leaves
-        // the gathered original sitting beside its copy — a column the
-        // reference cloud does not have, riding every stage downstream.
-        // Unreachable while `addLapPlacements` passes the stage's default,
-        // which is the same name; here because the alternative is a stage
-        // whose output shape depends on a param nobody sets.
-        ...(renamed ? [opts.stationAttr] : []),
         SCRATCH_POSE,
         PLACEMENT_ASSET.across,
         PLACEMENT_ASSET.along,
@@ -1691,11 +1644,238 @@ function addCornerLanguageRows(
   // rests on, and which was stated here before it was true.
   const cleaned = g.add(
     removeAttribute,
-    { names: [...CORNER_LANGUAGE_SCRATCH], strict: false },
+    { names: [...CORNER_LANGUAGE_SCRATCH, ...CORNER_BOOKKEEPING_SCRATCH], strict: false },
     `${tag}Strip`,
   );
   g.connect(out, "out", cleaned, "in");
   return cleaned;
+}
+
+
+/**
+ * L-2's convert-or-add and L-3's displacement, APPLIED.
+ *
+ * `addCornerBookkeeping` decides two columns -- which corner claimed each
+ * placement and which tight corner's ruler displaced it -- and changes
+ * nothing else. This is the other half: the claimed placements become
+ * markers, the displaced ones go, and the corners nobody claimed are the
+ * ones whose marker has to be ADDED. `placeCornerLanguage` does all three
+ * in one walk over a mutable array; they are three stages here.
+ *
+ * IT RUNS BEFORE THE ASSEMBLY, WHICH IS WHY THE CONVERSION IS CHEAP. A
+ * conversion changes which ASSET a placement holds, and everything that
+ * follows from an asset -- the extents, the pose, the id string, the two
+ * flags -- is what {@link addPlacementAssembly} looks up. Applying the
+ * conversion to the ord BEFORE that lookup means the lookup happens once
+ * and is right; applying it after would mean doing the whole lookup a
+ * second time for a few dozen rows.
+ *
+ * THE TWO ORD SPELLINGS MEET HERE, AND ONLY HERE. `VICTIM.assetOrd` says a
+ * marker is `-1 - row`, which is `addConvertStage`'s own convention and
+ * predates the placement ord space; `placementAssetRows` says a marker is
+ * `poolLength + row`. Both are reasonable and they are not the same number,
+ * so the translation is one expression in one place rather than a
+ * convention change rippling through the file that owns the loops.
+ *
+ * AND THE CONVERSION IS ALREADY COMPUTED when this runs.
+ * `addConvertStage` rewrites `VICTIM.assetOrd` to the marker's ordinal
+ * INSIDE the loop -- it has to, because the next corner's histogram must
+ * count the marker rather than the asset it replaced -- so what is left
+ * here is reading it, not deciding it.
+ */
+function addCornerBookkeepingApplied(
+  g: Graph,
+  cloud: { readonly node: NodeHandle; readonly pin: string },
+  markerRows: NodeHandle,
+  corners: readonly Corner[],
+  opts: { readonly lapW: number; readonly ordBase: number },
+  tag: string,
+): { readonly kept: NodeHandle; readonly unclaimed: NodeHandle } {
+  // ---- 1. THE COLUMNS THE LOOPS READ ------------------------------------
+  //
+  // EVERY ORD IS A POOL ORD AT THIS POINT, which is what makes the straight
+  // copy honest: the corner language has not been merged in yet, so there
+  // is no marker on this cloud for `addVictimSearch`'s `ge(assetOrd, 0)`
+  // guard to exclude. That guard stops a LATER corner re-converting what an
+  // earlier one took, and it earns its keep once the loop starts writing
+  // marker ordinals.
+  let head: NodeHandle = cloud.node;
+  let headPin = cloud.pin;
+  const init: [string, Field | number][] = [
+    [VICTIM.assetOrd, attribute(ASSET.ord)],
+    [VICTIM.stationW, attribute(PLACEMENT.station)],
+    [VICTIM.t, attribute(CHOICE.t)],
+    [VICTIM.claimedBy, -1],
+    [VICTIM.displacedBy, -1],
+  ];
+  for (const [name, value] of init) {
+    const n = g.add(setAttribute, { name, tupleSize: 1, value }, `${tag}V_${name}`);
+    g.connect(head, headPin, n, "in");
+    head = n;
+    headPin = "out";
+  }
+
+  // ---- 2. THE TWO LOOPS --------------------------------------------------
+  const booked = addCornerBookkeeping(g, { node: head, pin: headPin }, corners, opts.lapW, tag);
+
+  // ---- 3. THE MARKER EACH CLAIMED PLACEMENT BECOMES ----------------------
+  //
+  // Its lateral and height come from the corner language's own draw for
+  // THAT corner, which is what `placeCornerLanguage` uses too -- the
+  // conversion keeps the placement's STATION and takes everything else from
+  // the marker. `clamp` never fires: an unclaimed row indexes -1 and the
+  // select below throws the gathered values away, so the only thing a
+  // clamped row-zero read costs is a column nobody reads.
+  const drawn = g.add(
+    transferByIndex,
+    {
+      index: max(0, attribute(VICTIM.claimedBy)),
+      attributes: [PLACED.t, PLACED.h],
+      outOfRange: "clamp",
+    },
+    `${tag}Drawn`,
+  );
+  g.connect(booked.node, booked.pin, drawn, "in");
+  g.connect(markerRows, "out", drawn, "source");
+
+  const claimed = ge(attribute(VICTIM.claimedBy), 0);
+  let out: NodeHandle = drawn;
+  const applied: [string, Field][] = [
+    // THE TRANSLATION BETWEEN THE TWO ORD SPELLINGS. `-1 - row` back to
+    // `row`, then into the placement ord space.
+    [
+      ASSET.ord,
+      select(
+        claimed,
+        add(opts.ordBase, sub(-1, attribute(VICTIM.assetOrd))),
+        attribute(ASSET.ord),
+      ),
+    ],
+    [CHOICE.t, select(claimed, attribute(PLACED.t), attribute(CHOICE.t))],
+    [CHOICE.h, select(claimed, attribute(PLACED.h), attribute(CHOICE.h))],
+  ];
+  for (const [name, value] of applied) {
+    const n = g.add(setAttribute, { name, tupleSize: 1, value }, `${tag}A_${name}`);
+    g.connect(out, "out", n, "in");
+    out = n;
+  }
+
+  // ---- 4. WHAT THE RULERS PAID WITH, REMOVED -----------------------------
+  //
+  // ONE REMOVAL, AFTER BOTH LOOPS, which is the whole reason the loops mark
+  // rather than delete: every index the bookkeeping hands back names the
+  // list AS IT ARRIVED, so a removal partway through would renumber the
+  // rows a later corner's answer refers to. `placeCornerLanguage` says the
+  // same thing at greater length about its own `displaced` set.
+  const kept = g.add(
+    filterByExpression,
+    { predicate: lt(attribute(VICTIM.displacedBy), 0) },
+    `${tag}Drop`,
+  );
+  g.connect(out, "out", kept, "in");
+
+  // ---- 5. WHICH CORNERS NOBODY CLAIMED -----------------------------------
+  //
+  // THE INVERSE OF A GATHER, and that is what makes it the awkward one. The
+  // cloud that KNOWS which corners were claimed is the placements; the
+  // cloud that needs to know is the corners. `transferByIndex` runs the
+  // other way and there is no scatter.
+  //
+  // SO THE ANSWER IS LAID OUT AS GEOMETRY AND ASKED FOR BY PROXIMITY --
+  // the same move `PLAN.md`'s station ring makes, and for the same reason.
+  // Put every placement at `x = claimedBy` and every corner at `x = its own
+  // index`, and carry `claimedBy` across with a nearest-point transfer: a
+  // claimed corner has a point sitting exactly on it, so it reads back its
+  // own index, and an unclaimed one reads back somebody else's.
+  //
+  // THE GUARD FALLS OUT RATHER THAN BEING ADDED. An unclaimed placement
+  // holds -1 and sits at `x = -1`, which is a whole unit from corner 0 and
+  // further from the rest -- so it can never be the exact hit, and it never
+  // needs filtering out. A lap where nothing was claimed puts every
+  // placement at -1 and every corner reads back -1, which equals no corner
+  // index. Ties do not matter either: only an exact hit passes the test,
+  // and a claimed corner always has one at distance zero.
+  // A LAP WITH NOTHING LEFT TO ASK ABOUT would take the cook down here with
+  // `transferNearest: source has no points`, which names neither this demo
+  // nor the fix. It needs L-3 to displace every surviving placement -- a
+  // lap short enough that its tight corners' braking windows cover the
+  // whole circuit -- and no lap this demo generates comes near it. Left
+  // unguarded and named rather than wrapped, because a guard for an
+  // unreachable case is a branch nothing can ever test.
+  const asClaims = g.add(
+    setAttribute,
+    { name: "P", tupleSize: 3, value: vec(attribute(VICTIM.claimedBy), 0, 0) },
+    `${tag}ClaimP`,
+  );
+  g.connect(kept, "out", asClaims, "in");
+
+  const asCorners = g.add(
+    setAttribute,
+    { name: "P", tupleSize: 3, value: vec(attribute(PLACED.corner), 0, 0) },
+    `${tag}CornerP`,
+  );
+  g.connect(markerRows, "out", asCorners, "in");
+
+  const asked = g.add(
+    transferAttribute,
+    { name: VICTIM.claimedBy, mapping: "nearest" },
+    `${tag}Ask`,
+  );
+  g.connect(asCorners, "out", asked, "in");
+  g.connect(asClaims, "out", asked, "source");
+
+  // AND THE ANSWER CARRIED BACK ONTO THE ROWS THAT STILL HAVE THEIR OWN `P`.
+  //
+  // BOTH CLOUDS ABOVE HAD TO HAVE THEIR POSITIONS CLOBBERED for the
+  // proximity question to mean anything, and `asCorners` is the marker rows
+  // with a corner ORDINAL where their frame position was. Filtering that
+  // cloud directly would publish the ordinal: measured, 10 of seed 1's 341
+  // placements -- exactly the added markers -- came out with `P` = [corner,
+  // 0, 0]. Inert, because `sampleTrackFrame` overwrites `P` from the
+  // station before anything reads it, and that is precisely why it would
+  // have gone unnoticed.
+  //
+  // `transferByIndex` ON `index()` IS THE WAY BACK. A `setAttribute` and a
+  // nearest transfer both preserve row order and row count, so row i of
+  // `asked` is row i of the marker cloud -- the clobbered pair is scratch
+  // that never leaves this function.
+  const answered = g.add(
+    transferByIndex,
+    { index: index(), attributes: [VICTIM.claimedBy], outOfRange: "clamp" },
+    `${tag}Answer`,
+  );
+  g.connect(markerRows, "out", answered, "in");
+  g.connect(asked, "out", answered, "source");
+
+  // KEPT WHERE THE ANSWER IS NOT ITS OWN INDEX, which is the corner nobody
+  // claimed -- so `lt(eq(...), 1)` rather than `eq(...)`, and the direction
+  // is worth reading twice because both spellings run and only one is L-2.
+  const unclaimed = g.add(
+    filterByExpression,
+    {
+      predicate: lt(eq(attribute(VICTIM.claimedBy), attribute(PLACED.corner)), 1),
+    },
+    `${tag}Unclaimed`,
+  );
+  g.connect(answered, "out", unclaimed, "in");
+
+  // ---- 6. AND THE LOOPS' OWN WORKING, DROPPED --------------------------
+  //
+  // AFTER THE CLAIM CLOUD BRANCHES OFF IT, which is the only ordering
+  // constraint here: `asClaims` reads `VICTIM.claimedBy` and both hang off
+  // `kept`, so the strip is a third branch rather than something the claim
+  // test has to be sequenced around. Twenty-one columns -- a histogram, a
+  // running scan, a round counter, a per-corner row -- all of it on the
+  // POINT domain because a `repeatUntil` body cannot read a detail
+  // attribute, and all of it meaningless one stage later.
+  const stripped = g.add(
+    removeAttribute,
+    { names: [...CORNER_BOOKKEEPING_SCRATCH], strict: false },
+    `${tag}Strip`,
+  );
+  g.connect(kept, "out", stripped, "in");
+
+  return { kept: stripped, unclaimed };
 }
 
 /**
@@ -1774,6 +1954,7 @@ export function addLapPlacements(
       readonly stations?: string;
       readonly repair?: string;
       readonly choice?: string;
+      readonly language?: string;
     };
     /**
      * L-2 and L-3, when the caller has a marker kit and a cooked lap.
@@ -1828,20 +2009,72 @@ export function addLapPlacements(
       prefix: opts.prefixes?.choice,
     },
   );
-  const assembled = addPlacementAssembly(
-    g,
-    { node: choice.out, pin: "out" },
+  // ---- THE STATION, BACK OFF THE CLOUD THE COPIES WERE LAID OVER ---------
+  //
+  // `copyToPoints` composes each copy from the SOURCE's columns and writes
+  // only the target's INDEX, so a copy knows which station it belongs to and
+  // not where that station is.
+  //
+  // HERE RATHER THAN INSIDE THE ASSEMBLY, WHICH IS WHERE IT USED TO BE. The
+  // corner bookkeeping runs BETWEEN this and the assembly and needs the arc
+  // position -- L-2's window is measured back from a corner's entry -- so
+  // the gather has to happen first. What that buys is one contract for
+  // {@link addPlacementAssembly} instead of two: a row carries an ord, a
+  // lateral, a height and a station, and where the station came from stopped
+  // being its business.
+  //
+  // THE REPAIRED CLOUD AND NOT THE RAW ONE. D-4 MOVES stations, and the
+  // choice's copies were laid over the moved ones -- reading the arc column
+  // off the scatter would give every placement the position its station had
+  // before the gaps were closed.
+  const located = g.add(
+    transferByIndex,
     {
-      // THE REPAIRED CLOUD AND NOT THE RAW ONE. D-4 MOVES stations, and the
-      // choice's copies were laid over the moved ones — reading the arc
-      // column off the scatter would give every placement the position its
-      // station had before the gaps were closed.
-      stations: { node: repair.out, pin: "carry" },
-      stationAttr: stations.stationAttr,
-      poseIds: opts.poseIds,
+      index: attribute(CHOICE.stationIdx),
+      attributes: [stations.stationAttr],
+      outOfRange: "clamp",
     },
-    `${tag}Asm`,
+    `${tag}Station`,
   );
+  g.connect(choice.out, "out", located, "in");
+  g.connect(repair.out, "carry", located, "source");
+
+  // ---- L-2's CONVERT AND L-3's DISPLACEMENT, IF THERE IS A LANGUAGE ------
+  //
+  // BEFORE THE ASSEMBLY, so a converted placement's new asset is looked up
+  // once rather than twice. See {@link addCornerBookkeepingApplied}.
+  let rowsIn: { node: NodeHandle; pin: string } = { node: located, pin: "out" };
+  let unclaimedMarkers: NodeHandle | undefined;
+  let languageStage: { readonly markers: NodeHandle; readonly rulers: NodeHandle } | undefined;
+  if (opts.language) {
+    languageStage = addCornerLanguage(
+      g,
+      path,
+      opts.language.markers,
+      opts.language.lap,
+      // "cl" AND NOT A TAGGED ONE, WHICH IS THE PREFIX RULE AGAIN. A node
+      // id is part of what seeds a node, and `cookLapPlacements` adds these
+      // same stages under exactly this prefix -- so sharing it is what makes
+      // the two produce the SAME corner language from one seed rather than
+      // two plausible ones. See `opts.prefixes`.
+      opts.prefixes?.language ?? "cl",
+    );
+    const applied = addCornerBookkeepingApplied(
+      g,
+      rowsIn,
+      languageStage.markers,
+      cornersOf(opts.language.lap),
+      {
+        lapW: opts.language.lap.lengthW,
+        ordBase: opts.poolLength ?? opts.assetCount,
+      },
+      `${tag}Bk`,
+    );
+    rowsIn = { node: applied.kept, pin: "out" };
+    unclaimedMarkers = applied.unclaimed;
+  }
+
+  const assembled = addPlacementAssembly(g, rowsIn, { poseIds: opts.poseIds }, `${tag}Asm`);
   g.connect(tables.lookup.node, tables.lookup.pin, assembled.assets, "source");
   g.connect(tables.poses.node, tables.poses.pin, assembled.poses, "source");
 
@@ -1862,17 +2095,14 @@ export function addLapPlacements(
   // Two assemblies produce two clouds with identical columns, which is the
   // one arrangement the merge cannot get wrong.
   let list: NodeHandle = assembled.out;
-  if (opts.language) {
-    const language = addCornerLanguage(
-      g,
-      path,
-      opts.language.markers,
-      opts.language.lap,
-      `${tag}Cl`,
-    );
+  if (languageStage && unclaimedMarkers) {
     const rows = addCornerLanguageRows(
       g,
-      language,
+      // ONLY THE MARKERS NOBODY CLAIMED. A corner whose window held a good
+      // victim already has its marker -- the conversion above turned an
+      // ordinary placement into it, keeping the station the station process
+      // chose. Adding one here too would give that corner two.
+      { markers: unclaimedMarkers, rulers: languageStage.rulers },
       opts.poolLength ?? opts.assetCount,
       `${tag}Lang`,
     );
