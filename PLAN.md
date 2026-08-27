@@ -3786,29 +3786,49 @@ above it the page still runs `cookLapPlacements`, `placementsBeforeLanguage`,
 `cookCorners`, `cookCornerBookkeeping` and `dressLap`. The prelude is
 PORTABLE, not yet PORTED, and the difference is the whole remaining unit.
 
-**What stands between the two** — being scoped as this is written, so the
-list is provisional and the ranking is not settled:
+**What stands between the two, MEASURED.** The first draft of this list
+ranked `mixPinned` as the blocker; it is not, and the real one is duller and
+worse.
 
-1. **`mixPinned`, and the decline above answered the wrong question.** It is
-   REQUIRED on `DressGraphInput`, and it is `reserved ∪ landmarkAssets(THE
-   SETTLED LIST)` — the list the graph would be deciding. So a page that
-   omits `placements` cannot compute it without first running `dressLap`,
-   which is circular. The Stretch entry above measured "does recomputing it
-   per round change any placement" (no, over eight seeds) when the
-   load-bearing question is "can the page omit the list at all without it".
-   Those are different questions and only the second one blocks anything.
-2. **The panel's other two lines.** `statCorners` and `statRules` still read
-   `dressLap`'s stats. Dropping the prelude means moving them onto the lap
-   level's outputs — the same scheduling move `dressing` and `enclosure`
-   already took, twice more, and probably some new `DRESS_OUTPUTS` for the
-   repair counts.
-3. **The prelude deletion itself.** `cookReserveMarkers` stays — it decides
-   WHICH ASSETS EXIST before anything else and is deliberately its own cook.
-   Everything else leaves `main.ts`.
+1. **`densityScale` HAS NOWHERE TO GO, and this is the blocker.**
+   `DressGraphInput` has no density field, and `assemble` hands
+   `addLapPlacements` exactly `{halfWidth, assetCount, poseIds, language}`.
+   The page's density slider would go INERT at x1.00 — a silent functional
+   regression, which is a different and worse thing than the fidelity costs
+   below. Add it to the input and thread it through.
+2. **The page never passes `markers`**, so the omitted-placements branch sets
+   `language: undefined` and the lap comes out with no L-2/L-3 vocabulary at
+   all. One line: `markers: reservation.markers`.
+3. **`mixPinned` is circular but NOT a dependency, and the Stretch entry
+   above answered the wrong question.** It is required, and it is `reserved ∪
+   landmarkAssets(THE SETTLED LIST)` — the list the graph would be deciding —
+   so the page cannot reproduce `dressLap`'s set without running `dressLap`.
+   But an empty or reserved-only set COOKS FINE. Measured with `placements`
+   omitted on seeds 1-3, placement counts identical at 352/338/360 either
+   way, against `dressLap`'s real 13-id set: reserved-only (the 3 ids
+   `cookReserveMarkers` already returns) differs by 5 / 6 / 25 placements,
+   1.4% / 1.8% / 6.9%; empty differs by 6 / 21 / 34. So this is a fidelity
+   POLICY to state, not a wall — pass `reserved` and say what it costs, or
+   port L-4, which this file declined once already.
+4. **Both panel lines die, and one of them cannot be revived.** All nineteen
+   `DressStats` fields behind `statCorners` and `statRules` have no
+   `DRESS_OUTPUTS` equivalent — the twelve outputs are geometries plus
+   `rounds`/`converged`. `landmarkFixes` is unobtainable IN PRINCIPLE,
+   because L-4 is not a stage at all; the per-round counters are
+   structurally unavailable from `repeatUntil`, which publishes only its last
+   round. And `showLapStats` is gated on `if (!s) return`, so `dressing` and
+   `enclosure` go dark with them unless that gate is rewritten.
+5. **`immovable` and `pool` are NOT blockers** — both come straight from
+   `cookReserveMarkers`; `dressLap` merely re-exposes `opts.reservation`.
 
-Also worth checking: whether the suites that omit `placements` take
-`mixPinned` from a `dressLap` result. If they do, "the graph decides the
-list" has only ever been exercised with a TypeScript-derived protect set.
+**And the coverage is thinner than the capability suggests.**
+`buildRacetrackLevels` is NEVER called without a placement list anywhere in
+the suite — both `racetrackLevels.test.ts` sites hand one in — so the page's
+actual two-level path has zero coverage for the mode the page would switch
+to. Only `racetrackPlacementAssembly.test.ts` omits the list, and it passes
+`mixPinned` as an empty set or the three reserved ids, never with the
+landmark half. "The graph decides the list" has therefore only ever been
+exercised with a protect set no page would use.
 
 What is NOT left is rules. `mixBandPools` is a build-time literal by design.
 The other two open items are a library gap (`splineSample`'s
