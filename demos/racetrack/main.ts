@@ -84,15 +84,10 @@ import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/pane
 import { attachWordmark } from "../../shared/wordmark.js";
 import { BACKGROUND } from "../../shared/scene.js";
 import { OUTPUTS, buildRoadGraph } from "./graph.js";
-import {
-  type DressStats,
-  type Dressing,
-  dressLap,
-  placementsBeforeLanguage,
-} from "./dress.js";
 import type { PlaceableAsset } from "./assets.js";
-import { cookCornerBookkeeping, cookCorners, cookReserveMarkers } from "./cornerGraph.js";
-import { cookLapPlacements } from "./assetGraph.js";
+import { cookReserveMarkers } from "./cornerGraph.js";
+import { SEVERITY, cornersOf } from "./corners.js";
+import type { MarkerKit } from "./legibility.js";
 import { DENSITY } from "./stations.js";
 import { type Kit, type PlacedBox, loadKit, placeKit } from "./kit.js";
 import { shippedVocabulary } from "./vocabulary.js";
@@ -101,9 +96,12 @@ import { type Spline, makeTrackSpline, splineBounds } from "./spline.js";
 import { ASSET_ATTR, DEFAULT_ASSET, boxCloud } from "./spawn.js";
 import {
   DRESS_OUTPUTS,
+  languagePoses,
   poseLibrary,
   readEnclosure,
+  readRepairs,
   type EnclosureReport,
+  type RepairReport,
 } from "./dressGraph.js";
 import {
   AHEAD_SECTORS,
@@ -563,28 +561,41 @@ function buildCircuit(circuit: Circuit): void {
  */
 let referenceMeshes: readonly InstancedMesh[] = [];
 
-/** What the last dressing pass had to repair, for the readouts. */
-let lastStats: DressStats | undefined;
-
 /**
- * What the LAP LEVEL decided, which is a different lap from the one above.
+ * WHAT THE LAP LEVEL DECIDED, WHICH IS NOW THE ONLY LAP THIS PAGE KNOWS
+ * ANYTHING ABOUT.
  *
- * THE PRELUDE NO LONGER BUILDS L-6 AND THIS IS WHERE IT WENT. `dressLap`
- * is called with `enclosure: "deferred"` -- it settles the list and stands
- * aside, because the budget enclosure spends is measured from boxes built
- * out of the SETTLED list, which does not exist until it has finished. The
- * lap level's graph runs L-6 over that list, and it cooks asynchronously,
- * so its figures arrive some frames after the panel was first drawn.
+ * THERE USED TO BE A SECOND ONE BESIDE IT. `lastStats` held `dressLap`'s
+ * `DressStats`, and two of the four readouts read it -- a lap settled in
+ * TypeScript before the level cooked, short by exactly the cover the
+ * level was about to build (11, 16 and 16 pieces on seeds 1-3). The page
+ * does not run that pass at all any more: the level decides the list, so
+ * there is no second lap for a readout to be describing by mistake, which
+ * is a thing this page had to keep saying and no longer has to.
  *
- * WHICH IS THE WHOLE REASON THIS VARIABLE EXISTS. Both readouts below
- * describe the lap the page DRAWS, and until the level has cooked, nothing
- * on this page knows what that is: `lastStats` describes the list as the
- * prelude left it, which is short by exactly the cover the level is about
- * to build (measured: 11, 16 and 16 pieces on seeds 1-3). Printing it as
- * the finished lap would put a placement count and a D-1 verdict on screen
- * for a lap with no tunnels in it.
+ * IT ARRIVES LATE, AND THAT IS THE WHOLE REASON THE VARIABLE EXISTS. The
+ * lap level cooks under a frame budget, so its figures land some frames
+ * after the panel was first drawn. Until they do, every readout below
+ * says so rather than filling the gap with a number about something else.
  */
-let lastLap: { readonly enclosure: EnclosureReport; readonly placed: number } | undefined;
+let lastLap:
+  | {
+      readonly enclosure: EnclosureReport;
+      readonly repairs: RepairReport;
+      readonly placed: number;
+      /**
+       * Wall clock from the World being built to the lap cell landing.
+       *
+       * NOT COMPARABLE WITH THE `cookMs` THIS REPLACES, and the label on
+       * the panel says a different word for that reason. `dressLap` ran
+       * synchronously and reported its own compute time; the level is
+       * budgeted across frames, so this includes every frame it waited.
+       * It is the honest answer to "how long until the lap was there",
+       * which is the question a viewer watching it appear is asking.
+       */
+      readonly readyMs: number;
+    }
+  | undefined;
 
 // ------------------------------------------------------------------ //
 // The streamed dressing.
@@ -703,42 +714,89 @@ function disposeStreamedDressing(): void {
  *
  * Placed by the rules from the kit's own measurements and drawn with the
  * same renderer as the reference, so the two can still be compared fairly.
- * What changed is WHEN: `dressLap` settles the list for the whole lap in
- * the prelude, `buildRacetrackLevels` cuts it into arc sectors, and a
- * sector becomes geometry when the car is near enough to want it.
+ *
+ * AND THE LIST IS THE LEVEL'S OWN NOW. `placements` is not passed at all:
+ * the lap level runs the station process, D-4's repair, the asset choice,
+ * the assembly, the corner language and every repair rule, settles the
+ * whole lap once, and `buildRacetrackLevels` cuts what it settled into arc
+ * sectors. A sector becomes geometry when the car is near enough to want
+ * it. Everything below comes from `reserveMarkers`, which is the one cook
+ * that stays outside the graph -- it decides WHICH ASSETS EXIST before
+ * anything is dressed, so it cannot be a stage inside the graph that
+ * consumes its answer.
  *
  * ONE INSTANCE PER PLACEMENT rather than per box, which is why the asset
  * map is keyed by POSE. The reference layer beside it still draws a box
  * each — the two are different pictures of the same numbers, and
  * `assets3d.ts` argues why both are wanted.
  */
-function buildStreamedDressing(circuit: Circuit, dressed: Dressing): {
+function buildStreamedDressing(
+  circuit: Circuit,
+  kit: Kit,
+  reservation: { readonly markers?: MarkerKit; readonly pool: PlaceableAsset[] },
+): {
   lapGraph: Graph;
   dressingGraph: Graph;
 } {
   disposeStreamedDressing();
-  const kit = dressingKit();
+  const { markers } = reservation;
   const built = buildRacetrackLevels({
     kit,
     lap: circuit.lap,
     frames: circuit.frames,
-    placements: dressed.placements,
+    // NO `placements`. That is what this whole campaign was for.
     seed: state.seed,
-    // L-3's braking mark, and nothing else. `dressLap` locks exactly this
-    // one against L-1's push-aside and hands back the marker kit it
-    // reserved, so taking the id from there is the two paths agreeing by
-    // construction rather than by both reserving markers the same way.
-    immovable: new Set(dressed.markers ? [dressed.markers.brake.id] : []),
-    // Z-3's protect set, likewise taken from the path that built it rather
-    // than reconstructed: it holds L-4's landmarks, which are a property
-    // of this lap's finished list and not of the kit.
-    mixPinned: dressed.mixPinned,
-    pool: dressed.pool,
+    // L-3's braking mark, and nothing else: L-1 must DROP a blocked ruler
+    // rather than shove it to the verge, because a braking reference in
+    // the wrong place is worse than none. `reserveMarkers` is where the
+    // three come from, so the id is the reservation's own rather than a
+    // second guess at which asset L-3 speaks with.
+    immovable: new Set(markers ? [markers.brake.id] : []),
+    // Z-3'S PROTECT SET IS THE RESERVED THREE AND NOTHING ELSE, WHICH IS A
+    // POLICY AND WAS MEASURED BEFORE IT WAS CHOSEN.
+    //
+    // `dressLap` pins `reserved ∪ landmarkAssets(the settled list)` -- L-4's
+    // landmarks, the assets unique to a tenth of the lap -- and the page
+    // cannot reproduce that without first running `dressLap`, because the
+    // set is a property of the list the graph is deciding. So the question
+    // was whether the landmark half is worth porting, and the answer is
+    // that it is worth NOT porting.
+    //
+    // L-4'S ACTUAL GUARANTEE IS STRETCH COVERAGE -- every tenth of the lap
+    // holds an asset that appears nowhere else on it -- and pinning is
+    // what is supposed to stop Z-3's redraw breaking it. Measured over six
+    // seeds against a two-pass reconstruction of the full 13-id set: the
+    // covered-stretch count is IDENTICAL on seeds 1-5 (10, 10, 9, 10, 10)
+    // and on seed 6 the reserved-only lap is strictly BETTER, 10 against
+    // 9. Seed 3's one bare stretch is bare with nothing pinned at all, so
+    // it is not the mix's doing. Placement counts are identical either way.
+    //
+    // THE MECHANISM IS THAT PINNING COSTS A DONOR AND A DRAW. A pinned id
+    // is excluded from the quota's eligible set AND from the redraw pool,
+    // so withholding ten more assets shrinks a ~226-asset pool and pushes
+    // the mix onto more-repeated replacements -- which destroys uniqueness
+    // elsewhere faster than the pin protects it here. And the pin is
+    // purely defensive in graph mode: `repairLandmarks` is not a stage, so
+    // there is no L-4 repair to restore what the mix breaks, which is the
+    // situation the reference's pin was answering.
+    mixPinned: new Set(markers ? [markers.sharp.id, markers.open.id, markers.brake.id] : []),
+    pool: reservation.pool,
+    // READ ONLY BECAUSE `placements` IS ABSENT, and required for the same
+    // reason: without it the lap comes out with no L-2 or L-3 vocabulary
+    // at all, which is a lap that cooks perfectly and has no corner
+    // language on it.
+    markers,
+    densityScale: state.density,
   });
 
   const group = new Group();
   scene.add(group);
-  const assets = makePoseAssetMap(poseLibrary(kit), circuit.lap.halfWidth, "generated");
+  const lib = poseLibrary(kit);
+  // L-2's two assets and L-3's one, as POSE ids -- the placement cloud
+  // carries no asset ord, so counting a vocabulary on it has to come at it
+  // through the library. Built once here rather than per readout.
+  const language = markers ? languagePoses(lib, markers) : undefined;
+  const assets = makePoseAssetMap(lib, circuit.lap.halfWidth, "generated");
   const binding = new WorldThreeBinding({ group, assets });
   const rig: StreamedDressing = {
     world: undefined as unknown as World,
@@ -753,6 +811,11 @@ function buildStreamedDressing(circuit: Circuit, dressed: Dressing): {
     live: new Set<number>(),
     disposed: false,
   };
+  // THE CLOCK THE `ready in` FIGURE IS READ OFF, started before the World
+  // exists rather than at the first update: what a viewer is waiting for
+  // is the lap appearing, and every frame between here and the level
+  // landing is part of that wait whether it was spent cooking or not.
+  const worldT0 = performance.now();
   rig.world = new World({
     seed: state.seed,
     levels: built.levels,
@@ -765,16 +828,18 @@ function buildStreamedDressing(circuit: Circuit, dressed: Dressing): {
       if (rig.disposed) return;
       binding.cellReady(level, coord, outputs);
       if (level === LEVELS.dressing) rig.live.add(coord[0]);
-      // THE LAP LEVEL'S CELL IS WHERE THE ENCLOSURE STAT COMES FROM NOW.
-      // `readEnclosure` is the same reader `dressLapByGraph` uses, so the
-      // number on the panel is the number a test measures -- see
-      // `tests/racetrackLevels.test.ts`, which pins the two schedules
-      // equal. There is exactly one cell on an unbounded level, so this
-      // fires once per world.
+      // THE LAP LEVEL'S CELL IS WHERE EVERY FIGURE ON THIS PANEL COMES
+      // FROM NOW. `readEnclosure` and `readRepairs` are the same two
+      // readers `dressLapByGraph` uses, so a number on the panel is a
+      // number a test measures -- see `tests/racetrackLevels.test.ts`,
+      // which pins the two schedules equal. There is exactly one cell on
+      // an unbounded level, so this fires once per world.
       if (level === LEVELS.lap) {
         lastLap = {
           enclosure: readEnclosure(outputs, circuit.lap),
+          repairs: readRepairs(outputs, language),
           placed: requirePlacementCount(outputs),
+          readyMs: performance.now() - worldT0,
         };
         showLapStats();
       }
@@ -999,37 +1064,37 @@ function requirePlacementCount(
 }
 
 /**
- * The two readouts that describe the lap ON SCREEN, from the level that
- * decided it.
+ * THE FOUR READOUTS THAT DESCRIBE THE LAP ON SCREEN, ALL FROM THE LEVEL
+ * THAT DECIDED IT.
  *
- * CALLED TWICE PER COOK, AND THAT IS THE POINT OF THE FUNCTION. The
- * prelude finishes synchronously and the lap level cooks later, so between
- * the two there is a window — a second or so — in which the page has a
- * settled list and no enclosure and no final count. It used to fill that
- * window with `dressLap`'s own numbers, which were true of a lap the page
- * was no longer drawing. Now it says it is still cooking, in the same
- * words the sectors readout already uses, and both lines land together
- * when the level answers.
+ * IT USED TO BE TWO, AND THE OTHER TWO WERE ABOUT A DIFFERENT LAP. The
+ * corner-language and repairs lines read `dressLap`'s `DressStats` -- a
+ * lap settled in TypeScript in a prelude, next to a lap drawn by the
+ * graph. They were close enough to look right and were not the same lap.
+ * There is no prelude now, so all four come off the one cell.
+ *
+ * CALLED TWICE PER COOK, WHICH IS THE POINT OF THE FUNCTION. The lap
+ * level cooks under a frame budget, so for a second or so after a seed
+ * changes the page is drawing a circuit it cannot yet describe. Every
+ * line says so, in the same words the `sectors` readout already uses,
+ * and all four land together when the level answers. Filling that window
+ * with anything else is what the old arrangement did.
  *
  * THE COUNT AND THE COVER COME FROM THE SAME CELL because they are two
  * views of one list: L-6's pieces ARE placements, so a count taken before
  * enclosure and a cover share taken after it would not add up. Measured on
- * the shipped vocabulary, the level's list is the prelude's plus exactly
- * the pieces it built — 11, 16 and 16 on seeds 1-3 — which is a 3-5% error
- * in `/W` and enough to move the D-1 verdict.
- *
- * THE MILLISECONDS ARE STILL THE PRELUDE'S and are not the whole cost of
- * the lap. They are the part the page BLOCKS on: nothing streams until the
- * prelude returns, whereas the level's own cook is budgeted across frames
- * and is what the `sectors` line is watching.
+ * the shipped vocabulary, the level's list is the pre-enclosure one plus
+ * exactly the pieces it built -- 11, 16 and 16 on seeds 1-3 -- which is a
+ * 3-5% error in `/W` and enough to move the D-1 verdict.
  */
 function showLapStats(): void {
-  const s = lastStats;
-  if (!s || !circuit) return;
+  if (!circuit) return;
   const level = lastLap;
   if (!level) {
-    statProps(`cooking the lap · prelude ${s.cookMs.toFixed(0)} ms`);
+    statProps("cooking the lap");
     statCover("cooking the lap");
+    statCorners("cooking the lap");
+    statRules("cooking the lap");
     return;
   }
 
@@ -1048,18 +1113,20 @@ function showLapStats(): void {
         : perW > DENSITY.max
           ? " — over D-1"
           : " — inside D-1";
-  statProps(`${level.placed} placements, ${perW.toFixed(2)}/W${band}, ${s.cookMs.toFixed(0)} ms`);
+  // `ready in`, NOT `ms`, AND THE WORD IS THE HONEST PART. The figure this
+  // replaced was `dressLap`'s own compute time, measured round a
+  // synchronous call. The level is budgeted across frames, so this is wall
+  // clock from the World being built to the cell landing -- which includes
+  // every frame it waited and is what a viewer watching the lap appear is
+  // actually timing.
+  statProps(
+    `${level.placed} placements, ${perW.toFixed(2)}/W${band}, ready in ${level.readyMs.toFixed(0)} ms`,
+  );
 
   // MEASURED, not planned. L-6's only real claim is what a ray cast finds,
   // and the dressing already encloses a good deal of lap before any
   // enclosure run is placed — so the interesting numbers are the before
   // and after, not the intent.
-  //
-  // EVERY FIGURE ON THIS LINE IS THE GRAPH'S NOW, the trim included. Both
-  // halves of L-6 run in the lap level's second repair pass, and
-  // `dressLap` is called with `enclosure: "deferred"`, which stands the
-  // whole rule down rather than half of it — so there is no second set of
-  // these numbers for this line to be reading by mistake.
   //
   // THE TRIM READS ZERO ON EVERY LAP THIS PAGE CAN DRAW, and that is a
   // measurement rather than an omission: the shipped vocabulary tops out
@@ -1076,6 +1143,69 @@ function showLapStats(): void {
         : e.nothingToTrim
           ? " · nothing incidental to trim"
           : ""),
+  );
+
+  // THE CORNER LANGUAGE, AND THE CORNER COUNT IS A READING OF THE LAP
+  // RATHER THAN A RULE THE PAGE RUNS. `cornersOf` turns the road graph's
+  // own curvature columns into corners; it is the same model the graph's
+  // stage reads, pinned corner for corner against `cookCorners` in
+  // `tests/racetrackCornerGraph.test.ts`. So this is the same category of
+  // thing as the lap length on the line above, not a survival of the
+  // prelude.
+  //
+  // AND IT IS WHAT MAKES THE MARKER COUNTS MEAN ANYTHING. "19 markers" is
+  // not a claim on its own; "19 markers on 19 corners" is L-2 satisfied,
+  // and one short of it is the rule failing where a viewer can see it.
+  //
+  // WHAT THIS LINE NO LONGER SPLITS is L-2's converted from its added.
+  // `dressLap` reported the two apart; a conversion and an addition leave
+  // the same marker on the same list, so the difference lives in the
+  // bookkeeping stage and not in the cloud it hands on. The total is
+  // honest and the split would have to be published to come back.
+  const r = level.repairs;
+  const corners = cornersOf(circuit.lap);
+  const tight = corners.filter((c) => c.tightestW < SEVERITY.tightW).length;
+  statCorners(
+    `${corners.length} corners (${tight} tight) · ` +
+      `L-2 ${r.markersPlaced} markers, ${r.markersPlaced - r.markersKept} lost to cull · ` +
+      `L-3 ${r.rulersPlaced} marks, ${r.rulersPlaced - r.rulersKept} lost`,
+  );
+
+  // THE REPAIRS, AND WHAT THIS LINE SAYS IS SHORTER THAN WHAT IT USED TO
+  // AND TRUE, WHICH THE FIRST VERSION OF IT WAS NOT.
+  //
+  // It printed `still pushed N, still lowered M (last round)` and both
+  // were ALWAYS ZERO. `PLACEMENT.pushW` and `PLACEMENT.drop` are
+  // rewritten unconditionally every round rather than accumulated, and
+  // `writeSettleCount` stops the loop exactly when both read zero over
+  // every point -- so on a converged lap the final round moved nothing and
+  // the counts are zero by construction. They carried the one bit
+  // `converged` already carries and read as "L-1 pushed nothing", which is
+  // false about the lap. `RepairReport` says the same at greater length.
+  //
+  // `cut` IS A TOTAL AND SURVIVES THE SAME ARGUMENT, because it is a
+  // difference between two published LISTS rather than a flag on a carry:
+  // the first pass only ever shrinks, so the count that entered it minus
+  // the count that left it is the whole of what L-1 dropped, however many
+  // rounds it took. The round counts survive it too, for the opposite
+  // reason -- `repeatUntil` synthesizes them and the body cannot see them,
+  // so nothing in the body can overwrite them.
+  //
+  // FIVE FIGURES ARE GONE AND ARE NOT COMING BACK QUIETLY. D-4's
+  // post-cull pass and L-4 are not stages in this graph at all, so
+  // `coverageMoves`, `worstGapW` and `landmarkFixes` have no source --
+  // that is a property of what was ported, not of what is published.
+  // Z-1's and Z-3's per-round counts are folded into the settle signal
+  // rather than reduced apart, so `corridorFixes` and `mixMoves` would
+  // need their own outputs and a running column to be totals. Printing a
+  // stale number for any of them is exactly what dropping the prelude was
+  // for.
+  statRules(
+    `${r.assembled} assembled -> ${r.settledFirst} settled · ` +
+      `sightline cut ${r.dropped} · ` +
+      (r.converged
+        ? `settled in ${r.roundsFirst}+${r.roundsSecond} rounds`
+        : `DID NOT SETTLE in ${r.roundsFirst}+${r.roundsSecond} rounds`),
   );
 }
 
@@ -1103,123 +1233,44 @@ async function cookAndBuild(): Promise<void> {
   {
     const next = await cookCircuit(state.seed);
     circuit = next;
-    // THE PRELUDE, NOW TWO ROUNDS SHORTER. Where the placements GO and
-    // what each placement IS are both a graph now: `cookLapPlacements`
-    // runs the Neyman-Scott station process, D-4's coverage repair and
-    // the four weighted draws of asset choice as nodes, in ONE graph on
-    // the lap's own frames, and hands back exactly what the two
-    // TypeScript stages handed back. What is left of the prelude below is
-    // the corner language, landmark uniqueness and the band mix —
-    // lap-global list arithmetic, and the next thing to move.
-    // `levels.ts`' header says the rest.
+    // THERE IS NO PRELUDE ANY MORE, AND THAT WAS THE POINT OF THE WHOLE
+    // CAMPAIGN. What stood here settled the lap in TypeScript before the
+    // level cooked -- `cookLapPlacements`, `placementsBeforeLanguage`,
+    // `cookCorners`, `cookCornerBookkeeping` and `dressLap` -- and handed
+    // the finished list to `buildRacetrackLevels`. The graph could decide
+    // its own list for some time before this line changed; what the page
+    // was still doing was deciding it FIRST and handing it over, which
+    // made the placements DATA in the lap graph. A graph whose answer is
+    // bound into it as input is a picture of one lap and cannot be
+    // serialized and re-run against another spline, which is the only
+    // version of it a game could ship.
     //
-    // THE POOL IS DECIDED ONCE AND GIVEN TO BOTH, because a choice is an
-    // INDEX into it: `reserveFor` sets L-2 and L-3's corner vocabulary
-    // aside before anything is dressed, and the cook must draw from the
-    // same remainder `dressLap` will resolve against.
+    // ONE COOK STAYS, DELIBERATELY. `cookReserveMarkers` decides WHICH
+    // ASSETS EXIST before anything is dressed -- the pool everything
+    // downstream draws from is the kit minus L-2 and L-3's three reserved
+    // verticals -- so it cannot be a stage inside the graph that consumes
+    // its answer. Folding it in would also mean ranking three objects by
+    // height in-graph and handing back a list of TypeScript objects for
+    // indices to resolve against. It is a cook over eight candidates and
+    // costs nothing measurable.
     //
-    // THE PAGE IS THE FIRST CONSUMER ON PURPOSE. The graph and the
-    // TypeScript do not agree station for station and cannot, so this is
-    // the lap the demo draws now; the suites that still call `dressLap`
-    // with neither option keep measuring the fitted process, which is
-    // what those figures were fitted against.
+    // WHAT THE PAGE GAVE UP TO GET HERE is on the two readouts, not in the
+    // geometry: five of `DressStats`' figures have no graph source and
+    // `showLapStats` says which and why. The lap itself is the same rules
+    // in the same order.
     const kit = dressingKit();
-    // TWO COOKS, AND THE REASON IS NOT LAZINESS. The reservation decides
-    // WHICH ASSETS EXIST for everything after it -- the pool the stations
-    // draw from is the kit minus these three -- so it cannot be a stage
-    // inside the graph that consumes its answer. Folding it in would also
-    // mean deciding the three roles in-graph, which is a rank of three
-    // objects by height, and handing `dressLap` a pool it can resolve
-    // indices against, which is a list of TypeScript objects. Both are
-    // work with nothing to show for it: this cook is over eight
-    // candidates and costs nothing measurable.
     const reservation = await cookReserveMarkers({
       assets: (kit.assets as unknown as PlaceableAsset[]).filter((a) => a.where),
       seed: state.seed,
     });
-    const decided = await cookLapPlacements({
-      lap: next.lap,
-      seed: state.seed,
-      pool: reservation.pool,
-      markers: reservation.markers,
-      densityScale: state.density,
-    });
-    // AND THE BOOKKEEPING, which needs the lap as it reaches step 4 --
-    // stations, assets and Z-1 and nothing after. `dressLap` exports the
-    // one definition of that list rather than the page building a second
-    // one, and re-running it below costs a draw the page already has plus
-    // one pure function per placement.
-    const dressOpts = {
-      density: state.density,
-      reservation,
-      stations: decided.stations,
-      choices: decided.choices,
-      language: decided.language,
-    };
-    const staged = placementsBeforeLanguage(next.lap, state.seed, reservation.pool, dressOpts);
-    // BY ID, NOT BY OBJECT IDENTITY. The placements do carry the very
-    // objects the pool holds today -- `fromChoice` returns `pool[i]` and
-    // Z-1 spreads it -- so `indexOf` would work and would stop working
-    // the first time anything downstream cloned a placement, silently,
-    // as an ord of -1.
-    const ordOfId = new Map(reservation.pool.map((a, i) => [a.id, i]));
-    const bookkeeping = await cookCornerBookkeeping({
-      placements: staged.placements.map((p) => ({
-        assetOrd: ordOfId.get(p.asset.id) ?? -1,
-        station: p.station,
-        t: p.t,
-      })),
-      corners: await cookCorners({ lap: next.lap }),
-      lapW: next.lap.lengthW,
-    });
-    // AND L-6 IS DEFERRED, which is the last thing the page ran in
-    // TypeScript. `enclosure: "deferred"` is a SKIP and not a hand-in,
-    // unlike every other option above: the budget enclosure spends is
-    // measured from boxes built out of the settled list, so it cannot be
-    // handed an answer decided beforehand. The lap level's graph runs it,
-    // over the list this call settles.
-    //
-    // WHAT WAS ACTUALLY WRONG BEFORE, since it was not a missing rule. The
-    // graph has run L-6 since it was ported; it just never had anything to
-    // do, because `dressLap` had already enclosed the lap and the budget
-    // came out zero — so every tunnel on screen was the TypeScript one's
-    // and the ported stage was inert. Deferring makes the graph the one
-    // that builds them, and `showLapStats` reads what it built.
-    const dressed = dressLap(kit, next.lap, state.seed, {
-      ...dressOpts,
-      bookkeeping,
-      enclosure: "deferred",
-    });
-    lastStats = dressed.stats;
     buildCircuit(next);
-    const graphs = buildStreamedDressing(next, dressed);
+    const graphs = buildStreamedDressing(next, kit, reservation);
     frameMap(next, state.mapZoom);
     statLap(`${next.lap.lengthW.toFixed(1)} W (${next.lap.length.toFixed(0)} u)`);
-    if (lastStats) {
-      const s = lastStats;
-      // The corner language gets its own line: L-2 and L-3 are the only
-      // rules that ADD placements, so their two counts are what makes
-      // D-1's budget drift explicable rather than mysterious. The losses
-      // to the cull are on the same line because L-1 runs after them and
-      // has the last word — a marker can be placed correctly and still
-      // not survive.
-      statCorners(
-        `${s.corners} corners (${s.tightCorners} tight) · ` +
-          `L-2 ${s.markersConverted}+${s.markersAdded} · ` +
-          `L-3 ${s.brakeMarks}-${s.brakeDisplaced} · ` +
-          `cull took ${s.markersLostToCull} markers, ${s.rulersLostToCull} rulers`,
-      );
-      statRules(
-        `gaps ${s.stationGapRepairs}+${s.coverageMoves} (worst ${s.worstGapW.toFixed(0)}W) · corridor ${s.corridorFixes} · ` +
-          `sightline ${s.blocked} (${s.pushedOut} out, ${s.dropped} cut) · ` +
-          `landmarks ${s.landmarkFixes} · false edges ${s.falseEdges}/${s.edgeMoves} · ` +
-          `mix ${s.mixMoves}`,
-      );
-    }
-    // AND THE TWO LINES ABOUT THE LAP THE PAGE DRAWS, which nothing knows
-    // yet: the lap level has been asked to cook and has not answered. This
-    // renders the waiting state; `onCellReady` calls it again with the
-    // answer.
+    // AND EVERY LINE ABOUT THE LAP THE PAGE DRAWS, none of which anything
+    // knows yet: the lap level has been asked to cook and has not
+    // answered. This renders the waiting state; `onCellReady` calls it
+    // again with the answer.
     showLapStats();
     statCook(`${next.cookMs.toFixed(0)} ms`);
     // Called only when the graphs CHANGED — it re-serializes and re-lays

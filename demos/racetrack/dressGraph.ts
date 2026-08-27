@@ -723,15 +723,11 @@ export interface GraphDressing extends EnclosureReport, RepairReport {
    */
   readonly placementsInput: Geometry;
   /**
-   * How many rounds the repair loop ran, and whether it settled.
-   *
-   * `converged` false does NOT mean the cook failed — it means some rule
-   * is still unsatisfied on this lap and the cap stopped the search. That
-   * is a fact the caller decides what to do with, and the whole reason a
-   * bounded repair has to report it rather than returning quietly.
+   * BOTH PASSES' ROUNDS, SUMMED, because that is what the cook actually
+   * spent. `RepairReport` publishes the two apart so a caller can tell
+   * which half a lap's cost came from; a stat line wants the total.
    */
   readonly rounds: number;
-  readonly converged: boolean;
   /**
    * How many copies the box build actually emitted.
    *
@@ -5003,39 +4999,36 @@ export function languagePoses(
 /** What the repairs did, as {@link readRepairs} can honestly report it. */
 export interface RepairReport {
   /**
-   * L-1's push-aside and L-5's lowering, ON THE LAST ROUND ONLY.
+   * How many rounds each repair pass ran, and whether the second settled.
    *
-   * `pushed + dropped` USED TO BE `cullSightlines`' `blocking`, and that
-   * invariant is why both are reported: the node answers with survivors
-   * and says nothing about what it removed, so a stage whose only visible
-   * effect is a shorter list is a stage nobody can tell from a stage that
-   * did nothing. The identity itself stopped holding when L-6 was wired
-   * in -- `pushed` is a last-round count over a list that now contains
-   * cover -- which is recorded here rather than deleted, because it is the
-   * sentence anyone reconciling these two numbers will look for.
+   * THESE REPLACED A `pushed` AND A `lowered` THAT WERE ALWAYS ZERO, and
+   * the reason is worth keeping because the fields looked perfectly
+   * reasonable. Both were counts of a per-placement flag on the finished
+   * carry -- `PLACEMENT.pushW` where L-1 shoved something,
+   * `PLACEMENT.drop` where L-5 lowered it. But `writeSettleCount` stops
+   * the loop exactly when `max(corridorMoved, mixCommit, pushW != 0,
+   * drop)` sums to zero over every point, and both columns are REWRITTEN
+   * unconditionally each round rather than accumulated. So on a lap that
+   * converged, the last round moved nothing, and the two counts are zero
+   * BY CONSTRUCTION -- they carried exactly the one bit `converged`
+   * already carries, and read on the panel as "L-1 pushed nothing", which
+   * is false about the lap.
    *
-   * `lowered` IS ONE PASS OF L-5 AND NOT THE RULE'S TOTAL, separately from
-   * the last-round point below. `repairFalseEdges` runs its detector up to
-   * eight times because breaking a run can leave two runs; this graph runs
-   * it once per round, which is why the test compares against
-   * `repairFalseEdges(..., 1)`.
+   * THE ROUND COUNTS ARE WHAT A REPAIR LINE ACTUALLY WANTS. They are
+   * synthesized by `repeatUntil` itself rather than folded out of the
+   * body's columns, which is why they survive the same argument: the body
+   * cannot see how many times it has run, so nothing in it can overwrite
+   * them. `converged` false is not a failed cook -- it means some rule is
+   * still unsatisfied and the cap stopped the search, which is a fact the
+   * caller decides what to do with.
    *
-   * NOT THE RULE'S TOTAL, AND THE DIFFERENCE IS STRUCTURAL RATHER THAN AN
-   * OMISSION. Both are per-placement flags rewritten by every round of the
-   * repair loop, and `repeatUntil` publishes the last round's carry and
-   * nothing from the rounds before it -- so a sum over all rounds would
-   * have to be a running total threaded on the carry cloud, the way
-   * `writeSettleCount` threads its settle flag. `dressLap` adds these up
-   * in a local because a TypeScript loop has somewhere to put one.
-   *
-   * A LAST-ROUND FIGURE IS STILL WORTH PRINTING, and it is not the same
-   * statement: it says what the finished lap still has moved on it, which
-   * is what a viewer is looking at. It just is not "how much work the rule
-   * did", and a panel that implied otherwise would be wrong in the
-   * direction that flatters.
+   * BOTH PASSES, APART. The first runs before L-6 has added anything and
+   * is the only figure comparable with a reference loop over the same
+   * list; the second is what the lap that came OUT cost to settle.
    */
-  readonly pushed: number;
-  readonly lowered: number;
+  readonly roundsFirst: number;
+  readonly roundsSecond: number;
+  readonly converged: boolean;
   /**
    * How many the cull removed, EXACTLY, across every round.
    *
@@ -5099,7 +5092,6 @@ export function readRepairs(
     readonly rulerPoses: ReadonlySet<number>;
   },
 ): RepairReport {
-  const placements = requireGeo(outputs[DRESS_OUTPUTS.placements], DRESS_OUTPUTS.placements);
   const placementsFirst = requireGeo(
     outputs[DRESS_OUTPUTS.placementsFirst],
     DRESS_OUTPUTS.placementsFirst,
@@ -5108,23 +5100,6 @@ export function readRepairs(
     outputs[DRESS_OUTPUTS.placementsInput],
     DRESS_OUTPUTS.placementsInput,
   );
-
-  // WHAT L-1 DID, AS A DIFFERENCE BETWEEN TWO LISTS. `occlusionCull`
-  // answers with survivors and reports nothing about the ones it removed,
-  // which is the right contract for a node that knows nothing about what
-  // it is culling -- so the accounting happens here, off `PLACEMENT.pushW`
-  // (who moved) and the two counts (how many went).
-  const pushCol = placements.attrs.point.require(PLACEMENT.pushW);
-  let pushed = 0;
-  for (let i = 0; i < placements.pointCount; i++) {
-    if (pushCol.get(i) !== 0) pushed++;
-  }
-
-  const dropCol = placements.attrs.point.require(PLACEMENT.drop);
-  let lowered = 0;
-  for (let i = 0; i < placements.pointCount; i++) {
-    if (dropCol.get(i) !== 0) lowered++;
-  }
 
   const count = (geo: Geometry, poses: ReadonlySet<number>): number => {
     if (poses.size === 0) return 0;
@@ -5140,8 +5115,9 @@ export function readRepairs(
   const rulerPoses = language?.rulerPoses ?? none;
 
   return {
-    pushed,
-    lowered,
+    roundsFirst: requireNumber(outputs[DRESS_OUTPUTS.roundsFirst], DRESS_OUTPUTS.roundsFirst),
+    roundsSecond: requireNumber(outputs[DRESS_OUTPUTS.rounds], DRESS_OUTPUTS.rounds),
+    converged: requireNumber(outputs[DRESS_OUTPUTS.converged], DRESS_OUTPUTS.converged) !== 0,
     // AGAINST THE PASS THAT ONLY EVER SHRANK. Measuring this against the
     // FINAL list gave a NEGATIVE count once L-6 was wired in -- -11 to -16
     // on a bare lap -- because the final list has enclosure ADDED to it,
@@ -5209,10 +5185,7 @@ export async function dressLapByGraph(input: DressGraphInput): Promise<GraphDres
     // cost came from; a stat line wants the total.
     placementsFirst,
     placementsInput,
-    rounds:
-      requireNumber(out[DRESS_OUTPUTS.roundsFirst], DRESS_OUTPUTS.roundsFirst) +
-      requireNumber(out[DRESS_OUTPUTS.rounds], DRESS_OUTPUTS.rounds),
-    converged: requireNumber(out[DRESS_OUTPUTS.converged], DRESS_OUTPUTS.converged) !== 0,
+    rounds: repairs.roundsFirst + repairs.roundsSecond,
     stamped: boxes.pointCount,
     graph,
     cookMs: performance.now() - t0,

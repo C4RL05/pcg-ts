@@ -3768,7 +3768,7 @@ list) and 10 of 226 pool assets. `mixBandPools` is `[1,1,1,1,1,0]` on every
 seed: one band has no donor regardless of the set, which is a fact about the
 vocabulary and not about this decision.
 
-### Where the lap prelude stands — CORRECTED, 2026-08-27
+### ~~Where the lap prelude stands~~ — THE PAGE DROPPED IT, 2026-08-27
 
 Every rule that decides the racetrack's lap is a graph stage. The station
 process, D-4's coverage repair, asset choice, Z-1, L-1, L-5, Z-3, the corner
@@ -3888,3 +3888,136 @@ reports no length at all, so the second offender is untouched. And
 readers to size `count` from `lengthAttr` "which writes each path's true arc
 length", in the same paragraph that says its own arc coordinate is the chord
 one. That is corrected in the same commit as the reports.
+
+### The page has no prelude, 2026-08-27
+
+`demos/racetrack/main.ts` runs `cookReserveMarkers` and nothing else before
+handing the spline to a `World`. `cookLapPlacements`,
+`placementsBeforeLanguage`, `cookCorners`, `cookCornerBookkeeping` and
+`dressLap` are all gone from it, `placements` is not passed to
+`buildRacetrackLevels`, and the lap level decides the whole list. Nothing
+about the lap is data in the graph except the spline.
+
+**THE ONE COOK THAT STAYS IS NOT AN EXCEPTION BEING TOLERATED.**
+`reserveMarkers` decides WHICH ASSETS EXIST before anything is dressed --
+the pool everything downstream draws from is the kit minus L-2 and L-3's
+three reserved verticals -- so it cannot be a stage inside the graph that
+consumes its answer. It is a cook over eight candidates.
+
+**WHAT ACTUALLY BLOCKED IT WAS `densityScale`, AND THE ENTRY ABOVE RANKED
+`mixPinned` FIRST BY GUESSING.** `addLapPlacements` had taken a density
+scale since it was written; `assemble` handed it exactly
+`{halfWidth, assetCount, poseIds, language}`. Nothing would have thrown --
+the page's slider would simply have dressed every lap at x1.00, a control
+that moves nothing, which is worse than one that is not there. Threading it
+is one field. Measured: seed 1 at x0.5 lays 165 placements against x1.00's
+329, a ratio of 0.501 -- D-4's coverage repair does NOT add back what the
+thinning removes, so it is not the binding constraint on this population at
+either rate.
+
+**`mixPinned` IS RESERVED-ONLY, AND THAT IS BETTER THAN THE REFERENCE
+RATHER THAN A COMPROMISE.** `dressLap` pins `reserved ∪
+landmarkAssets(the settled list)`, which the page cannot reproduce without
+running `dressLap`. The question was never the 1.4-6.9% placement delta
+recorded above; it is whether L-4's actual guarantee survives -- every tenth
+of the lap holding an asset unique to the lap. Measured over six seeds, in
+three variants (reserved-only, reserved + a two-pass reconstruction of the
+full 13-id set, and a nothing-pinned control), counting covered stretches
+off the settled cloud with cover pieces excluded:
+
+| seed | reserved-only | + landmarks | control |
+| --- | --- | --- | --- |
+| 1 | 10 | 10 | 10 |
+| 2 | 10 | 10 | 10 |
+| 3 | 9 (bare [9]) | 9 (bare [9]) | 9 (bare [9]) |
+| 4 | 10 | 10 | 10 |
+| 5 | 10 | 10 | 10 |
+| 6 | **10** | **9 (bare [3])** | 9 (bare [3]) |
+
+Placement counts identical across all three on every seed; all 18 cooks
+converged in 3-5 rounds. The landmark pin buys ZERO coverage on five seeds
+and COSTS a stretch on the sixth, where it lands on exactly the answer
+pinning nothing gives. Seed 3's bare stretch is bare under all three, so it
+is not the mix's doing. Independently re-derived by a second agent that
+wrote its own measurement and reproduced all 18 cells.
+
+**THE MECHANISM, since "pinning is harmful" reads as backwards.** A pinned
+id is excluded from the quota's eligible donors AND from the redraw pool, so
+withholding ten more assets shrinks a ~226-asset pool and pushes Z-3 onto
+more-repeated replacements -- which destroys uniqueness elsewhere faster
+than the pin protects it here. And in graph mode the pin is purely
+defensive: `repairLandmarks` is not a stage, so there is no L-4 repair to
+restore what the mix breaks, which is the situation the reference's pin
+exists to answer. `uniqueAssetCount` moves with the pin set on every seed
+(seed 3: 82 / 77 / 74), so the measurement is sensitive; it only reaches
+stretch coverage on seed 6.
+
+**AND TWO PANEL LINES CHANGED, WHICH IS THE PRICE AND IT IS REAL.**
+`statCorners` and `statRules` read `DressStats`, and most of it cannot come
+back. Five figures have NO graph source at all -- D-4's post-cull pass and
+L-4 are not stages, so `coverageMoves`, `worstGapW` and `landmarkFixes` do
+not exist to publish, and Z-1's and Z-3's per-round counts are folded into
+the settle signal rather than reduced apart. `dropped` survives exactly,
+because it is a difference between two published LISTS rather than a flag on
+a carry: the first pass only ever shrinks.
+
+**AND THE FIRST VERSION OF THE REPLACEMENT LINE PRINTED TWO FIGURES THAT
+ARE ALWAYS ZERO**, which is worth recording because they looked perfectly
+reasonable and shipped through a typecheck and a green suite. It said
+`still pushed N, still lowered M (last round)`, off `PLACEMENT.pushW` and
+`PLACEMENT.drop` on the finished carry. Both columns are REWRITTEN
+unconditionally each round rather than accumulated, and `writeSettleCount`
+stops the loop exactly when `max(corridorMoved, mixCommit, pushW != 0,
+drop)` sums to zero over every point -- so on a lap that converged, the last
+round moved nothing and both counts are zero BY CONSTRUCTION. They carried
+the one bit `converged` already carries, and read on the panel as "L-1
+pushed nothing", which is false about the lap. Caught by looking at the
+rendered page, not by any test: nothing outside `main.ts` had ever read
+`GraphDressing.pushed` or `.lowered`, so a field that was provably always 0
+sat in the interface unexercised.
+
+**WHAT REPLACED THEM IS THE ROUND COUNTS, which survive the same argument
+from the other side.** `repeatUntil` synthesizes `rounds` and `converged`
+itself and the body cannot see them, so nothing in the body can overwrite
+them. The page reads `settled in 2+1 rounds` on seed 1 -- and that is also
+the explanation for the zeros, since a second pass that converges in one
+round has a final round that by definition did nothing.
+
+**STILL AVAILABLE, NOT TAKEN.** A true push TOTAL is reachable without a
+running column: compare `trackT` per placement id between `placementsInput`
+and `placementsFirst`. It would count Z-1's corridor moves in with L-1's,
+so it wants a way to tell the two apart before it is worth printing.
+
+**THE CORNER LINE CAME BACK STRONGER, THOUGH.** `languagePoses` inverts the
+pose library for L-2's two assets and L-3's one, and `readRepairs` counts
+them on `placementsInput` and `placementsFirst` -- placed, and survived.
+`dressLap` derived its equivalent by running `legibilityHealth` before and
+after and subtracting, which answers "is every corner still marked" and only
+approximates "how many went". What is lost is L-2's converted/added split,
+which lives in the bookkeeping stage and not in the cloud it hands on. The
+corner COUNT is `cornersOf(lap)`, a reading of the road graph's own
+curvature columns and the same model the graph's stage reads -- pinned
+corner for corner against `cookCorners` in `tests/racetrackCornerGraph.test.ts`
+-- so it is the same category of thing as the lap length, not a survival of
+the prelude.
+
+**AND THE MILLISECONDS MEAN A DIFFERENT THING NOW**, so the label does too.
+`dressLap` ran synchronously and reported its own compute time; the level is
+budgeted across frames, so the panel says `ready in` and measures wall clock
+from the World being built to the cell landing. That is the wait a viewer is
+actually timing, and the blocking quarter-second the prelude cost is gone
+from it entirely.
+
+**COVERAGE FOR THE MODE THE PAGE SWITCHED TO DID NOT EXIST UNTIL NOW.**
+`buildRacetrackLevels` had never been called without a placement list
+anywhere in the suite -- both call sites handed one in, and the branch was
+only ever exercised through `dressLapByGraph`, which COOKS. The dressing
+level reads its list off `ctx.parent.outputs`, and on every prior path that
+cloud was a `dataInput` restating a caller-built item rather than the end of
+a chain of stages. `tests/racetrackLevels.test.ts` now drives a World round
+a self-decided lap: 352 / 338 / 360 placements into 17 / 16 / 17 sectors,
+every placement spawned exactly once, union bit-identical to spawning the
+settled cloud whole.
+
+**On screen: 352 placements at 1.01/W, inside D-1, 19 markers on 19
+corners.** The count is unchanged from the prelude's lap.
