@@ -18,6 +18,9 @@
  * catch it, because they run the original.
  */
 import { describe, expect, it } from "vitest";
+import { buildCornerBookkeeping } from "../demos/racetrack/cornerGraph.js";
+import { dressedLapFor } from "./support/lap.js";
+import { cornersOf } from "../demos/racetrack/corners.js";
 import {
   type VictimPlacement,
   cookCornerBookkeeping,
@@ -332,4 +335,71 @@ describe("cornerBookkeeping: through dressLap", () => {
     // would pass everything above.
     expect(JSON.stringify(viaGraph.boxes)).toBe(JSON.stringify(plain.boxes));
   });
+});
+
+describe("corner bookkeeping topology", () => {
+  /**
+   * THE GRAPH IS THE SAME GRAPH WHATEVER LAP IT IS GIVEN, and this is the
+   * only assertion that says what the two convert/displace loops were
+   * for.
+   *
+   * L-2's conversion and L-3's payment were both UNROLLED — a node stage
+   * per corner, and per (corner, mark) — so a lap with nineteen corners
+   * built a bigger graph than a lap with twelve. A graph whose shape
+   * depends on the spline cannot be serialized once and re-run against
+   * another track, which is the whole point of putting these rules in a
+   * graph at all.
+   *
+   * Behaviour is checked against the reference everywhere else in this
+   * file; what is checked here is the SHAPE, because that is the property
+   * the rewrite bought and it is invisible to every other test. Both
+   * loops passed their suites while still unrolled.
+   */
+  it("has the same nodes for laps with different corner counts", async () => {
+    const shapes: { seed: number; corners: number; tight: number; nodes: number }[] = [];
+
+    for (const seed of [1, 2, 3, 4, 5, 6]) {
+      const { lap, dressing } = await dressedLapFor(seed);
+      const corners = cornersOf(lap);
+      const g = buildCornerBookkeeping({
+        placements: dressing.placements.map((p) => ({
+          assetOrd: 0,
+          station: p.station,
+          t: p.t,
+        })),
+        corners,
+        lapW: lap.lengthW,
+        seed,
+      });
+      shapes.push({
+        seed,
+        corners: corners.length,
+        tight: corners.filter((c) => c.tightestW < SEVERITY.tightW).length,
+        nodes: g.describe().nodes.length,
+      });
+    }
+
+    // THE PREMISE, ASSERTED. If every lap happened to have the same corner
+    // count the comparison below would hold for a graph that was still
+    // unrolled, and would prove nothing at all.
+    const cornerCounts = new Set(shapes.map((s) => s.corners));
+    const tightCounts = new Set(shapes.map((s) => s.tight));
+    expect(
+      cornerCounts.size + tightCounts.size,
+      `every lap has the same corner shape (${[...cornerCounts]} / ${[...tightCounts]}), ` +
+        "so this test cannot tell an unrolled graph from a looped one",
+    ).toBeGreaterThan(2);
+
+    const nodeCounts = new Set(shapes.map((s) => s.nodes));
+    expect(
+      nodeCounts.size,
+      "the bookkeeping graph's node count varies with the lap: " +
+        shapes.map((s) => `seed ${s.seed} ${s.corners}c/${s.tight}t -> ${s.nodes} nodes`).join(", "),
+    ).toBe(1);
+
+    console.log(
+      `corner bookkeeping: ${[...nodeCounts][0]} nodes for every lap — ` +
+        shapes.map((s) => `${s.corners}c/${s.tight}t`).join(", "),
+    );
+  }, 120000);
 });

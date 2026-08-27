@@ -3124,3 +3124,38 @@ switching the page over means moving when that stat appears, which is page
 chrome and touches the streaming path. The rule is ported, tested against
 the reference on four laps, and exercised through the real option -- what
 is left is where the number is printed.
+
+### The corner bookkeeping is 7 nodes for every lap, 2026-08-27
+
+L-2's conversion and L-3's payment were both UNROLLED -- a node stage per
+corner, and per (corner, mark) -- so a lap with 25 corners built a bigger
+graph than one with 15. A graph whose SHAPE depends on the spline cannot
+be serialized once and re-run against another track, which is the whole
+point of putting these rules in a graph.
+
+Both are loops now, and the measurement is the claim: **7 nodes on every
+lap**, over corner counts of 19, 15, 25, 15, 21 and 15 and tight counts of
+9 to 13. Adding one node per corner back breaks it immediately (26 / 22 /
+32 / 22 / 28 / 22), which is what makes the assertion worth having --
+every OTHER test in that file passed with the graph still unrolled,
+because behaviour never changed. It still has not: the bookkeeping matches
+the shipped reference exactly on all four seeds (9+10/-25, 13+6/-22,
+13+6/-24, 10+9/-27).
+
+**The two reasons the code gave for the unroll had both stopped being
+true.** "A `repeatUntil` body cannot see its own iteration index" -- the
+node cannot, and the CARRY CAN COUNT, which is what the enclosure planner
+runs on. "`repeatUntil` carries exactly one pin and this needs two
+populations" -- it carries one carry plus as many broadcast inputs as the
+body exposes, and `buildRepairBody` already uses two.
+
+`cookCornerBookkeeping` is split into `buildCornerBookkeeping` + a cook,
+the same way `buildDressGraph` and `dressLapByGraph` are, because a
+topology claim cannot be checked through an entry point that throws the
+graph away.
+
+**What is left before `placements` can leave the `dataInput` list** is the
+join itself: `cookLapPlacements` already puts stations, the coverage
+repair, asset choice, Z-1 and the corner language in ONE graph with one
+cook, and `buildDressGraph` builds a second. Joining them is now a wiring
+question rather than a topology one.

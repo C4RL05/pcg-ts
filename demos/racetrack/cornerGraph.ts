@@ -44,6 +44,8 @@ import {
   copyToPoints,
   createPointCloud,
   dataInput,
+  floor,
+  div,
   eq,
   filterByExpression,
   ge,
@@ -1584,43 +1586,6 @@ function addConvertStage(
   );
 }
 
-/**
- * ONE MARK'S WORTH of L-3's payment.
- *
- * PAY FIRST, AND UP TO THREE TIMES. `placeCornerLanguage` displaces the
- * most repeated ordinary placement in the braking window, up to
- * `BRAKING.count` of them, BEFORE it adds the ruler -- so the displaced
- * placements cannot be the marks just added, and a window with nothing to
- * give still gets its ruler.
- *
- * IT BREAKS RATHER THAN CONTINUES when a round finds nothing, which
- * unrolled is simply what happens: a stage with no eligible placement
- * marks none, and the next stage over the same window finds none either.
- */
-function addDisplaceStage(
-  g: Graph,
-  from: { readonly node: NodeHandle; readonly pin: string },
-  corner: Corner,
-  tightIndex: number,
-  mark: number,
-  lapW: number,
-  pre: string,
-): NodeHandle {
-  const tag = `${pre}D${tightIndex}_${mark}`;
-  const search = addVictimSearch(g, from, {
-    entryW: corner.entryW,
-    windowW: BRAKING.windowW as unknown as readonly [number, number],
-    lapW,
-    tag,
-  });
-  return put(
-    g,
-    { node: search.out, pin: "out" },
-    VICTIM.displacedBy,
-    select(search.isVictim, tightIndex, attribute(VICTIM.displacedBy)),
-    `${tag}Displace`,
-  );
-}
 
 /** One placement, as the victim search reads and answers it. */
 export interface VictimPlacement {
@@ -1701,6 +1666,29 @@ export async function cookCornerBookkeeping(opts: {
   if (placements.length === 0) {
     return { claimedBy: [], displacedBy: [], added: corners.map((_, ci) => ci) };
   }
+  const g = buildCornerBookkeeping(opts);
+  const cooked = await cook(g);
+  const geoOut = (cooked.outputs.placements[0] as { geo: Geometry }).geo;
+  return readBookkeeping(geoOut, placements.length, corners.length);
+}
+
+/**
+ * The bookkeeping graph, built and not cooked.
+ *
+ * SPLIT OUT SO THE TOPOLOGY CAN BE MEASURED. Both of L-2's and L-3's
+ * unrolls are loops now, so this graph has the same nodes whatever lap it
+ * is given -- which is the whole reason they were rewritten, and a claim
+ * nothing could check while the only entry point was an async cook that
+ * threw the graph away. `buildDressGraph` and `dressLapByGraph` are split
+ * for the same reason.
+ */
+export function buildCornerBookkeeping(opts: {
+  readonly placements: readonly VictimPlacement[];
+  readonly corners: readonly Corner[];
+  readonly lapW: number;
+  readonly seed?: number;
+}): Graph {
+  const { placements, corners, lapW } = opts;
   const g = new Graph(opts.seed ?? 1);
   const inCloud = g.add(dataInput, {}, "placements");
   g.setParam(inCloud, "items", [makeGeometryItem(bookkeepingCloud(placements))]);
@@ -1746,22 +1734,43 @@ export async function cookCornerBookkeeping(opts: {
     at = loop;
     atPin = "carry";
   }
-  // L-3 IS STILL UNROLLED, and that is the next thing rather than an
-  // oversight: its stages are per (corner, mark) and its window arithmetic
-  // is the same shape L-2's was, so the same loop fits. L-2 was taken
-  // first because it is the one that CONVERTS, and a conversion is what
-  // makes the graph's topology depend on the lap.
   const tight = corners.filter((c) => c.tightestW < SEVERITY.tightW);
-  for (let ti = 0; ti < tight.length; ti++) {
-    for (let k = 0; k < BRAKING.count; k++) {
-      at = addDisplaceStage(g, { node: at, pin: atPin }, tight[ti], ti, k, lapW, "bk");
-      atPin = "out";
-    }
+  if (tight.length > 0) {
+    // The counter goes back to zero: L-3 walks its own corners, and it
+    // walks each of them `BRAKING.count` times.
+    const zeroed = g.add(
+      setAttribute,
+      { name: CONVERT.round, tupleSize: 1, value: 0 },
+      "bkdRound0",
+    );
+    g.connect(at, atPin, zeroed, "in");
+
+    const tightIn = g.add(dataInput, {}, "tightCorners");
+    g.setParam(tightIn, "items", [makeGeometryItem(tightCornerCloud(corners))]);
+
+    const body = buildDisplaceBody(lapW);
+    const loop = g.add(
+      repeatUntilNode(body.graph, body.inputs, body.outputs),
+      { maxRounds: tight.length * BRAKING.count, settleAttr: CONVERT_SETTLE },
+      "bkDisplace",
+    );
+    g.connect(zeroed, "out", loop, "carry");
+    g.connect(tightIn, "out", loop, "corners");
+    at = loop;
+    atPin = "carry";
   }
   g.output(at, atPin, "placements");
+  return g;
+}
 
-  const cooked = await cook(g);
-  const geo = (cooked.outputs.placements[0] as { geo: Geometry }).geo;
+/** The three lists {@link cookCornerBookkeeping} reads off the cooked cloud. */
+function readBookkeeping(
+  geo: Geometry,
+  placementCount: number,
+  cornerCount: number,
+): CornerBookkeeping {
+  void placementCount;
+  const corners = { length: cornerCount };
   const col = (name: string): number[] => {
     const c = geo.attrs.point.require(name);
     const out: number[] = [];
@@ -1792,6 +1801,8 @@ export const CORNER_ROW = {
 const CONVERT = {
   round: "bkRound",
   going: "bkGoing",
+  /** Which corner the round belongs to, where a corner spans several. */
+  which: "bkWhich",
 } as const;
 
 /** The detail attribute the convert loop settles on. */
@@ -1928,6 +1939,132 @@ export function buildConvertBody(
     graph: b,
     inputs: [
       { name: "carry", node: row, pin: "in" },
+      { name: "corners", node: row, pin: "source" },
+    ],
+    outputs: [{ name: "carry", node: settle, pin: "out" }],
+  };
+}
+
+/**
+ * The TIGHT corners as a cloud, one point each.
+ *
+ * A SECOND CLOUD RATHER THAN A FLAG ON THE FIRST, because L-3 indexes by
+ * position among the TIGHT corners and `VICTIM.displacedBy` records that
+ * index -- not the corner's position on the lap. Filtering here keeps the
+ * numbering the reference's, where a flag would have made every round skip
+ * rows and the index mean something else.
+ */
+export function tightCornerCloud(corners: readonly Corner[]): Geometry {
+  const tight = corners.filter((c) => c.tightestW < SEVERITY.tightW);
+  const geo = createPointCloud(Math.max(1, tight.length));
+  const pts = geo.attrs.point;
+  const P = pts.require("P");
+  const entryW = pts.add(CORNER_ROW.entryW, "f32", 1);
+  const count = pts.add(CORNER_ROW.count, "f32", 1);
+  for (let i = 0; i < pts.count; i++) {
+    P.setTuple(i, [i, 0, 0]);
+    count.set(i, tight.length);
+    const c = tight[i];
+    if (c) entryW.set(i, c.entryW);
+  }
+  return geo;
+}
+
+/**
+ * L-3's payment over every tight corner, as one bounded loop.
+ *
+ * THE UNROLL WAS A DOUBLE ONE -- per tight corner, and then
+ * `BRAKING.count` times within it -- and the inner repetition is not a
+ * detail: L-3 displaces the most repeated ordinary placement in the
+ * braking window, up to three of them, and each round takes the next
+ * because the one before it is now marked. So the rounds are
+ * `tight * BRAKING.count` and the corner a round belongs to is
+ * `floor(round / BRAKING.count)`, which is the order the unroll visited
+ * them in and is load-bearing for the same reason the conversion's was.
+ *
+ * `mark` DECIDED NOTHING AND ONLY NAMED THINGS. It appeared in the
+ * unrolled stage's tag and nowhere in its arithmetic, which is what makes
+ * the two nested loops one flat one here.
+ */
+export function buildDisplaceBody(
+  lapW: number,
+): { graph: Graph; inputs: ExposedPin[]; outputs: ExposedPin[] } {
+  const b = new Graph(1);
+
+  const which = b.add(
+    setAttribute,
+    {
+      name: CONVERT.which,
+      tupleSize: 1,
+      // `floor` of a non-negative quotient; there is no `ceil` in the field
+      // vocabulary and none is wanted here.
+      value: floor(div(attribute(CONVERT.round), BRAKING.count)),
+    },
+    "bkdWhich",
+  );
+
+  const row = b.add(
+    transferByIndex,
+    {
+      index: attribute(CONVERT.which),
+      attributes: [CORNER_ROW.entryW, CORNER_ROW.count],
+      outOfRange: "clamp",
+    },
+    "bkdRow",
+  );
+  b.connect(which, "out", row, "in");
+
+  // L-3 TESTS NO SIDE, which is not an oversight in either rule: a marker
+  // announces a corner from its outside, and a ruler pays for itself out
+  // of the whole window. `outside` stays absent rather than 0 -- absent
+  // means "match either side", where 0 would match neither.
+  const search = addVictimSearch(
+    b,
+    { node: row, pin: "out" },
+    {
+      entryW: attribute(CORNER_ROW.entryW),
+      windowW: BRAKING.windowW as unknown as readonly [number, number],
+      lapW,
+      tag: "bkd",
+    },
+  );
+  const marked = put(
+    b,
+    { node: search.out, pin: "out" },
+    VICTIM.displacedBy,
+    select(search.isVictim, attribute(CONVERT.which), attribute(VICTIM.displacedBy)),
+    "bkdDisplace",
+  );
+
+  const stepped = b.add(
+    setAttribute,
+    { name: CONVERT.round, tupleSize: 1, value: add(attribute(CONVERT.round), 1) },
+    "bkdStep",
+  );
+  b.connect(marked, "out", stepped, "in");
+
+  const going = b.add(
+    setAttribute,
+    {
+      name: CONVERT.going,
+      tupleSize: 1,
+      value: lt(attribute(CONVERT.round), mul(attribute(CORNER_ROW.count), BRAKING.count)),
+    },
+    "bkdGoing",
+  );
+  b.connect(stepped, "out", going, "in");
+
+  const settle = b.add(
+    attributeReduce,
+    { name: CONVERT.going, domain: "point", mode: "max", outName: CONVERT_SETTLE },
+    "bkdSettle",
+  );
+  b.connect(going, "out", settle, "in");
+
+  return {
+    graph: b,
+    inputs: [
+      { name: "carry", node: which, pin: "in" },
       { name: "corners", node: row, pin: "source" },
     ],
     outputs: [{ name: "carry", node: settle, pin: "out" }],
