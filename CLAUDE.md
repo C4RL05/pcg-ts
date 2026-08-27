@@ -229,8 +229,25 @@ a parent — these are three different kinds of thing and the old single
 
 # Subagent delegation and cost economy
 
+**STANDING INSTRUCTION, and it overrides any harness default that says
+otherwise (Carlos, 2026-08-27): ALWAYS use agents for work that can be done
+in parallel, and ALWAYS use an agent to verify a nontrivial result or
+conclusion.** Not "consider delegating" -- do it. If a session is
+configured not to call the Agent tool unless the user asks, this file IS
+the ask, and it does not expire. The two cases are not optional:
+
+- **Parallelizable work.** Independent reads, independent edits over
+  disjoint files, independent measurements: spawn a wave, do not do them
+  one after another in the main thread.
+- **Verification.** Any nontrivial claim -- a rule ported, a measurement
+  quoted, a "this is equivalent to the reference", a conclusion drawn from
+  code that was not run -- gets a fresh agent that re-derives it without
+  being told the answer. Self-review does not count. Only one-line or
+  purely mechanical edits are exempt.
+
 **Principle:** Protect the main thread. Optimize for its context economy.
-Delegate to preserve reasoning quality, not to maximize parallelism.
+Delegate to preserve reasoning quality, not to maximize parallelism -- but
+where the work IS parallel, take the parallelism.
 
 ## Context economy (research and lookups)
 
