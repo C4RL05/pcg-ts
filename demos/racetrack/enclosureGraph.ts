@@ -164,6 +164,16 @@ const SCRATCH = {
   going: "l6Going",
 } as const;
 
+/**
+ * What `enclosure.ts` calls a long stretch, restated here.
+ *
+ * `dressGraph.ts` argues for this repetition and `pathCoverage`'s own
+ * description argues for it from the library's side: a measurement whose
+ * whole value is that today's figure compares with one taken upstream must
+ * not move when a placement rule is retuned. The suite pins the two equal.
+ */
+export const HEAVY_W = 10;
+
 /** The detail attribute `repeatUntil` reads to decide whether to run again. */
 export const PLAN_SETTLE = "l6Working";
 
@@ -181,6 +191,13 @@ export const PLAN_PIN = "carry";
 /**
  * The cover vocabulary as a table, one point per candidate.
  *
+ * NAMED `COVER_ASSET` RATHER THAN `COVER` because `dressGraph.ts` already
+ * has a `COVER`, and it means something else: the ray-cast MEASUREMENT's
+ * numbers -- how far up to look, how many rays, how many must hit. These
+ * are the pieces the tiling is built from. The two would sit in one scope
+ * the moment this stage is wired into that graph, which is exactly when a
+ * shared name stops being a nuisance and starts being a bug.
+ *
  * EVERYTHING HERE IS A PURE FUNCTION OF THE ASSET, which is why it is
  * built once in TypeScript rather than per tile in the graph.
  * `coverCandidates` is already a filter over the kit -- what the source
@@ -189,7 +206,7 @@ export const PLAN_PIN = "carry";
  * arithmetic over one asset. Computing them here makes the graph side a
  * gather of six columns instead of six expressions repeated per piece.
  */
-export const COVER = {
+export const COVER_ASSET = {
   /** Pool index, so a placement can name the asset it was tiled from. */
   ord: "coverOrd",
   /** The kit's own asset id. */
@@ -834,13 +851,13 @@ export function coverCloud(cover: readonly PlaceableAsset[]): Geometry {
   const geo = createPointCloud(Math.max(1, cover.length));
   const pts = geo.attrs.point;
   const P = pts.require("P");
-  const ord = pts.add(COVER.ord, "f32", 1);
-  const id = pts.add(COVER.id, "i32", 1);
-  const along = pts.add(COVER.alongW, "f32", 1);
-  const across = pts.add(COVER.acrossW, "f32", 1);
-  const tall = pts.add(COVER.tallW, "f32", 1);
-  const baseH = pts.add(COVER.baseH, "f32", 1);
-  const columns = pts.add(COVER.columns, "f32", 1);
+  const ord = pts.add(COVER_ASSET.ord, "f32", 1);
+  const id = pts.add(COVER_ASSET.id, "i32", 1);
+  const along = pts.add(COVER_ASSET.alongW, "f32", 1);
+  const across = pts.add(COVER_ASSET.acrossW, "f32", 1);
+  const tall = pts.add(COVER_ASSET.tallW, "f32", 1);
+  const baseH = pts.add(COVER_ASSET.baseH, "f32", 1);
+  const columns = pts.add(COVER_ASSET.columns, "f32", 1);
 
   for (let i = 0; i < cover.length; i++) {
     const a = cover[i] as PlaceableAsset;
@@ -981,13 +998,13 @@ export function addEnclosureTiles(
     {
       index: attribute(SCRATCH.pick),
       attributes: [
-        COVER.ord,
-        COVER.id,
-        COVER.alongW,
-        COVER.acrossW,
-        COVER.tallW,
-        COVER.baseH,
-        COVER.columns,
+        COVER_ASSET.ord,
+        COVER_ASSET.id,
+        COVER_ASSET.alongW,
+        COVER_ASSET.acrossW,
+        COVER_ASSET.tallW,
+        COVER_ASSET.baseH,
+        COVER_ASSET.columns,
       ],
       outOfRange: "clamp",
     },
@@ -1006,7 +1023,7 @@ export function addEnclosureTiles(
     {
       name: PIECE.tiles,
       tupleSize: 1,
-      value: add(ceilOf(div(attribute(PLAN.lengthW), attribute(COVER.alongW))), 1),
+      value: add(ceilOf(div(attribute(PLAN.lengthW), attribute(COVER_ASSET.alongW))), 1),
     },
     `${tag}_tiles`,
   );
@@ -1051,13 +1068,13 @@ export function addEnclosureTiles(
         PLAN.startW,
         PLAN.lengthW,
         PIECE.tiles,
-        COVER.ord,
-        COVER.id,
-        COVER.alongW,
-        COVER.acrossW,
-        COVER.tallW,
-        COVER.baseH,
-        COVER.columns,
+        COVER_ASSET.ord,
+        COVER_ASSET.id,
+        COVER_ASSET.alongW,
+        COVER_ASSET.acrossW,
+        COVER_ASSET.tallW,
+        COVER_ASSET.baseH,
+        COVER_ASSET.columns,
       ],
     },
     `${tag}_tile`,
@@ -1080,12 +1097,12 @@ export function addEnclosureTiles(
         PIECE.tiles,
         PIECE.tile,
         PIECE.ramp,
-        COVER.ord,
-        COVER.id,
-        COVER.acrossW,
-        COVER.tallW,
-        COVER.baseH,
-        COVER.columns,
+        COVER_ASSET.ord,
+        COVER_ASSET.id,
+        COVER_ASSET.acrossW,
+        COVER_ASSET.tallW,
+        COVER_ASSET.baseH,
+        COVER_ASSET.columns,
       ],
       topology: "drop",
     },
@@ -1096,7 +1113,7 @@ export function addEnclosureTiles(
 
   const trimmed = g.add(
     filterByExpression,
-    { predicate: lt(attribute(PIECE.slot), attribute(COVER.columns)) },
+    { predicate: lt(attribute(PIECE.slot), attribute(COVER_ASSET.columns)) },
     `${tag}_trim`,
   );
   g.connect(spread, "out", trimmed, "in");
@@ -1109,8 +1126,8 @@ export function addEnclosureTiles(
     add(attribute(PIECE.tile), 0.5),
     div(attribute(PLAN.lengthW), attribute(PIECE.tiles)),
   );
-  const columns = attribute(COVER.columns);
-  const acrossW = attribute(COVER.acrossW);
+  const columns = attribute(COVER_ASSET.columns);
+  const acrossW = attribute(COVER_ASSET.acrossW);
   let out: NodeHandle = trimmed;
   for (const [name, value] of [
     [TRACK_FRAME.station, mod(add(attribute(PLAN.startW), along), lapW)],
@@ -1131,11 +1148,260 @@ export function addEnclosureTiles(
         ),
       ),
     ],
-    ["trackH", add(attribute(COVER.baseH), mul(ENCLOSE.flareRiseW, attribute(PIECE.ramp)))],
+    ["trackH", add(attribute(COVER_ASSET.baseH), mul(ENCLOSE.flareRiseW, attribute(PIECE.ramp)))],
   ] as [string, Field][]) {
     const n = g.add(setAttribute, { name, tupleSize: 1, value }, `${tag}_track_${name}`);
     g.connect(out, "out", n, "in");
     out = n;
   }
   return out;
+}
+
+/** What {@link writeCoverBudget} measures off a coverage-carrying path. */
+export const BUDGET = {
+  /** Arc each frame owns, in W. */
+  ownW: "l6OwnW",
+  /**
+   * 1 where coverage CHANGES -- the boundary the runs are cut on.
+   *
+   * EVERY TRANSITION AND NOT JUST THE COVERED ONES, which is the whole
+   * difference between a stretch and a stretch plus the gap behind it.
+   * `pathRuns` cuts a run at each boundary and carries it to the NEXT
+   * one, so marking only where cover begins makes one run out of a covered
+   * stretch and the uncovered lap after it -- measured, the long total
+   * came out 7.3W high. Cutting at both ends makes every run homogeneous,
+   * and masking by `covered` then keeps the ones that are cover.
+   */
+  runStart: "l6RunStart",
+  /**
+   * 1 on the LAST frame of each run -- the boundary the backward scan needs.
+   *
+   * A SECOND BOUNDARY, BECAUSE THE TWO DIRECTIONS DO NOT SHARE ONE.
+   * `pathRuns` forward makes a boundary frame the FIRST of its run and
+   * backward makes it the LAST, so one flag run through both directions
+   * describes two run sets offset by a frame -- measured on a synthetic
+   * path, where a run of four read 1,2,3,4 forward and 1,4,3,2 backward,
+   * the backward figures reaching one frame into the next run. Adding the
+   * arcs from both directions then overcounts by exactly one frame, which
+   * on the lap was a long total 0.385W high: one frame pitch, and it took
+   * a probe on ten points to see rather than a stare at the lap.
+   *
+   * Shifting the start flag one place forward marks each run's last frame,
+   * and the backward scan cut on THAT describes the same runs the forward
+   * scan does.
+   */
+  runEnd: "l6RunEnd",
+  /** How long this frame's covered run is, in W. 0 on an uncovered frame. */
+  runW: "l6RunW",
+  /** Covered arc over the whole lap, in W, the same on every frame. */
+  coveredW: "l6CoveredTotalW",
+  /** Covered arc held by runs longer than `heavyW`, in W, likewise. */
+  longW: "l6LongTotalW",
+  /** `longCoverBudgetW`'s answer, in W, likewise. */
+  budgetW: "l6BudgetW",
+} as const;
+
+/**
+ * `longCoverBudgetW`, off the coverage the rays already measured.
+ *
+ * WHAT THE RULE ASKS FOR IS THE TAIL, NOT THE TOTAL, and that is why this
+ * takes two numbers rather than one. The ordinary dressing on an
+ * overhead-rich kit already runs a fifth of the lap under something -- but
+ * in fifty-odd SHORT stretches, where the source holds 39% of its covered
+ * length in the few longer than 10W. The total can be right while the
+ * shape is wrong, and what enclosure supplies is the long stretches the
+ * incidental cover never produces.
+ *
+ * BOTH NUMBERS ARE PATH SCANS AND NEITHER IS A NEW IDEA HERE. The covered
+ * total is a sum of each frame's own arc over the covered frames. The long
+ * total is the same sum restricted to frames whose RUN is long, and a
+ * run's length reaches every frame of it by adding what lies behind to
+ * what lies ahead and removing the double-counted middle -- the two
+ * directions `pathRuns` offers, which its own description says "are not
+ * each other's complement without the run's total".
+ *
+ * A RUN THAT WRAPS THE START LINE IS ONE RUN, which is `wrap` and is the
+ * same rule `cornersOf` needs; a scan that closed its runs at the end of
+ * the array would report two and call neither of them long.
+ */
+export function writeCoverBudget(
+  g: Graph,
+  frames: NodeHandle,
+  coveredAttr: string,
+  lapW: number,
+  tag: string,
+): NodeHandle {
+  // Each frame's own arc, measured rather than assumed -- `pathShift`'s
+  // own gap-ring case, for the reason {@link writeCornerTests} gives.
+  const next = g.add(
+    pathShift,
+    {
+      attributes: [TRACK_FRAME.station],
+      outNames: [SCRATCH.bcast],
+      offset: 1,
+      outOfRange: "wrap",
+    },
+    `${tag}_next`,
+  );
+  g.connect(frames, "out", next, "in");
+
+  const own = g.add(
+    setAttribute,
+    {
+      name: BUDGET.ownW,
+      tupleSize: 1,
+      value: (() => {
+        const d = sub(attribute(SCRATCH.bcast), attribute(TRACK_FRAME.station));
+        return select(lt(d, 0), add(d, lapW), d);
+      })(),
+    },
+    `${tag}_own`,
+  );
+  g.connect(next, "out", own, "in");
+
+  // A run boundary is any frame whose coverage differs from the frame
+  // before it -- both ends of every stretch.
+  const prev = g.add(
+    pathShift,
+    { attributes: [coveredAttr], outNames: [SCRATCH.pick], offset: -1, outOfRange: "wrap" },
+    `${tag}_prev`,
+  );
+  g.connect(own, "out", prev, "in");
+
+  const starts = g.add(
+    setAttribute,
+    {
+      name: BUDGET.runStart,
+      tupleSize: 1,
+      value: sub(1, eq(gt(attribute(coveredAttr), 0), gt(attribute(SCRATCH.pick), 0))),
+    },
+    `${tag}_starts`,
+  );
+  g.connect(prev, "out", starts, "in");
+
+  // The run's length, at every frame of it: what lies behind me plus what
+  // lies ahead of me, less the arc I was counted for twice.
+  // The other end of every run: the frame whose SUCCESSOR starts a new
+  // one. See {@link BUDGET.runEnd}.
+  const ends = g.add(
+    pathShift,
+    {
+      attributes: [BUDGET.runStart],
+      outNames: [BUDGET.runEnd],
+      offset: 1,
+      outOfRange: "wrap",
+    },
+    `${tag}_ends`,
+  );
+  g.connect(starts, "out", ends, "in");
+
+  const behind = g.add(
+    pathRuns,
+    {
+      name: BUDGET.ownW,
+      boundary: BUDGET.runStart,
+      outName: SCRATCH.startK,
+      reduce: "sum",
+      mode: "inclusive",
+      direction: "forward",
+      wrap: true,
+    },
+    `${tag}_behind`,
+  );
+  g.connect(ends, "out", behind, "in");
+
+  const ahead = g.add(
+    pathRuns,
+    {
+      name: BUDGET.ownW,
+      boundary: BUDGET.runEnd,
+      outName: SCRATCH.rawK,
+      reduce: "sum",
+      mode: "inclusive",
+      direction: "backward",
+      wrap: true,
+    },
+    `${tag}_ahead`,
+  );
+  g.connect(behind, "out", ahead, "in");
+
+  const runW = g.add(
+    setAttribute,
+    {
+      name: BUDGET.runW,
+      tupleSize: 1,
+      value: mul(
+        gt(attribute(coveredAttr), 0),
+        sub(add(attribute(SCRATCH.startK), attribute(SCRATCH.rawK)), attribute(BUDGET.ownW)),
+      ),
+    },
+    `${tag}_runW`,
+  );
+  g.connect(ahead, "out", runW, "in");
+
+  // The two totals, each a masked sum broadcast off its own scan. `runs.ts`
+  // calls a stretch long above `heavyW`, and the comparison is STRICT
+  // there, so it is strict here.
+  let out: NodeHandle = runW;
+  for (const [mask, name] of [
+    [gt(attribute(coveredAttr), 0), BUDGET.coveredW],
+    [mul(gt(attribute(coveredAttr), 0), gt(attribute(BUDGET.runW), HEAVY_W)), BUDGET.longW],
+  ] as [Field, string][]) {
+    const m = g.add(
+      setAttribute,
+      { name: SCRATCH.pick, tupleSize: 1, value: mul(mask, attribute(BUDGET.ownW)) },
+      `${tag}_mask_${name}`,
+    );
+    g.connect(out, "out", m, "in");
+    const scan = g.add(
+      pathScan,
+      {
+        name: SCRATCH.pick,
+        outName: SCRATCH.bcast,
+        reduce: "sum",
+        mode: "inclusive",
+        totalAttr: name,
+      },
+      `${tag}_sum_${name}`,
+    );
+    g.connect(m, "out", scan, "in");
+    const down = g.add(
+      promoteAttribute,
+      { name, from: "primitive", to: "point", mode: "first" },
+      `${tag}_down_${name}`,
+    );
+    g.connect(scan, "out", down, "in");
+    out = down;
+  }
+
+  // TWO TARGETS, AND THE FIRST DRAFT OF THE RULE COLLAPSED THEM INTO ONE.
+  // L-6 asks for a total (10-25% of lap, population median 10.5%) and the
+  // measurement behind it carries a shape (39% of covered length in
+  // stretches longer than 10W). Solving only for the shape gives
+  // `(f*total - long)/(1 - f)`, which is correct arithmetic and wrong: on
+  // a lap with NO cover it returns zero, because 39% of nothing is
+  // nothing, and a bare circuit would have got no tunnels at all with the
+  // formula looking right. So the total target comes first and the shape
+  // target is a fraction of THAT.
+  const covered = attribute(BUDGET.coveredW);
+  const targetTotal = mul(
+    min(ENCLOSE.ruleShare[1], max(ENCLOSE.sourceShare, div(covered, lapW))),
+    lapW,
+  );
+  const room = sub(ENCLOSE.ruleShare[1] * lapW, covered);
+  const want = min(sub(mul(ENCLOSE.sourceLongShare, targetTotal), attribute(BUDGET.longW)), room);
+  const budget = g.add(
+    setAttribute,
+    {
+      name: BUDGET.budgetW,
+      tupleSize: 1,
+      // ZERO WHERE THERE IS NO ROOM FOR EVEN ONE LONG STRETCH. Half a
+      // half-width of budget cannot buy a 10W tunnel, and spending it
+      // anyway would overshoot the ceiling by twenty times the budget.
+      value: mul(ge(want, ENCLOSE.longW), want),
+    },
+    `${tag}_budget`,
+  );
+  g.connect(out, "out", budget, "in");
+  return budget;
 }

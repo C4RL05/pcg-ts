@@ -2984,3 +2984,36 @@ trade for the same reason and is checked on its POSTCONDITION instead:
 here that is no two stretches within `separationW`, none starting inside a
 tight corner or within `flareW` before one, and covered length within one
 draw of the budget.
+
+### L-6's budget is a graph stage, and its trim never fires, 2026-08-27
+
+`longCoverBudgetW` reads two numbers off the ray cast and does scalar
+arithmetic on them, so the port is really the two numbers: the covered arc
+and the arc held by stretches longer than `heavyW`. Both are path scans
+over the coverage mask `pathCoverage` already writes.
+
+**`pathRuns`' two directions do not share a boundary set, which cost two
+bugs.** Marking only where cover BEGINS makes one run out of a covered
+stretch and the uncovered lap after it -- the long total came out 7.3W
+high. Cutting at every transition fixed that and left 0.385W, exactly one
+frame pitch: forward runs make a boundary frame the FIRST of its run and
+backward runs make it the LAST, so one flag through both directions
+describes two run sets offset by a frame, and adding the arcs from both
+overcounts by the frame the backward scan reaches into the next run. A
+probe on ten points made it obvious in a way staring at a 900-frame lap
+did not. The fix is a second boundary, `runEnd`, one `pathShift` from the
+first.
+
+**`reduceEnclosure` NEVER FIRES on the shipped kit** -- `enclosureTrims` is
+0 on 8 of 8 seeds -- and the mechanism says why: it reduces a lap that is
+over L-6's 25% ceiling, and the demo runs at 8.8%. That is the same
+argument L-4's repair lost, and it loses it for the same reason: porting a
+rule with nothing end to end to check it would leave a stage whose only
+possible test is a synthetic lap built to make it fire. So L-6's port is
+the planner, the tiler and the budget, and the trim is named as skipped
+rather than quietly missing.
+
+Measured against `measureEnclosure` and `longCoverBudgetW` on four laps,
+in both branches -- a dressed lap already holds its cover and asks for
+nothing, a bare lap asks for the population's median share: worst
+|dCovered| 5.4e-3W, |dLong| 1.6e-3W, |dBudget| 1.6e-6W.

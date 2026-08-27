@@ -33,11 +33,15 @@ import {
   dataInput,
   evaluateField,
   firstGeometry,
+  index,
   makeGeometryItem,
+  transferByIndex,
   type Geometry,
 } from "pcg-ts";
 import {
-  COVER,
+  BUDGET,
+  COVER_ASSET,
+  HEAVY_W,
   PIECE,
   PLAN,
   PLAN_PIN,
@@ -48,6 +52,7 @@ import {
   slotCloud,
   stretchLengthField,
   writeCornerTests,
+  writeCoverBudget,
   type PlanOptions,
 } from "../demos/racetrack/enclosureGraph.js";
 import {
@@ -55,9 +60,15 @@ import {
   LONG_QUANTILE,
   coverCandidates,
   drawStretchLengthW,
+  longCoverBudgetW,
 } from "../demos/racetrack/tunnels.js";
 import { shippedVocabulary } from "../demos/racetrack/vocabulary.js";
 import { CORRIDOR } from "../demos/racetrack/zones.js";
+import {
+  ENCLOSURE,
+  enclosureMask,
+  measureEnclosure,
+} from "../demos/racetrack/enclosure.js";
 import { TRACK_FRAME } from "../demos/racetrack/graph.js";
 import type { PlaceableAsset } from "../demos/racetrack/assets.js";
 import { beforeEntryW, cornersOf, radiusAtW } from "../demos/racetrack/corners.js";
@@ -458,12 +469,12 @@ async function tilesOf(
   const slot = num(PIECE.slot);
   const tile = num(PIECE.tile);
   const tiles = num(PIECE.tiles);
-  const ord = num(COVER.ord);
+  const ord = num(COVER_ASSET.ord);
   const startW = num(PLAN.startW);
   const lengthW = num(PLAN.lengthW);
-  const acrossW = num(COVER.acrossW);
-  const baseH = num(COVER.baseH);
-  const columns = num(COVER.columns);
+  const acrossW = num(COVER_ASSET.acrossW);
+  const baseH = num(COVER_ASSET.baseH);
+  const columns = num(COVER_ASSET.columns);
   const out2: Piece[] = [];
   for (let i = 0; i < p.count; i++) {
     out2.push({
@@ -612,6 +623,118 @@ describe("racetrack enclosure tiling, as a graph", () => {
     );
     console.log(
       `L-6 graph tiling: lowest base ${lowest.toFixed(3)}W against a ceiling of ${CORRIDOR.ceilingW}W`,
+    );
+  }, 120000);
+});
+
+describe("racetrack enclosure budget, as a graph", () => {
+  it("restates enclosure.ts's long-stretch threshold without changing it", () => {
+    // Two independent statements of one measurement, CHECKED equal — the
+    // same arrangement `dressGraph` pins for the ray numbers, and for the
+    // same reason: the check is what catches a hand edit, and the
+    // independence is what keeps a retune of one from silently moving the
+    // other.
+    expect(HEAVY_W).toBe(ENCLOSURE.heavyW);
+  });
+
+  it("measures the coverage and the budget measureEnclosure does", async () => {
+    // AGAINST THE RAY CAST'S OWN OUTPUT, which is the only fair
+    // comparison. `measureEnclosure` decides which FRAMES are covered by
+    // casting rays at boxes; this stage takes that decision as given and
+    // does the arithmetic over it. Feeding the graph the same covered mask
+    // the reference computed isolates the arithmetic, which is the part
+    // that was ported — a graph that re-cast the rays would be comparing
+    // two ray casts and calling the difference a budget error.
+    let worstCovered = 0;
+    let worstLong = 0;
+    let worstBudget = 0;
+    let nonZero = 0;
+    let zero = 0;
+
+    for (const seed of SEEDS) {
+      const { lap, frames, dressing } = await dressedLapFor(seed);
+     for (const bare of [false, true]) {
+      // TWO INPUTS PER LAP, BECAUSE THE RULE HAS TWO ANSWERS. A dressed
+      // lap already holds L-6's own cover, so the budget it asks for is
+      // ZERO -- correct, and the first draft of this test asserted the
+      // opposite and failed. A lap with NOTHING covered is the other
+      // branch and the one the rule was written for: it asks for the
+      // population's median share of long stretches, about 14W here. A
+      // stage returning zero always would pass one of these and not both.
+      const mask = bare
+        ? (enclosureMask(lap, dressing.boxes).map(() => false) as boolean[])
+        : enclosureMask(lap, dressing.boxes);
+      const report = bare
+        ? { share: 0, heavyTailShare: 0 }
+        : measureEnclosure(lap, dressing.boxes);
+
+      // THE MASK COMES IN BY INDEX rather than being written onto the
+      // frames, because the frames are a fixture shared across this whole
+      // suite and adding a column to them would reach every other test.
+      // One point per frame carrying the ray cast's verdict, gathered at
+      // the frame's own ordinal, is the same value with nothing mutated.
+      const maskCloud = createPointCloud(mask.length);
+      const maskCol = maskCloud.attrs.point.add("covered", "f32", 1);
+      const maskP = maskCloud.attrs.point.require("P");
+      for (let i = 0; i < mask.length; i++) {
+        maskP.setTuple(i, [i, 0, 0]);
+        maskCol.set(i, mask[i] ? 1 : 0);
+      }
+
+      const g = new Graph(seed);
+      const framesIn = g.add(dataInput, {}, "frames");
+      g.setParam(framesIn, "items", [makeGeometryItem(frames)]);
+      const maskIn = g.add(dataInput, {}, "mask");
+      g.setParam(maskIn, "items", [makeGeometryItem(maskCloud)]);
+      const withMask = g.add(
+        transferByIndex,
+        { index: index(), attributes: ["covered"], outOfRange: "clamp" },
+        "maskGather",
+      );
+      g.connect(framesIn, "out", withMask, "in");
+      g.connect(maskIn, "out", withMask, "source");
+      const out = writeCoverBudget(g, withMask, "covered", lap.lengthW, "b");
+      g.output(out, "out", "budget");
+      const cooked = firstGeometry((await cook(g)).outputs["budget"])!;
+      const pts = cooked.attrs.point;
+
+      const gotCovered = pts.require(BUDGET.coveredW).get(0);
+      const gotLong = pts.require(BUDGET.longW).get(0);
+      const gotBudget = pts.require(BUDGET.budgetW).get(0);
+
+      const wantCovered = report.share * lap.lengthW;
+      const wantLong = report.heavyTailShare * wantCovered;
+      const wantBudget = longCoverBudgetW(wantCovered, wantLong, lap.lengthW);
+
+      worstCovered = Math.max(worstCovered, Math.abs(gotCovered - wantCovered));
+      worstLong = Math.max(worstLong, Math.abs(gotLong - wantLong));
+      worstBudget = Math.max(worstBudget, Math.abs(gotBudget - wantBudget));
+      if (wantBudget > 0) nonZero++;
+      else zero++;
+      expect(gotBudget > 0, `seed ${seed} bare=${bare}: budget sign`).toBe(wantBudget > 0);
+     }
+    }
+
+    // THE BOUND IS THE SUMMATION, and nothing else. Both sides add one
+    // frame's arc per covered frame over a lap of ~900 frames, in a
+    // different order and through f32 columns on one side; a covered arc
+    // reaches ~35W, where f32 spacing is 4e-6, so a few hundred additions
+    // carry a few thousandths at the very worst.
+    const TOL = 5e-2;
+    expect(worstCovered, "covered arc").toBeLessThan(TOL);
+    expect(worstLong, "long-stretch arc").toBeLessThan(TOL);
+    expect(worstBudget, "budget").toBeLessThan(TOL);
+
+    // BOTH ANSWERS HAVE TO HAVE APPEARED. Zero is a legal budget and so
+    // is fourteen half-widths; a stage stuck on either would satisfy every
+    // bound above, so the test that both occur is separate from the test
+    // that each is right.
+    expect(nonZero, "no input asked for cover").toBeGreaterThan(0);
+    expect(zero, "no input was already satisfied").toBeGreaterThan(0);
+    console.log(
+      `L-6 graph budget: worst |dCovered| ${worstCovered.toExponential(2)}W, ` +
+        `|dLong| ${worstLong.toExponential(2)}W, |dBudget| ${worstBudget.toExponential(2)}W ` +
+        `over ${SEEDS.length} seeds (${nonZero} asked for cover, ${zero} already satisfied)`,
     );
   }, 120000);
 });
