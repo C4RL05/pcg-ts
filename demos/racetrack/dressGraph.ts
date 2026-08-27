@@ -178,7 +178,19 @@ import { FALSE_EDGE } from "./falseEdges.js";
 import { SIGHTLINE } from "./sightline.js";
 import { SAME_PLACE_W } from "./tolerance.js";
 import { BAND_T, Z3, lateralReach, type Band } from "./assets.js";
-import { ASSET, assetCloud, quantileField } from "./assetGraph.js";
+import {
+  ASSET,
+  CHOICE,
+  addAssetChoiceStage,
+  assetCloud,
+  quantileField,
+} from "./assetGraph.js";
+import {
+  STATION_LENGTH_ATTR,
+  addCoverageRepair,
+  addStationStage,
+} from "./stationGraph.js";
+import type { StationParams } from "./stations.js";
 import type { PlaceableAsset } from "./assets.js";
 import { CORRIDOR, OVERHEAD, fitsOverhead } from "./zones.js";
 import {
@@ -1076,6 +1088,443 @@ function placementCloudInTrackCoords(
     poseU.set(i, rand(seed, Math.round(p.station * 97), 0x7053));
   }
   return geo;
+}
+
+/**
+ * The placement list, BUILT IN THE GRAPH rather than handed to it.
+ *
+ * THIS IS WHAT {@link placementCloudInTrackCoords} DOES, WITH NOTHING IN
+ * TYPESCRIPT. That function turns a `StationedPlacement[]` into a cloud,
+ * and every column it writes is a lookup a caller has already done: the
+ * asset's extents, the pose, the two set memberships, the draw. So a graph
+ * built around it cannot be serialized and re-run against another spline —
+ * the list is DATA in it, and the list is the answer.
+ *
+ * The choice stage already decides all of it. `addAssetChoiceStage` leaves
+ * one point per station that drew an asset, carrying the asset's own row
+ * and Z-1's resolved lateral and height; what is missing is only the
+ * plumbing — the station value the copy did not carry, the two columns the
+ * asset table holds and the choice never needed, and the pose. Each is one
+ * gather.
+ *
+ * THE POSE RE-BASES AND THAT IS THE ONE THING THIS CANNOT TRANSCRIBE.
+ * `poseFor` draws from {@link rand}, a 32-bit integer hash of the seed, a
+ * rounded station and a salt, and the field vocabulary has no integer
+ * arithmetic to state it in. `randomFrom` is the library's answer to the
+ * same question — a draw keyed on a VALUE rather than on an element's
+ * position, so it survives the list being reordered — and this keys it on
+ * the station for the reason the reference did: the pose is a fact about
+ * what stands at a place, so two cooks of the same lap must agree about it
+ * however the list is ordered. The stream differs, so the POSES differ;
+ * `addAssetChoiceStage` re-based all four of its own uniforms on the same
+ * argument and its suite says what survives that — the distributional and
+ * structural claims, which are the ones a golden file would not have
+ * caught either.
+ *
+ * WHAT IT DOES TRANSCRIBE EXACTLY is the modulo. `poseFor` answers
+ * `ids[floor(u * n) % n]`, and the `% n` is not redundant: `u` is closed at
+ * the top, so a draw of exactly 1 indexes one past the end. Written out
+ * here for the reason `writeCoverPlacements` writes out its own — a bias
+ * that belongs to the reference is kept, and one introduced by the port is
+ * not.
+ *
+ * AND ONE BRANCH OF `poseFor` IS DELIBERATELY ABSENT. It takes a placement's
+ * OWN `pose` when it has one (`p.pose ?? …`) and draws only otherwise; there
+ * is no such column here, because at this point in the lap nothing has set
+ * one. L-6's cover is the only thing that does, and it runs after this and
+ * writes its pieces' poses itself in {@link writeCoverPlacements}. So the
+ * branch is unreachable rather than dropped — but it is a branch of the
+ * function this claims to state, so it is named rather than left for a
+ * reader to notice missing.
+ *
+ * THE ORDER IS THE SCATTER'S, NOT THE STATION'S, and that is deliberate
+ * rather than tolerated. `pointScatterOnPath` lays stations down in an
+ * order that has nothing to do with arc position — measured at 165
+ * descents in 329 points — and `cookLapPlacements` sorts its rows in
+ * TypeScript afterwards, which is exactly the kind of step this function
+ * exists to delete. Nothing downstream needs the permutation: every stage
+ * that cares about arc order says so in its own parameters, `pointsToPath`
+ * through `orderAttr` and `quotaRebalance` through its priority. That the
+ * whole graph is order-free is a MEASUREMENT, not a reading — see "dresses
+ * a shuffled list into the same lap" in `tests/racetrackDressGraph.test.ts`,
+ * which fails on both of those parameters when either is taken away.
+ */
+export function addPlacementAssembly(
+  g: Graph,
+  chosen: { readonly node: NodeHandle; readonly pin: string },
+  opts: {
+    /** The station cloud the choice's copies were laid over. */
+    readonly stations: { readonly node: NodeHandle; readonly pin: string };
+    /** What that cloud calls its arc column — see {@link PLACEMENT.station}. */
+    readonly stationAttr: string;
+    /** {@link mixPoseIds}, the two-half table the string column indexes. */
+    readonly poseIds: readonly string[];
+  },
+  tag: string,
+): {
+  readonly out: NodeHandle;
+  /** The asset-table gather, whose `source` pin the caller wires. */
+  readonly assets: NodeHandle;
+  /** The pose-table gather, likewise. */
+  readonly poses: NodeHandle;
+} {
+  // 1. THE STATION, BACK OFF THE CLOUD THE COPIES WERE LAID OVER.
+  //    `copyToPoints` composes each copy from the SOURCE's columns and
+  //    writes only the target's INDEX, so a copy knows which station it
+  //    belongs to and not where that station is. `cookLapPlacements` reads
+  //    the arc column off the station cloud and pairs the two lists in
+  //    TypeScript for the same reason; this is that pairing as a gather.
+  const station = g.add(
+    transferByIndex,
+    { index: attribute(CHOICE.stationIdx), attributes: [opts.stationAttr], outOfRange: "clamp" },
+    `${tag}Station`,
+  );
+  g.connect(chosen.node, chosen.pin, station, "in");
+  g.connect(opts.stations.node, opts.stations.pin, station, "source");
+
+  // A RENAME ONLY IF THE NAMES DIFFER. `addStationStage` defaults its arc
+  // column to the same `stationW` this file calls `PLACEMENT.station`, so
+  // the two agree by construction on every caller today — but the stage
+  // takes the name as a param, and a graph that silently dropped the
+  // column when a caller renamed it would be wrong in a way no type
+  // catches.
+  let head: NodeHandle = station;
+  const renamed = opts.stationAttr !== PLACEMENT.station;
+  if (renamed) {
+    head = g.add(
+      setAttribute,
+      { name: PLACEMENT.station, tupleSize: 1, value: attribute(opts.stationAttr) },
+      `${tag}StationName`,
+    );
+    g.connect(station, "out", head, "in");
+  }
+
+  // 2. THE ASSET'S OWN ROW — the three facts a choice never needed.
+  //    `assetCloud` carries `across` and `tall` because Z-1 resolves the
+  //    corridor by them, and the copy has therefore already brought those
+  //    two along. The along-track extent and the two set memberships ride
+  //    {@link mixAssetCloud}, which is in this graph already for the
+  //    redraw, so this is a gather rather than a fourth table.
+  const assets = g.add(
+    transferByIndex,
+    {
+      index: attribute(ASSET.ord),
+      attributes: [
+        MIX_ASSET.along,
+        MIX_ASSET.poseOff,
+        MIX_ASSET.poseCount,
+        MIX_ASSET.locked,
+        MIX_ASSET.pinned,
+      ],
+      outOfRange: "clamp",
+    },
+    `${tag}Asset`,
+  );
+  g.connect(head, "out", assets, "in");
+
+  // 3. THE POSE. The draw, then the asset's own pose list indexed by it —
+  //    `writeCoverPlacements` states the same three nodes and its comments
+  //    carry the argument for each.
+  const drawn = g.add(
+    setAttribute,
+    {
+      name: PLACEMENT.poseU,
+      tupleSize: 1,
+      value: randomFrom(attribute(PLACEMENT.station), `${tag}.pose`),
+    },
+    `${tag}PoseU`,
+  );
+  g.connect(assets, "out", drawn, "in");
+
+  // ROW 0 WHEN THE KIT RECORDED NO POSE, AND THE ANSWER IS FIXED AFTER THE
+  // GATHER RATHER THAN BEFORE IT. Sending -1 would rely on how
+  // `transferByIndex` treats a negative index under `clamp`, which is a
+  // question this file does not need to ask: gather row 0, then throw the
+  // value away with a `select` on the count. What must NOT happen is the
+  // placement quietly taking row 0's pose — a real pose id belonging to
+  // whichever asset the flat table starts with.
+  const row = g.add(
+    setAttribute,
+    {
+      name: SCRATCH_POSE,
+      tupleSize: 1,
+      value: add(
+        attribute(MIX_ASSET.poseOff),
+        mod(
+          floor(mul(attribute(PLACEMENT.poseU), attribute(MIX_ASSET.poseCount))),
+          max(1, attribute(MIX_ASSET.poseCount)),
+        ),
+      ),
+    },
+    `${tag}PoseRow`,
+  );
+  g.connect(drawn, "out", row, "in");
+
+  const poses = g.add(
+    transferByIndex,
+    { index: attribute(SCRATCH_POSE), attributes: [MIX_POSE.id], outOfRange: "clamp" },
+    `${tag}Pose`,
+  );
+  g.connect(row, "out", poses, "in");
+
+  // 4. THE COLUMNS. Every one of them is what `placementCloudInTrackCoords`
+  //    writes, in the same order and for the same stated reasons.
+  let out: NodeHandle = poses;
+  const writes: [string, Field | number][] = [
+    // -1 IS A REAL ANSWER AND NOT AN ERROR. `poseFor` returns it for an
+    // asset the vocabulary has nothing for, `buildBoxes` falls through to
+    // an empty box set, and the copy-and-select downstream drops every box
+    // of that placement. So the two paths produce the same nothing.
+    [PLACEMENT.pose, select(le(attribute(MIX_ASSET.poseCount), 0), -1, attribute(MIX_POSE.id))],
+    [PLACEMENT.t, attribute(CHOICE.t)],
+    [PLACEMENT.h, attribute(CHOICE.h)],
+    [PLACEMENT.sizeAcross, attribute(ASSET.across)],
+    [PLACEMENT.sizeAlong, attribute(MIX_ASSET.along)],
+    [PLACEMENT.sizeTall, attribute(ASSET.tall)],
+    // ORDINARY DRESSING IS NEVER COVER. L-6 is the only thing that builds
+    // cover, it runs after this, and it writes its pieces' flag itself.
+    [PLACEMENT.cover, 0],
+    [PLACEMENT.locked, attribute(MIX_ASSET.locked)],
+    [PLACEMENT.mixPinned, attribute(MIX_ASSET.pinned)],
+    // BEFORE THE REDRAW HAS RUN EVEN ONCE, which is when the quota first
+    // reads it — the same reason the TypeScript cloud creates this column
+    // rather than leaving it to the stage that sets it.
+    [PLACEMENT.mixTried, 0],
+    // AND -1 SO THE MERGE DOES NOT INVENT A RUN. An ordinary placement
+    // belongs to no enclosure run, and a column filled by `mergePoints`'
+    // default would say it belongs to the one starting at station zero.
+    [PLACEMENT.coverRun, -1],
+    // WHERE THIS PLACEMENT SITS IN THE LIST THE GRAPH MADE. The TypeScript
+    // cloud writes the row index of the list it was handed and means the
+    // same thing; what makes the number exact either way is that a lap
+    // carries a few hundred placements and every integer below 2^24 is
+    // exact in f32.
+    [PLACEMENT.id, index()],
+  ];
+  for (const [name, value] of writes) {
+    const n = g.add(setAttribute, { name, tupleSize: 1, value }, `${tag}W_${name}`);
+    g.connect(out, "out", n, "in");
+    out = n;
+  }
+
+  // 5. THE CHOICE'S SCRATCH, GONE -- AND BEFORE THE ID STRING, NOT AFTER.
+  //
+  //    `ASSET.id` AND `PLACEMENT.asset` ARE THE SAME STRING, "assetId",
+  //    and they are two different facts: the kit's own numeric id for the
+  //    asset, which the choice carries, and the POSE name a spawner keys
+  //    its batches by, which a placement carries. Nothing had ever put
+  //    both on one cloud before this stage, so nothing had ever had to
+  //    notice. Stripping after the string write deletes the string; the
+  //    strip therefore runs first, and the write below lands on a free
+  //    name. The first draft had it the other way round and the cloud came
+  //    out with no `assetId` at all -- which fails loudly at the first
+  //    reader, but only because a spawner requires the column.
+  //
+  //    WHAT ELSE GOES AND WHY. A placement is a track coordinate and a
+  //    thing to draw; the four uniforms, the bracket and the weights are
+  //    HOW it was decided, and carrying them would put the pick's working
+  //    next to the answer for the rest of the cook. `strict: false` for
+  //    `writeCoverPlacements`' reason -- the list is long and a rename
+  //    upstream should not take a cook down over a strip.
+  const cleaned = g.add(
+    removeAttribute,
+    {
+      names: [
+        // THE ARC COLUMN'S OTHER NAME, WHEN THERE IS ONE. `setAttribute`
+        // WRITES a column, it does not MOVE one, so the rename above leaves
+        // the gathered original sitting beside its copy — a column the
+        // reference cloud does not have, riding every stage downstream.
+        // Unreachable while `addLapPlacements` passes the stage's default,
+        // which is the same name; here because the alternative is a stage
+        // whose output shape depends on a param nobody sets.
+        ...(renamed ? [opts.stationAttr] : []),
+        SCRATCH_POSE,
+        MIX_ASSET.along,
+        MIX_ASSET.poseOff,
+        MIX_ASSET.poseCount,
+        MIX_ASSET.locked,
+        MIX_ASSET.pinned,
+        MIX_POSE.id,
+        CHOICE.curveK,
+        CHOICE.uPick,
+        CHOICE.uLat,
+        CHOICE.uHgt,
+        CHOICE.uSide,
+        CHOICE.stationIdx,
+        CHOICE.weight,
+        CHOICE.cumBelow,
+        CHOICE.cumThrough,
+        CHOICE.weightTotal,
+        CHOICE.draw,
+        CHOICE.t,
+        CHOICE.h,
+        ASSET.ord,
+        ASSET.id,
+        ASSET.instances,
+        ASSET.affStraight,
+        ASSET.affEasy,
+        ASSET.affMedium,
+        ASSET.affTight,
+        ASSET.latP10,
+        ASSET.latMed,
+        ASSET.latP90,
+        ASSET.hgtP10,
+        ASSET.hgtMed,
+        ASSET.hgtP90,
+        ASSET.right,
+        ASSET.across,
+        ASSET.tall,
+      ],
+      strict: false,
+    },
+    `${tag}Strip`,
+  );
+  g.connect(out, "out", cleaned, "in");
+
+  // 6. THE ASSET ID STRING, off the PLAIN half of the table. `poseAssetId`
+  //    keys by pose and not by asset, and {@link mixPoseIds} lays the two
+  //    vocabularies out as one list with -1 leading each half -- so the
+  //    index is `pose + 1` with no branch, and cover's half is the same
+  //    expression plus the offset {@link writeCoverPlacements} adds.
+  const named = g.add(
+    setAttribute,
+    {
+      name: PLACEMENT.asset,
+      tupleSize: 1,
+      type: "string",
+      values: opts.poseIds as string[],
+      value: add(attribute(PLACEMENT.pose), 1),
+    },
+    `${tag}AssetId`,
+  );
+  g.connect(cleaned, "out", named, "in");
+
+  return { out: named, assets, poses };
+}
+
+/**
+ * The whole lap placement list, from a path, as one run of stages.
+ *
+ * WHAT `cookLapPlacements` COOKS, WITHOUT THE COOK. That function already
+ * puts the stations, D-4's coverage repair and the asset choice into one
+ * graph — it says so in its own header, and the reason it gives is this
+ * one: the endpoint is a lap LEVEL and a level is one graph. What it then
+ * does is READ the result back into TypeScript, pair two lists, sort them,
+ * and hand them to `dressLap`, which builds a cloud out of them again.
+ * This is those four steps deleted: the same three stages, plus
+ * {@link addPlacementAssembly}, ending on the cloud the repair loop wants.
+ *
+ * THE SORT DOES NOT COME WITH IT, and that is the one difference a caller
+ * can see. `cookLapPlacements` sorts its rows by station because it is
+ * handing back two parallel lists and `dressLap` indexes them in lockstep;
+ * a cloud has no such pairing to keep, and nothing downstream reads row
+ * order. {@link addPlacementAssembly} carries the measurement.
+ *
+ * THE TABLES ARE THE CALLER'S, all three of them, for the reason
+ * `cookLapPlacements` gives about the pool: a choice is an INDEX into the
+ * asset table, and the pose is an index into the flat pose table, so a
+ * caller that built either from a different pool would get a lap dressed
+ * with different objects and every index still in range. `reserveFor` is
+ * the one definition of what that pool is — call it once and build all
+ * three from its answer.
+ */
+export function addLapPlacements(
+  g: Graph,
+  path: { readonly node: NodeHandle; readonly pin: string },
+  tables: {
+    /** {@link assetCloud} over the pool — what the choice picks from. */
+    readonly assets: { readonly node: NodeHandle; readonly pin: string };
+    /** {@link mixAssetCloud} over the same pool — what the assembly gathers. */
+    readonly mixAssets: { readonly node: NodeHandle; readonly pin: string };
+    /** {@link mixPoseCloud} over the same pool — the flat pose table. */
+    readonly mixPoses: { readonly node: NodeHandle; readonly pin: string };
+  },
+  opts: {
+    readonly halfWidth: number;
+    readonly assetCount: number;
+    readonly poseIds: readonly string[];
+    readonly params?: StationParams;
+    readonly densityScale?: number;
+    readonly lengthAttr?: string;
+    /**
+     * Node id prefixes for the three stages this wraps.
+     *
+     * DEFAULTED TO THE STAGES' OWN DEFAULTS, WHICH IS NOT LAZINESS. A node
+     * id is part of what seeds a node, so a stage built under a different
+     * prefix draws a different lap -- and `cookLapPlacements` builds these
+     * same three stages with no prefix at all. Leaving them alone means
+     * this function and that one produce the SAME stations and the SAME
+     * choices from one seed, which is what lets the two be compared rather
+     * than merely both be plausible. Set them only to put two of these in
+     * one graph.
+     */
+    readonly prefixes?: {
+      readonly stations?: string;
+      readonly repair?: string;
+      readonly choice?: string;
+    };
+  },
+  tag: string,
+): {
+  readonly out: NodeHandle;
+  /** The repair loop's own report, for a caller that wants to publish it. */
+  readonly repair: NodeHandle;
+  readonly roundsPin: string;
+  readonly convergedPin: string;
+} {
+  const lengthAttr = opts.lengthAttr ?? STATION_LENGTH_ATTR;
+  const stations = addStationStage(g, path, {
+    halfWidth: opts.halfWidth,
+    params: opts.params,
+    densityScale: opts.densityScale,
+    lengthAttr,
+    prefix: opts.prefixes?.stations,
+  });
+  const repair = addCoverageRepair(
+    g,
+    { node: stations.out, pin: "out" },
+    {
+      halfWidth: opts.halfWidth,
+      stationAttr: stations.stationAttr,
+      lengthAttr,
+      prefix: opts.prefixes?.repair,
+    },
+  );
+  const choice = addAssetChoiceStage(
+    g,
+    { node: repair.out, pin: "carry" },
+    tables.assets,
+    path,
+    {
+      halfWidth: opts.halfWidth,
+      assetCount: opts.assetCount,
+      stationAttr: stations.stationAttr,
+      prefix: opts.prefixes?.choice,
+    },
+  );
+  const assembled = addPlacementAssembly(
+    g,
+    { node: choice.out, pin: "out" },
+    {
+      // THE REPAIRED CLOUD AND NOT THE RAW ONE. D-4 MOVES stations, and the
+      // choice's copies were laid over the moved ones — reading the arc
+      // column off the scatter would give every placement the position its
+      // station had before the gaps were closed.
+      stations: { node: repair.out, pin: "carry" },
+      stationAttr: stations.stationAttr,
+      poseIds: opts.poseIds,
+    },
+    `${tag}Asm`,
+  );
+  g.connect(tables.mixAssets.node, tables.mixAssets.pin, assembled.assets, "source");
+  g.connect(tables.mixPoses.node, tables.mixPoses.pin, assembled.poses, "source");
+
+  return {
+    out: assembled.out,
+    repair: repair.out,
+    roundsPin: repair.roundsPin,
+    convergedPin: repair.convergedPin,
+  };
 }
 
 /**
@@ -1981,6 +2430,25 @@ export const MIX_ASSET = {
   poseCount: "mixPoseCount",
   /** 0 where the corner language reserved this asset, or it has no `where`. */
   free: "mixAssetFree",
+  /**
+   * The two per-asset flags a placement carries, as columns.
+   *
+   * SEPARATE FROM {@link MIX_ASSET.free}, WHICH IS NOT A THIRD SPELLING OF
+   * `pinned`. `free` is written inside the `where` guard, so an asset the
+   * kit never placed anywhere comes out 0 -- excluded from the redraw's
+   * pool, which is right, because a pool entry with no distribution has
+   * nothing to draw. `pinned` is the protect set and nothing else, and an
+   * asset with no `where` is not in it. Deriving one from the other would
+   * mark every unplaceable asset as protected, which is a different claim.
+   *
+   * BOTH ARE SET MEMBERSHIPS AND NEITHER IS DERIVABLE FROM THE POOL, which
+   * is why they ride the asset table rather than being recomputed: they are
+   * the caller's answer to `immovable` and `mixPinned`, and
+   * {@link DressGraphInput} argues at length why those are required rather
+   * than optional.
+   */
+  locked: "mixAssetLocked",
+  pinned: "mixAssetPinned",
 } as const;
 
 /** The flat pose table: one point per (asset, pose), in pool order. */
@@ -2024,6 +2492,7 @@ export function mixAssetCloud(
   pool: readonly PlaceableAsset[],
   lib: PoseLibrary,
   protect: ReadonlySet<number>,
+  immovable: ReadonlySet<number>,
 ): Geometry {
   const geo = assetCloud(pool);
   const pts = geo.attrs.point;
@@ -2034,6 +2503,8 @@ export function mixAssetCloud(
   const poseOff = pts.add(MIX_ASSET.poseOff, "f32", 1);
   const poseCount = pts.add(MIX_ASSET.poseCount, "f32", 1);
   const free = pts.add(MIX_ASSET.free, "f32", 1);
+  const locked = pts.add(MIX_ASSET.locked, "f32", 1);
+  const pinned = pts.add(MIX_ASSET.pinned, "f32", 1);
 
   let flat = 0;
   for (let i = 0; i < pool.length; i++) {
@@ -2044,6 +2515,11 @@ export function mixAssetCloud(
     poseOff.set(i, flat);
     poseCount.set(i, poses.length);
     flat += poses.length;
+    // ABOVE THE `where` GUARD, DELIBERATELY. See the two columns' own note:
+    // an asset the kit never placed is still either in these sets or not,
+    // and the guard below is about having a distribution to draw from.
+    locked.set(i, immovable.has(a.id) ? 1 : 0);
+    pinned.set(i, protect.has(a.id) ? 1 : 0);
     const w = a.where;
     if (!w) continue;
     const reach = lateralReach(w);
@@ -3034,7 +3510,7 @@ export function buildRoundGraph(input: DressGraphInput): Graph {
   // cloud that becomes the first round's carry.
   const carried = sampleTrackFrame(g, sight, carry, lap.halfWidth, "round");
   const mixAssets = g.add(dataInput, {}, "roundMixAssets");
-  g.setParam(mixAssets, "items", [makeGeometryItem(mixAssetCloud(pool, lib, mixPinned))]);
+  g.setParam(mixAssets, "items", [makeGeometryItem(mixAssetCloud(pool, lib, mixPinned, immovable))]);
   const mixPoses = g.add(dataInput, {}, "roundMixPoses");
   g.setParam(mixPoses, "items", [makeGeometryItem(mixPoseCloud(pool, lib))]);
 
@@ -3141,7 +3617,7 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   // over. See {@link buildRepairBody}.
   const mixAssetsIn = g.add(dataInput, {}, "mixAssets");
   g.setParam(mixAssetsIn, "items", [
-    makeGeometryItem(mixAssetCloud(pool, lib, mixPinned)),
+    makeGeometryItem(mixAssetCloud(pool, lib, mixPinned, immovable)),
   ]);
   const mixPosesIn = g.add(dataInput, {}, "mixPoses");
   g.setParam(mixPosesIn, "items", [makeGeometryItem(mixPoseCloud(pool, lib))]);
@@ -3417,7 +3893,7 @@ export async function cookBandRedraw(input: DressGraphInput): Promise<BandRedraw
     "z3",
   );
   const assetsIn = g.add(dataInput, {}, "mixAssets");
-  g.setParam(assetsIn, "items", [makeGeometryItem(mixAssetCloud(pool, lib, mixPinned))]);
+  g.setParam(assetsIn, "items", [makeGeometryItem(mixAssetCloud(pool, lib, mixPinned, immovable))]);
   g.connect(assetsIn, "out", redraw.assets, "source");
   const posesIn = g.add(dataInput, {}, "mixPoses");
   g.setParam(posesIn, "items", [makeGeometryItem(mixPoseCloud(pool, lib))]);
