@@ -2,7 +2,7 @@
  * Sampler nodes: derive point clouds from other geometry — triangle mesh
  * surfaces, polyline splines, and bounded volumes.
  */
-import { PRIMTYPE_ATTR, createPointCloud } from "../data/index.js";
+import { PRIMTYPE_ATTR, type AttributeSet, createPointCloud } from "../data/index.js";
 import { makeGeometryItem } from "../graph/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 import { standardNode } from "./registry.js";
@@ -14,6 +14,7 @@ import {
   optionalGeometry,
   polylineArcTables,
   requireGeometry,
+  requireReportSlot,
   requireTuple,
   resolveOnMaybeGpu,
 } from "./util.js";
@@ -215,6 +216,78 @@ export interface SplineSampleParams {
   mode: string;
   count: number;
   spacing: number;
+  sampledLengthAttr: string;
+  sampleArcAttr: string;
+}
+
+/**
+ * The two refusals {@link splineSample}'s `sampleArcAttr` owes that
+ * {@link requireReportSlot} cannot give it, both about columns that are not
+ * on the output's point domain YET when the slot is checked. The same pair
+ * `pathResample` owes, for the same two reasons — this node builds a fresh
+ * cloud and carries the input's primitive columns onto it exactly as that
+ * one does — with one difference stated below.
+ *
+ * The INPUT'S PRIMITIVE columns are all CARRIED onto these samples, so they
+ * end up on the output's POINT domain, where this report lands. The
+ * point-domain `requireReportSlot` runs BEFORE the carry — it has to, since
+ * the carry must find the column already there to refuse it — so without
+ * this pre-check the collision is caught inside `carryPrimitiveAttributes`,
+ * whose message is about the CARRIED attribute: it never names
+ * `sampleArcAttr`, it sends the reader to the setAttribute or
+ * promoteAttribute that produced the input's column, and it says the name
+ * "is already the attribute this node writes itself" when that is only true
+ * because this param asked for it. Right refusal, wrong fix, and error
+ * messages are part of this library's agent API.
+ */
+function requireSplineArcSlot(attrs: AttributeSet, params: SplineSampleParams): void {
+  const name = params.sampleArcAttr;
+  if (name === "") return;
+  const carried = attrs.get(name);
+  if (carried === undefined) return;
+  const shape = carried.tupleSize === 1 ? carried.type : `${carried.type}x${carried.tupleSize}`;
+  throw new Error(
+    `splineSample: sampleArcAttr "${name}" is also a PRIMITIVE attribute of the input (${shape}), and every primitive attribute is carried onto this node's samples — both would land on the same POINT column, and the one written second would take it. Primitive attributes come along automatically and there is no opt-out, so the fix here is to RENAME THE PARAM: give sampleArcAttr a name of its own (e.g. "sampleArc"). Renaming the input's column instead, or dropping it upstream with removeAttribute (domain "primitive", names ["${name}"]) if it is genuinely dead, works too — but it moves the author's own value to make room for a report, which is the wrong way round.`,
+  );
+}
+
+/**
+ * The `primtype` half of {@link requireSplineArcSlot}, param-only and over
+ * BOTH reports.
+ *
+ * THE ONE PLACE THIS NODE'S RULE IS NOT `pathResample`'S ARGUMENT VERBATIM,
+ * and it is worth saying why the answer is the same anyway. `pathResample`
+ * emits PATHS, so it stamps `primtype` on its own output and a point column
+ * under that name is a second meaning for a name it writes itself. This node
+ * emits a CLOUD with no topology at all, so nothing here stamps the tag and
+ * an f32 column called `primtype` collides with nothing today. It is refused
+ * all the same: `carryPrimitiveAttributes` already refuses to carry the tag
+ * for the same reason, the path nodes resolve the name as a TYPE, and one
+ * `promoteAttribute` onto the primitive domain later replaces the string tag
+ * with a float and leaves every path node downstream unable to find a path.
+ * A slot whose only defence is that this node happens not to write topology
+ * is a slot that fails the day it does.
+ *
+ * BOTH REPORTS, and the detail one is the reason this is a loop rather than
+ * one `if`. `pathResample` gets its per-path report's refusal for free: that
+ * one lands on the PRIMITIVE domain, where `primtype` already exists as a
+ * string, so `requireReportSlot`'s shape check refuses it without anyone
+ * having to think about the name. The detail domain holds no such column, so
+ * nothing catches it there and `sampledLengthAttr: "primtype"` would write a
+ * float under the tag's name in silence — the shorter promote away from the
+ * same wreckage, and an asymmetry with a stated rationale on one side and
+ * nothing on the other.
+ */
+function requireSplineReportsNotPrimtype(params: SplineSampleParams): void {
+  for (const { param, name, domain } of [
+    { param: "sampleArcAttr", name: params.sampleArcAttr, domain: "POINT" },
+    { param: "sampledLengthAttr", name: params.sampledLengthAttr, domain: "DETAIL" },
+  ]) {
+    if (name !== PRIMTYPE_ATTR) continue;
+    throw new Error(
+      `splineSample: ${param} may not be "${PRIMTYPE_ATTR}" — that name is the primitive TYPE TAG, not a report slot. carryPrimitiveAttributes refuses to carry it for the same reason, and the path nodes read it to decide what is a polyline; an f32 ${domain} column under that name would be a second meaning for a name the library resolves as a type, and one promoteAttribute onto the primitive domain would replace the tag with a float and leave every path node downstream unable to find a path. Give ${param} a name of its own (e.g. "${param === "sampleArcAttr" ? "sampleArc" : "sampleLength"}").`,
+    );
+  }
 }
 
 /** Arc-length spline sampling over polyline primitives. */
@@ -222,7 +295,7 @@ export const splineSample = standardNode<SplineSampleParams>({
   type: "splineSample",
   category: "sampler",
   description:
-    "Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve. mode 'count' places exactly `count` samples (endpoints included on open curves; when every polyline is closed the samples divide the total length without duplicating the start). mode 'spacing' places samples every `spacing` world units from the start. Output points carry P, the unit segment `tangent` (f32 tuple 3), and `curveU` (f32) — the normalized arc-length position in [0, 1]. Each sample ALSO carries every attribute of the polyline PRIMITIVE it landed on, even though the polylines are measured as one concatenated curve, so a per-edge value survives the sampling; a sample landing exactly on a join between two polylines takes the LATER one's values. `primtype` is the one exception, being a type tag rather than a value, and there is no opt-out: a carried name that collides with one this node writes is refused with an error naming the attribute and the fix. Input polylines come from pointsToPath, pathResample, or createPolyline in TypeScript; the output is a plain point CLOUD with no topology, so it is no longer a path. Topology is fragile upstream too: any node that can REMOVE points drops it — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a path that passes through one stops being a path and this node will report that it found no polylines. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
+    "Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve. mode 'count' places exactly `count` samples (endpoints included on open curves; when every polyline is closed the samples divide the total length without duplicating the start). mode 'spacing' places samples every `spacing` world units from the start. Output points carry P, the unit segment `tangent` (f32 tuple 3), and `curveU` (f32) — the normalized arc-length position in [0, 1]. Each sample ALSO carries every attribute of the polyline PRIMITIVE it landed on, even though the polylines are measured as one concatenated curve, so a per-edge value survives the sampling; a sample landing exactly on a join between two polylines takes the LATER one's values. `primtype` is the one exception, being a type tag rather than a value, and there is no opt-out: a carried name that collides with one this node writes is refused with an error naming the attribute and the fix. TWO OPT-IN REPORTS publish the ruler this node's OUTPUT is measured in, which is not the one `curveU` speaks: `curveU` is a fraction of the INPUT CURVE's arc length, while the thing handed downstream is the POLYLINE THROUGH THE SAMPLES, and a sampling CUTS CORNERS — the two agree on straights and diverge wherever the curve bends, so `curveU` times any length is two rulers in one expression and drifts exactly over the bends where a consumer reads it. `sampledLengthAttr` writes the emitted polyline's total chord length to the DETAIL domain (one number: every polyline is one curve here), including the closing chord back to the first sample when every input polyline is closed. `sampleArcAttr` writes each sample's own arc position along that same emitted polyline, in WORLD UNITS, to the POINT domain — the coordinate pathPointAt's 'distance' mode, transferAlongPath and arcTile all read. Both are empty by default and the output is byte-identical to a cook without them. Input polylines come from pointsToPath, pathResample, or createPolyline in TypeScript; the output is a plain point CLOUD with no topology, so it is no longer a path. Topology is fragile upstream too: any node that can REMOVE points drops it — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a path that passes through one stops being a path and this node will report that it found no polylines. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -246,9 +319,29 @@ export const splineSample = standardNode<SplineSampleParams>({
       description:
         "Distance between samples in world units when mode is 'spacing'. Must be > 0 in that mode. Ignored in 'count' mode.",
     },
+    sampledLengthAttr: {
+      type: "string",
+      default: "",
+      description:
+        "Name of an f32 DETAIL attribute (tuple 1) receiving the length of the polyline this node EMITS: the sum of the straight-line chords between consecutive samples, plus the closing chord from the last sample back to the first when every input polyline is closed (the case in which the samples divide the curve without duplicating the start, so the emitted sequence is a ring). Empty (the default) writes none. IT IS NOT THE INPUT CURVE'S LENGTH AND THAT IS THE POINT: a sampling CUTS CORNERS, so the polyline through the samples is always SHORTER than the curve it was cut from, and the shortfall is NOT UNIFORM — every unit of it accrues over the bends and none of it over the straights, so no scale factor turns one into the other. A consumer that steps the curve's length over these samples drifts, running off the end or wrapping short of its own seam. This is the number to divide `sampleArcAttr` by for a fraction, and the number to multiply a fraction by to get back to world units; `curveU` times this length is the mistake the pair exists to remove, because that expression mixes the CURVE's parameterization with the CHORD's ruler and the two only agree where the curve is straight. Measured from the f32 positions actually written, in the same order and with the same arithmetic `polylineArcTables` uses to re-measure a cloud downstream, so the number a later pathResample, pathPointAt, arcTile or transferAlongPath computes over these points IS this number rather than a near miss — the column itself is f32, so what a graph reads is that f64 sum rounded once on the way in. IT LANDS ON THE DETAIL DOMAIN, which is where this node's vocabulary differs from pathResample's: that node resamples every polyline ON ITS OWN ARC LENGTH and emits one output path per input path, so its equivalent report (`resampledLengthAttr`) is a fact about a PRIMITIVE, one per path. This node concatenates every polyline into ONE curve and emits a CLOUD with no primitives at all, so there is exactly ONE emitted length and no primitive to hang it on — the detail domain is the library's one-element domain and where attributeReduce already writes a whole-geometry number. Note that a detail attribute is NOT readable from a point-domain field (a field reads the domain it lands on); broadcast it with promoteAttribute (from 'detail', to 'point', mode 'first') when a field needs it per sample, or read it directly from a host. Same reporting-slot rule as every report in the library: the shape is this node's to pick (f32, tuple 1), so a name the output's detail domain already holds under a different shape is REFUSED rather than deleted and re-added, and a same-shape one is RESET. \"primtype\" is refused outright, from the param alone: it is a type tag rather than a value, and an f32 detail column under that name is one promoteAttribute detail → primitive away from replacing the tag with a float and hiding every path from the nodes that read it. The detail domain holds no `primtype` of its own for the shape check to catch, which is exactly why this name needs stating rather than leaving to the general rule.",
+    },
+    sampleArcAttr: {
+      type: "string",
+      default: "",
+      description:
+        "Name of an f32 POINT attribute (tuple 1) receiving each sample's ARC POSITION from the FIRST sample, measured along the EMITTED polyline: sample 0 is 0, and each later sample adds the straight-line chord from the sample before it. Empty (the default) writes none. ONE RUNNING COORDINATE OVER THE WHOLE OUTPUT, not one per polyline, because that is what this node's model already is — every polyline is measured as one concatenated curve, `curveU` is a fraction of that whole, and a sample crossing from one polyline to the next adds the chord that joins them exactly as any other sample adds its own. (pathResample restarts its arc at 0 on every path because it never concatenates anything; if per-path arcs are what a graph wants, that is the node that produces them.) THE UNITS ARE WORLD UNITS, NOT A 0..1 FRACTION, and that is what makes it more than `curveU` under another name: `pathPointAt`'s 'distance' mode, `pointScatterOnPath.arcAttr`, `transferAlongPath.arcAttr` and `arcTile.startAttr` are all world-unit CHORD coordinates, so this column plugs into any of them with no multiply and nothing for the graph to get wrong. The fraction is one divide away (by `sampledLengthAttr`) while going back the other way needs the length anyway, so the coordinate that composes is the one written. `curveU` is still written beside it and still measures the INPUT curve's fraction; the two disagree by exactly the corner-cutting `sampledLengthAttr` reports, which is why `curveU` times a length is not this column and drifts against it over every bend. It lands on the POINT domain because it is a fact about a SAMPLE — a different number for every point — which is what makes it unlike `sampledLengthAttr` and why it is checked against the output's point domain rather than the detail one. THE CLOSING CHORD OF A FULLY CLOSED INPUT IS NOT IN THIS COLUMN: it runs from the last sample back to the first, so no sample holds it — it is in `sampledLengthAttr`, and the last sample's value plus that chord is the emitted length. Otherwise the last sample's value IS the emitted length. The shape is this node's to pick (f32, tuple 1), so a name already on the OUTPUT's point domain under a different shape is REFUSED rather than deleted and re-added — P, scale, boundsMin, boundsMax and `tangent` (f32x3), rot and color (f32x4) and seed (u32) all reach that refusal — while `density` and `curveU` ARE f32 tuple 1, so naming either passes the shape check and RESETS it, silently overwriting a standard column with an arc length — and `curveU` is then gone rather than merely shadowed, since the two columns become one buffer and the arc is what stays in it. Give it a name of its own. TWO MORE NAMES ARE REFUSED OUTRIGHT. A name that is also a PRIMITIVE attribute of the INPUT is refused before the cook starts, whatever its shape: every primitive attribute is carried onto these samples, so it would land on this very column, and the refusal names this param rather than the carried attribute because renaming the report is the fix and moving the author's own value is not. And \"primtype\" is refused because it is a type tag rather than a value — this node emits no topology, so nothing here stamps it and the collision is only latent, but the name is one the library resolves as a TYPE and one promoteAttribute point → primitive away from replacing that tag with a float and hiding every path from the nodes that read it. Naming this report the same as `sampledLengthAttr` is NOT refused: the two land on different domains, so they are different columns and nothing collides.",
+    },
   },
   execute({ inputs, params, seed }) {
+    // Param-only, so it lands before any geometry is read: a param error
+    // reported as "no polyline primitives" sends the author to debug
+    // topology, which is the wrong thing entirely.
+    requireSplineReportsNotPrimtype(params);
     const geo = requireGeometry(inputs, "in", "splineSample");
+    // Against the INPUT's primitive columns, which are the ones about to be
+    // carried onto the output's POINT domain where this report lands — see
+    // requireSplineArcSlot for why the carry's own refusal is not enough.
+    requireSplineArcSlot(geo.attrs.primitive, params);
 
     // One arc-length table per polyline primitive, then concatenated into
     // a single curve — the node's documented "all polylines as one" rule.
@@ -306,6 +399,55 @@ export const splineSample = standardNode<SplineSampleParams>({
     const tangent = out.attrs.point.add("tangent", "f32", 3, [0, 0, 0]).data;
     const curveU = out.attrs.point.add("curveU", "f32", 1, 0).data;
     const seeds = out.attrs.point.require("seed").data;
+    // The per-sample report's slot, checked the moment the columns it must
+    // not destroy exist and BEFORE the carry that can add more. This node
+    // builds a FRESH cloud rather than cloning, so the input's point
+    // attributes — which never reach the output — are the wrong set to check
+    // against, exactly as pointScatterOnPath.arcAttr documents for its own
+    // fresh cloud. The input's PRIMITIVE names were checked above, since the
+    // carry lands every one of them on this same domain.
+    let sampleArc: Float32Array | undefined;
+    if (params.sampleArcAttr !== "") {
+      requireReportSlot({
+        attrs: out.attrs.point,
+        nodeType: "splineSample",
+        param: "sampleArcAttr",
+        name: params.sampleArcAttr,
+        type: "f32",
+        tupleSize: 1,
+        domain: "point",
+        suggestion: "sampleArc",
+        // The cloud is this node's own, so a refusal must name it: the
+        // input's point columns never reach here, and "remove it from the
+        // input" would send an author after a geometry it is not on.
+        on: "output",
+      });
+      sampleArc = out.attrs.point.replace(params.sampleArcAttr, "f32", 1, 0).data;
+    }
+    // The chord walk over the EMITTED samples, which is the whole point of
+    // both reports: `curveU` measures the INPUT curve and this measures what
+    // came out. Skipped when neither report asks for it, since it costs a
+    // square root per sample on top of the one the tangent already takes,
+    // and a report nobody named must not slow down the cook that does not
+    // use it. The running sum is kept for either report — `sampleArcAttr`
+    // alone needs the walk and not the closing chord, and computing a chord
+    // nothing reads would be one square root spent on a number thrown away.
+    const wantTotal = params.sampledLengthAttr !== "";
+    const wantChords = wantTotal || sampleArc !== undefined;
+    // Chord distance from the FIRST sample, in f64 over the f32 positions
+    // the loop has just written. BOTH halves of that are load-bearing.
+    // Reading the values back out of `op` rather than accumulating the f64
+    // expressions above them is what makes this number the one
+    // `polylineArcTables` recomputes for the same cloud downstream — it
+    // measures an f32 P column and nothing else, so an f64 sum here would be
+    // a slightly different length that no later node ever agrees with.
+    // Summing in f64 rather than in the f32 column is the same rule from the
+    // other side: `cum` accumulates in f64 above, so rounding every partial
+    // sum to f32 here would drift away from it over a few thousand samples.
+    let arc = 0;
+    let px = 0;
+    let py = 0;
+    let pz = 0;
     const samplePrim = new Uint32Array(n);
     const at = [0, 0]; // scratch [segment, t] reused by every sample
     for (let i = 0; i < n; i++) {
@@ -319,6 +461,20 @@ export const splineSample = standardNode<SplineSampleParams>({
       op[i * 3] = segAx[lo * 3] + dx * t;
       op[i * 3 + 1] = segAx[lo * 3 + 1] + dy * t;
       op[i * 3 + 2] = segAx[lo * 3 + 2] + dz * t;
+      if (wantChords) {
+        const x = op[i * 3];
+        const y = op[i * 3 + 1];
+        const z = op[i * 3 + 2];
+        if (i > 0) {
+          const cx = x - px;
+          const cy = y - py;
+          const cz = z - pz;
+          arc += Math.sqrt(cx * cx + cy * cy + cz * cz);
+        }
+        px = x;
+        py = y;
+        pz = z;
+      }
       const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (len > 0) {
         tangent[i * 3] = dx / len;
@@ -326,6 +482,16 @@ export const splineSample = standardNode<SplineSampleParams>({
         tangent[i * 3 + 2] = dz / len;
       }
       curveU[i] = L > 0 ? s / L : 0;
+      // AFTER `curveU`, and that order is the one case where it matters:
+      // `curveU` is f32 tuple 1, so `sampleArcAttr: "curveU"` passes the
+      // shape check and `replace` hands back the SAME buffer. Written first,
+      // the arc would be overwritten by the fraction one line later and the
+      // column an author explicitly asked for the arc in would hold the
+      // other number — the exact plausible-looking cook the reporting-slot
+      // rule exists to avoid. Written last, the named param means what it
+      // says and the standard column is the one lost, which is the trade
+      // every same-shape reset in the library already makes.
+      if (sampleArc !== undefined) sampleArc[i] = arc;
       seeds[i] = hashCombine(seed, i);
       samplePrim[i] = segPrim[lo];
     }
@@ -340,6 +506,47 @@ export const splineSample = standardNode<SplineSampleParams>({
       "splineSample",
       "point",
     );
+    if (wantTotal) {
+      // The closing chord belongs to the LENGTH and to no sample: when every
+      // input polyline is closed the sampling divides the curve WITHOUT
+      // duplicating the start (the `allClosed` rule above), so the emitted
+      // sequence is a ring and the segment from the last sample back to the
+      // first is as real as any other — a length that left it out would be
+      // short by one side of the seam. It starts at the last sample and ends
+      // where the arc coordinate already reads 0, so there is no sample it
+      // could be written on. `allClosed` is exactly the right condition and
+      // not an approximation of one: it is the same flag that decided
+      // whether the last sample duplicates the first, and a mixed input
+      // (some closed, some open) is sampled as an OPEN concatenation, whose
+      // last sample is an end rather than a point before a seam.
+      let closing = 0;
+      if (allClosed && n > 0) {
+        const cx = op[0] - px;
+        const cy = op[1] - py;
+        const cz = op[2] - pz;
+        closing = Math.sqrt(cx * cx + cy * cy + cz * cz);
+      }
+      // Checked against the domain actually written and marked "output":
+      // this is the cloud the node built, so "remove it from the input"
+      // would send an author after a column that is not there. Nothing on a
+      // fresh cloud's detail domain can collide today — createPointCloud
+      // leaves it empty and nothing between there and here adds to it — so
+      // the guard has nothing to refuse yet. It is written anyway, because
+      // the day this node carries a detail column across is the day the
+      // guard has to already exist rather than be remembered.
+      requireReportSlot({
+        attrs: out.attrs.detail,
+        nodeType: "splineSample",
+        param: "sampledLengthAttr",
+        name: params.sampledLengthAttr,
+        type: "f32",
+        tupleSize: 1,
+        domain: "detail",
+        suggestion: "sampleLength",
+        on: "output",
+      });
+      out.attrs.detail.replace(params.sampledLengthAttr, "f32", 1, 0).set(0, arc + closing);
+    }
     return { out: [makeGeometryItem(out)] };
   },
 });
