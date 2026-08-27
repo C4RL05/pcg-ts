@@ -173,7 +173,13 @@ import { rand } from "./rand.js";
 import { TRACK_FRAME } from "./graph.js";
 import type { Kit } from "./kit.js";
 import type { Lap } from "./lap.js";
-import type { StationedPlacement } from "./legibility.js";
+import type { MarkerKit, StationedPlacement } from "./legibility.js";
+import {
+  CORNER_LANGUAGE_OUTPUTS,
+  CORNER_LANGUAGE_SCRATCH,
+  PLACED,
+  addCornerLanguage,
+} from "./cornerGraph.js";
 import { FALSE_EDGE } from "./falseEdges.js";
 import { SIGHTLINE } from "./sightline.js";
 import { SAME_PLACE_W } from "./tolerance.js";
@@ -843,6 +849,23 @@ export interface DressGraphInput {
    * range and nothing to see it.
    */
   readonly pool: readonly PlaceableAsset[];
+  /**
+   * L-2 and L-3's reserved vocabulary, when the graph is to place it.
+   *
+   * FROM THE SAME `reserveFor` CALL AS `pool`, NECESSARILY, and for that
+   * field's own reason: the pool is what is LEFT once these three are held
+   * back, so a kit and a seed decide both together and splitting them would
+   * let a lap dress from a pool that still contains its own corner markers.
+   * `cookLapPlacements` says the same thing about its own `markers`.
+   *
+   * READ ONLY WHEN `placements` IS ABSENT. A caller handing a list in has
+   * already placed the corner language into it -- that is what
+   * `placeCornerLanguage` did -- so a kit here would place it twice.
+   * Absent with no list, the lap comes out with no corner vocabulary,
+   * which is what `dressLap` does when `reserveMarkers` cannot find three
+   * verticals to hold back.
+   */
+  readonly markers?: MarkerKit;
 }
 
 /**
@@ -1132,6 +1155,118 @@ function placementCloudInTrackCoords(
   return geo;
 }
 
+
+/**
+ * The per-asset columns {@link addPlacementAssembly} gathers by `ASSET.ord`.
+ *
+ * ITS OWN TABLE AND NOT `mixAssetCloud`'s, WHICH IT USED TO BE. The two
+ * answer different questions and the corner language is what made the
+ * difference matter. `mixAssetCloud` is the pool Z-3's redraw DRAWS FROM,
+ * so it holds exactly the pool and nothing else -- a marker in it would be
+ * a marker the mix could scatter round the lap, which is the one thing
+ * `reserveFor` exists to prevent. This is the table a placement is LOOKED
+ * UP IN, and L-2's markers and L-3's ruler element have to be in it,
+ * because a converted placement carries a marker and still needs its
+ * extents and its poses.
+ *
+ * SO THE ORD SPACE IS WIDER THAN THE POOL, and {@link placementAssetRows}
+ * is the one definition of it: the pool in its own order, then sharp, open
+ * and brake. Every consumer -- this table, the flat pose table, and the
+ * arithmetic that turns a `PLACED.row` into an ord -- derives from that one
+ * list rather than restating the layout.
+ */
+export const PLACEMENT_ASSET = {
+  across: "paAcross",
+  along: "paAlong",
+  tall: "paTall",
+  /** Where this asset's poses start in the flat table, and how many. */
+  poseOff: "paPoseOff",
+  poseCount: "paPoseCount",
+  /** 1 where L-1 must DROP this asset rather than push it. */
+  locked: "paLocked",
+  /** 1 where Z-3 may not move it. */
+  pinned: "paPinned",
+} as const;
+
+/** The flat pose table {@link PLACEMENT_ASSET.poseOff} indexes into. */
+const PLACEMENT_POSE = { id: "paPoseId" } as const;
+
+/**
+ * The assets a placement can name, in ord order: the pool, then the three
+ * reserved markers.
+ *
+ * ONE DEFINITION OF THE LAYOUT, called by everything that depends on it.
+ * The pool comes first and keeps its own indices, so a choice's
+ * `ASSET.ord` -- which indexes `assetCloud(pool)` -- means the same thing
+ * here without translation. That is the property worth having: the asset
+ * choice never learns that the table it picks from is a prefix of a longer
+ * one.
+ */
+export function placementAssetRows(
+  pool: readonly PlaceableAsset[],
+  markers: MarkerKit | undefined,
+): readonly PlaceableAsset[] {
+  return markers === undefined ? pool : [...pool, markers.sharp, markers.open, markers.brake];
+}
+
+/** The lookup table itself. */
+export function placementAssetCloud(
+  rows: readonly PlaceableAsset[],
+  lib: PoseLibrary,
+  immovable: ReadonlySet<number>,
+  mixPinned: ReadonlySet<number>,
+): Geometry {
+  const geo = createPointCloud(Math.max(1, rows.length));
+  const pts = geo.attrs.point;
+  const P = pts.require("P");
+  const across = pts.add(PLACEMENT_ASSET.across, "f32", 1);
+  const along = pts.add(PLACEMENT_ASSET.along, "f32", 1);
+  const tall = pts.add(PLACEMENT_ASSET.tall, "f32", 1);
+  const poseOff = pts.add(PLACEMENT_ASSET.poseOff, "f32", 1);
+  const poseCount = pts.add(PLACEMENT_ASSET.poseCount, "f32", 1);
+  const locked = pts.add(PLACEMENT_ASSET.locked, "f32", 1);
+  const pinned = pts.add(PLACEMENT_ASSET.pinned, "f32", 1);
+
+  let flat = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const a = rows[i] as PlaceableAsset;
+    // DISTINCT POSITIONS, for `mixAssetCloud`'s reason: a cloud whose
+    // points cannot be told apart answers one number for all of them to
+    // anything that keys on identity.
+    P.setTuple(i, [i, 0, 0]);
+    across.set(i, a.size.across);
+    along.set(i, a.size.along);
+    tall.set(i, a.size.tall);
+    const poses = lib.posesOf.get(a.id) ?? [];
+    poseOff.set(i, flat);
+    poseCount.set(i, poses.length);
+    flat += poses.length;
+    locked.set(i, immovable.has(a.id) ? 1 : 0);
+    pinned.set(i, mixPinned.has(a.id) ? 1 : 0);
+  }
+  return geo;
+}
+
+/** The flat pose table, over the same rows and in the same order. */
+export function placementPoseCloud(
+  rows: readonly PlaceableAsset[],
+  lib: PoseLibrary,
+): Geometry {
+  const ids: number[] = [];
+  for (const a of rows) for (const id of lib.posesOf.get(a.id) ?? []) ids.push(id);
+  // A ROW EVEN WHEN THERE ARE NO POSES, for `mixPoseCloud`'s reason: over
+  // an EMPTY source `transferByIndex` misses every point under all three
+  // settings, and a miss leaves whatever the column held before.
+  const geo = createPointCloud(Math.max(1, ids.length));
+  const P = geo.attrs.point.require("P");
+  const col = geo.attrs.point.add(PLACEMENT_POSE.id, "f32", 1);
+  for (let i = 0; i < geo.attrs.point.count; i++) {
+    P.setTuple(i, [i, 0, 0]);
+    col.set(i, ids.length === 0 ? -1 : (ids[i] as number));
+  }
+  return geo;
+}
+
 /**
  * The placement list, BUILT IN THE GRAPH rather than handed to it.
  *
@@ -1195,10 +1330,21 @@ export function addPlacementAssembly(
   g: Graph,
   chosen: { readonly node: NodeHandle; readonly pin: string },
   opts: {
-    /** The station cloud the choice's copies were laid over. */
-    readonly stations: { readonly node: NodeHandle; readonly pin: string };
+    /**
+     * The station cloud the choice's copies were laid over, when the rows
+     * came from a choice.
+     *
+     * ABSENT WHEN THE ROWS ALREADY KNOW WHERE THEY ARE. A chosen row
+     * carries a station INDEX, because `copyToPoints` writes the target's
+     * index and not its columns, so the arc position has to be gathered
+     * back. L-2's markers and L-3's ruler marks carry a station VALUE --
+     * the corner language decided it, from the corner's entry -- and there
+     * is no station cloud they are copies of. Omitting this says the rows
+     * bring their own {@link PLACEMENT.station} and the gather is skipped.
+     */
+    readonly stations?: { readonly node: NodeHandle; readonly pin: string };
     /** What that cloud calls its arc column — see {@link PLACEMENT.station}. */
-    readonly stationAttr: string;
+    readonly stationAttr?: string;
     /** {@link mixPoseIds}, the two-half table the string column indexes. */
     readonly poseIds: readonly string[];
   },
@@ -1216,13 +1362,20 @@ export function addPlacementAssembly(
   //    belongs to and not where that station is. `cookLapPlacements` reads
   //    the arc column off the station cloud and pairs the two lists in
   //    TypeScript for the same reason; this is that pairing as a gather.
-  const station = g.add(
-    transferByIndex,
-    { index: attribute(CHOICE.stationIdx), attributes: [opts.stationAttr], outOfRange: "clamp" },
-    `${tag}Station`,
-  );
-  g.connect(chosen.node, chosen.pin, station, "in");
-  g.connect(opts.stations.node, opts.stations.pin, station, "source");
+  let station: NodeHandle | undefined;
+  if (opts.stations) {
+    station = g.add(
+      transferByIndex,
+      {
+        index: attribute(CHOICE.stationIdx),
+        attributes: [opts.stationAttr ?? PLACEMENT.station],
+        outOfRange: "clamp",
+      },
+      `${tag}Station`,
+    );
+    g.connect(chosen.node, chosen.pin, station, "in");
+    g.connect(opts.stations.node, opts.stations.pin, station, "source");
+  }
 
   // A RENAME ONLY IF THE NAMES DIFFER. `addStationStage` defaults its arc
   // column to the same `stationW` this file calls `PLACEMENT.station`, so
@@ -1230,15 +1383,22 @@ export function addPlacementAssembly(
   // takes the name as a param, and a graph that silently dropped the
   // column when a caller renamed it would be wrong in a way no type
   // catches.
-  let head: NodeHandle = station;
-  const renamed = opts.stationAttr !== PLACEMENT.station;
+  let head: NodeHandle = station ?? chosen.node;
+  let headPin = station ? "out" : chosen.pin;
+  const renamed = station !== undefined && opts.stationAttr !== undefined &&
+    opts.stationAttr !== PLACEMENT.station;
   if (renamed) {
     head = g.add(
       setAttribute,
-      { name: PLACEMENT.station, tupleSize: 1, value: attribute(opts.stationAttr) },
+      {
+        name: PLACEMENT.station,
+        tupleSize: 1,
+        value: attribute(opts.stationAttr as string),
+      },
       `${tag}StationName`,
     );
-    g.connect(station, "out", head, "in");
+    g.connect(station as NodeHandle, "out", head, "in");
+    headPin = "out";
   }
 
   // 2. THE ASSET'S OWN ROW — the three facts a choice never needed.
@@ -1251,18 +1411,28 @@ export function addPlacementAssembly(
     transferByIndex,
     {
       index: attribute(ASSET.ord),
+      // THE EXTENTS ARE GATHERED TOO, WHICH THEY DID NOT USED TO BE. They
+      // rode the copy for a chosen row, because `assetCloud` carries them
+      // and `copyToPoints` composes a copy from the source's columns. A
+      // marker row is not a copy of anything -- the corner language emits a
+      // station, a lateral and a height, and nothing else -- so the only
+      // way both kinds of row can go through one stage is for the stage to
+      // look everything up. A row now needs an ord and its own three
+      // decided numbers, and nothing else.
       attributes: [
-        MIX_ASSET.along,
-        MIX_ASSET.poseOff,
-        MIX_ASSET.poseCount,
-        MIX_ASSET.locked,
-        MIX_ASSET.pinned,
+        PLACEMENT_ASSET.across,
+        PLACEMENT_ASSET.along,
+        PLACEMENT_ASSET.tall,
+        PLACEMENT_ASSET.poseOff,
+        PLACEMENT_ASSET.poseCount,
+        PLACEMENT_ASSET.locked,
+        PLACEMENT_ASSET.pinned,
       ],
       outOfRange: "clamp",
     },
     `${tag}Asset`,
   );
-  g.connect(head, "out", assets, "in");
+  g.connect(head, headPin, assets, "in");
 
   // 3. THE POSE. The draw, then the asset's own pose list indexed by it —
   //    `writeCoverPlacements` states the same three nodes and its comments
@@ -1291,10 +1461,10 @@ export function addPlacementAssembly(
       name: SCRATCH_POSE,
       tupleSize: 1,
       value: add(
-        attribute(MIX_ASSET.poseOff),
+        attribute(PLACEMENT_ASSET.poseOff),
         mod(
-          floor(mul(attribute(PLACEMENT.poseU), attribute(MIX_ASSET.poseCount))),
-          max(1, attribute(MIX_ASSET.poseCount)),
+          floor(mul(attribute(PLACEMENT.poseU), attribute(PLACEMENT_ASSET.poseCount))),
+          max(1, attribute(PLACEMENT_ASSET.poseCount)),
         ),
       ),
     },
@@ -1304,7 +1474,7 @@ export function addPlacementAssembly(
 
   const poses = g.add(
     transferByIndex,
-    { index: attribute(SCRATCH_POSE), attributes: [MIX_POSE.id], outOfRange: "clamp" },
+    { index: attribute(SCRATCH_POSE), attributes: [PLACEMENT_POSE.id], outOfRange: "clamp" },
     `${tag}Pose`,
   );
   g.connect(row, "out", poses, "in");
@@ -1317,17 +1487,17 @@ export function addPlacementAssembly(
     // asset the vocabulary has nothing for, `buildBoxes` falls through to
     // an empty box set, and the copy-and-select downstream drops every box
     // of that placement. So the two paths produce the same nothing.
-    [PLACEMENT.pose, select(le(attribute(MIX_ASSET.poseCount), 0), -1, attribute(MIX_POSE.id))],
+    [PLACEMENT.pose, select(le(attribute(PLACEMENT_ASSET.poseCount), 0), -1, attribute(PLACEMENT_POSE.id))],
     [PLACEMENT.t, attribute(CHOICE.t)],
     [PLACEMENT.h, attribute(CHOICE.h)],
-    [PLACEMENT.sizeAcross, attribute(ASSET.across)],
-    [PLACEMENT.sizeAlong, attribute(MIX_ASSET.along)],
-    [PLACEMENT.sizeTall, attribute(ASSET.tall)],
+    [PLACEMENT.sizeAcross, attribute(PLACEMENT_ASSET.across)],
+    [PLACEMENT.sizeAlong, attribute(PLACEMENT_ASSET.along)],
+    [PLACEMENT.sizeTall, attribute(PLACEMENT_ASSET.tall)],
     // ORDINARY DRESSING IS NEVER COVER. L-6 is the only thing that builds
     // cover, it runs after this, and it writes its pieces' flag itself.
     [PLACEMENT.cover, 0],
-    [PLACEMENT.locked, attribute(MIX_ASSET.locked)],
-    [PLACEMENT.mixPinned, attribute(MIX_ASSET.pinned)],
+    [PLACEMENT.locked, attribute(PLACEMENT_ASSET.locked)],
+    [PLACEMENT.mixPinned, attribute(PLACEMENT_ASSET.pinned)],
     // BEFORE THE REDRAW HAS RUN EVEN ONCE, which is when the quota first
     // reads it — the same reason the TypeScript cloud creates this column
     // rather than leaving it to the stage that sets it.
@@ -1336,12 +1506,14 @@ export function addPlacementAssembly(
     // belongs to no enclosure run, and a column filled by `mergePoints`'
     // default would say it belongs to the one starting at station zero.
     [PLACEMENT.coverRun, -1],
-    // WHERE THIS PLACEMENT SITS IN THE LIST THE GRAPH MADE. The TypeScript
-    // cloud writes the row index of the list it was handed and means the
-    // same thing; what makes the number exact either way is that a lap
-    // carries a few hundred placements and every integer below 2^24 is
-    // exact in f32.
-    [PLACEMENT.id, index()],
+    // `PLACEMENT.id` IS NOT WRITTEN HERE, AND IT USED TO BE. It is "where
+    // this placement sits in the list", and this stage does not build the
+    // list -- it builds one KIND of row. A lap with a corner language runs
+    // it twice, once over the chosen rows and once over L-2's and L-3's,
+    // and `index()` on each would number both from zero and give every
+    // marker the id of an ordinary placement. {@link addLapPlacements}
+    // writes the column once, over the merged cloud, which is the first
+    // moment the list exists.
   ];
   for (const [name, value] of writes) {
     const n = g.add(setAttribute, { name, tupleSize: 1, value }, `${tag}W_${name}`);
@@ -1381,12 +1553,19 @@ export function addPlacementAssembly(
         // whose output shape depends on a param nobody sets.
         ...(renamed ? [opts.stationAttr] : []),
         SCRATCH_POSE,
-        MIX_ASSET.along,
-        MIX_ASSET.poseOff,
-        MIX_ASSET.poseCount,
-        MIX_ASSET.locked,
-        MIX_ASSET.pinned,
-        MIX_POSE.id,
+        PLACEMENT_ASSET.across,
+        PLACEMENT_ASSET.along,
+        PLACEMENT_ASSET.tall,
+        PLACEMENT_ASSET.poseOff,
+        PLACEMENT_ASSET.poseCount,
+        PLACEMENT_ASSET.locked,
+        PLACEMENT_ASSET.pinned,
+        PLACEMENT_POSE.id,
+        PLACED.stationW,
+        PLACED.t,
+        PLACED.h,
+        PLACED.row,
+        PLACED.corner,
         CHOICE.curveK,
         CHOICE.uPick,
         CHOICE.uLat,
@@ -1444,6 +1623,81 @@ export function addPlacementAssembly(
   return { out: named, assets, poses };
 }
 
+
+/**
+ * L-2's markers and L-3's ruler marks, as rows {@link addPlacementAssembly}
+ * can take.
+ *
+ * WHAT THE CORNER LANGUAGE DECIDES IS FOUR NUMBERS PER MARK -- a station,
+ * a lateral, a height and which of the three reserved assets it is -- and
+ * what the assembly wants is an ord and those same three decided numbers.
+ * So this is a rename and one piece of arithmetic, and the arithmetic is
+ * `PLACED.row` into the ord space {@link placementAssetRows} lays out.
+ *
+ * THE TWO CLOUDS MERGE FIRST AND ARE ASSEMBLED ONCE. They carry the same
+ * five columns -- `addRulerStage` pins its own row to 2, which is `brake`
+ * in both `markerCloud`'s order and `placementAssetRows`' tail -- so there
+ * is nothing to tell them apart by the time the assembly sees them, and
+ * nothing that needs to. A marker and a ruler mark are both a reserved
+ * asset standing at a station.
+ *
+ * THE ORDER IS L-2 THEN L-3, which is `placeCornerLanguage`'s and is worth
+ * keeping even though nothing downstream reads row order: it is the order
+ * the reference builds the list in, so a comparison that ever wants to be
+ * positional can be.
+ */
+function addCornerLanguageRows(
+  g: Graph,
+  language: { readonly markers: NodeHandle; readonly rulers: NodeHandle },
+  ordBase: number,
+  tag: string,
+): NodeHandle {
+  const merged = g.add(mergePoints, {}, `${tag}Merge`);
+  g.connect(language.markers, "out", merged, "in");
+  g.connect(language.rulers, "out", merged, "in");
+
+  let out: NodeHandle = merged;
+  const writes: [string, Field][] = [
+    // THE ORD, AND THIS IS THE JOIN. `PLACED.row` is 0, 1 or 2 for sharp,
+    // open and brake; the reserved three sit at the end of the ord space,
+    // in that order, because `placementAssetRows` puts them there. One
+    // addition, and a marker is an asset like any other.
+    [ASSET.ord, add(ordBase, attribute(PLACED.row))],
+    [CHOICE.t, attribute(PLACED.t)],
+    [CHOICE.h, attribute(PLACED.h)],
+    // NO GATHER FOR THIS ONE, which is why the assembly's station lookup
+    // is optional. The corner language measured back from a corner's entry
+    // and wrapped into the lap; there is no station cloud these are copies
+    // of, and asking for one would mean inventing an index.
+    [PLACEMENT.station, attribute(PLACED.stationW)],
+  ];
+  for (const [name, value] of writes) {
+    const n = g.add(setAttribute, { name, tupleSize: 1, value }, `${tag}W_${name}`);
+    g.connect(out, "out", n, "in");
+    out = n;
+  }
+
+  // THE CORNER STAGES' WORKING, DROPPED HERE AND NOT LEFT TO THE MERGE.
+  // Resolving a corner model onto the frames and carrying a marker row onto
+  // each corner leaves eighteen columns of it, and they all rode into the
+  // placement list -- 22 columns onto every placement, through the whole
+  // repair loop, with the chosen rows getting 0 for each from the merge's
+  // default. Nothing downstream reads a name like `cornerEntryW`, so it was
+  // inert; `arcW` is live scratch in three modules and was one rename from
+  // meaning two things on one cloud.
+  //
+  // STRIPPED BEFORE THE ASSEMBLY, so that the two assemblies really do
+  // produce identical column sets -- which is the property the merge below
+  // rests on, and which was stated here before it was true.
+  const cleaned = g.add(
+    removeAttribute,
+    { names: [...CORNER_LANGUAGE_SCRATCH], strict: false },
+    `${tag}Strip`,
+  );
+  g.connect(out, "out", cleaned, "in");
+  return cleaned;
+}
+
 /**
  * The whole lap placement list, from a path, as one run of stages.
  *
@@ -1476,14 +1730,30 @@ export function addLapPlacements(
   tables: {
     /** {@link assetCloud} over the pool — what the choice picks from. */
     readonly assets: { readonly node: NodeHandle; readonly pin: string };
-    /** {@link mixAssetCloud} over the same pool — what the assembly gathers. */
-    readonly mixAssets: { readonly node: NodeHandle; readonly pin: string };
-    /** {@link mixPoseCloud} over the same pool — the flat pose table. */
-    readonly mixPoses: { readonly node: NodeHandle; readonly pin: string };
+    /**
+     * {@link placementAssetCloud} over {@link placementAssetRows} — what a
+     * placement is LOOKED UP in, pool and reserved markers together.
+     *
+     * NOT `mixAssetCloud`. That one is the pool Z-3 DRAWS FROM and must not
+     * contain a marker; this one is the table every placement's extents and
+     * poses come out of, and a converted placement carries a marker.
+     */
+    readonly lookup: { readonly node: NodeHandle; readonly pin: string };
+    /** {@link placementPoseCloud} over the same rows — the flat pose table. */
+    readonly poses: { readonly node: NodeHandle; readonly pin: string };
   },
   opts: {
     readonly halfWidth: number;
     readonly assetCount: number;
+    /**
+     * How many rows of the asset table are the POOL -- the ord the first
+     * reserved marker sits at. Defaults to `assetCount`, which is the same
+     * number for every caller today; it is stated apart because
+     * `assetCount` is what the CHOICE may pick from and this is where the
+     * choice's ord space ends, and a kit that ever reserved from somewhere
+     * else would want them to differ.
+     */
+    readonly poolLength?: number;
     readonly poseIds: readonly string[];
     readonly params?: StationParams;
     readonly densityScale?: number;
@@ -1504,6 +1774,20 @@ export function addLapPlacements(
       readonly stations?: string;
       readonly repair?: string;
       readonly choice?: string;
+    };
+    /**
+     * L-2 and L-3, when the caller has a marker kit and a cooked lap.
+     *
+     * ONE OPTION HOLDING BOTH, because neither is any use without the
+     * other: `addCornerLanguage` reads the corner model off the path and
+     * draws from the three reserved assets, so a kit with no lap and a lap
+     * with no kit are both half a question. Absent, the lap comes out with
+     * no corner vocabulary at all, which is what `dressLap` does when
+     * `reserveMarkers` could not find three verticals to hold back.
+     */
+    readonly language?: {
+      readonly markers: MarkerKit;
+      readonly lap: Lap;
     };
   },
   tag: string,
@@ -1558,11 +1842,74 @@ export function addLapPlacements(
     },
     `${tag}Asm`,
   );
-  g.connect(tables.mixAssets.node, tables.mixAssets.pin, assembled.assets, "source");
-  g.connect(tables.mixPoses.node, tables.mixPoses.pin, assembled.poses, "source");
+  g.connect(tables.lookup.node, tables.lookup.pin, assembled.assets, "source");
+  g.connect(tables.poses.node, tables.poses.pin, assembled.poses, "source");
+
+  // ---- L-2 AND L-3 -------------------------------------------------------
+  //
+  // THE SAME ASSEMBLY, RUN A SECOND TIME. A marker is a reserved asset at a
+  // station, which is what a chosen placement is; the only difference is
+  // where the station came from, and that is the one thing
+  // {@link addPlacementAssembly} takes as an option. So the corner language
+  // does not get a second spelling of the pose draw, the extents lookup or
+  // the id string -- it gets the same nodes, over its own rows.
+  //
+  // ASSEMBLED APART AND MERGED AFTER, rather than merged and assembled
+  // once. `mergePoints` unions columns and fills the gaps with defaults, so
+  // a merge before the assembly would give every marker a station INDEX of
+  // zero beside its real station, and the gather would then overwrite the
+  // station it already knew with whichever one row zero happened to hold.
+  // Two assemblies produce two clouds with identical columns, which is the
+  // one arrangement the merge cannot get wrong.
+  let list: NodeHandle = assembled.out;
+  if (opts.language) {
+    const language = addCornerLanguage(
+      g,
+      path,
+      opts.language.markers,
+      opts.language.lap,
+      `${tag}Cl`,
+    );
+    const rows = addCornerLanguageRows(
+      g,
+      language,
+      opts.poolLength ?? opts.assetCount,
+      `${tag}Lang`,
+    );
+    const marked = addPlacementAssembly(
+      g,
+      { node: rows, pin: "out" },
+      { poseIds: opts.poseIds },
+      `${tag}LangAsm`,
+    );
+    g.connect(tables.lookup.node, tables.lookup.pin, marked.assets, "source");
+    g.connect(tables.poses.node, tables.poses.pin, marked.poses, "source");
+
+    const merged = g.add(mergePoints, {}, `${tag}Merge`);
+    // ORDINARY DRESSING FIRST, THEN THE LANGUAGE, which is the order
+    // `placeCornerLanguage` builds its list in.
+    g.connect(list, "out", merged, "in");
+    g.connect(marked.out, "out", merged, "in");
+    list = merged;
+  }
+
+  // ---- AND NOW THE LIST EXISTS, SO IT CAN BE NUMBERED --------------------
+  //
+  // ONE WRITE, OVER THE WHOLE THING. {@link addPlacementAssembly} used to
+  // do this and cannot: it builds one KIND of row, and a lap with a corner
+  // language runs it twice, so `index()` there numbers both from zero and
+  // gives every marker the id of an ordinary placement. Here it is what the
+  // column has always claimed to be -- where this placement sits in the
+  // list the graph made.
+  const numbered = g.add(
+    setAttribute,
+    { name: PLACEMENT.id, tupleSize: 1, value: index() },
+    `${tag}Id`,
+  );
+  g.connect(list, "out", numbered, "in");
 
   return {
-    out: assembled.out,
+    out: numbered,
     repair: repair.out,
     roundsPin: repair.roundsPin,
     convergedPin: repair.convergedPin,
@@ -3736,15 +4083,31 @@ function assemble(input: DressGraphInput): { graph: Graph } {
     g.setParam(assetsIn, "items", [makeGeometryItem(assetCloud(pool))]);
     const pathIn = g.add(dataInput, {}, "lapPath");
     g.setParam(pathIn, "items", [makeGeometryItem(lapAsPath(lap))]);
+    // THE LOOKUP TABLE IS THE POOL PLUS THE RESERVED THREE, and it is not
+    // `mixAssetsIn`. See `AddLapPlacements`' `tables.lookup`: the redraw's
+    // pool must not contain a marker and a converted placement must be able
+    // to find one.
+    const rows = placementAssetRows(pool, input.markers);
+    const lookupIn = g.add(dataInput, {}, "placementAssets");
+    g.setParam(lookupIn, "items", [
+      makeGeometryItem(placementAssetCloud(rows, lib, immovable, mixPinned)),
+    ]);
+    const lookupPosesIn = g.add(dataInput, {}, "placementPoses");
+    g.setParam(lookupPosesIn, "items", [makeGeometryItem(placementPoseCloud(rows, lib))]);
     placementsIn = addLapPlacements(
       g,
       { node: pathIn, pin: "out" },
       {
         assets: { node: assetsIn, pin: "out" },
-        mixAssets: { node: mixAssetsIn, pin: "out" },
-        mixPoses: { node: mixPosesIn, pin: "out" },
+        lookup: { node: lookupIn, pin: "out" },
+        poses: { node: lookupPosesIn, pin: "out" },
       },
-      { halfWidth: lap.halfWidth, assetCount: pool.length, poseIds: mixPoseIds(lib) },
+      {
+        halfWidth: lap.halfWidth,
+        assetCount: pool.length,
+        poseIds: mixPoseIds(lib),
+        language: input.markers ? { markers: input.markers, lap } : undefined,
+      },
       "lap",
     ).out;
   } else {

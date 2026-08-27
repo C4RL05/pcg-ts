@@ -863,6 +863,46 @@ export function addCornerLanguage(
   };
 }
 
+/**
+ * Every column the corner-language stages leave behind that is NOT an
+ * answer.
+ *
+ * THIS FILE OWNS THE LIST BECAUSE THIS FILE WRITES THE COLUMNS. The corner
+ * stage resolves a whole corner model onto the frames, the marker stage
+ * carries a row of the marker table onto each corner, and the ruler stage
+ * keeps its own magnitude -- eighteen columns of working, none of which is
+ * a fact about a placement. {@link PLACED} is the answer and is deliberately
+ * absent here: a consumer reads those and then drops them, which is a
+ * different moment from dropping these.
+ *
+ * IT EXISTS BECAUSE A CONSUMER MERGED THESE INTO A PLACEMENT LIST.
+ * `dressGraph`'s corner language runs these stages and then merges their
+ * output with the dressed lap, and every column here rode along -- 22 of
+ * them, onto every placement, through the whole repair loop. Inert, since
+ * nothing downstream reads a name like `cornerEntryW`; but `arcW` is live
+ * scratch in three modules and was one rename away from meaning two things
+ * on one cloud. Enumerating them in the consumer would be a second list to
+ * keep true, so the producer states it.
+ */
+export const CORNER_LANGUAGE_SCRATCH: readonly string[] = [
+  ARC_ATTR,
+  RULER_MAG,
+  MASKED_RADIUS,
+  STRAIGHT_TOTAL,
+  EXIT_FRAME,
+  ...Object.values(CORNER),
+  ...Object.values(MARKER_COL),
+  // AND THE ROAD GRAPH'S OWN CORNER MODEL, which this file does not write
+  // and does carry: `lapAsPath` puts the four columns back on the path so
+  // the corner stage can read them, and every cloud derived from that path
+  // has them. They belong to the PATH and not to a placement, so a consumer
+  // merging a corner-language cloud into a placement list has to drop them
+  // for the same reason as the rest. Listed here rather than in the
+  // consumer because this is the list of what arrives on these clouds, and
+  // where each name was minted is not the consumer's problem.
+  ...Object.values(CORNER_MODEL),
+];
+
 /** The output names {@link addCornerLanguage}'s two clouds publish under. */
 export const CORNER_LANGUAGE_OUTPUTS = { markers: "l2", rulers: "l3" } as const;
 

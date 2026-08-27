@@ -3276,3 +3276,73 @@ those now, and the second one is on the path to the endpoint.
 **And an observation the assembly surfaced without explaining**, written
 up as its own Backlog entry above -- "A settled lap has placements inside
 the corridor".
+
+### L-2 and L-3 are placed by the graph, 2026-08-27
+
+`addLapPlacements` takes a marker kit now. Given one it runs
+`addCornerLanguage`, turns its two clouds into placement rows, and merges
+them into the lap: every corner carries its marker and every tight corner
+its three ruler marks, checked by the rules' OWN gates
+(`cornerMarkersSatisfied`, `brakingRulersSatisfied`) rather than by a
+restatement of them. 59 corners marked and 102 marks over three seeds.
+
+**A marker is an asset at a station, which is what a placement is.** That
+is the whole reason this needed no new vocabulary: the corner language
+decides four numbers per mark -- station, lateral, height, and which of the
+three reserved assets -- and the assembly wants an ord plus those same
+three. So `addPlacementAssembly` runs a SECOND time over the language's
+rows rather than the language getting its own spelling of the pose draw,
+the extents lookup and the id string.
+
+Two things had to move to make that true. The station lookup became
+OPTIONAL: a chosen row carries a station INDEX, because `copyToPoints`
+writes the target's index and not its columns, and a marker carries a
+station VALUE with no station cloud to be an index into. And the extents
+are GATHERED now instead of riding the copy, so a row needs an ord and
+nothing else.
+
+**The lookup table split from the redraw's pool, and the reason is a rule.**
+Z-3 draws from `mixAssetCloud`, and a marker in it is a marker the mix
+could scatter round the lap -- which is precisely what `reserveFor` exists
+to prevent. But a CONVERTED placement carries a marker and still needs its
+extents and its poses. So `placementAssetCloud` is the table a placement is
+LOOKED UP in (pool then sharp, open, brake) and `mixAssetCloud` stays the
+table Z-3 DRAWS FROM. `placementAssetRows` is the one definition of the ord
+space, so the choice never learns that the table it picks from is a prefix
+of a longer one.
+
+**`PLACEMENT.id` moved out of the assembly.** The assembly builds one KIND
+of row and now runs twice, so `index()` there numbers both from zero and
+gives every marker the id of an ordinary placement. It is written once, in
+`addLapPlacements`, over the merged cloud -- the first moment the list
+exists.
+
+**HALF OF L-2/L-3 IS DELIBERATELY NOT WIRED, AND THE COUNT SAYS SO
+EXACTLY.** `placeCornerLanguage` does four things: CONVERT an ordinary
+placement into a marker, ADD one where no victim fits, place L-3's marks,
+and DISPLACE what those marks pay for. The two placements are done; the two
+bookkeeping halves are not -- `buildCornerBookkeeping` already decides both
+as columns (`VICTIM.claimedBy`, `VICTIM.displacedBy`) and what is missing
+is applying them. Rather than describe that, the suite asserts the list is
+exactly `chosen + corners + 3 * tight`. The moment a conversion replaces an
+addition, that equality fails, so the next unit cannot land silently.
+
+**What verification found, and it was two things the suite could not see.**
+The corner stages resolve a whole corner model onto their clouds, and all
+of it rode into the placement list through the merge -- 45 columns instead
+of 23, through the whole repair loop, chosen rows getting 0 for each from
+the merge default. Inert, since nothing downstream reads `cornerEntryW`;
+but `arcW` is live scratch in three modules and was one rename from meaning
+two things on one cloud. `CORNER_LANGUAGE_SCRATCH` in `cornerGraph.ts` is
+the producer stating what it leaves behind, and the rows stage drops it
+before the assembly. The column-set assertion existed already and ran only
+on the no-marker path; it runs on both now.
+
+And the case handed in `immovable` and `mixPinned`, said in a comment that
+the markers were protected, and asserted nothing that depended on it. Run
+with both sets EMPTY every assertion still passed, while seed 3 came out of
+the repair loop holding 19 of its 25 markers -- Z-3 redrawing corner
+vocabulary into ordinary scenery, invisible. The case reads
+`placementsInput`, which is the list BEFORE any rule ran; it now also
+counts what survives the loop.
+

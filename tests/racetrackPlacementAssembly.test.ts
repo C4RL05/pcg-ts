@@ -38,15 +38,22 @@ import { lapAsPath } from "../demos/racetrack/stationGraph.js";
 import {
   PLACEMENT,
   addLapPlacements,
-  mixAssetCloud,
-  mixPoseCloud,
   mixPoseIds,
+  placementAssetCloud,
+  placementAssetRows,
+  placementPoseCloud,
   poseAssetId,
   poseLibrary,
   dressLapByGraph,
   type PoseLibrary,
 } from "../demos/racetrack/dressGraph.js";
-import type { StationedPlacement } from "../demos/racetrack/legibility.js";
+import {
+  brakingRulersSatisfied,
+  cornerMarkersSatisfied,
+  type StationedPlacement,
+} from "../demos/racetrack/legibility.js";
+import { SEVERITY, cornersOf } from "../demos/racetrack/corners.js";
+import { BRAKING } from "../demos/racetrack/legibility.js";
 import { placementsBeforeLanguage, reserveFor } from "../demos/racetrack/dress.js";
 import { shippedVocabulary } from "../demos/racetrack/vocabulary.js";
 import { lapFor } from "./support/lap.js";
@@ -107,33 +114,7 @@ function expectAssembled(
     expect(
       [...geo.attrs.point.names()].sort(),
       `seed ${seed}: the assembled cloud does not carry the columns the reference cloud does`,
-    ).toEqual(
-      [
-        "P",
-        "rot",
-        "scale",
-        "density",
-        "boundsMin",
-        "boundsMax",
-        "color",
-        "seed",
-        PLACEMENT.t,
-        PLACEMENT.h,
-        PLACEMENT.sizeAcross,
-        PLACEMENT.sizeAlong,
-        PLACEMENT.sizeTall,
-        PLACEMENT.cover,
-        PLACEMENT.pose,
-        PLACEMENT.station,
-        PLACEMENT.id,
-        PLACEMENT.locked,
-        PLACEMENT.mixPinned,
-        PLACEMENT.poseU,
-        PLACEMENT.mixTried,
-        PLACEMENT.coverRun,
-        PLACEMENT.asset,
-      ].sort(),
-    );
+    ).toEqual([...PLACEMENT_COLUMNS].sort());
 
     const names = [
       PLACEMENT.station,
@@ -254,6 +235,44 @@ function expectAssembled(
   return { matched, multiPose };
 }
 
+/**
+ * The columns a placement cloud carries, whoever built it.
+ *
+ * STATED IN ONE PLACE BECAUSE THREE CASES DEPEND ON IT. It is the eight
+ * standard point attributes plus the fifteen `placementCloudInTrackCoords`
+ * adds, and what makes it worth asserting rather than assuming is that
+ * every stage which BUILDS a placement has to produce exactly this: a
+ * column one of them forgets rides every later stage carrying somebody's
+ * working, and a column one of them adds is a name nobody downstream
+ * recognises. The corner language leaked 22 of the latter before anything
+ * looked.
+ */
+const PLACEMENT_COLUMNS: readonly string[] = [
+        "P",
+        "rot",
+        "scale",
+        "density",
+        "boundsMin",
+        "boundsMax",
+        "color",
+        "seed",
+        PLACEMENT.t,
+        PLACEMENT.h,
+        PLACEMENT.sizeAcross,
+        PLACEMENT.sizeAlong,
+        PLACEMENT.sizeTall,
+        PLACEMENT.cover,
+        PLACEMENT.pose,
+        PLACEMENT.station,
+        PLACEMENT.id,
+        PLACEMENT.locked,
+        PLACEMENT.mixPinned,
+        PLACEMENT.poseU,
+        PLACEMENT.mixTried,
+        PLACEMENT.coverRun,
+        PLACEMENT.asset,
+];
+
 /** Every scalar column of a cloud, as plain arrays. */
 function columns(geo: Geometry, names: readonly string[]): Map<string, number[]> {
   const pts = geo.attrs.point;
@@ -299,19 +318,20 @@ describe("the lap's placement list, as a graph", () => {
       g.setParam(pathIn, "items", [makeGeometryItem(lapAsPath(lap))]);
       const assetsIn = g.add(dataInput, {}, "assetTable");
       g.setParam(assetsIn, "items", [makeGeometryItem(assetCloud(pool))]);
-      const mixAssetsIn = g.add(dataInput, {}, "mixAssets");
-      g.setParam(mixAssetsIn, "items", [
-        makeGeometryItem(mixAssetCloud(pool, lib, new Set(), new Set())),
+      const rows = placementAssetRows(pool, undefined);
+      const lookupIn = g.add(dataInput, {}, "placementAssets");
+      g.setParam(lookupIn, "items", [
+        makeGeometryItem(placementAssetCloud(rows, lib, new Set(), new Set())),
       ]);
-      const mixPosesIn = g.add(dataInput, {}, "mixPoses");
-      g.setParam(mixPosesIn, "items", [makeGeometryItem(mixPoseCloud(pool, lib))]);
+      const posesIn = g.add(dataInput, {}, "placementPoses");
+      g.setParam(posesIn, "items", [makeGeometryItem(placementPoseCloud(rows, lib))]);
       const built = addLapPlacements(
         g,
         { node: pathIn, pin: "out" },
         {
           assets: { node: assetsIn, pin: "out" },
-          mixAssets: { node: mixAssetsIn, pin: "out" },
-          mixPoses: { node: mixPosesIn, pin: "out" },
+          lookup: { node: lookupIn, pin: "out" },
+          poses: { node: posesIn, pin: "out" },
         },
         { halfWidth: lap.halfWidth, assetCount: pool.length, poseIds: mixPoseIds(lib) },
         "lap",
@@ -391,19 +411,20 @@ describe("the lap's placement list, as a graph", () => {
     g.setParam(pathIn, "items", [makeGeometryItem(lapAsPath(lap))]);
     const assetsIn = g.add(dataInput, {}, "assetTable");
     g.setParam(assetsIn, "items", [makeGeometryItem(assetCloud(pool))]);
-    const mixAssetsIn = g.add(dataInput, {}, "mixAssets");
-    g.setParam(mixAssetsIn, "items", [
-      makeGeometryItem(mixAssetCloud(pool, lib, pinned, immovable)),
+    const rows = placementAssetRows(pool, undefined);
+    const lookupIn = g.add(dataInput, {}, "placementAssets");
+    g.setParam(lookupIn, "items", [
+      makeGeometryItem(placementAssetCloud(rows, lib, immovable, pinned)),
     ]);
-    const mixPosesIn = g.add(dataInput, {}, "mixPoses");
-    g.setParam(mixPosesIn, "items", [makeGeometryItem(mixPoseCloud(pool, lib))]);
+    const posesIn = g.add(dataInput, {}, "placementPoses");
+    g.setParam(posesIn, "items", [makeGeometryItem(placementPoseCloud(rows, lib))]);
     const built = addLapPlacements(
       g,
       { node: pathIn, pin: "out" },
       {
         assets: { node: assetsIn, pin: "out" },
-        mixAssets: { node: mixAssetsIn, pin: "out" },
-        mixPoses: { node: mixPosesIn, pin: "out" },
+        lookup: { node: lookupIn, pin: "out" },
+        poses: { node: posesIn, pin: "out" },
       },
       { halfWidth: lap.halfWidth, assetCount: pool.length, poseIds: mixPoseIds(lib) },
       "lap",
@@ -606,6 +627,224 @@ describe("the dress graph, deciding its own list", () => {
     console.log(
       `dress graph, self-decided: ${built} placements over ${SEEDS_E2E.length} laps, ` +
         "no list handed in",
+    );
+  }, FOUR_LAP_MS);
+});
+
+/**
+ * L-2 and L-3, placed by the graph.
+ *
+ * WHAT THIS UNIT DOES AND WHAT IT POINTEDLY DOES NOT. `placeCornerLanguage`
+ * does four things with the corner language: it CONVERTS an ordinary
+ * placement into a marker where the window holds a good victim, ADDS a
+ * marker where it does not, places L-3's three ruler marks per tight
+ * corner, and DISPLACES what those marks pay for. Two of the four are pure
+ * placement and are what `addLapPlacements` does now: every corner gets its
+ * marker and every tight corner gets its three marks.
+ *
+ * THE OTHER TWO ARE THE BOOKKEEPING and are not wired yet. `buildCornerBookkeeping`
+ * already decides both -- which placement each corner claims, and which
+ * each ruler displaces -- as columns on the placement cloud; what is
+ * missing is applying them. So a lap from this path carries MORE
+ * placements than the reference: a conversion becomes an addition, and
+ * nothing is removed to pay for a ruler. That is a difference this suite
+ * states rather than tolerates, and the count is asserted in the direction
+ * it must be wrong in, so that wiring the bookkeeping is visible here as a
+ * change rather than as continued silence.
+ */
+describe("the corner language, placed by the graph", () => {
+  it("marks every corner and rules every tight one", async () => {
+    const kit = shippedVocabulary();
+    let markersPlaced = 0;
+    let rulerMarks = 0;
+
+    for (const seed of [1, 2, 3] as const) {
+      const { lap, frames } = await lapFor(seed);
+      const { pool, markers } = reserveFor(kit, seed);
+      expect(markers, `seed ${seed}: the shipped kit reserved no markers`).toBeDefined();
+      if (!markers) continue;
+      const lib = poseLibrary(kit);
+      const corners = cornersOf(lap);
+
+      const got = await dressLapByGraph({
+        kit,
+        lap,
+        frames,
+        seed,
+        immovable: new Set([markers.brake.id]),
+        mixPinned: new Set([markers.sharp.id, markers.open.id, markers.brake.id]),
+        pool,
+        markers,
+      });
+
+      // THE CLOUD BACK INTO THE SHAPE THE RULE'S OWN GATES TAKE. A
+      // placement's asset is recovered through its pose, because the cloud
+      // carries the pose name and not the kit id -- `poseAssetId` keys by
+      // pose deliberately, and inverting the library is what turns that
+      // back into an asset. Cover pieces are skipped: they are L-6's and
+      // carry no kit asset of the pool's.
+      const rows = placementAssetRows(pool, markers);
+      const assetOfPose = new Map<number, (typeof rows)[number]>();
+      for (const a of rows) for (const p of lib.posesOf.get(a.id) ?? []) assetOfPose.set(p, a);
+
+      const pts = got.placementsInput.attrs.point;
+      const pose = pts.require(PLACEMENT.pose);
+      const station = pts.require(PLACEMENT.station);
+      const t = pts.require(PLACEMENT.t);
+      const h = pts.require(PLACEMENT.h);
+      const list: StationedPlacement[] = [];
+      for (let i = 0; i < pts.count; i++) {
+        const a = assetOfPose.get(pose.get(i) as number);
+        if (!a) continue;
+        list.push({
+          asset: a,
+          station: station.get(i) as number,
+          t: t.get(i) as number,
+          h: h.get(i) as number,
+        });
+      }
+      expect(
+        list.length,
+        `seed ${seed}: no placement's pose named an asset, so nothing below is checked`,
+      ).toBeGreaterThan(200);
+
+      // EVERY CORNER CARRIES ITS MARKER, by the rule's own gate -- right
+      // archetype for the severity, on the outside, inside the window.
+      const marked = cornerMarkersSatisfied(list, corners, markers, lap.lengthW);
+      expect(
+        marked.missing,
+        `seed ${seed}: ${marked.missing.length} of ${corners.length} corners have no marker`,
+      ).toEqual([]);
+      markersPlaced += corners.length;
+
+      // AND EVERY TIGHT CORNER ITS THREE MARKS, evenly spaced end to end
+      // across the braking window and sharing one lateral. That last part
+      // is what `brakingRulersSatisfied` is really for: three marks drawn
+      // per MARK rather than per corner is the one way to get L-3 wrong
+      // that every count survives.
+      const ruled = brakingRulersSatisfied(list, corners, markers, lap.lengthW);
+      expect(
+        ruled.failures,
+        `seed ${seed}: ${ruled.failures.length} braking rulers do not hold`,
+      ).toEqual([]);
+      const tight = corners.filter((c) => c.tightestW < SEVERITY.tightW);
+      expect(tight.length, `seed ${seed}: no tight corner, so L-3 placed nothing`).toBeGreaterThan(
+        0,
+      );
+      rulerMarks += list.filter((p) => p.asset.id === markers.brake.id).length;
+
+      // THE SAME COLUMNS, WHICH IS WHAT THE MERGE RESTS ON. Two assemblies
+      // feed it, and a column on one side and not the other is filled by a
+      // default -- silently, on every row of the other kind. The corner
+      // stages resolve a whole corner model onto their clouds and it all
+      // rode in: 45 columns instead of 23, through the repair loop, until
+      // this assertion existed. The no-marker case checks the same list, so
+      // between them both branches are pinned.
+      expect(
+        [...got.placementsInput.attrs.point.names()].sort(),
+        `seed ${seed}: the corner language changed the placement cloud's columns`,
+      ).toEqual([...PLACEMENT_COLUMNS].sort());
+
+      // AND THE LIST IS NUMBERED ONCE, WHICH IS THE OTHER THING THIS UNIT
+      // CHANGED. `PLACEMENT.id` used to be written inside the assembly,
+      // and the assembly runs TWICE on a lap with a corner language -- once
+      // over the chosen rows and once over L-2's and L-3's -- so `index()`
+      // there numbers both from zero and gives every marker the id of an
+      // ordinary placement. The no-marker case cannot see that: it runs one
+      // assembly. This is the only place the defect the move fixed is
+      // reachable.
+      const idCol = pts.require(PLACEMENT.id);
+      const ids: number[] = [];
+      for (let i = 0; i < pts.count; i++) ids.push(idCol.get(i) as number);
+      expect(
+        [...ids].sort((a, b) => a - b),
+        `seed ${seed}: the merged list is not numbered 0..n-1`,
+      ).toEqual(ids.map((_, i) => i));
+
+      // THE MARKERS ARE PROTECTED, AND THIS IS THE ASSERTION THAT SAYS SO.
+      // The case hands in `immovable` and `mixPinned` and the columns are
+      // what carry them: L-3's brake mark must be DROPPED rather than
+      // shoved out of line, and all three reserved assets must be off
+      // limits to Z-3's redraw.
+      const lockedCol = pts.require(PLACEMENT.locked);
+      const pinnedCol = pts.require(PLACEMENT.mixPinned);
+      let brakeRows = 0;
+      let markerRows = 0;
+      for (let i = 0; i < pts.count; i++) {
+        const a = assetOfPose.get(pose.get(i) as number);
+        if (!a) continue;
+        const reserved =
+          a.id === markers.sharp.id || a.id === markers.open.id || a.id === markers.brake.id;
+        if (!reserved) continue;
+        markerRows++;
+        expect(pinnedCol.get(i), `seed ${seed}: a reserved asset is not pinned against Z-3`).toBe(1);
+        if (a.id === markers.brake.id) {
+          brakeRows++;
+          expect(lockedCol.get(i), `seed ${seed}: a brake mark is not locked against L-1`).toBe(1);
+        }
+      }
+      expect(markerRows, `seed ${seed}: no reserved asset on the lap to check`).toBeGreaterThan(0);
+      expect(brakeRows, `seed ${seed}: no brake mark to check`).toBeGreaterThan(0);
+
+      // AND THEY SURVIVE THE LOOP, which is the only thing that makes the
+      // pinning worth anything. Every assertion above reads
+      // `placementsInput`, the list BEFORE any rule ran -- so a Z-3 that
+      // redrew half the markers into ordinary scenery would leave all of it
+      // green. Measured with the two sets emptied: seed 3 comes out of the
+      // loop holding 19 of its 25 markers, and nothing else in this case
+      // notices.
+      const finalPts = got.placements.attrs.point;
+      const finalPose = finalPts.require(PLACEMENT.pose);
+      let survivingMarkers = 0;
+      let survivingBrake = 0;
+      for (let i = 0; i < finalPts.count; i++) {
+        const a = assetOfPose.get(finalPose.get(i) as number);
+        if (!a) continue;
+        if (a.id === markers.sharp.id || a.id === markers.open.id) survivingMarkers++;
+        if (a.id === markers.brake.id) survivingBrake++;
+      }
+      expect(
+        survivingMarkers,
+        `seed ${seed}: the repair loop lost ${corners.length - survivingMarkers} of ${corners.length} corner markers`,
+      ).toBe(corners.length);
+      // L-1 MAY DROP A BRAKE MARK AND THAT IS THE RULE WORKING -- `locked`
+      // means "drop rather than push", so a mark whose sightline is blocked
+      // goes. What must not happen is losing most of them, which is what a
+      // marker treated as ordinary scenery would look like.
+      expect(
+        survivingBrake,
+        `seed ${seed}: only ${survivingBrake} of ${tight.length * BRAKING.count} brake marks survived`,
+      ).toBeGreaterThanOrEqual(tight.length * BRAKING.count - 2);
+
+      // AND THE COUNT SAYS EXACTLY WHICH HALF IS WIRED. With no
+      // bookkeeping applied, every corner ADDS its marker rather than
+      // converting an existing placement, and no ruler displaces anything
+      // to pay for itself -- so the list is the chosen placements plus one
+      // per corner plus three per tight corner, exactly. Asserting the
+      // equality rather than an inequality is what makes wiring the
+      // bookkeeping show up here as a failure instead of as silence: the
+      // moment a conversion replaces an addition this number drops.
+      const cooked = await cookLapPlacements({ lap, seed, pool });
+      const chosen = placementsBeforeLanguage(lap, seed, pool, {
+        stations: cooked.stations,
+        choices: cooked.choices,
+      }).placements.length;
+      expect(
+        got.placementsInput.pointCount,
+        `seed ${seed}: the list is not the chosen placements plus one marker per corner ` +
+          `plus ${BRAKING.count} marks per tight corner`,
+      ).toBe(chosen + corners.length + tight.length * BRAKING.count);
+
+      // AND THE LAP STILL SETTLES WITH THE LANGUAGE IN IT. The markers are
+      // pinned against Z-3 and the brake marks are locked against L-1, so
+      // the repair loop has two populations it may not move -- which is the
+      // one thing about this arrangement that could fail to converge.
+      expect(got.converged, `seed ${seed}: the lap did not settle`).toBe(true);
+    }
+
+    console.log(
+      `corner language in the graph: ${markersPlaced} corners marked, ` +
+        `${rulerMarks} ruler marks placed over 3 laps`,
     );
   }, FOUR_LAP_MS);
 });
