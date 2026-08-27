@@ -51,6 +51,7 @@ import {
   type Field,
   type Geometry,
   type NodeHandle,
+  abs,
   add,
   arcTile,
   attribute,
@@ -69,6 +70,7 @@ import {
   le,
   lt,
   max,
+  mergePoints,
   min,
   mod,
   mul,
@@ -79,17 +81,19 @@ import {
   pointsToPath,
   promoteAttribute,
   ramp,
+  removeAttribute,
   randomFrom,
   repeatUntilNode,
   select,
   setAttribute,
+  sign,
   sub,
   transferByIndex,
   transferAlongPath,
 } from "pcg-ts";
 import { CORNER_MODEL, TRACK_FRAME } from "./graph.js";
 import type { PlaceableAsset } from "./assets.js";
-import { CORRIDOR } from "./zones.js";
+import { CORRIDOR, OVERHEAD } from "./zones.js";
 import { ENCLOSE } from "./tunnels.js";
 
 /**
@@ -1324,6 +1328,31 @@ export function writeCoverBudget(
   lapW: number,
   tag: string,
 ): NodeHandle {
+  const out0 = writeCoverRuns(g, frames, coveredAttr, lapW, tag);
+  return writeBudgetFromRuns(g, out0, coveredAttr, lapW, tag);
+}
+
+/**
+ * The covered runs of a lap, as columns on its frames.
+ *
+ * SPLIT OUT OF {@link writeCoverBudget} BECAUSE THE TRIM WANTS THE SAME
+ * RUNS. L-6's two halves ask different questions of one decomposition --
+ * the top-up wants the totals to size a budget, the trim wants to pick a
+ * run and take it out -- and a second scan would be a second definition of
+ * "a covered stretch" for two rules that have to agree about which
+ * stretches exist. Every column below is the one the budget already used.
+ *
+ * `ownW`, `runStart` and `runEnd` are the machinery; {@link BUDGET.runW} is
+ * the answer -- each covered frame carries the length of the run it belongs
+ * to, and an uncovered frame carries 0.
+ */
+export function writeCoverRuns(
+  g: Graph,
+  frames: NodeHandle,
+  coveredAttr: string,
+  lapW: number,
+  tag: string,
+): NodeHandle {
   // Each frame's own arc, measured rather than assumed -- `pathShift`'s
   // own gap-ring case, for the reason {@link writeCornerTests} gives.
   const next = g.add(
@@ -1431,7 +1460,17 @@ export function writeCoverBudget(
     `${tag}_runW`,
   );
   g.connect(ahead, "out", runW, "in");
+  return runW;
+}
 
+/** The budget half, off the runs {@link writeCoverRuns} already cut. */
+function writeBudgetFromRuns(
+  g: Graph,
+  runW: NodeHandle,
+  coveredAttr: string,
+  lapW: number,
+  tag: string,
+): NodeHandle {
   // The two totals, each a masked sum broadcast off its own scan. `runs.ts`
   // calls a stretch long above `heavyW`, and the comparison is STRICT
   // there, so it is strict here.
@@ -1497,4 +1536,967 @@ export function writeCoverBudget(
   );
   g.connect(out, "out", budget, "in");
   return budget;
+}
+
+/**
+ * What L-6's TRIM writes, and what survives the round it ran in.
+ *
+ * THE FIRST FIVE RIDE THE CARRY and are the rule's answer; the rest are
+ * working columns this stage drops before it hands the cloud back, for the
+ * reason the corner language learned the hard way -- a column nothing reads
+ * still rides every round of a `repeatUntil` and lands on every output,
+ * where the only thing it can do is be mistaken for something.
+ */
+export const TRIM = {
+  /** 1 on the placements THIS round moved. Feeds the settle count. */
+  moved: "l6TrimMoved",
+  /** 1 on every placement the trim has EVER moved. Accumulates. */
+  trimmed: "l6Trimmed",
+  /** How many runs the trim has taken, so far, on every point. Accumulates. */
+  runsTrimmed: "l6TrimRuns",
+  /**
+   * Why the trim stopped, on every point, as the LAST round left them.
+   *
+   * TWO FLAGS AND NOT ONE, which is `reduceEnclosure`'s own split and its
+   * argument: a lap whose overhead is all L-6's deliberate cover has
+   * nothing this pass may touch, and saying "held back by Z-3" of it blames
+   * a rule that was never consulted. One says the vocabulary cannot make a
+   * lap this open, the other says the band mix is binding.
+   */
+  blocked: "l6TrimBlocked",
+  nothing: "l6TrimNothing",
+
+  /** Working: is this placement incidental overhead the trim may move? */
+  trimmable: "l6Trimmable",
+  /** Working: the covered run containing it -- start station + 1, or 0. */
+  runKey: "l6TrimRunKey",
+  /** Working: that run's length in W. */
+  runW: "l6TrimRunW",
+  /** Working: how many trimmable placements share that run. */
+  runCount: "l6TrimRunCount",
+  /** Working: the lap's covered arc in W, the same on every point. */
+  coveredW: "l6TrimCoveredW",
+  /** Working: how many trimmable placements the whole list holds. */
+  overhead: "l6TrimOverhead",
+  /** Working: how long the list is, for Z-3's floor. */
+  listCount: "l6TrimListCount",
+} as const;
+
+/** The working columns, dropped from the cloud this stage hands back. */
+const TRIM_WORKING = [
+  TRIM.trimmable,
+  TRIM.runKey,
+  TRIM.runW,
+  TRIM.runCount,
+  TRIM.coveredW,
+  TRIM.overhead,
+  TRIM.listCount,
+];
+
+/**
+ * Scratch that exists only on the merged frames-and-placements cloud.
+ *
+ * Never reaches a placement: the merged cloud is a side branch whose only
+ * product is three numbers, gathered back by ordinal. Named anyway, because
+ * two `pathRuns` over one boundary column is exactly the kind of thing a
+ * later reader renames without noticing the second one.
+ */
+const MERGED = {
+  /** 1 on a point that came from the placements. */
+  isPlacement: "l6TmIsPlacement",
+  /** The frames' run boundary, and the same flag one point further along. */
+  boundary: "l6TmBoundary",
+  boundaryEnd: "l6TmBoundaryEnd",
+  /**
+   * The run key at a covered run's FIRST frame, 0 everywhere else.
+   *
+   * THE FRAME'S INDEX AND NOT ITS STATION, which is a requirement rather
+   * than a preference: `pointsToPath` refuses a fractional `groupAttr` --
+   * "a group key is an IDENTITY, and a fractional one cannot be trusted to
+   * be equal to itself" -- and the recount below groups on it. A frame
+   * index is whole, unique to the run that starts there, and MONOTONIC in
+   * station, so the argmin that breaks a length tie by taking the smallest
+   * key still takes the run that starts earliest, which is the racing order
+   * `reduceEnclosure`'s stable sort resolves ties in.
+   */
+  keySeed: "l6TmKeySeed",
+  /**
+   * The same run's START STATION, carried separately.
+   *
+   * The key stopped being the station when it had to be whole, and the
+   * lower-end repair below needs the station itself -- it asks whether a
+   * placement sits exactly ON a run's first frame, which is a question
+   * about arc position and not about identity. -1 where there is no run
+   * start, so the maximum over a window holding one is that one.
+   */
+  stationSeed: "l6TmStationSeed",
+  /** The same, spread to every point up to that start. */
+  nextStation: "l6TmNextStation",
+  /** The run LENGTH at every covered frame, before the fold spreads it. */
+  lenSeed: "l6TmLenSeed",
+  /** The two directions of the trimmable count, before they are combined. */
+  behind: "l6TmBehind",
+  ahead: "l6TmAhead",
+  /** 1 at a frame that OPENS a covered run -- the backward fold's boundary. */
+  startFlag: "l6TmStartFlag",
+  /** The next covered run at or after me: its key. */
+  nextKey: "l6TmNextKey",
+  /** Whether this point adopts that run -- a COLUMN, deliberately. */
+  adopts: "l6TmAdopts",
+} as const;
+
+/** A sentinel no run length or run key can reach, for the two argmins. */
+const NO_PICK = 1e30;
+
+export interface CoverTrimOptions {
+  readonly lapW: number;
+  /** The column `pathCoverage` wrote on the frames. */
+  readonly coveredAttr: string;
+  /**
+   * The arc column BOTH clouds carry.
+   *
+   * `TRACK_FRAME.station` and `PLACEMENT.station` are the same string,
+   * `"stationW"`, which is why the merge below needs no renaming and why
+   * `pointsToPath` can order the two populations against each other at all.
+   */
+  readonly stationAttr: string;
+  /** The placement columns the rule reads. */
+  readonly tAttr: string;
+  readonly hAttr: string;
+  readonly acrossAttr: string;
+  readonly coverAttr: string;
+  /**
+   * Z-3's `over` floor as a share of the list: `keepOverhead` is
+   * `ceil(keepShare * count)`, which is `dressLap`'s own expression.
+   */
+  readonly keepShare: number;
+}
+
+/**
+ * L-6's TRIM: bring an over-enclosed lap back under the ceiling, BY RUN.
+ *
+ * THE PORT OF `reduceEnclosure`, ONE PASS OF IT. That function loops up to
+ * six times, re-measuring between passes; this is the body of that loop,
+ * and the loop is the repair loop it sits in -- so a lap that needs three
+ * runs taken out has them taken out over three repair rounds, each one
+ * re-measured by the ray cast at the top of the body. The two are the same
+ * fixed point reached by the same steps, and the graph's is if anything
+ * more conservative: every round it trims, the sightline cull and the band
+ * mix see the result before the next one is chosen.
+ *
+ * WHY IT TAKES A WHOLE STRETCH RATHER THAN THE MOST CENTRAL PIECES is
+ * `reduceEnclosure`'s own finding and worth restating, because the
+ * arithmetic below looks like it could shave: of the enclosure exemplar's
+ * 124 covered frames only 11 are roofed by a SINGLE object, the median has
+ * three holders and the p90 has six. TILED COVER IS REDUNDANT COVER, so
+ * removing one piece costs a placement and opens no sky nine times in ten.
+ * Taking the whole run actually opens it.
+ *
+ * THE SHORTEST RUN FIRST -- take what costs least, and it happens to be
+ * what L-6 wants, since the long stretches are the tunnels and the tail is
+ * the part of the distribution the rule is hardest to satisfy on.
+ *
+ * IT MOVES RATHER THAN DROPS, so D-1's count is untouched, and it never
+ * takes L-6's own cover: dismantling a deliberate tunnel to satisfy L-6
+ * would be absurd. What it takes is the cover the dressing produced without
+ * meaning to.
+ *
+ * ---
+ *
+ * HOW A PLACEMENT LEARNS WHICH RUN IT IS IN, which is the whole of the
+ * difficulty and has one exact answer. `inRun` tests a placement's station
+ * against a stretch's `[startW, endW]`, and `endW` is defined by
+ * `enclosure.ts` as "the station of the first frame PAST the run" -- so a
+ * placement lying between a run's last covered frame and the next uncovered
+ * one is INSIDE that run. There is no node that reads a discrete value at
+ * an arc position: `transferAlongPath` interpolates and lands everything as
+ * f32, so a run identity taken through it arrives blended, and
+ * `transferAttribute`'s nearest mapping asks its question in space, where a
+ * hairpin puts the far side of the corner within reach.
+ *
+ * So the two populations are MERGED into one path ordered by station, and
+ * `pathRuns` propagates each run's identity across it. A placement carries
+ * no boundary flag, so it never cuts a run; it simply inherits the one it
+ * falls inside. That reproduces `inRun` exactly, including its inclusive
+ * upper end -- and including the tie, because `mergePoints` concatenates in
+ * connection order and `pointsToPath` breaks an equal `orderAttr` to the
+ * LOWER point index, so with the placements merged FIRST a placement whose
+ * station is exactly a boundary frame's sorts before that frame and lands
+ * in the run that is ending. Which is what `station <= endW` says.
+ *
+ * ---
+ *
+ * IT IS NOT BIT-IDENTICAL TO `reduceEnclosure`, AND THE REASON IS THE ARC
+ * ARITHMETIC RATHER THAN THE RULE. `measureEnclosure` sums a run's frame
+ * arcs in f64; every column here is f32 -- `pathRuns` writes f32 whatever
+ * it reads -- so two runs' lengths agree to about 1e-6 W and their ORDER
+ * can disagree. Measured on the suite's fixture: two runs at 2.697621 W
+ * and 2.697623 W, a gap of seven f32 ulps, which the f64 sum orders one
+ * way and the f32 sum the other, so the reference opened the run at
+ * station 15.80 and this stage opened the one at 53.95.
+ *
+ * THAT IS A DIFFERENT RUN AND NOT A WRONG ONE, which is the distinction
+ * worth holding. Both are shortest to within a quarter of a frame pitch,
+ * both are whole runs, both respect Z-3's floor, and the loop re-measures
+ * -- so the lap converges under the ceiling either way and the rule's
+ * claim ("take the stretch that costs least, whole") is satisfied by
+ * both. What is NOT guaranteed is that the two implementations move the
+ * same pieces on a lap where two runs are that close, and no amount of
+ * tie-breaking fixes it: the two do not disagree about a TIE, they
+ * disagree about which is shorter. `PLAN.md` makes the same argument for
+ * the station port at greater length.
+ *
+ * The suite pins the strong claim where it holds -- one round against one
+ * reference pass, exact -- and the postcondition where it does not.
+ *
+ * A FULLY COVERED LAP IS THE ONE PLACE THIS DELIBERATELY DIFFERS.
+ * `stretchesOf` special-cases it to a single stretch `{startW: 0, endW: 0,
+ * lengthW: lapW}`, and `inRun` reads that as `0 <= station <= 0` -- so the
+ * reference trims a placement at station 0 and NOTHING else on a lap that
+ * is roofed end to end. Here there is no coverage TRANSITION anywhere, so
+ * no frame opens a run, no placement gets a key, and the trim reports
+ * "nothing to trim". Both answers are defensible and neither is reachable
+ * on a real lap; this one is written down rather than reproduced, because
+ * reproducing it would mean porting an artefact of how the stretch list
+ * spells "all of it" rather than porting the rule.
+ *
+ * ---
+ *
+ * THE MERGED CLOUD IS A SIDE BRANCH AND NOTHING COMES BACK ON IT. Its
+ * product is three numbers per placement, gathered onto the real cloud by
+ * ordinal with `transferByIndex` -- the placements were merged first, so
+ * they hold indices 0..n-1, and `filterByExpression` preserves relative
+ * order. Doing it that way rather than filtering the merged cloud back down
+ * is what keeps the placements' own topology, which L-5 built and
+ * `DRESS_OUTPUTS.placements` publishes: `mergePoints` drops topology and
+ * the detail domain, and a filter would hand back a cloud whose polylines
+ * were the merged walk's.
+ */
+export function writeCoverTrim(
+  g: Graph,
+  frames: NodeHandle,
+  placements: NodeHandle,
+  opts: CoverTrimOptions,
+  tag: string,
+): NodeHandle {
+  const { lapW, coveredAttr, stationAttr } = opts;
+
+  // ---- 1. the runs, off the same scan the budget uses --------------------
+  // A TAG OF ITS OWN, because the run scan names nodes this function also
+  // wants to name -- `_ends`, `_behind`, `_ahead` are the same three ideas
+  // on the frames and on the merged walk, and a graph refuses a duplicate
+  // id rather than letting two stages quietly share one.
+  const runs = writeCoverRuns(g, frames, coveredAttr, lapW, `${tag}_runs`);
+
+  // The lap's covered arc, so the ceiling can be tested. Summed here rather
+  // than taken from `BUDGET.coveredW`, which belongs to the budget half and
+  // is not computed on this path.
+  const maskedOwn = g.add(
+    setAttribute,
+    {
+      name: TRIM.coveredW,
+      tupleSize: 1,
+      value: mul(gt(attribute(coveredAttr), 0), attribute(BUDGET.ownW)),
+    },
+    `${tag}_ownMask`,
+  );
+  g.connect(runs, "out", maskedOwn, "in");
+  const coveredTotal = g.add(
+    attributeReduce,
+    { name: TRIM.coveredW, domain: "point", mode: "sum", outName: TRIM.coveredW },
+    `${tag}_coveredSum`,
+  );
+  g.connect(maskedOwn, "out", coveredTotal, "in");
+  const coveredDown = g.add(
+    promoteAttribute,
+    { name: TRIM.coveredW, from: "detail", to: "point", mode: "first" },
+    `${tag}_coveredDown`,
+  );
+  g.connect(coveredTotal, "out", coveredDown, "in");
+
+  // The run key, seeded only at a COVERED run's first frame so that the max
+  // fold below carries the run's own start rather than its largest station
+  // -- which would be the last frame on an ordinary run and the wrong one
+  // entirely on the run that crosses the start line. `+ 1` keeps station 0
+  // from reading as "no run" under a fold whose identity is 0.
+  const seeded = g.add(
+    setAttribute,
+    {
+      name: MERGED.keySeed,
+      tupleSize: 1,
+      value: mul(
+        mul(gt(attribute(BUDGET.runStart), 0), gt(attribute(coveredAttr), 0)),
+        add(index(), 1),
+      ),
+    },
+    `${tag}_keySeed`,
+  );
+  g.connect(coveredDown, "out", seeded, "in");
+
+  const seededAt = g.add(
+    setAttribute,
+    {
+      name: MERGED.stationSeed,
+      tupleSize: 1,
+      value: select(
+        mul(gt(attribute(BUDGET.runStart), 0), gt(attribute(coveredAttr), 0)),
+        attribute(stationAttr),
+        -1,
+      ),
+    },
+    `${tag}_stationSeed`,
+  );
+  g.connect(seeded, "out", seededAt, "in");
+
+  const framesBoundary = g.add(
+    setAttribute,
+    { name: MERGED.boundary, tupleSize: 1, value: attribute(BUDGET.runStart) },
+    `${tag}_fBoundary`,
+  );
+  g.connect(seededAt, "out", framesBoundary, "in");
+  const framesRunW = g.add(
+    setAttribute,
+    { name: MERGED.lenSeed, tupleSize: 1, value: attribute(BUDGET.runW) },
+    `${tag}_fRunW`,
+  );
+  g.connect(framesBoundary, "out", framesRunW, "in");
+  const framesSide = g.add(
+    setAttribute,
+    { name: MERGED.isPlacement, tupleSize: 1, value: 0 },
+    `${tag}_fSide`,
+  );
+  g.connect(framesRunW, "out", framesSide, "in");
+
+  // ---- 2. the placements' own half --------------------------------------
+  //
+  // `isTrimmable`, transcribed: not L-6's own cover, inside the cover span,
+  // and standing in the band between the corridor's ceiling and the
+  // overhead one. Every comparison is the reference's, strict where it is
+  // strict.
+  const trimmable = g.add(
+    setAttribute,
+    {
+      name: TRIM.trimmable,
+      tupleSize: 1,
+      value: mul(
+        mul(
+          sub(1, gt(attribute(opts.coverAttr), 0)),
+          lt(abs(attribute(opts.tAttr)), ENCLOSE.coverW),
+        ),
+        mul(
+          ge(attribute(opts.hAttr), CORRIDOR.ceilingW),
+          lt(attribute(opts.hAttr), OVERHEAD.ceilingW),
+        ),
+      ),
+    },
+    `${tag}_trimmable`,
+  );
+  g.connect(placements, "out", trimmable, "in");
+
+  // How many there are, and how long the list is: Z-3's floor is a share of
+  // the SECOND, which is `dressLap`'s own `ceil(Z3.over.rule[0] * length)`.
+  const overheadSum = g.add(
+    attributeReduce,
+    { name: TRIM.trimmable, domain: "point", mode: "sum", outName: TRIM.overhead },
+    `${tag}_overheadSum`,
+  );
+  g.connect(trimmable, "out", overheadSum, "in");
+  const overheadDown = g.add(
+    promoteAttribute,
+    { name: TRIM.overhead, from: "detail", to: "point", mode: "first" },
+    `${tag}_overheadDown`,
+  );
+  g.connect(overheadSum, "out", overheadDown, "in");
+  const listCount = g.add(
+    attributeReduce,
+    { name: "", domain: "point", mode: "count", outName: TRIM.listCount },
+    `${tag}_listCount`,
+  );
+  g.connect(overheadDown, "out", listCount, "in");
+  const listDown = g.add(
+    promoteAttribute,
+    { name: TRIM.listCount, from: "detail", to: "point", mode: "first" },
+    `${tag}_listDown`,
+  );
+  g.connect(listCount, "out", listDown, "in");
+
+  // -1 ON THIS SIDE TOO, RATHER THAN THE MERGE'S DEFAULT. `mergePoints`
+  // fills a column the other side lacks with its DEFAULT, which is 0 --
+  // and 0 is a legal station, so a placement at the start line would have
+  // compared equal to it. Harmless today because the backward maximum
+  // still lands on the real start, and exactly the kind of accident that
+  // stops being harmless when a sentinel changes.
+  const placementAt = g.add(
+    setAttribute,
+    { name: MERGED.stationSeed, tupleSize: 1, value: -1 },
+    `${tag}_pStation`,
+  );
+  g.connect(listDown, "out", placementAt, "in");
+
+  const placementSide = g.add(
+    setAttribute,
+    { name: MERGED.isPlacement, tupleSize: 1, value: 1 },
+    `${tag}_pSide`,
+  );
+  g.connect(placementAt, "out", placementSide, "in");
+
+  // ---- 3. one path over both, ordered by station ------------------------
+  //
+  // THE PLACEMENTS ARE CONNECTED FIRST and it is load-bearing, not
+  // cosmetic: it is what puts them at the low indices the gather below
+  // spends, and it is what makes an exact station tie resolve into the run
+  // that is ENDING rather than the gap that follows -- `inRun`'s inclusive
+  // upper end, arrived at through `pointsToPath`'s lower-index tie-break.
+  const merged = g.add(mergePoints, {}, `${tag}_merge`);
+  g.connect(placementSide, "out", merged, "in");
+  g.connect(framesSide, "out", merged, "in");
+
+  const walk = g.add(
+    pointsToPath,
+    { closed: true, orderAttr: stationAttr },
+    `${tag}_walk`,
+  );
+  g.connect(merged, "out", walk, "in");
+
+  // THE BACKWARD SCAN NEEDS ITS OWN BOUNDARY, one point along. `pathRuns`
+  // forward makes a flagged point the FIRST of its run and backward makes
+  // it the LAST, so one flag run through both directions describes two run
+  // sets offset by a point -- `writeCoverBudget` hit this on the frames and
+  // the merged walk is the same shape with more points in it.
+  const ends = g.add(
+    pathShift,
+    {
+      attributes: [MERGED.boundary],
+      outNames: [MERGED.boundaryEnd],
+      offset: 1,
+      outOfRange: "wrap",
+    },
+    `${tag}_ends`,
+  );
+  g.connect(walk, "out", ends, "in");
+
+  // The identity and the length, carried from each run's first frame to
+  // everything inside it. `max` over a column that is zero everywhere but
+  // the seed is a propagation; there is no "first" reduce to say it more
+  // directly.
+  const key = g.add(
+    pathRuns,
+    {
+      name: MERGED.keySeed,
+      boundary: MERGED.boundary,
+      outName: TRIM.runKey,
+      reduce: "max",
+      mode: "inclusive",
+      direction: "forward",
+      wrap: true,
+    },
+    `${tag}_key`,
+  );
+  g.connect(ends, "out", key, "in");
+  // And the run's trimmable population, at every member of it: what lies
+  // behind me plus what lies ahead, less the one I was counted for twice.
+  const behind = g.add(
+    pathRuns,
+    {
+      name: TRIM.trimmable,
+      boundary: MERGED.boundary,
+      outName: MERGED.behind,
+      reduce: "sum",
+      mode: "inclusive",
+      direction: "forward",
+      wrap: true,
+    },
+    `${tag}_behind`,
+  );
+  g.connect(key, "out", behind, "in");
+  const ahead = g.add(
+    pathRuns,
+    {
+      name: TRIM.trimmable,
+      boundary: MERGED.boundaryEnd,
+      outName: MERGED.ahead,
+      reduce: "sum",
+      mode: "inclusive",
+      direction: "backward",
+      wrap: true,
+    },
+    `${tag}_ahead`,
+  );
+  g.connect(behind, "out", ahead, "in");
+  // ---- THE RUN'S LOWER END, WHICH THE WALK ORDER GETS WRONG -------------
+  //
+  // `inRun` is inclusive at BOTH ends and one merge order can only buy one
+  // of them. Placements first gives the upper end -- a placement whose
+  // station is exactly `endW` sorts before the frame that ends the run and
+  // stays inside it -- and pays for it at the lower end, where a placement
+  // whose station is exactly `startW` sorts before the frame that OPENS the
+  // run and lands in the gap behind it. Frames first would swap the two.
+  // Nudging the order key by an epsilon would buy both and turn an
+  // exact-equality error into a half-ulp-band one, which is a different
+  // wrong answer rather than a right one.
+  //
+  // SO THE LOWER END IS REPAIRED AFTER THE FOLD, exactly. A backward run
+  // cut AT the covered-run starts puts the NEXT such start's key on every
+  // point up to it; a placement that landed in a gap and whose station is
+  // exactly that start's belongs to it, which is what `startW <= station`
+  // says. Nothing else can match: a placement strictly inside a gap is
+  // strictly between two run starts, so its station equals neither.
+  const starts = g.add(
+    setAttribute,
+    {
+      name: MERGED.startFlag,
+      tupleSize: 1,
+      value: gt(attribute(MERGED.keySeed), 0),
+    },
+    `${tag}_startFlag`,
+  );
+  g.connect(ahead, "out", starts, "in");
+  const nextKey = g.add(
+    pathRuns,
+    {
+      name: MERGED.keySeed,
+      boundary: MERGED.startFlag,
+      outName: MERGED.nextKey,
+      reduce: "max",
+      mode: "inclusive",
+      direction: "backward",
+      wrap: true,
+    },
+    `${tag}_nextKey`,
+  );
+  g.connect(starts, "out", nextKey, "in");
+  const nextAt = g.add(
+    pathRuns,
+    {
+      name: MERGED.stationSeed,
+      boundary: MERGED.startFlag,
+      outName: MERGED.nextStation,
+      reduce: "max",
+      mode: "inclusive",
+      direction: "backward",
+      wrap: true,
+    },
+    `${tag}_nextAt`,
+  );
+  g.connect(nextKey, "out", nextAt, "in");
+
+  // A COLUMN AND NOT A SHARED FIELD, and the difference cost a real
+  // defect. A `Field` is an expression evaluated wherever it lands, not a
+  // snapshot of the cloud it was written against: the first draft built
+  // `adopts` once and spent it in two consecutive `setAttribute` nodes,
+  // the first of which REWRITES `TRIM.runKey` -- so by the second node the
+  // `eq(runKey, 0)` term was false for exactly the points that had just
+  // adopted, and the run length they should have taken stayed 0. The stage
+  // then trimmed a single placement instead of the whole run, which is the
+  // one guarantee the rule makes. Materialising the test settles what it
+  // is asking about at the moment it is asked.
+  const adopting = g.add(
+    setAttribute,
+    {
+      name: MERGED.adopts,
+      tupleSize: 1,
+      value: mul(
+        eq(attribute(TRIM.runKey), 0),
+        eq(attribute(stationAttr), attribute(MERGED.nextStation)),
+      ),
+    },
+    `${tag}_adopts`,
+  );
+  g.connect(nextAt, "out", adopting, "in");
+  const fixedKey = g.add(
+    setAttribute,
+    {
+      name: TRIM.runKey,
+      tupleSize: 1,
+      value: select(
+        attribute(MERGED.adopts),
+        attribute(MERGED.nextKey),
+        attribute(TRIM.runKey),
+      ),
+    },
+    `${tag}_fixKey`,
+  );
+  g.connect(adopting, "out", fixedKey, "in");
+
+  // ---- AND THE COUNT IS TAKEN FROM THE MEMBERSHIP THAT SURVIVED ---------
+  //
+  // The two folds above counted against the WALK's runs, which the repair
+  // has just changed: a placement that adopted the run ahead of it is a
+  // member the forward-and-backward sum never saw, and Z-3's floor is
+  // tested against that count. So the count is taken again, by GROUPING on
+  // the key rather than by scanning the walk -- which is also the simpler
+  // statement of what it is, since a run's population does not depend on
+  // the order its members are visited in.
+  //
+  // THE FRAMES ARE STILL IN THE CLOUD AND THAT IS WHY THIS IS SAFE. They
+  // carry `trimmable` 0, so they add nothing to any sum, and they put at
+  // least one point in every group -- so `shortGroups: "skip"` can only
+  // drop a group that no placement is in, whose count nothing reads.
+  const grouped = g.add(
+    pointsToPath,
+    { closed: false, groupAttr: TRIM.runKey, orderAttr: stationAttr, shortGroups: "skip" },
+    `${tag}_group`,
+  );
+  g.connect(fixedKey, "out", grouped, "in");
+  const tally = g.add(
+    pathScan,
+    {
+      name: TRIM.trimmable,
+      outName: MERGED.behind,
+      reduce: "sum",
+      mode: "inclusive",
+      totalAttr: TRIM.runCount,
+    },
+    `${tag}_tally`,
+  );
+  g.connect(grouped, "out", tally, "in");
+  const counted = g.add(
+    promoteAttribute,
+    { name: TRIM.runCount, from: "primitive", to: "point", mode: "first" },
+    `${tag}_runCount`,
+  );
+  g.connect(tally, "out", counted, "in");
+
+  // AND THE LENGTH COMES OFF THE SAME GROUPING, for the same reason and
+  // through the same mechanism. It used to ride a fold of its own -- one
+  // forward over the walk and one backward for the adopters -- which meant
+  // the length and the membership were computed by two different means and
+  // could disagree about which run a placement was in. They cannot now: a
+  // run's frames all carry its length in `lenSeed`, so the maximum over the
+  // group is that length, taken from exactly the population the key
+  // defines. Uncovered frames carry 0, so the gap group answers 0 and its
+  // members are non-candidates anyway.
+  const spanned = g.add(
+    pathScan,
+    {
+      name: MERGED.lenSeed,
+      outName: MERGED.ahead,
+      reduce: "max",
+      mode: "inclusive",
+      totalAttr: TRIM.runW,
+    },
+    `${tag}_span`,
+  );
+  g.connect(counted, "out", spanned, "in");
+  const runCount = g.add(
+    promoteAttribute,
+    { name: TRIM.runW, from: "primitive", to: "point", mode: "first" },
+    `${tag}_runW`,
+  );
+  g.connect(spanned, "out", runCount, "in");
+
+  // The lap's covered arc reaches the placements the same way: it is on
+  // every frame and zero on every placement, so the run-independent maximum
+  // over the merged cloud is it.
+  const coverMax = g.add(
+    attributeReduce,
+    { name: TRIM.coveredW, domain: "point", mode: "max", outName: TRIM.coveredW },
+    `${tag}_coverMax`,
+  );
+  g.connect(runCount, "out", coverMax, "in");
+  const coverOnAll = g.add(
+    promoteAttribute,
+    { name: TRIM.coveredW, from: "detail", to: "point", mode: "first" },
+    `${tag}_coverAll`,
+  );
+  g.connect(coverMax, "out", coverOnAll, "in");
+
+  // ---- 4. back onto the real cloud, by ordinal --------------------------
+  const answers = g.add(
+    filterByExpression,
+    { predicate: gt(attribute(MERGED.isPlacement), 0) },
+    `${tag}_answers`,
+  );
+  g.connect(coverOnAll, "out", answers, "in");
+
+  const gathered = g.add(
+    transferByIndex,
+    {
+      index: index(),
+      attributes: [TRIM.runKey, TRIM.runW, TRIM.runCount, TRIM.coveredW],
+      // EVERY POINT LANDS BY CONSTRUCTION -- the filter kept exactly the
+      // placements and kept them in order, so index i is placement i --
+      // and `clamp` is named rather than `miss` so that a future change
+      // which broke that correspondence would produce a wrong answer at the
+      // ends rather than a silent prior value everywhere.
+      outOfRange: "clamp",
+    },
+    `${tag}_gather`,
+  );
+  g.connect(placementSide, "out", gathered, "in");
+  g.connect(answers, "out", gathered, "source");
+
+  // ---- 5. WHICH RUN, WHICH IS TWO ARGMINS AND NOT ONE --------------------
+  //
+  // There is no argmin node. The idiom is a masked minimum reduced to the
+  // detail domain, broadcast back, and compared -- which keeps EVERY tie,
+  // so the tie has to be broken by a second one. `reduceEnclosure` sorts
+  // its stretches by length with a stable sort over a list built in racing
+  // order, so equal lengths resolve to the earlier start; the second
+  // minimum is that, taken over the run key, which IS the start station.
+  //
+  // The gate is the reference's `after > ceiling`: below the ceiling the
+  // loop breaks before it looks at a run, and nothing here may be chosen.
+  const keep = mul(-1, floor(mul(-opts.keepShare, attribute(TRIM.listCount))));
+  const over = gt(div(attribute(TRIM.coveredW), lapW), ENCLOSE.ruleShare[1]);
+  const candidate = mul(attribute(TRIM.trimmable), gt(attribute(TRIM.runKey), 0));
+  const affordable = ge(sub(attribute(TRIM.overhead), attribute(TRIM.runCount)), keep);
+  const eligible = mul(mul(candidate, affordable), over);
+
+  const byLength = g.add(
+    setAttribute,
+    {
+      name: PICK.lengthKey,
+      tupleSize: 1,
+      value: select(eligible, attribute(TRIM.runW), NO_PICK),
+    },
+    `${tag}_lenKey`,
+  );
+  g.connect(gathered, "out", byLength, "in");
+  const shortest = g.add(
+    attributeReduce,
+    { name: PICK.lengthKey, domain: "point", mode: "min", outName: PICK.shortest },
+    `${tag}_shortest`,
+  );
+  g.connect(byLength, "out", shortest, "in");
+  const shortestDown = g.add(
+    promoteAttribute,
+    { name: PICK.shortest, from: "detail", to: "point", mode: "first" },
+    `${tag}_shortestDown`,
+  );
+  g.connect(shortest, "out", shortestDown, "in");
+
+  const byStart = g.add(
+    setAttribute,
+    {
+      name: PICK.startKey,
+      tupleSize: 1,
+      value: select(
+        mul(eligible, eq(attribute(TRIM.runW), attribute(PICK.shortest))),
+        attribute(TRIM.runKey),
+        NO_PICK,
+      ),
+    },
+    `${tag}_startKey`,
+  );
+  g.connect(shortestDown, "out", byStart, "in");
+  const earliest = g.add(
+    attributeReduce,
+    { name: PICK.startKey, domain: "point", mode: "min", outName: PICK.earliest },
+    `${tag}_earliest`,
+  );
+  g.connect(byStart, "out", earliest, "in");
+  const earliestDown = g.add(
+    promoteAttribute,
+    { name: PICK.earliest, from: "detail", to: "point", mode: "first" },
+    `${tag}_earliestDown`,
+  );
+  g.connect(earliest, "out", earliestDown, "in");
+
+  const chosen = g.add(
+    setAttribute,
+    {
+      name: TRIM.moved,
+      tupleSize: 1,
+      value: mul(
+        eligible,
+        mul(
+          eq(attribute(TRIM.runW), attribute(PICK.shortest)),
+          eq(attribute(TRIM.runKey), attribute(PICK.earliest)),
+        ),
+      ),
+    },
+    `${tag}_chosen`,
+  );
+  g.connect(earliestDown, "out", chosen, "in");
+
+  // ---- 6. THE MOVE, which is a lateral and nothing else ------------------
+  //
+  // Out to the far edge of the cover span, keeping the side it was on --
+  // `Math.sign(p.t || 1)`, where the `|| 1` is what sends a piece sitting
+  // exactly on the centreline to the right rather than nowhere. The
+  // placement keeps its station and its height: the run stops being roofed
+  // because the piece is no longer over the road, not because it left.
+  const moved = g.add(
+    setAttribute,
+    {
+      name: opts.tAttr,
+      tupleSize: 1,
+      value: select(
+        attribute(TRIM.moved),
+        mul(
+          sign(select(eq(attribute(opts.tAttr), 0), 1, attribute(opts.tAttr))),
+          add(ENCLOSE.coverW, div(attribute(opts.acrossAttr), 2)),
+        ),
+        attribute(opts.tAttr),
+      ),
+    },
+    `${tag}_move`,
+  );
+  g.connect(chosen, "out", moved, "in");
+
+  // ---- 7. WHAT HAPPENED, AND WHY IT STOPPED -----------------------------
+  //
+  // The two flags are read off the LAST round, which is the round that
+  // stopped -- so they have to be false whenever the ceiling was the reason
+  // rather than the rule, and `over` is in both.
+  const refusedFlag = g.add(
+    setAttribute,
+    {
+      name: PICK.refused,
+      tupleSize: 1,
+      value: mul(mul(candidate, sub(1, affordable)), over),
+    },
+    `${tag}_refusedFlag`,
+  );
+  g.connect(moved, "out", refusedFlag, "in");
+
+  let tail: NodeHandle = refusedFlag;
+  for (const [src, dst] of [
+    [TRIM.moved, PICK.anyMoved],
+    [PICK.refused, PICK.anyRefused],
+  ] as const) {
+    const any = g.add(
+      attributeReduce,
+      { name: src, domain: "point", mode: "max", outName: dst },
+      `${tag}_any_${dst}`,
+    );
+    g.connect(tail, "out", any, "in");
+    const down = g.add(
+      promoteAttribute,
+      { name: dst, from: "detail", to: "point", mode: "first" },
+      `${tag}_anyDown_${dst}`,
+    );
+    g.connect(any, "out", down, "in");
+    tail = down;
+  }
+
+  // THREE REFUSALS AND NOT ONE, which is `reduceEnclosure`'s own shape and
+  // was the defect an independent check found here. The reference tests the
+  // whole list BEFORE it looks at a single run: no overhead at all is
+  // "nothing to trim", and overhead that exists but does not clear Z-3's
+  // floor is "held back by Z-3" -- a global refusal with no run involved.
+  // Reading `blocked` only off a per-run refusal reported the second case
+  // as the first, which is exactly the confusion the two flags exist to
+  // prevent: one says the vocabulary cannot make a lap this open, the other
+  // says the band mix is binding.
+  const globalBlock = mul(
+    gt(attribute(TRIM.overhead), 0),
+    le(attribute(TRIM.overhead), keep),
+  );
+  // The per-run refusal is only REACHED when the global one did not fire,
+  // which is what `else if` means and what this multiplication says.
+  const refusedSomewhere = max(
+    globalBlock,
+    mul(sub(1, globalBlock), attribute(PICK.anyRefused)),
+  );
+  const stalled = mul(over, sub(1, attribute(PICK.anyMoved)));
+
+  // AND THEY ACCUMULATE, because `dressLap` accumulates them: it ORs each
+  // round's answer into one flag for the whole dressing, so a lap held back
+  // in an early round says so even if a later one stopped for another
+  // reason. Reporting only the last round's would be a quieter answer than
+  // the rule gives.
+  const flags = g.add(
+    setAttribute,
+    {
+      name: TRIM.blocked,
+      tupleSize: 1,
+      value: max(attribute(TRIM.blocked), mul(stalled, refusedSomewhere)),
+    },
+    `${tag}_blocked`,
+  );
+  g.connect(tail, "out", flags, "in");
+  const nothing = g.add(
+    setAttribute,
+    {
+      name: TRIM.nothing,
+      tupleSize: 1,
+      value: max(attribute(TRIM.nothing), mul(stalled, sub(1, refusedSomewhere))),
+    },
+    `${tag}_nothing`,
+  );
+  g.connect(flags, "out", nothing, "in");
+
+  // The two running totals. A placement the trim has moved is outside the
+  // cover span, so `isTrimmable` refuses it for ever after and no placement
+  // can be counted twice; the running OR is therefore also the count.
+  const everTrimmed = g.add(
+    setAttribute,
+    {
+      name: TRIM.trimmed,
+      tupleSize: 1,
+      value: max(attribute(TRIM.trimmed), attribute(TRIM.moved)),
+    },
+    `${tag}_everTrimmed`,
+  );
+  g.connect(nothing, "out", everTrimmed, "in");
+  const runTally = g.add(
+    setAttribute,
+    {
+      name: TRIM.runsTrimmed,
+      tupleSize: 1,
+      value: add(attribute(TRIM.runsTrimmed), attribute(PICK.anyMoved)),
+    },
+    `${tag}_runTally`,
+  );
+  g.connect(everTrimmed, "out", runTally, "in");
+
+  // AND THE WORKING COLUMNS GO HOME. They are recomputed from scratch every
+  // round, so carrying them costs a column per round on every output for
+  // nothing -- and `l6TrimRunKey` riding a settled lap is a number that
+  // means something only during the round that wrote it.
+  const cleaned = g.add(
+    removeAttribute,
+    { names: [...TRIM_WORKING, ...PICK_WORKING, MERGED.isPlacement] },
+    `${tag}_clean`,
+  );
+  g.connect(runTally, "out", cleaned, "in");
+  return cleaned;
+}
+
+/**
+ * The two argmins' scratch, and the two "did anything happen" broadcasts.
+ *
+ * Apart from {@link TRIM} because none of it survives the stage: these are
+ * the reduction slots, and a reduction's `outName` may not be the column it
+ * reduces.
+ */
+const PICK = {
+  lengthKey: "l6TmLenKey",
+  shortest: "l6TmShortest",
+  startKey: "l6TmStartKey",
+  earliest: "l6TmEarliest",
+  refused: "l6TmRefused",
+  anyMoved: "l6TmAnyMoved",
+  anyRefused: "l6TmAnyRefused",
+} as const;
+
+const PICK_WORKING = [
+  PICK.lengthKey,
+  PICK.shortest,
+  PICK.startKey,
+  PICK.earliest,
+  PICK.refused,
+  PICK.anyMoved,
+  PICK.anyRefused,
+];
+
+/**
+ * The columns a caller must put on the cloud BEFORE the loop that trims it.
+ *
+ * `TRIM.trimmed` and `TRIM.runsTrimmed` accumulate across rounds, so the
+ * body reads them on its first round -- when nothing has written them yet.
+ * A `repeatUntil` body cannot initialise its own carry, so the wrapper's
+ * caller does, and this is the one definition of what "not yet trimmed"
+ * looks like.
+ */
+export function writeTrimInit(g: Graph, cloud: NodeHandle, tag: string): NodeHandle {
+  let out = cloud;
+  for (const name of [TRIM.trimmed, TRIM.runsTrimmed, TRIM.moved, TRIM.blocked, TRIM.nothing]) {
+    const n = g.add(setAttribute, { name, tupleSize: 1, value: 0 }, `${tag}_init_${name}`);
+    g.connect(out, "out", n, "in");
+    out = n;
+  }
+  return out;
 }

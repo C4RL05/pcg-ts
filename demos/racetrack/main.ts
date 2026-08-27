@@ -1055,21 +1055,26 @@ function showLapStats(): void {
   // enclosure run is placed — so the interesting numbers are the before
   // and after, not the intent.
   //
-  // THE TRIM IS STILL THE PRELUDE'S, and it is the one half of L-6 that
-  // has not moved into the graph. `dressLap` runs `reduceEnclosure`
-  // whatever `enclosure` says, because a kit whose vocabulary is half
-  // overhead pieces can sail past the rule's ceiling with no enclosure
-  // pass having run at all. What it trims is therefore incidental
-  // overhead, which is what the wording says; on the shipped vocabulary it
-  // finds nothing to trim on any seed.
+  // EVERY FIGURE ON THIS LINE IS THE GRAPH'S NOW, the trim included. Both
+  // halves of L-6 run in the lap level's second repair pass, and
+  // `dressLap` is called with `enclosure: "deferred"`, which stands the
+  // whole rule down rather than half of it — so there is no second set of
+  // these numbers for this line to be reading by mistake.
+  //
+  // THE TRIM READS ZERO ON EVERY LAP THIS PAGE CAN DRAW, and that is a
+  // measurement rather than an omission: the shipped vocabulary tops out
+  // near 20% of lap against L-6's 25% ceiling, so there is nothing to
+  // bring back down. It is printed because a rule only ever seen not
+  // firing is one nobody can tell from a rule that is missing.
   const e = level.enclosure;
   statCover(
     `${(100 * e.shareBefore).toFixed(1)}% -> ${(100 * e.share).toFixed(1)}% of lap · ` +
-      `+${e.coverStretches} runs (${e.coverPieces} pieces) · ${s.enclosureTrims} trimmed` +
-      (s.enclosureBlocked
+      `+${e.coverStretches} runs (${e.coverPieces} pieces) · ` +
+      `${e.trims} trimmed off ${e.runsTrimmed}` +
+      (e.blocked
         ? " · held back by Z-3"
-        : s.enclosureNothingToTrim
-          ? " · no incidental overhead to trim"
+        : e.nothingToTrim
+          ? " · nothing incidental to trim"
           : ""),
   );
 }

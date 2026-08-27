@@ -211,6 +211,7 @@ import {
   PIECE,
   PLAN,
   PLAN_PIN,
+  TRIM,
   addEnclosurePlan,
   addEnclosureTiles,
   coverCloud,
@@ -219,6 +220,8 @@ import {
   slotCloud,
   writeCornerTests,
   writeCoverBudget,
+  writeCoverTrim,
+  writeTrimInit,
   type PlanOptions,
 } from "./enclosureGraph.js";
 import { LONG_QUANTILE, coverCandidates } from "./tunnels.js";
@@ -3773,7 +3776,7 @@ function writeBandMix(g: Graph, target: NodeHandle, tag: string): NodeHandle {
  * the library cannot express it. Anything relying on the opposite should
  * check first.
  */
-function writeSettleCount(g: Graph, target: NodeHandle, tag: string): NodeHandle {
+function writeSettleCount(g: Graph, target: NodeHandle, tag: string, trimmed = false): NodeHandle {
   const flags = g.add(
     setAttribute,
     {
@@ -3785,10 +3788,19 @@ function writeSettleCount(g: Graph, target: NodeHandle, tag: string): NodeHandle
       // changed — measured, before this term was added, as two seeds in
       // twenty shipping a placement whose boxes were built up to 17 world
       // units from where the rule had just put it.
-      value: max(
-        max(attribute(PLACEMENT.corridorMoved), attribute(MIX.commit)),
-        max(gt(abs(attribute(PLACEMENT.pushW)), 0), attribute(PLACEMENT.drop)),
-      ),
+      // L-6'S TRIM IS IN HERE TOO WHEN IT RAN, and it has to be for the
+      // reason Z-3's commit is: a round whose only event was a covered run
+      // being opened is a round that moved something, and a loop that
+      // cannot see it stops with the lap still over the ceiling and calls
+      // that converged. It is conditional because the column exists only
+      // on a body built with the trim in it.
+      value: (() => {
+        const rules = max(
+          max(attribute(PLACEMENT.corridorMoved), attribute(MIX.commit)),
+          max(gt(abs(attribute(PLACEMENT.pushW)), 0), attribute(PLACEMENT.drop)),
+        );
+        return trimmed ? max(rules, attribute(TRIM.moved)) : rules;
+      })(),
     },
     `${tag}_moved`,
   );
@@ -3834,6 +3846,25 @@ function writeSettleCount(g: Graph, target: NodeHandle, tag: string): NodeHandle
 export function buildRepairBody(
   lap: Lap,
   mix: { readonly bandPools: readonly boolean[]; readonly poseIds: readonly string[] },
+  /**
+   * Run L-6's TRIM at the end of every round.
+   *
+   * OFF FOR THE FIRST PASS AND ON FOR THE SECOND, which is where the port
+   * differs from `dressLap` on purpose. The trim is a ceiling repair on a
+   * FINISHED lap, and the first pass settles a lap that has no enclosure in
+   * it yet -- so trimming there would move incidental overhead before the
+   * budget that is sized from it has been computed, and the top-up would
+   * then spend a budget measured from a lap it had already changed.
+   *
+   * IT COSTS A RAY CAST PER ROUND, which is what kept L-6's other half out
+   * of this body. Measured: a coverage pass is ~25 ms against a ~950 ms lap
+   * cook, and the second pass settles in one round or two on the shipped
+   * vocabulary, so the honest price is 2.5-5% of a lap. That is affordable
+   * where the budget's own measurement -- which has to be taken once,
+   * between the passes, on a population neither pass has changed -- was
+   * not.
+   */
+  trim = false,
 ): {
   graph: Graph;
   inputs: ExposedPin[];
@@ -3857,7 +3888,58 @@ export function buildRepairBody(
   // are only the lap's once both have run.
   const mixed = writeBandMix(b, settled, "z3");
   const redrawn = writeBandRedraw(b, mixed, lap.halfWidth, mix.bandPools, mix.poseIds, "z3");
-  const counted = writeSettleCount(b, redrawn.tail, "round");
+  // L-6's TRIM, LAST, WHICH IS `dressLap`'s ORDER FOR THE SAME REASON Z-3
+  // IS LAST. The trim reads a lap-wide measurement of the dressing, so it
+  // has to see the lap the other repairs left: a run measured before the
+  // cull is a run the cull is about to open, and trimming it would spend a
+  // move on cover that was going away anyway.
+  //
+  // THE BOXES ARE A BRANCH, not the carry. `writeCopyScale` overwrites
+  // `scale` with the track's half-width, which is what `copyToPoints`
+  // wants and is NOT what a placement carries -- the carry keeps the
+  // asset's own extents, exactly as `assemble` keeps them outside the loop.
+  //
+  // AND IT MEASURES THE LAP THE OTHER REPAIRS LEFT, which is the point of
+  // running last: the ray cast is over `redrawn.tail`, so a run this round
+  // trims is a run that survived the cull, not one the cull was about to
+  // open anyway.
+  //
+  // A TRIMMED PLACEMENT'S `P` IS ONE ROUND STALE, and the loop is what
+  // makes that harmless. `writeWorldTransform` runs near the top of the
+  // body, off the lateral Z-1 resolved; the trim rewrites that lateral
+  // afterwards, so the position on the cloud this round hands back is the
+  // one the piece had BEFORE it was moved. It is corrected on the next
+  // round -- and there is always a next round, because the move is in the
+  // settle count below, so a round that trims cannot be the round that
+  // settles. The one exception is `maxRounds` truncating the loop mid-trim,
+  // and that comes back as `converged: false`, which is the caller's
+  // signal that the lap is not finished rather than a quietly wrong `P`.
+  let settling: NodeHandle = redrawn.tail;
+  let trimBoxes: NodeHandle | undefined;
+  let trimCover: NodeHandle | undefined;
+  if (trim) {
+    const scaled = writeCopyScale(b, redrawn.tail, lap.halfWidth, "l6trim", "out");
+    trimBoxes = writeBoxes(b, null, scaled, "l6trim");
+    trimCover = writeCoverage(b, null, trimBoxes, lap.halfWidth, "l6trim");
+    settling = writeCoverTrim(
+      b,
+      trimCover,
+      redrawn.tail,
+      {
+        lapW: lap.lengthW,
+        coveredAttr: "covered",
+        stationAttr: PLACEMENT.station,
+        tAttr: PLACEMENT.t,
+        hAttr: PLACEMENT.h,
+        acrossAttr: PLACEMENT.sizeAcross,
+        coverAttr: PLACEMENT.cover,
+        keepShare: Z3.over.rule[0],
+      },
+      "l6trim",
+    );
+  }
+
+  const counted = writeSettleCount(b, settling, "round", trim);
 
   return {
     graph: b,
@@ -3869,6 +3951,17 @@ export function buildRepairBody(
       // Nor does the pool Z-3 redraws out of, nor its pose table.
       { name: "mixAssets", node: redrawn.assets, pin: "source" },
       { name: "mixPoses", node: redrawn.poses, pin: "source" },
+      // The trim's two, when it is in. The frames arrive TWICE -- once for
+      // L-1's sight path and once for the ray cast -- because an exposed
+      // input names one (node, pin) and these are two pins on two nodes.
+      // The wrapper feeds both from the same handle, so it is one cloud
+      // broadcast to two readers rather than two copies of a lap.
+      ...(trimBoxes !== undefined && trimCover !== undefined
+        ? [
+            { name: "trimPoses", node: trimBoxes, pin: "source" },
+            { name: "coverPath", node: trimCover, pin: "path" },
+          ]
+        : []),
     ],
     // THE TWO INTERMEDIATES ARE PUBLISHED AS WELL AS THE CARRY, and that
     // is what keeps the individual rules testable once they are inside a
@@ -3966,7 +4059,11 @@ function writeCopyScale(
  */
 function writeBoxes(
   g: Graph,
-  poses: NodeHandle,
+  // NULL WHEN THE CALLER IS EXPOSING THE PIN RATHER THAN FEEDING IT. A
+  // `repeatUntil` body names its inputs as (node, pin) pairs on nodes it
+  // already built, so a body that wants the pose library broadcast to it
+  // has to leave `source` unconnected for the wrapper to fill.
+  poses: NodeHandle | null,
   placements: NodeHandle,
   tag: string,
 ): NodeHandle {
@@ -4008,7 +4105,7 @@ function writeBoxes(
     },
     `${tag}_stamp`,
   );
-  g.connect(poses, "out", copies, "source");
+  if (poses !== null) g.connect(poses, "out", copies, "source");
   g.connect(placements, "out", copies, "target");
   return copies;
 }
@@ -4039,7 +4136,8 @@ function writeBoxes(
  */
 function writeCoverage(
   g: Graph,
-  path: NodeHandle,
+  /** Null when the caller exposes the pin -- see {@link writeBoxes}. */
+  path: NodeHandle | null,
   boxes: NodeHandle,
   halfWidth: number,
   tag: string,
@@ -4065,7 +4163,7 @@ function writeCoverage(
     },
     `${tag}_enclosure`,
   );
-  g.connect(path, "out", cover, "path");
+  if (path !== null) g.connect(path, "out", cover, "path");
   g.connect(boxes, "out", cover, "boxes");
   return cover;
 }
@@ -4122,7 +4220,22 @@ function requireList(
  * `rounds` and `converged` are not published here. One round is one round;
  * a number that can only be 1 is not a measurement.
  */
-export function buildRoundGraph(input: DressGraphInput): Graph {
+export function buildRoundGraph(
+  input: DressGraphInput,
+  /**
+   * Build the round with L-6's TRIM in it.
+   *
+   * THE ONLY WAY THE TRIM IS CHECKABLE AT ALL, and it is worth saying why
+   * rather than leaving it as a convenience. No lap the shipped vocabulary
+   * can dress reaches the ceiling -- measured, seeds 1-8 at density 1, 2
+   * and 3 top out at 20.0% against 25% -- so the rule never fires through
+   * `assemble`, and a suite that only cooked whole laps would be green for
+   * a trim that had been deleted. One round over a CONSTRUCTED
+   * over-enclosed list is where the rule can be held to its reference,
+   * which is the same argument this function already makes for Z-1 and L-1.
+   */
+  opts: { readonly trim?: boolean } = {},
+): Graph {
   // A BODY OF ITS OWN, not the one `assemble` built. Wrapping a body
   // CONNECTS its exposed input pins to the portals the wrapper injects, so
   // reusing that body here would find `carry` already wired and refuse —
@@ -4132,10 +4245,14 @@ export function buildRoundGraph(input: DressGraphInput): Graph {
   const { kit, lap, seed, immovable, mixPinned, pool } = input;
   const placements = requireList(input.placements, "buildRoundGraph");
   const lib = poseLibrary(kit);
-  const body = buildRepairBody(lap, {
-    bandPools: mixBandPools(pool, lib, mixPinned),
-    poseIds: mixPoseIds(lib),
-  });
+  const body = buildRepairBody(
+    lap,
+    {
+      bandPools: mixBandPools(pool, lib, mixPinned),
+      poseIds: mixPoseIds(lib),
+    },
+    opts.trim ?? false,
+  );
   const g = body.graph;
 
   // The portals `repeatUntil` would have injected, added by hand — which
@@ -4161,11 +4278,24 @@ export function buildRoundGraph(input: DressGraphInput): Graph {
   // ternary this replaced sent every pin that was not "carry" to the sight
   // path, so adding an input to the body wired it to the frames and the
   // failure arrived as a missing column three nodes later.
+  // The pose library, for the trim's boxes. Built whether or not the trim
+  // is on: it is the same cloud `assemble` binds, and an unread
+  // `dataInput` cooks to nothing.
+  const trimPoses = g.add(dataInput, {}, "roundTrimPoses");
+  g.setParam(trimPoses, "items", [makeGeometryItem(poseCloud(lib, lap.halfWidth))]);
+
   const portals: Record<string, NodeHandle> = {
-    carry: carried,
+    // THE TRIM'S RUNNING TOTALS ARE THE CARRY'S, which is why they are
+    // started here and not in the body -- see {@link writeTrimInit}. Doing
+    // it unconditionally keeps one carry shape for both kinds of round.
+    carry: writeTrimInit(g, carried, "roundTrim"),
     sight,
     mixAssets,
     mixPoses,
+    trimPoses,
+    // The frames a second time: L-1 reads them as a sight path and the
+    // trim casts rays down them. One cloud, two readers.
+    coverPath: sight,
   };
   for (const pin of body.inputs) {
     const from = portals[pin.name];
@@ -4439,19 +4569,37 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   // collides on the id it gives the carry pin. Two builds of the same
   // function are the same rules either way -- the body carries no state
   // and no randomness, which `buildRepairBody` says in its own words.
-  const secondBody = buildRepairBody(lap, {
-    bandPools: mixBandPools(pool, lib, mixPinned),
-    poseIds: mixPoseIds(lib),
-  });
+  const secondBody = buildRepairBody(
+    lap,
+    {
+      bandPools: mixBandPools(pool, lib, mixPinned),
+      poseIds: mixPoseIds(lib),
+    },
+    // L-6's TRIM, IN THE SECOND PASS AND NOT THE FIRST. The first settles a
+    // lap with no enclosure in it, and the budget the top-up spends is
+    // measured from exactly that lap -- so a trim there would move the
+    // incidental overhead the budget is sized from, and the top-up would
+    // spend a figure describing a lap that no longer existed. This pass is
+    // the one that sees the finished list, which is what the ceiling is a
+    // statement about.
+    true,
+  );
   const second = g.add(
     repeatUntilNode(secondBody.graph, secondBody.inputs, secondBody.outputs),
     { maxRounds: MAX_ROUNDS, settleAttr: SETTLE_ATTR },
     "repairWithCover",
   );
-  g.connect(merged, "out", second, "carry");
+  // THE TRIM'S RUNNING TOTALS, STARTED OUTSIDE THE LOOP. A `repeatUntil`
+  // body reads them on its first round, before anything has written them;
+  // it cannot initialise its own carry, so the wrapper's caller does.
+  g.connect(writeTrimInit(g, merged, "l6trim"), "out", second, "carry");
   g.connect(framesIn, "out", second, "sight");
   g.connect(mixAssetsIn, "out", second, "mixAssets");
   g.connect(mixPosesIn, "out", second, "mixPoses");
+  // The pose library for the trim's own boxes, and the frames a second
+  // time for its ray cast. Both are the clouds this graph already holds.
+  g.connect(posesIn, "out", second, "trimPoses");
+  g.connect(framesIn, "out", second, "coverPath");
 
   const boxes = writeBoxes(
     g,
@@ -4670,6 +4818,29 @@ export interface EnclosureReport {
   /** How many cover pieces L-6 built, and how many runs they tile. */
   readonly coverPieces: number;
   readonly coverStretches: number;
+  /**
+   * L-6's TRIM: how many placements it moved, and off how many runs.
+   *
+   * THE OTHER HALF OF THE RULE, and the one that reports zero on every lap
+   * the shipped vocabulary can dress -- measured, seeds 1-8 at density 1,
+   * 2 and 3 reach at most 20.0% against a 25% ceiling, so the trim has
+   * nothing to do. It is reported anyway, because a rule that is only ever
+   * seen not firing is a rule nobody can tell from a rule that is missing.
+   */
+  readonly trims: number;
+  readonly runsTrimmed: number;
+  /**
+   * Why the trim stopped, as the last repair round left it.
+   *
+   * BOTH FALSE IS THE ORDINARY ANSWER and means the ceiling was never
+   * breached. `blocked` means Z-3's floor refused a run the trim wanted;
+   * `nothingToTrim` means there was no candidate at all -- the lap's
+   * overhead is all L-6's own deliberate cover, or there is none. The two
+   * send a reader to different places, which is why `reduceEnclosure`
+   * splits them and why this does too.
+   */
+  readonly blocked: boolean;
+  readonly nothingToTrim: boolean;
 }
 
 /**
@@ -4747,6 +4918,20 @@ export function readEnclosure(
     runs.add(runCol.get(i));
   }
 
+  // AND WHAT THE TRIM DID. `trimmed` is a per-placement flag and
+  // `runsTrimmed` is a broadcast -- the same number on every point -- so
+  // one is a sum and the other is a read. Both are written by every round
+  // of the second repair pass, so what survives here is the last round's,
+  // which is the finished lap's.
+  const trimmedCol = placements.attrs.point.require(TRIM.trimmed);
+  let trims = 0;
+  for (let i = 0; i < placements.attrs.point.count; i++) {
+    if (trimmedCol.get(i) !== 0) trims++;
+  }
+  // A LAP WITH NO PLACEMENTS HAS NO BROADCAST TO READ, which is not a
+  // failure: the three below are facts about a trim that never ran.
+  const any = placements.attrs.point.count > 0;
+
   return {
     covered,
     hits,
@@ -4754,6 +4939,10 @@ export function readEnclosure(
     shareBefore: arcBeforeW / lap.lengthW,
     coverPieces,
     coverStretches: runs.size,
+    trims,
+    runsTrimmed: any ? placements.attrs.point.require(TRIM.runsTrimmed).get(0) : 0,
+    blocked: any && placements.attrs.point.require(TRIM.blocked).get(0) !== 0,
+    nothingToTrim: any && placements.attrs.point.require(TRIM.nothing).get(0) !== 0,
   };
 }
 

@@ -226,9 +226,19 @@ export interface DressOptions {
    * Who builds L-6's enclosure.
    *
    * "rules" (the default) is this function, as it always has. "deferred"
-   * means DO NOT ADD COVER -- something downstream will -- and it exists
+   * means DO NOT RUN L-6 AT ALL -- neither the top-up nor the trim,
+   * because something downstream owns the whole rule -- and it exists
    * because the racetrack's enclosure now runs as a graph stage inside
    * `buildDressGraph`, which cooks AFTER this returns.
+   *
+   * IT COVERS BOTH HALVES AND IT USED TO COVER ONE. When only the top-up
+   * was ported, deferring it and still trimming here was the honest
+   * arrangement: the trim was the only implementation there was. Now the
+   * graph's second repair pass runs the trim every round, so leaving this
+   * one in would trim a lap and then hand it to a stage that trims it
+   * again, against a ceiling the first pass had already brought it under.
+   * The two would not disagree about the ANSWER -- both stop at the
+   * ceiling -- but the moves would be counted twice and reported twice.
    *
    * IT IS A SKIP AND NOT A HAND-IN, which is where it parts company with
    * every other option here. `stations`, `choices`, `language` and
@@ -868,21 +878,32 @@ export function dressLap(
     // whose vocabulary is half overhead pieces the dressing sails past
     // L-6's ceiling with no enclosure pass having run at all, and no
     // amount of adding fixes a lap that already has too much roof.
-    const reduce = reduceEnclosure(
-      placements,
-      (ps) => measureEnclosure(lap, buildBoxes(kit, lap, ps, seed)),
-      Math.ceil(Z3.over.rule[0] * placements.length),
-      // `already` IS this measurement whenever the top-up added nothing,
-      // which is most rounds. Handing it over skips a rebuild of every
-      // box on the lap plus a ray cast per frame — the single most
-      // expensive thing this pipeline does.
-      coverChangedPlacements ? undefined : already,
-    );
-    placements = reduce.placements;
-    enclosureTrims += reduce.moves;
-    enclosureRunsTrimmed += reduce.runsTrimmed;
-    if (reduce.blockedByBandMix) enclosureBlocked = true;
-    if (reduce.nothingToTrim) enclosureNothingToTrim = true;
+    //
+    // DEFERRED SKIPS THIS TOO, which is the whole of L-6 standing aside
+    // rather than half of it -- see {@link DressOptions.enclosure}.
+    //
+    // ZERO MOVES WHEN IT DID NOT RUN, which is what the settle test below
+    // reads: a round is settled when nothing moved, and a rule that stood
+    // aside moved nothing.
+    let trimMoves = 0;
+    if (opts.enclosure !== "deferred") {
+      const reduce = reduceEnclosure(
+        placements,
+        (ps) => measureEnclosure(lap, buildBoxes(kit, lap, ps, seed)),
+        Math.ceil(Z3.over.rule[0] * placements.length),
+        // `already` IS this measurement whenever the top-up added nothing,
+        // which is most rounds. Handing it over skips a rebuild of every
+        // box on the lap plus a ray cast per frame — the single most
+        // expensive thing this pipeline does.
+        coverChangedPlacements ? undefined : already,
+      );
+      placements = reduce.placements;
+      trimMoves = reduce.moves;
+      enclosureTrims += reduce.moves;
+      enclosureRunsTrimmed += reduce.runsTrimmed;
+      if (reduce.blockedByBandMix) enclosureBlocked = true;
+      if (reduce.nothingToTrim) enclosureNothingToTrim = true;
+    }
 
     // D-4, on the lap the cull actually left. The station process
     // enforces coverage too, but at step 1 — before a single one of the
@@ -958,7 +979,7 @@ export function dressLap(
     if (typeof process !== "undefined" && process.env.ROAD_TRACE) {
       console.log(
         `  round ${rounds}: corridor=${fixedThisRound} cull=${cull.blocking} cover+=${addedCover} ` +
-          `trim=${reduce.moves} cov=${cov.moves} L4=${marks.moves} L5=${edges.moves} mix=${mix.moves}`,
+          `trim=${trimMoves} cov=${cov.moves} L4=${marks.moves} L5=${edges.moves} mix=${mix.moves}`,
       );
     }
     if (
@@ -969,7 +990,7 @@ export function dressLap(
       edges.moves === 0 &&
       fixedThisRound === 0 &&
       addedCover === 0 &&
-      reduce.moves === 0
+      trimMoves === 0
     ) {
       converged = true;
       break;

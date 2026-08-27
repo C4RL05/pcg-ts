@@ -3553,3 +3553,109 @@ own budget subtracts what is already covered from the ceiling, so it cannot
 push a lap past it, and on the shipped vocabulary the trim finds nothing to
 do on any seed. What it protects is the case where the ORDINARY dressing is
 already over, which is a property of a kit rather than of this one.
+
+### L-6's trim is a graph stage too, 2026-08-27
+
+**THIS REVERSES "L-6's budget is a graph stage, and its trim never fires"
+ABOVE**, which decided against the port and gave a reason worth restating
+because it was half right: "porting a rule with nothing end to end to check
+it would leave a stage whose only possible test is a synthetic lap built to
+make it fire". Carlos asked for it anyway. The measurement that decision
+rested on still holds -- across seeds 1-8 at density 1, 2 and 3 the shipped
+vocabulary tops out at **20.0% against a 25% ceiling**, so the trim has had
+nothing to do in 24 laps -- and what was wrong was the conclusion about
+testability, not the measurement.
+
+**THE FIXTURE IS MOSTLY REAL, WHICH IS WHY THE ENTRY ABOVE WAS TOO
+PESSIMISTIC.** Seed 1's actual dressing plus ten copies of one wide
+overhead piece reaches **31.3% of lap, 17 stretches, 41 trimmable of 364** --
+and `reduceEnclosure` takes that to 24.9% in 8 moves over 6 runs. Only the
+exact-station-tie cases need a synthetic lap, and they need one for a reason
+that is itself a fact worth having: a real lap's f32 arc lengths never put a
+placement exactly on a frame, so the tie is unreachable at unit pitch or
+not at all.
+
+**WHERE IT RUNS: the SECOND repair pass, not the first.** The trim is a
+ceiling repair on a finished lap, and the first pass settles a lap with no
+enclosure in it -- the budget the top-up spends is measured from exactly
+that lap, so trimming there would move the incidental overhead the budget is
+sized from and the top-up would then spend a figure describing a lap that no
+longer existed. In the second pass the trim's moves are re-culled by the
+next round and the loop converges only when the trim has nothing left to do,
+which is what "at convergence the last trim saw the final list" means in
+`dressLap`. `dressLap`'s `enclosure: "deferred"` now stands down BOTH halves
+of L-6 rather than one, so nothing trims twice.
+
+**THE COST IS NOT MEASURABLE.** A coverage pass is ~25 ms against a ~950 ms
+lap cook, and the loop settles in a round or two: 743 / 822 / 1073 ms with
+the trim in, against a 999 / 897 / 926 ms baseline. That is inside
+run-to-run variance on this box.
+
+**HOW A PLACEMENT LEARNS WHICH RUN IT IS IN, which was the whole of the
+difficulty.** No node does an arc-parametric DISCRETE lookup:
+`transferAlongPath` interpolates and lands everything as f32, so a run
+identity taken through it arrives blended, and `transferAttribute`'s nearest
+mapping asks in space, where a hairpin puts the far side of the corner
+within reach. So the frames and the placements are MERGED into one path
+ordered by station and `pathRuns` propagates the run across it -- a
+placement carries no boundary flag, so it never cuts a run, it inherits the
+one it falls inside. The merged cloud is a side branch; three numbers come
+back onto the real cloud by ordinal, which is what preserves the polyline
+topology L-5 built and `DRESS_OUTPUTS.placements` publishes.
+
+**FOUR DEFECTS, ALL FOUND BY INDEPENDENT AGENTS AND NONE BY THE AUTHOR.**
+Worth listing because three of them were invisible to a green suite.
+
+1. **The run's LOWER end was exclusive; `inRun`'s is inclusive.** Merging
+   the placements first buys the inclusive UPPER end -- a placement at
+   exactly `endW` sorts before the frame that ends the run -- and pays for
+   it at the lower end. Frames first only swaps which end is wrong. The
+   repair is after the fold: a backward run cut at the covered-run starts
+   carries the next start's key and station, and a placement that landed in
+   a gap whose station equals that start adopts it.
+2. **The global `overheadCount <= keepOverhead` refusal had no port.** The
+   reference breaks before it looks at a run and says `blockedByBandMix`;
+   the port said `nothingToTrim`. That is exactly the confusion the two
+   flags exist to prevent -- one says the vocabulary cannot make a lap this
+   open, the other says the band mix is binding.
+3. **A SHARED `Field` IS NOT A SNAPSHOT, and this is the one to remember.**
+   The fix for (1) built its adoption test once and spent it in two
+   consecutive `setAttribute` nodes -- and the first REWRITES the column the
+   test reads, so by the second the test was false for exactly the points
+   that had just adopted. They kept a run length of 0, which then WON the
+   shortest-run argmin, so the stage trimmed a single placement instead of
+   taking a run whole: the one guarantee the rule makes, broken on precisely
+   the case the repair was added for. The length no longer rides a fold at
+   all -- it comes off the same grouping the member count does, so length
+   and membership are one mechanism over one key and cannot disagree.
+4. **`mergePoints` fills a missing column with its DEFAULT, which is 0**,
+   and 0 is a legal station -- so a sentinel that only worked because
+   stations are non-negative. Written explicitly now.
+
+**TWO DIVERGENCES ARE DELIBERATE AND BOTH ARE STATED IN THE CODE.**
+
+- **It is not bit-identical, and cannot be.** `pathRuns` writes f32 whatever
+  it reads; `measureEnclosure` sums in f64. Two runs at 2.697621W and
+  2.697623W -- seven f32 ulps -- are ordered one way by the f64 sum and the
+  other by the f32 one, so the two implementations opened different runs.
+  Not a tie-break failure: they disagree about which is SHORTER. Both are
+  shortest to within a quarter of a frame pitch, both whole, both respect
+  Z-3's floor, and the loop re-measures, so the lap converges under the
+  ceiling either way. Same category as "The station port cannot be
+  bit-identical" above.
+- **A fully covered lap.** `stretchesOf` spells it `{startW: 0, endW: 0,
+  lengthW: lapW}`, which `inRun` reads as "station exactly 0" -- so the
+  reference trims ONE placement on a lap roofed end to end. The graph has no
+  coverage transition anywhere, so it reports nothing to trim. Reproducing
+  the reference would mean porting an artefact of how the stretch list spells
+  "all of it" rather than porting the rule.
+
+**The page reads all of it**: `trims`, `runsTrimmed` and both flags come off
+the lap level's settled cloud through `readEnclosure`, beside the share and
+the pieces. On every lap this demo can draw the line says 0 trimmed, which is
+printed rather than hidden because a rule only ever seen not firing is one
+nobody can tell from a rule that is missing.
+
+**What is left of the lap prelude.** `mixPinned` still reaches the graph
+three ways and could be derived in-graph; `mixBandPools` is a build-time
+literal by design. Both halves of L-6 are now graph stages.
