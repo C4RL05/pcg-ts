@@ -29,7 +29,9 @@
  * stays in TypeScript for one more pass.
  */
 import {
+  type ExposedPin,
   type Field,
+  type FieldLike,
   type Geometry,
   Graph,
   type NodeHandle,
@@ -59,6 +61,7 @@ import {
   pathScan,
   pointsToPath,
   promoteAttribute,
+  repeatUntilNode,
   select,
   setAttribute,
   sub,
@@ -1412,9 +1415,19 @@ function addVictimSearch(
   g: Graph,
   from: { readonly node: NodeHandle; readonly pin: string },
   opts: {
-    readonly entryW: number;
+    /**
+     * The corner's entry, in W.
+     *
+     * A FIELD RATHER THAN A NUMBER so that this stage can be run against a
+     * corner it is TOLD about rather than one baked into it. Every use
+     * below was already a field expression -- `sub(entryW, station)` --
+     * so widening the type changes no arithmetic; what it buys is that the
+     * corner can arrive in a column.
+     */
+    readonly entryW: FieldLike;
     readonly windowW: readonly [number, number];
-    readonly outside?: number;
+    /** Which side the marker announces from, as +1 / -1, or absent for L-3. */
+    readonly outside?: FieldLike;
     readonly lapW: number;
     readonly tag: string;
   },
@@ -1533,12 +1546,11 @@ function addVictimSearch(
 function addConvertStage(
   g: Graph,
   from: { readonly node: NodeHandle; readonly pin: string },
-  corner: Corner,
-  cornerIndex: number,
+  corner: { readonly entryW: FieldLike; readonly outside: FieldLike; readonly sharp: FieldLike },
+  cornerIndex: FieldLike,
   lapW: number,
-  pre: string,
+  tag: string,
 ): NodeHandle {
-  const tag = `${pre}C${cornerIndex}`;
   const search = addVictimSearch(g, from, {
     entryW: corner.entryW,
     windowW: MARKER.windowW as unknown as readonly [number, number],
@@ -1562,7 +1574,10 @@ function addConvertStage(
     VICTIM.assetOrd,
     select(
       search.isVictim,
-      markerOrdOf(corner.severity === "sharp" ? 0 : 1),
+      // WHICH MARKER, CHOSEN BY A FIELD. The severity was a build-time
+      // string and the ordinal a constant; now the corner says which it is
+      // and both ordinals are in the expression. Same two answers.
+      select(corner.sharp, markerOrdOf(0), markerOrdOf(1)),
       attribute(VICTIM.assetOrd),
     ),
     `${tag}Convert`,
@@ -1695,16 +1710,55 @@ export async function cookCornerBookkeeping(opts: {
   // the markers L-2 made, so a ruler pays for itself out of a lap that
   // already speaks the corner language rather than one that is about to.
   let at: NodeHandle = inCloud;
-  for (let ci = 0; ci < corners.length; ci++) {
-    at = addConvertStage(g, { node: at, pin: "out" }, corners[ci], ci, lapW, "bk");
+  // WHICH PIN `at` PUBLISHES ON, tracked rather than assumed: `repeatUntil`
+  // names its outputs after the body's exposed ones, so the loop below
+  // hands back "carry" where every other stage here hands back "out".
+  let atPin = "out";
+  if (corners.length > 0) {
+    // THE ROUND COUNTER STARTS AT ZERO ON EVERY PLACEMENT. It is loop
+    // state kept on the point domain, for `enclosureGraph`'s reason: a
+    // detail attribute is not readable from a point-domain field, so state
+    // the body has to READ cannot live there.
+    const zeroed = g.add(
+      setAttribute,
+      { name: CONVERT.round, tupleSize: 1, value: 0 },
+      "bkRound0",
+    );
+    g.connect(at, "out", zeroed, "in");
+
+    const cornersIn = g.add(dataInput, {}, "corners");
+    g.setParam(cornersIn, "items", [makeGeometryItem(cornerCloud(corners))]);
+
+    const body = buildConvertBody(lapW, corners.length);
+    const loop = g.add(
+      repeatUntilNode(body.graph, body.inputs, body.outputs),
+      // ONE ROUND PER CORNER, and the cap is a ceiling rather than the
+      // mechanism: the body stops itself when the counter reaches the
+      // corner count it reads off the cloud. It is stated as the count
+      // here because that is what this caller knows; a caller whose
+      // corners arrive at cook time would state an upper bound instead,
+      // and the graph would be the same graph.
+      { maxRounds: corners.length, settleAttr: CONVERT_SETTLE },
+      "bkConvert",
+    );
+    g.connect(zeroed, "out", loop, "carry");
+    g.connect(cornersIn, "out", loop, "corners");
+    at = loop;
+    atPin = "carry";
   }
+  // L-3 IS STILL UNROLLED, and that is the next thing rather than an
+  // oversight: its stages are per (corner, mark) and its window arithmetic
+  // is the same shape L-2's was, so the same loop fits. L-2 was taken
+  // first because it is the one that CONVERTS, and a conversion is what
+  // makes the graph's topology depend on the lap.
   const tight = corners.filter((c) => c.tightestW < SEVERITY.tightW);
   for (let ti = 0; ti < tight.length; ti++) {
     for (let k = 0; k < BRAKING.count; k++) {
-      at = addDisplaceStage(g, { node: at, pin: "out" }, tight[ti], ti, k, lapW, "bk");
+      at = addDisplaceStage(g, { node: at, pin: atPin }, tight[ti], ti, k, lapW, "bk");
+      atPin = "out";
     }
   }
-  g.output(at, "out", "placements");
+  g.output(at, atPin, "placements");
 
   const cooked = await cook(g);
   const geo = (cooked.outputs.placements[0] as { geo: Geometry }).geo;
@@ -1720,4 +1774,162 @@ export async function cookCornerBookkeeping(opts: {
   const added: number[] = [];
   for (let ci = 0; ci < corners.length; ci++) if (!converted.has(ci)) added.push(ci);
   return { claimedBy, displacedBy, added };
+}
+
+/** The columns a corner carries when L-2 reads it from a cloud. */
+export const CORNER_ROW = {
+  /** The corner's entry, in W. */
+  entryW: "cornerRowEntryW",
+  /** Which side a marker announces from: +1, -1, or 0 for neither. */
+  outside: "cornerRowOutside",
+  /** 1 where the corner is sharp, 0 where it is open. */
+  sharp: "cornerRowSharp",
+  /** How many corners the lap has -- the same on every row. */
+  count: "cornerRowCount",
+} as const;
+
+/** Scratch the convert loop writes and rewrites each round. */
+const CONVERT = {
+  round: "bkRound",
+  going: "bkGoing",
+} as const;
+
+/** The detail attribute the convert loop settles on. */
+export const CONVERT_SETTLE = "bkWorking";
+
+/**
+ * The corners as a cloud, one point each.
+ *
+ * `Corner.outside` IS OPTIONAL AND 0 IS THE ABSENCE, which works because
+ * the side test compares against `Math.sign(t)` and a sign is never 0 for
+ * a placement off the centreline -- `addVictimSearch` says so in its own
+ * words: "Math.sign(0) IS 0 AND MATCHES NEITHER SIDE, so a placement at
+ * exactly zero lateral can never be converted". A corner with no side
+ * therefore matches nothing, which is not what the undefined case meant
+ * (it meant match EVERYTHING, for L-3) -- so L-3 keeps passing `undefined`
+ * at build time and only L-2 reads this column.
+ */
+export function cornerCloud(corners: readonly Corner[]): Geometry {
+  const geo = createPointCloud(Math.max(1, corners.length));
+  const pts = geo.attrs.point;
+  const P = pts.require("P");
+  const entryW = pts.add(CORNER_ROW.entryW, "f32", 1);
+  const outside = pts.add(CORNER_ROW.outside, "f32", 1);
+  const sharp = pts.add(CORNER_ROW.sharp, "f32", 1);
+  const count = pts.add(CORNER_ROW.count, "f32", 1);
+  for (let i = 0; i < pts.count; i++) {
+    P.setTuple(i, [i, 0, 0]);
+    count.set(i, corners.length);
+    const c = corners[i];
+    if (!c) continue;
+    entryW.set(i, c.entryW);
+    outside.set(i, c.outside ?? 0);
+    sharp.set(i, c.severity === "sharp" ? 1 : 0);
+  }
+  return geo;
+}
+
+/**
+ * L-2's convert-or-add over EVERY corner, as one bounded loop.
+ *
+ * THIS REPLACES AN UNROLL, and the comment that used to sit on
+ * {@link addConvertStage} argued the unroll was forced. It gave two
+ * reasons and both have since stopped being true.
+ *
+ * "A `repeatUntil` body cannot see its own iteration index." The NODE
+ * cannot, and it does not have to: THE CARRY CAN COUNT. A column
+ * incremented once per round is an iteration index, which is what the
+ * racetrack's enclosure planner runs on. Corner k's row then arrives by
+ * `transferByIndex` at that column -- a gather, not the join and grouped
+ * reduction the comment feared.
+ *
+ * "`repeatUntil` also carries exactly one pin, and this needs two
+ * populations." It carries one CARRY and as many broadcast inputs as the
+ * body exposes; `buildRepairBody` in `dressGraph.ts` uses two of them for
+ * exactly this, a second population the body reads and never rewrites.
+ *
+ * WHAT THE UNROLL WAS RIGHT ABOUT IS THE SEQUENCE, and the loop keeps it.
+ * The histogram is rebuilt every round, so corner k+1 sees the conversion
+ * corner k made -- which is what `placeCornerLanguage` does, and what a
+ * parallel pick would have to give up. Measured before the unroll was
+ * built: freezing the histogram moves the victim on 0 to 3 corners of 19
+ * and lets two corners name the SAME placement on 0 to 1 of them. A loop
+ * is as sequential as an unroll; it just does not mint nodes per corner.
+ *
+ * AND THAT IS THE POINT. An unrolled graph's TOPOLOGY depends on how many
+ * corners the spline happens to have, so it cannot be serialized once and
+ * re-run against another track. A loop's does not.
+ */
+export function buildConvertBody(
+  lapW: number,
+  maxCorners: number,
+): { graph: Graph; inputs: ExposedPin[]; outputs: ExposedPin[] } {
+  const b = new Graph(1);
+
+  // Corner k's row, onto every placement. `clamp` is unreachable while the
+  // settle below holds -- the loop stops at the corner count -- and is the
+  // safe direction if it ever does not.
+  const row = b.add(
+    transferByIndex,
+    {
+      index: attribute(CONVERT.round),
+      attributes: [CORNER_ROW.entryW, CORNER_ROW.outside, CORNER_ROW.sharp, CORNER_ROW.count],
+      outOfRange: "clamp",
+    },
+    "bkRow",
+  );
+
+  const converted = addConvertStage(
+    b,
+    { node: row, pin: "out" },
+    {
+      entryW: attribute(CORNER_ROW.entryW),
+      outside: attribute(CORNER_ROW.outside),
+      sharp: attribute(CORNER_ROW.sharp),
+    },
+    attribute(CONVERT.round),
+    lapW,
+    "bk",
+  );
+
+  const stepped = b.add(
+    setAttribute,
+    { name: CONVERT.round, tupleSize: 1, value: add(attribute(CONVERT.round), 1) },
+    "bkStep",
+  );
+  b.connect(converted, "out", stepped, "in");
+
+  // NOT "DID ANYTHING CHANGE". A corner that finds no victim converts
+  // nothing and is an ordinary outcome -- `placeCornerLanguage` ADDS a
+  // marker there instead -- so a settle signal reading movement would stop
+  // the loop on the first corner with an empty window and leave every
+  // corner after it unvisited. What ends this loop is running out of
+  // corners.
+  const going = b.add(
+    setAttribute,
+    {
+      name: CONVERT.going,
+      tupleSize: 1,
+      value: lt(attribute(CONVERT.round), attribute(CORNER_ROW.count)),
+    },
+    "bkGoing",
+  );
+  b.connect(stepped, "out", going, "in");
+
+  const settle = b.add(
+    attributeReduce,
+    { name: CONVERT.going, domain: "point", mode: "max", outName: CONVERT_SETTLE },
+    "bkSettle",
+  );
+  b.connect(going, "out", settle, "in");
+
+  void maxCorners;
+  return {
+    graph: b,
+    inputs: [
+      { name: "carry", node: row, pin: "in" },
+      { name: "corners", node: row, pin: "source" },
+    ],
+    outputs: [{ name: "carry", node: settle, pin: "out" }],
+  };
 }
