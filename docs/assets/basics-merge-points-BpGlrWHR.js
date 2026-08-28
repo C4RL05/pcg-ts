@@ -1,0 +1,45 @@
+var e=`{
+  "_comment": "Panel spec \\u2014 presentation only; the graph cooks identically without it. See shared/graphUi.ts.",
+  "sections": [
+    {
+      "title": "grid",
+      "controls": [
+        {
+          "param": "grid.countX",
+          "label": "columns",
+          "min": 1,
+          "max": 30,
+          "step": 1
+        },
+        {
+          "param": "grid.countZ",
+          "label": "rows",
+          "min": 1,
+          "max": 30,
+          "step": 1
+        },
+        {
+          "param": "grid.spacing",
+          "label": "spacing"
+        }
+      ]
+    },
+    {
+      "title": "scatter",
+      "controls": [
+        {
+          "param": "scatter.count",
+          "label": "points",
+          "min": 10,
+          "max": 1000,
+          "step": 10
+        },
+        {
+          "param": "scatter.seed",
+          "label": "seed"
+        }
+      ]
+    }
+  ]
+}
+`;export{e as default};

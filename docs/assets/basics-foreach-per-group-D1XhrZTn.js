@@ -1,0 +1,174 @@
+var e=`{
+  "formatVersion": 1,
+  "seed": 2026,
+  "meta": {
+    "title": "treat each group on its own",
+    "description": "\`partitionByAttribute\` splits the cloud into one geometry per district, and \`forEach\` cooks its inner graph once per group instead of once — so each district shakes loose on its own seed rather than all four sharing one. Exactly one exposed input must be named \`each\` (one iteration per item) or \`eachPoint\` (one per point); every other exposed input is broadcast whole to every iteration. Each iteration is seeded on its group's own CONTENT, never on where the group sat in the collection, so reordering the input reorders the output and re-rolls none of it. The \`groups\` output is the four separate results, still tagged \`district=<value>\`; \`points\` is the same four put back together with \`mergePoints\`, which is how you return to a single cloud.",
+    "tags": [
+      "basics",
+      "foreach",
+      "partition",
+      "composite"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "scatter",
+      "type": "pointScatterInBounds",
+      "params": {
+        "count": 900,
+        "boundsMin": [
+          -24,
+          0,
+          -24
+        ],
+        "boundsMax": [
+          24,
+          0,
+          24
+        ],
+        "seed": 0
+      }
+    },
+    {
+      "id": "district",
+      "type": "setAttribute",
+      "params": {
+        "name": "district",
+        "domain": "point",
+        "type": "string",
+        "tupleSize": 1,
+        "value": {
+          "fn": "mul",
+          "args": [
+            {
+              "fn": "valueNoise",
+              "opts": {
+                "frequency": 0.06,
+                "seed": { "from": "node", "variant": 41 },
+                "position": { "fn": "position" }
+              }
+            },
+            4
+          ]
+        },
+        "values": [
+          "north",
+          "east",
+          "south",
+          "west"
+        ],
+        "stringValue": "",
+        "seed": 0
+      }
+    },
+    {
+      "id": "groups",
+      "type": "partitionByAttribute",
+      "params": {
+        "name": "district"
+      }
+    },
+    {
+      "id": "each",
+      "type": "forEach",
+      "params": {},
+      "subgraph": {
+        "graph": {
+          "formatVersion": 1,
+          "seed": 0,
+          "nodes": [
+            {
+              "id": "shake",
+              "type": "jitterPoints",
+              "params": {
+                "amount": [
+                  2.5,
+                  0,
+                  2.5
+                ],
+                "seed": 0
+              }
+            }
+          ],
+          "connections": [],
+          "outputs": []
+        },
+        "inputs": [
+          {
+            "name": "each",
+            "node": "shake",
+            "pin": "in"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "out",
+            "node": "shake",
+            "pin": "out"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rejoin",
+      "type": "mergePoints",
+      "params": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": [
+        "scatter",
+        "out"
+      ],
+      "to": [
+        "district",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "district",
+        "out"
+      ],
+      "to": [
+        "groups",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "groups",
+        "out"
+      ],
+      "to": [
+        "each",
+        "each"
+      ]
+    },
+    {
+      "from": [
+        "each",
+        "out"
+      ],
+      "to": [
+        "rejoin",
+        "in"
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "each",
+      "pin": "out",
+      "name": "groups"
+    },
+    {
+      "id": "rejoin",
+      "pin": "out",
+      "name": "points"
+    }
+  ]
+}
+`;export{e as default};

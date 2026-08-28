@@ -1,0 +1,34 @@
+var e=`{
+  "formatVersion": 1,
+  "seed": 1028,
+  "meta": {
+    "title": "space props evenly along a curve",
+    "description": "Two primitives cover the whole road-and-lamp-posts shape: \`shape/path-meander\` is a curve SOURCE — an open path that wanders off a straight line by noise and is re-evened by arc length, needing no cloud to start from — and \`place/along-curve\` resamples it and turns every new point to face the way the curve goes, so a \`spacing\` of 6 means a post every 6 world units however long the road turns out to be. The points \`place/along-curve\` emits are new ones carrying \`P\`, \`tangent\`, \`curveU\` and \`rot\`, plus every attribute the curve carried on its PRIMITIVES — a post inherits the road it stands on; when the curve's own POINTS matter instead, \`write/orient-along-path\` orients them in place. Note what varies: the meander carries its noise seed inside a field spec, so \`variant\` is its only re-roll.",
+    "tags": ["basics", "primitives", "path", "placement"]
+  },
+  "nodes": [
+    {
+      "id": "road",
+      "type": "subgraph",
+      "params": { "count": 40, "size": [80, 1, 60], "wander": 0.5, "frequency": 3 },
+      "ref": { "name": "shape/path-meander" }
+    },
+    {
+      "id": "posts",
+      "type": "subgraph",
+      "params": { "mode": "spacing", "spacing": 6, "axis": "+z" },
+      "ref": { "name": "place/along-curve" }
+    },
+    {
+      "id": "spawn",
+      "type": "spawnInstances",
+      "params": { "assetId": "lamp" }
+    }
+  ],
+  "connections": [
+    { "from": ["road", "out"], "to": ["posts", "curve"] },
+    { "from": ["posts", "out"], "to": ["spawn", "in"] }
+  ],
+  "outputs": [{ "id": "spawn", "pin": "instances", "name": "instances" }]
+}
+`;export{e as default};

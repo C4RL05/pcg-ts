@@ -1,0 +1,14 @@
+var e=`{
+  "_comment": "Panel spec — presentation only; the graph cooks identically without it. See shared/graphUi.ts.",
+  "sections": [
+    {
+      "title": "scatter",
+      "controls": [
+        { "param": "scatter.count", "label": "points", "min": 50, "max": 5000, "step": 50 },
+        { "param": "scatter.boundsMin", "label": "bounds min" },
+        { "param": "scatter.boundsMax", "label": "bounds max" }
+      ]
+    }
+  ]
+}
+`;export{e as default};

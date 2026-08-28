@@ -831,7 +831,7 @@ Run it: `pcg run write/height-slope`
 
 Chooses an asset id per point from a list and emits the instance batches — the multi-asset spawn. The point of the primitive is the string coupling: one param names BOTH the attribute the choice is written to and the attribute the spawner reads it back from, so the two can never drift apart. The built-in selector spreads uniformly over FOUR entries, so pass exactly four assets and repeat one to weight it (['pine','pine','birch','bush'] is 50/25/25). VARIATION: yes — the choice comes from the evaluation context, so two instances differ automatically, and `seed` re-rolls one explicitly. Writes the species attribute; reads `P`, `rot` and `scale` through the spawner.
 
-**Content hash:** `0b3a9c8e048b9a12`
+**Content hash:** `e7902cc3b58ae3fc`
 
 **Tags:** `write`, `spawn`, `instancing`
 

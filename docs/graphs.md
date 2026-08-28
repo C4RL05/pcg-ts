@@ -4,7 +4,7 @@ Generated from the graphs in [`graphs`](../graphs) by `node scripts/gen-graphs.m
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-78 examples, alphabetical by file:
+79 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -27,6 +27,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-gather-by-index.json](#basics-gather-by-indexjson) — two hundred props each pick one of five kinds, by drawing its number
 - [basics-gather-on-path.json](#basics-gather-on-pathjson) — gather evenly spaced points into clumps along a curve
 - [basics-inline-field-params.json](#basics-inline-field-paramsjson) — put a field's shaping numbers on knobs without a wrapper
+- [basics-instance-channels.json](#basics-instance-channelsjson) — carry named per-instance channels to the host
 - [basics-jitter-points.json](#basics-jitter-pointsjson) — break up a lattice with deterministic jitter
 - [basics-mask-by-species.json](#basics-mask-by-speciesjson) — let a string attribute drive a field
 - [basics-merge-points.json](#basics-merge-pointsjson) — concatenate two clouds into one
@@ -492,6 +493,24 @@ The dunes of `basics-field-params` with the wrapper deleted. A `param` reference
 **Outputs:** `points` (from `dunes`.`out`)
 
 Cook it: `pcg cook graphs/basics-inline-field-params.json --stats`
+
+## basics-instance-channels.json
+
+**carry named per-instance channels to the host**
+
+`spawnInstances`' `instanceAttrs` is the ABI between a graph and the host that draws it. The field grammar has no time input on purpose — a graph settles STRUCTURE and the host animates it — so anything driven per instance at runtime (a phase, a stable id) has to leave on this list. Each entry becomes `batch.attributes[<the attribute's own name>]`, so the name in the graph is the name the host binds, and instance k of every channel is the same instance as `transforms[k]`. DTYPE AND TUPLE SIZE ARE PRESERVED, which is what this graph is really about: `seed` arrives as a `Uint32Array`, never widened to f32. It has to. The standard per-point `seed` is a full-range u32 identity hash, so nearly every value sits past 2^24 (16777216), where f32 stops representing consecutive integers — widen this column and the id read back is not the id written: the first point's 3932609219 comes back as 3932609280, a different instance to any host keying on it. The corollary is worth knowing and this graph cannot show it to you: fields evaluate in f32 too, so an id that large must COME from an integer column like this one rather than be computed in a field, where `index + 16777216` already returns 16777216 for both of the first two points. `phase` rides along as an ordinary f32 channel. Colour does not ride here at all: `color` is a reserved name that `instanceAttrs` refuses, because a renderer binds instance colour structurally rather than generically, so per-instance RGB goes through `colorAttr` — and `batch.colors` and `batch.attributes["color"]` are then two spellings of that one buffer, not two buffers.
+
+**Tags:** `basics`, `spawn`, `instancing`, `attributes`
+
+**Seed:** 1071
+
+**Node types:** `pointScatterInBounds`, `setAttribute`, `spawnInstances`
+
+**Primitives:** *(none)*
+
+**Outputs:** `instances` (from `spawn`.`instances`)
+
+Cook it: `pcg cook graphs/basics-instance-channels.json --stats`
 
 ## basics-jitter-points.json
 

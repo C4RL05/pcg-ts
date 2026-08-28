@@ -1,0 +1,27 @@
+var e=`{
+  "_comment": "Panel spec — presentation only; the graph cooks identically without it. See shared/graphUi.ts.",
+  "sections": [
+    {
+      "title": "curve",
+      "controls": [
+        { "param": "curve.count", "label": "path points", "min": 4, "max": 400, "step": 1 },
+        { "param": "curve.wander", "label": "wander", "min": 0, "max": 1, "step": 0.01 },
+        { "param": "curve.frequency", "label": "bends", "min": 0.5, "max": 8, "step": 0.1 }
+      ]
+    },
+    {
+      "title": "surface",
+      "controls": [
+        { "param": "skin.profile", "label": "profile" },
+        { "param": "skin.sides", "label": "sides", "min": 3, "max": 64, "step": 1 },
+        { "param": "skin.width", "label": "ribbon width", "min": 0.1, "max": 8, "step": 0.1 },
+        { "param": "skin.roll", "label": "roll", "min": -1, "max": 1, "step": 0.01, "unit": "turns" },
+        { "param": "skin.frame", "label": "frame" },
+        { "param": "skin.joint", "label": "joint" },
+        { "param": "skin.miterLimit", "label": "miter limit", "min": 1, "max": 16, "step": 0.1 },
+        { "param": "skin.caps", "label": "caps" }
+      ]
+    }
+  ]
+}
+`;export{e as default};

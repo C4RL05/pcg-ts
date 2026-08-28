@@ -1,0 +1,39 @@
+var e=`{
+  "_comment": "Panel spec — presentation only; the graph cooks identically without it. See shared/graphUi.ts.",
+  "sections": [
+    {
+      "title": "cloud",
+      "controls": [
+        {
+          "param": "scatter.count",
+          "label": "points",
+          "min": 100,
+          "max": 4000,
+          "step": 50
+        },
+        {
+          "param": "scatter.seed",
+          "label": "scatter seed"
+        },
+        {
+          "param": "scatter.boundsMin",
+          "label": "bounds min"
+        },
+        {
+          "param": "scatter.boundsMax",
+          "label": "bounds max"
+        }
+      ]
+    },
+    {
+      "title": "groups",
+      "controls": [
+        {
+          "param": "groups.name",
+          "label": "split on"
+        }
+      ]
+    }
+  ]
+}
+`;export{e as default};

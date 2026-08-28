@@ -1,0 +1,130 @@
+var e=`{
+  "_comment": "Panel spec — presentation only; the graph cooks identically without it. See shared/graphUi.ts.",
+  "sections": [
+    {
+      "title": "spine",
+      "controls": [
+        { "param": "spineLine.start", "label": "from" },
+        { "param": "spineLine.end", "label": "to" },
+        { "param": "spineSpine.count", "label": "samples", "min": 40, "max": 300, "step": 10 },
+        { "param": "spineWander.translate.verticalAmplitude", "label": "wander up", "step": 0.1 },
+        { "param": "spineWander.translate.horizontalAmplitude", "label": "wander across", "step": 0.1 },
+        { "param": "spineWander.translate.wanderScale", "label": "wander scale", "step": 0.1 },
+        {
+          "param": "spineWander.translate.variantUp",
+          "label": "variant up",
+          "description": "Which of the up-and-down wanders, of the many this node can draw. It is the \`variant\` in the noise's \`opts.seed\`, hashed with the node's own seed, so it re-rolls THIS noise and nothing else — the seed box moves every noise at once, this moves one. A whole number: it names a draw, it does not scale one.",
+          "min": 0,
+          "max": 16,
+          "step": 1
+        },
+        {
+          "param": "spineWander.translate.variantAcross",
+          "label": "variant across",
+          "description": "The same dial for the sideways wander. Two dials rather than one is the whole point: a node has a single seed, so before inline params the two noises could only be re-rolled together.",
+          "min": 0,
+          "max": 16,
+          "step": 1
+        }
+      ]
+    },
+    {
+      "title": "truss",
+      "controls": [
+        { "param": "trussCells.count", "label": "stations", "min": 8, "max": 120, "step": 2 },
+        { "param": "$trussHalfWidth", "label": "half width", "step": 0.025 },
+        {
+          "param": "trussChordSkin.radius",
+          "label": "chord",
+          "min": 0.01,
+          "max": 0.2,
+          "step": 0.005
+        },
+        { "param": "$braceRadius", "label": "brace", "step": 0.005 }
+      ]
+    },
+    {
+      "title": "components",
+      "controls": [
+        { "param": "partDense.count", "label": "density", "min": 100, "max": 2000, "step": 50 },
+        { "param": "partCluster.threshold", "label": "cluster cut", "min": 0, "max": 1, "step": 0.01 },
+        {
+          "param": "partScatter.amount.scatterSteps",
+          "label": "scatter",
+          "description": "How far a component may wander off its sample, in STEPS of the sampling above it: 0.5 is half a step, so neighbours can meet but not cross. It reads the step \`partDense\` publishes, so it keeps that meaning as the density knob moves — where a frozen distance was 0.05 of a step at 100 samples and 1.1 of one at 2000.",
+          "min": 0,
+          "max": 1.5,
+          "step": 0.05
+        },
+        {
+          "param": "partSize.value.partScale",
+          "label": "part size",
+          "description": "One multiplier over every component, on top of the per-point size draw and the per-kind proportions. It was a frozen 1 in the expression until a plain node could carry a param of its own.",
+          "min": 0.3,
+          "max": 3,
+          "step": 0.05
+        },
+        { "param": "$stretchMin", "label": "stretch min", "step": 0.05 },
+        { "param": "$stretchMax", "label": "stretch max", "step": 0.05 },
+        {
+          "param": "partDensity.value.clusterVariant",
+          "label": "cluster variant",
+          "description": "Re-rolls the noise that decides WHERE the components clump, without moving the spine or anything else the seed box would move with it.",
+          "min": 0,
+          "max": 16,
+          "step": 1
+        }
+      ]
+    },
+    {
+      "title": "cables",
+      "controls": [
+        { "param": "wrapCarrierLine.count", "label": "wraps", "min": 1, "max": 40, "step": 1 },
+        { "param": "wrapCells.count", "label": "wrap steps", "min": 20, "max": 400, "step": 10 },
+        { "param": "$cableRadius", "label": "cable radius", "step": 0.005 },
+        { "param": "chainAnchors.count", "label": "chains", "min": 2, "max": 20, "step": 1 },
+        { "param": "danglerAnchors.count", "label": "danglers", "min": 10, "max": 400, "step": 10 },
+        { "param": "$bundles", "label": "bundles", "step": 1 },
+        {
+          "param": "danglerCurl.translate.curlVariantX",
+          "label": "curl variant x",
+          "min": 0,
+          "max": 16,
+          "step": 1
+        },
+        {
+          "param": "danglerCurl.translate.curlVariantZ",
+          "label": "curl variant z",
+          "description": "The fringe curls on two noises, one per horizontal axis. A dial each, so a cable bundle can be pushed out of a plane it happened to fall into.",
+          "min": 0,
+          "max": 16,
+          "step": 1
+        }
+      ]
+    },
+    {
+      "title": "swags",
+      "controls": [
+        { "param": "drapeDrapeAnchors.count", "label": "anchors", "min": 4, "max": 120, "step": 2 },
+        { "param": "drapeChords.mode", "label": "pairing" },
+        { "param": "drapeChords.radius", "label": "reach", "min": 1, "max": 30, "step": 0.5 },
+        { "param": "drapeDrapeEven.count", "label": "segments", "min": 4, "max": 64, "step": 1 },
+        { "param": "drapeLong.value", "label": "min length", "min": 0, "max": 20, "step": 0.25 },
+        { "param": "drapeSome.value", "label": "keep", "min": 0, "max": 1, "step": 0.02 },
+        {
+          "param": "drapeSag.translate.sagVariant",
+          "label": "sag variant",
+          "description": "Re-rolls how deep each swag hangs. The picks that decide WHICH chords are hung are keyed on primitive identity, so they move with the anchors rather than with this.",
+          "min": 0,
+          "max": 16,
+          "step": 1
+        }
+      ]
+    },
+    {
+      "title": "skins",
+      "controls": [{ "param": "$tubeSides", "label": "tube sides", "step": 1 }]
+    }
+  ]
+}
+`;export{e as default};

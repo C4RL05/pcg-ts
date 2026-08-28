@@ -1,0 +1,53 @@
+var e=`{
+  "formatVersion": 1,
+  "seed": 1023,
+  "meta": {
+    "title": "compose several primitives into a scatter",
+    "description": "Four primitives and one terminal node build a complete placement pass: scatter with a guaranteed spacing, cut it to noise-defined regions, turn every point a random way, give every point one uniform random size, then spawn. Each step is a name from the catalog rather than a hand-built cluster of nodes, which is what keeps the graph readable and its behaviour documented. Note what varies: the scatter and the two write steps differ per instance, while the noise mask does not — two masks with the same params cut identically unless their \`variant\` differs.",
+    "tags": ["basics", "primitives", "composition", "spawn"]
+  },
+  "nodes": [
+    {
+      "id": "scatter",
+      "type": "subgraph",
+      "params": {
+        "count": 6000,
+        "minDistance": 2.5,
+        "boundsMin": [-40, 0, -40],
+        "boundsMax": [40, 0, 40]
+      },
+      "ref": { "name": "fill/scatter-even" }
+    },
+    {
+      "id": "mask",
+      "type": "subgraph",
+      "params": { "frequency": 0.03, "threshold": 0.45 },
+      "ref": { "name": "filter/mask-by-noise" }
+    },
+    {
+      "id": "yaw",
+      "type": "subgraph",
+      "params": {},
+      "ref": { "name": "write/random-yaw" }
+    },
+    {
+      "id": "size",
+      "type": "subgraph",
+      "params": { "min": 0.8, "max": 1.6 },
+      "ref": { "name": "write/random-scale" }
+    },
+    {
+      "id": "spawn",
+      "type": "spawnInstances",
+      "params": { "assetId": "pine" }
+    }
+  ],
+  "connections": [
+    { "from": ["scatter", "out"], "to": ["mask", "in"] },
+    { "from": ["mask", "out"], "to": ["yaw", "in"] },
+    { "from": ["yaw", "out"], "to": ["size", "in"] },
+    { "from": ["size", "out"], "to": ["spawn", "in"] }
+  ],
+  "outputs": [{ "id": "spawn", "pin": "instances", "name": "instances" }]
+}
+`;export{e as default};
