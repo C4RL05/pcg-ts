@@ -251,6 +251,73 @@ the over-generation dominate. Supers are ~17 on a 350W lap and clusters
 ~8 each, so a max of 2x on both is ~270 intermediate points -- nothing.
 The instance pick is the only step where N x R could bite.
 
+### The per-instance channel, verified on WebGPU by an external consumer, 2026-08-28
+
+The 0.17.0 channel shipped with a gap we could not close ourselves: the
+library ships the data and deliberately no material, so nothing here can
+issue a draw call through a real TSL/WebGPU material. `tests/instanceChannelRender.test.ts`
+covers WebGL and the WebGPU backend; the NODE/TSL path was reasoned about,
+not exercised.
+
+An integrator (Fantasynth) closed it. Real Chrome, `WebGPURenderer`, three
+0.185.0, 16,384 instances, four cases, one page load each. Method worth
+keeping: one instance per pixel of an f32 render target, with the u32 split
+**in the vertex stage while it is still an integer** — splitting after a
+float varying would have measured nothing — and `idx` riding as its own u32
+channel rather than TSL's `instanceIndex`, so the readback PINS the
+instance-order invariant instead of assuming it.
+
+**What it established that no test in this repo can:**
+
+- f32 and u32 channels arrive exact, including 2^24+1, 2^32-1, and real
+  cooked seeds from `graphs/basics-instance-channels.json`.
+- The instance-order invariant (`attributes[k]` ↔ `transforms[k]`) held on
+  every instance — now pinned by a consumer that shares none of our code.
+- Two meshes sharing ONE compiled `NodeMaterial` each read their own data,
+  with `renderer._pipelines.caches.size === 1`. A per-mesh material would be
+  a shader compile per clip launch for a real-time host, so this is the
+  property that makes the channel usable rather than merely correct.
+- **With no `gpuType` set on any column**, u32 still arrives exact. The
+  0.17.0 retraction (see `docs/authoring.md`) now rests on WebGPU evidence
+  as well as on reading three's source and a WebGL readback.
+
+**TWO ITEMS THIS LEAVES US, both deliberately unbuilt:**
+
+**1. Silent zeros when one assetId mixes channelled and unchannelled
+batches.** A mesh missing a channel its material declares reads 0 for every
+declared channel — no throw, no console output, no WebGPU validation
+message. That is three's behaviour, but it meets our adapter: a second batch
+of the SAME assetId carrying no channels joins a pipeline already compiled
+with those attributes and quietly shades zeros, which renders as "every
+instance identical" and nothing flags it.
+
+**Do not reflexively add a warning.** In our default path every mesh gets
+its own material clone, so the mixture is harmless, and an unconditional
+warning would fire spuriously for every host that does not pool materials.
+The honest options are documenting the hazard or an opt-in check a pooling
+host calls. Left unbuilt until a real integration hits it, because that is
+the evidence that decides the shape.
+
+**2. `toInstancedMeshes`'s material clone is documented only from the
+disposal angle.** A host with a pooled or shared material must overwrite
+`mesh.material` and dispose the clone, and today that is derivable from the
+ownership notes only if you already know to look. One sentence there closes
+it. (`ownsGeometry` by contrast was reported clear, and they branch teardown
+on it as documented.)
+
+**Untested by either side:** channel NAMING. Their shaders declare fixed
+attribute names and our graphs choose them; today the only thing between
+those is that both happen to say `seed`. A channel a shader declares and no
+batch provides is exactly the shape that shades zeros with nothing flagged.
+
+**A method note from their own correction**, which generalises:
+`readRenderTargetPixelsAsync` returns TOP-DOWN, and a hand-picked probe row
+sampled the neighbouring mesh's perfectly correct data — a plausible number
+from the wrong place. Their per-instance assertions were unaffected because
+each pixel is identified by its OWN payload rather than by position.
+**Payload-identified assertions cannot read the right answer from the wrong
+place; position-indexed ones can.**
+
 ### Stretch: intra-node yielding — MEASURED AND REJECTED, 2026-08-28
 
 An external integrator's cook-cost harness, run headless against `dist/`,
