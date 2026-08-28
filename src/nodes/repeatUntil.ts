@@ -434,6 +434,10 @@ export function repeatUntilNode(
     // forwarded into every inner cook, so the memo key carries GPU
     // provenance whenever one is present.
     gpu: "always",
+    // Same as the other two wrappers: this node yields between rounds on
+    // the outer budget, so its `elapsedMs` spans those yields and is not
+    // an uninterrupted block. See NodeDef.selfMetered.
+    selfMetered: true,
     memoKey: () => transitiveVersionKey(inner, new Set()),
     async execute({ inputs, params, seed, signal, budgetMs, gpu, checkCancelled }) {
       const maxRounds = params.maxRounds as number;

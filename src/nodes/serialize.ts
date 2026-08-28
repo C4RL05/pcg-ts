@@ -345,6 +345,12 @@ const EXPOSED_PARAM_NO_ANNOTATION_KEY =
 standardNode<Record<string, never>>({
   type: "subgraph",
   category: "composite",
+  // Metadata-only entries carry this for the same reason they carry a
+  // description: the def here cannot cook, and the def that CAN is built
+  // per instance by `subgraphNode`. A catalog reader has only this entry,
+  // so the fact has to be on it — and `selfMetered.test.ts` pins the two
+  // together so they cannot drift.
+  selfMetered: true,
   description:
     "Composite node wrapping an inner graph as a single node. Pins and params are per-instance, derived from the exposed inner pins and the exposed inner params, so this registry entry declares none — create instances with subgraphNode(innerGraph, exposedInputs, exposedOutputs, exposedParams) and read an instance's real interface with describeSubgraphPins(def) and describeSubgraphParams(def). A serialized subgraph node carries its exposed-param VALUES in \"params\" and its inner graph plus the exposed pin and param DECLARATIONS either inline under \"subgraph\" ({ graph, inputs, outputs, params }), recursively in the same versioned format, or by reference under \"ref\" ({ name, hash? }) to a subgraph registered with registerSubgraph. \"subgraph\" and \"ref\" are mutually exclusive; a ref's \"hash\" is optional, and pins the reference to that exact content (a mismatch is an error, never a warning).",
   inputs: [],
@@ -370,6 +376,8 @@ standardNode<Record<string, never>>({
 standardNode<Record<string, never>>({
   type: "forEach",
   category: "composite",
+  // See the `subgraph` entry above.
+  selfMetered: true,
   description:
     "Composite node that cooks an inner graph ONCE PER ELEMENT instead of once. Exactly one exposed input must be named \"each\" (one iteration per item of the collection on that pin) or \"eachPoint\" (one iteration per point of the one geometry on that pin, the body seeing a one-point cloud); every other exposed input is broadcast whole to every iteration. Each iteration's outputs are concatenated onto the matching output pin in the iterated collection's own order, and carry the iterated item's tags. Every iteration is seeded on its element's CONTENT — position bits, the seed attribute and the tags — never on its position in the collection, so reordering the input reorders the output without re-rolling any of it. Pins and params are per-instance exactly as for \"subgraph\", and the serialized form is the same payload: create instances with forEachNode(innerGraph, exposedInputs, exposedOutputs, exposedParams), or deserialize a graph containing one. The body gets no memo reuse between iterations, by construction — each rotates the inner seed, and a node holds one cache slot.",
   inputs: [],
@@ -399,6 +407,8 @@ standardNode<Record<string, never>>({
 standardNode<{ maxRounds: number; settleAttr: string }>({
   type: "repeatUntil",
   category: "composite",
+  // See the `subgraph` entry above.
+  selfMetered: true,
   description:
     'Composite node that cooks an inner graph REPEATEDLY, feeding each round\'s output back into its own input until the body stops changing anything — a bounded fixed point, in a graph where a cycle cannot be wired. Exactly one exposed input AND exactly one exposed output must be named "carry": round 1 gets the outer "carry" input, round k+1 gets round k\'s "carry" output, and every other exposed input is broadcast whole to every round. This is the loop that relaxation needs and that "forEach" cannot express, because the number of rounds is not known before the first one runs: push overlapping props apart and a new pair now overlaps; snap a dangling edge and the snap creates another dangler. TERMINATION is a scalar the body publishes on the DETAIL domain of the carried geometry, named by "settleAttr" — attributeReduce is what normally writes it. All zero means settled: the loop stops and that round counts. Absent is REFUSED by name rather than read as zero, because reading it as zero turns a typo into "converged on round one". Two synthetic outputs the body never declared report what happened: "rounds" (how many cooks) and "converged" (did the settle signal reach zero, or did it hit maxRounds), both value items. THE SEED IS NOT ROTATED PER ROUND, and that is the design: a fixed point exists only if the body is the SAME function every round, so a body whose seed varies with the round number is a different function each time and has no fixed point to converge to — it re-rolls whatever the last round settled, runs the full budget every time, and reports converged false forever, with no error to say why. Pass a constant seed and let the DATA change between rounds. The payoff is the mirror of forEach\'s cost: a constant inner seed means inner nodes whose inputs did not change between rounds serve their caches, so a broadcast branch is computed once for the whole loop. Pins are per-instance exactly as for "subgraph" and the serialized form is the same payload plus this node\'s own two params: create instances with repeatUntilNode(innerGraph, exposedInputs, exposedOutputs, exposedParams), or deserialize a graph containing one.',
   inputs: [],

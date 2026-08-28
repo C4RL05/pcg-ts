@@ -1059,6 +1059,15 @@ function yieldToEventLoop(): Promise<void> {
  * budgetMs yields to the event loop mirroring the executor's slice
  * policy. Once submitted, the single readback await completes and a
  * late cancellation surfaces before materialization.
+ *
+ * Those yields land INSIDE what the executor times as a single node —
+ * the run's terminal, which carries the whole run's elapsed time — so
+ * the terminal's `NodeDoneInfo.selfMetered` is true and its `elapsedMs`
+ * is wall time spanning them, not an uninterrupted block. The executor
+ * sets that flag from the run, not from the terminal's node type: no
+ * resident-capable type declares `NodeDef.selfMetered`, because on the
+ * per-node path (plan rejected, no resolver) those same nodes really are
+ * atomic. See `NodeDoneInfo.selfMetered`.
  */
 export async function executeResidentRun(
   env: RunExecEnv,

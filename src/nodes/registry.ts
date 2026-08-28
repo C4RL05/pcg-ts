@@ -56,6 +56,12 @@ export interface NodeSpec<P> {
   readonly gpu?: "fields" | "always";
   /** Resident-fusion declaration, copied onto the def; see {@link NodeDef.resident}. */
   readonly resident?: ResidentDesc<P>;
+  /**
+   * Budget self-metering declaration, copied onto the def AND — unlike
+   * `gpu` and `resident` — published in the JSON-safe catalog; see
+   * {@link NodeDef.selfMetered} and {@link NodeTypeInfo.selfMetered}.
+   */
+  readonly selfMetered?: boolean;
 }
 
 /** JSON-safe pin metadata. */
@@ -74,6 +80,25 @@ export interface NodeTypeInfo {
   readonly inputs: readonly PinInfo[];
   readonly outputs: readonly PinInfo[];
   readonly params: Record<string, ParamSchema>;
+  /**
+   * Present and `true` only on types that METER THE COOK'S TIME BUDGET
+   * THEMSELVES: their `execute` reads `CookOptions.budgetMs` and yields
+   * to the event loop inside itself, so `NodeDoneInfo.elapsedMs` for one
+   * of their instances is wall time spanning those yields rather than an
+   * uninterrupted block. Absent means the ordinary case — the executor
+   * timed one uninterrupted run — exactly as an absent `category` means
+   * uncategorized.
+   *
+   * It is HERE, in the catalog, and not only on the def, because the
+   * question "which of these types are not a block?" is one a consumer
+   * has to answer about types it did not write, before it decides what a
+   * timing means. Published, it is one field to read; unpublished, it is
+   * a hardcoded list of our type names in someone else's repository,
+   * free to drift from this one. See {@link NodeDef.selfMetered}.
+   *
+   * `subgraph`, `forEach` and `repeatUntil` carry it.
+   */
+  readonly selfMetered?: boolean;
 }
 
 /** A registered node type: the executable def plus its JSON-safe metadata. */
@@ -174,6 +199,7 @@ export function standardNode<P>(spec: NodeSpec<P>): NodeDef<P> {
     ...(spec.memoKey !== undefined ? { memoKey: spec.memoKey.bind(spec) } : {}),
     ...(spec.gpu !== undefined ? { gpu: spec.gpu } : {}),
     ...(spec.resident !== undefined ? { resident: spec.resident } : {}),
+    ...(spec.selfMetered !== undefined ? { selfMetered: spec.selfMetered } : {}),
   };
   const params: Record<string, ParamSchema> = {};
   for (const [name, schema] of Object.entries<ParamSchema>(spec.params)) {
@@ -193,6 +219,11 @@ export function standardNode<P>(spec: NodeSpec<P>): NodeDef<P> {
       inputs: copyPins(spec.inputs),
       outputs: copyPins(spec.outputs),
       params,
+      // Spread conditionally, like `category`, so the emitted key order
+      // is fixed and a type that does not self-meter carries no key at
+      // all — the catalog's JSON stays byte-identical for every one of
+      // them.
+      ...(spec.selfMetered !== undefined ? { selfMetered: spec.selfMetered } : {}),
     },
   });
   return def;
@@ -219,10 +250,10 @@ export function hasNodeType(type: string): boolean {
 
 /**
  * JSON-safe metadata for every registered node type, in registration
- * order: type name, description, category (when declared), pins, and
+ * order: type name, description, category (when declared), pins,
  * per-param schemas (type, default, description, enum values, field
- * capability, bounds). This is the runtime capability catalog for agents
- * authoring graphs.
+ * capability, bounds), and `selfMetered` (when declared). This is the
+ * runtime capability catalog for agents authoring graphs.
  */
 export function listNodeTypes(): NodeTypeInfo[] {
   return [...registry.values()].map((entry) => ({
@@ -234,5 +265,9 @@ export function listNodeTypes(): NodeTypeInfo[] {
     params: Object.fromEntries(
       Object.entries(entry.info.params).map(([k, s]) => [k, copySchema(s)]),
     ),
+    // Rebuilt field by field, exactly like `category` above, so a field
+    // added to NodeTypeInfo and not added HERE is silently dropped from
+    // every caller's copy while the stored `info` still carries it.
+    ...(entry.info.selfMetered !== undefined ? { selfMetered: entry.info.selfMetered } : {}),
   }));
 }

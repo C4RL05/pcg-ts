@@ -80,4 +80,37 @@ describe("node reference docs", () => {
     expect(again.json).toBe(json);
     expect(again.markdown).toBe(markdown);
   });
+
+  /**
+   * The renderer rebuilds `NodeTypeInfo` field by field, which is what
+   * keeps the emitted key order stable — and is also how a registry field
+   * goes missing here while `listNodeTypes()` carries it. That failure is
+   * SILENT in the worst way: a field the generator cannot emit produces no
+   * docs diff, so the byte-compare above stays green and CI never sees it.
+   * The two tests below are the guard, one per shape, and they read the
+   * registry rather than a literal so they follow the set.
+   */
+  const selfMeteringTypes = listNodeTypes().filter((t) => t.selfMetered === true);
+
+  it("carries selfMetered into nodes.json for every type the registry flags", () => {
+    expect(selfMeteringTypes.length).toBeGreaterThan(0); // the guard must have something to guard
+    const emitted = JSON.parse(json) as Array<{ type: string; selfMetered?: boolean }>;
+    const flagged = emitted.filter((t) => t.selfMetered === true).map((t) => t.type);
+    expect(flagged.sort()).toEqual(selfMeteringTypes.map((t) => t.type).sort());
+    // ...and the key is absent, not `false`, everywhere else — same
+    // convention `category` uses, and what keeps the other entries'
+    // bytes untouched.
+    expect(emitted.filter((t) => "selfMetered" in t).length).toBe(selfMeteringTypes.length);
+  });
+
+  it("says so in nodes.md too, so the prose and the JSON cannot disagree", () => {
+    const marker = "**Meters the cook budget itself:**";
+    const occurrences = markdown.split(marker).length - 1;
+    expect(occurrences).toBe(selfMeteringTypes.length);
+    for (const t of selfMeteringTypes) {
+      // The note belongs to that type's section, not to some other.
+      const section = markdown.split(`\n## ${t.type}\n`)[1] ?? "";
+      expect(section.split("\n## ")[0]).toContain(marker);
+    }
+  });
 });

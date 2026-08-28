@@ -52,6 +52,10 @@ export interface NodeExecuteArgs<P> {
    * Soft time budget of the enclosing cook, when one was set. Composite
    * nodes (e.g. subgraphs) forward it to nested cooks so inner work
    * yields on the same policy.
+   *
+   * A node that reads this and yields on it must declare
+   * {@link NodeDef.selfMetered}, or its reported `elapsedMs` silently
+   * stops meaning "an uninterrupted block".
    */
   readonly budgetMs?: number;
   /**
@@ -168,6 +172,40 @@ export interface NodeDef<P = Record<string, unknown>> {
    * non-geometry output pins.
    */
   readonly resident?: ResidentDesc<P>;
+  /**
+   * Declares that this node type METERS THE COOK'S TIME BUDGET ITSELF:
+   * it reads `NodeExecuteArgs.budgetMs` and yields to the event loop
+   * inside its own `execute` (directly, or by forwarding the budget into
+   * a nested cook that does). Omit it — the default — for every node
+   * that runs as one uninterrupted block between the executor's
+   * between-nodes yields.
+   *
+   * WHY IT IS PUBLISHED RATHER THAN INFERRED. The executor's budget
+   * check sits AFTER a node returns, so for an ordinary node
+   * `NodeDoneInfo.elapsedMs` is an uninterrupted block and a consumer can
+   * read it as one. For a node declaring this it is WALL TIME that spans
+   * the node's own yields — under a small budget it can exceed the real
+   * longest block by two orders of magnitude, because each yield costs
+   * the platform's timer latency and the node takes many. A consumer
+   * ranking budget settings on `elapsedMs` without knowing which is
+   * which inverts its verdict: the budget that makes a graph most
+   * launchable reports the worst number. Nothing observable at the seam
+   * distinguishes the two — the executor cannot see inside an `execute`
+   * — so the node type has to say, and this is where it says it. The
+   * alternative is every consumer hardcoding a list of our type names,
+   * which is a second model of our scheduler living in their code.
+   *
+   * The executor forwards the declaration to `NodeDoneInfo.selfMetered`
+   * on every report for an instance of this type, and `standardNode`
+   * copies it into the registry's `NodeTypeInfo` so a catalog reader
+   * knows before cooking anything.
+   *
+   * Three shipped types declare it: `subgraph`, `forEach` and
+   * `repeatUntil`. A device-resident run is the fourth case and is NOT a
+   * node type — see `NodeDoneInfo.selfMetered` for how a fused run's
+   * terminal reports.
+   */
+  readonly selfMetered?: boolean;
   /**
    * Optional extra memo-key component, read before each cook of an
    * instance. Use it to fold state living outside params into the cache

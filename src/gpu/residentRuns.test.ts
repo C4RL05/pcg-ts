@@ -523,6 +523,11 @@ describe("resident run cache contract (CPU-backed run resolver)", () => {
     // onNodeDone: every member once, chain order, after the dataInput.
     expect(done.map((d) => d.id)).toEqual([ids.din.id, ids.sa.id, ids.jit.id, ids.tr.id, ids.or.id]);
     expect(done.every((d) => !d.cached)).toBe(true);
+    // ...and the terminal is the one entry whose elapsed came from a path
+    // that meters budgetMs itself: `executeRun` receives it and yields
+    // between member kernel encodings, inside what the executor times as
+    // this single node. Interior members report 0 and span nothing.
+    expect(done.map((d) => d.selfMetered)).toEqual([false, false, false, false, true]);
 
     // Terminal-only caching: interiors hold no entries; the terminal's
     // key is a run key.
@@ -540,6 +545,27 @@ describe("resident run cache contract (CPU-backed run resolver)", () => {
     expect(r2.stats.cached).toBe(5);
     expect(r2.stats.gpu!.residentRuns).toBe(0);
     expect(done2.every((d) => d.cached)).toBe(true);
+    // The flag rides `elapsedMs`: a run served from the terminal's cache
+    // still reports the run's total there and 0 on the interiors.
+    expect(done2.map((d) => d.selfMetered)).toEqual([false, false, false, false, true]);
+  });
+
+  it("selfMetered is a fact about the RUN, not about the terminal's node type", async () => {
+    // The same graph, the same terminal, cooked without a resolver: no run
+    // forms, every member cooks on the per-node path, and each one really
+    // is atomic between the executor's yields. If the flag were keyed on
+    // the node TYPE — orientAlongVector, spawnInstances — this would come
+    // back true and be a lie about an uninterrupted block.
+    const { g, ids } = buildChain(makeParityGeometry(40));
+    const done: NodeDoneInfo[] = [];
+    await cook(g, { budgetMs: 0, onNodeDone: (info) => done.push(info) });
+    expect(done.map((d) => d.id)).toEqual([ids.din.id, ids.sa.id, ids.jit.id, ids.tr.id, ids.or.id]);
+    expect(done.every((d) => d.selfMetered === false)).toBe(true);
+    // No resident-capable type declares it, which is what makes the line
+    // above hold rather than happen to hold.
+    for (const id of [ids.sa, ids.jit, ids.tr, ids.or]) {
+      expect(g.require(id.id).def.selfMetered).toBeUndefined();
+    }
   });
 
   it("interior members hold no entry even when an earlier per-node cook left one", async () => {

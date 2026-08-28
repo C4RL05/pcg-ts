@@ -809,6 +809,12 @@ export function subgraphNode(
     // "always" over-invalidates conservatively (inner nodes apply their
     // own precise "fields" rule inside the nested cook).
     gpu: "always",
+    // The outer budget is forwarded into the inner cook below, whose own
+    // slice loop yields on it — so this node's `elapsedMs` spans those
+    // yields and is not an uninterrupted block. This node body contains
+    // no yield of its own; the metering is transitive, and the reported
+    // number is a composite's either way. See NodeDef.selfMetered.
+    selfMetered: true,
     memoKey: () => transitiveVersionKey(inner, new Set()),
     async execute({ inputs, params, seed, signal, budgetMs, gpu }) {
       // The writes and the cook are ONE indivisible step. One inner graph

@@ -30,13 +30,65 @@ import { deriveNodeSeed, type Graph, type NodeState, type OutputDecl } from "./g
  * chain order when the run completes (or is served from cache):
  * interior members carry elapsedMs 0 and the run's terminal carries
  * the whole run's elapsed time.
+ *
+ * `elapsedMs` is not always an uninterrupted block, and `selfMetered`
+ * is what says which — read the two together or a budgeted cook's
+ * timings mean the opposite of what they look like.
  */
 export interface NodeDoneInfo {
   readonly id: string;
   readonly type: string;
   /** True when the node's memo key was unchanged and its cache was reused. */
   readonly cached: boolean;
+  /**
+   * Wall time this entry's work took. Read it together with
+   * {@link NodeDoneInfo.selfMetered}: `true` there means the number
+   * spans yields the node took on the cook's budget and is not an
+   * uninterrupted block.
+   */
   readonly elapsedMs: number;
+  /**
+   * True when `elapsedMs` came from a path that meters the cook's
+   * `budgetMs` ITSELF, so the number is wall time that may span yields
+   * to the event loop — an upper bound on work, and NOT an uninterrupted
+   * block. False means the executor timed the node between its own
+   * between-nodes yields, which is the case for every ordinary (leaf)
+   * node, and the budget cost that node nothing.
+   *
+   * It is a statement about THE BUDGET and nothing else, so `false` is
+   * not a promise that the node never let the event loop run: an
+   * ordinary node resolving a field on the GPU awaits a real device
+   * readback (`mapAsync`, through `tryResolveOnGpu`) and yields there
+   * too. On a CPU-only cook `false` does mean an uninterrupted block.
+   *
+   * Two things set it, and they are different kinds of fact:
+   *
+   * - the node's TYPE declared {@link NodeDef.selfMetered} — a static
+   *   property, also published as `NodeTypeInfo.selfMetered` so a
+   *   catalog reader learns it without cooking. `subgraph`, `forEach`
+   *   and `repeatUntil` declare it;
+   * - this entry is the TERMINAL of a device-resident run, which carries
+   *   the whole run's elapsed time and whose executor receives
+   *   `budgetMs` across the resolver seam (`GpuFieldResolver.executeRun`)
+   *   and meters it between member kernel encodings. That is a property
+   *   of the RUN, not of the terminal's type: the same node reports
+   *   false when its plan is rejected and it cooks on the per-node path.
+   *   A run's interior members report `elapsedMs` 0 and false with it.
+   *
+   * Deliberately NOT conditioned on the cook having set `budgetMs`: it
+   * describes where the number came from, not what this particular pass
+   * did with it. Only a cook that set `budgetMs` can yield at all, so on
+   * an unbudgeted cook every `elapsedMs` is a block whatever this says.
+   *
+   * TO DERIVE A LONGEST-BLOCK FIGURE, cook once with `budgetMs` UNSET
+   * and take the largest `elapsedMs`: every budget check in the library
+   * is `budgetMs !== undefined`, so nothing yields on the budget then,
+   * every number is a true block, and the largest is the floor no budget
+   * can lower. Reading the same maximum out of a BUDGETED cook
+   * overstates it, by exactly the yield latency a flagged node
+   * accumulated.
+   */
+  readonly selfMetered: boolean;
 }
 
 /** Options for {@link cook}. */
@@ -47,6 +99,13 @@ export interface CookOptions {
    * continuing. Cooking always completes unless aborted. Forwarded to
    * nodes (see `NodeExecuteArgs.budgetMs`) so composite nodes can apply
    * the same policy to nested cooks.
+   *
+   * Setting it changes what the per-node timings MEAN for the nodes that
+   * take it up: a self-metering node's `elapsedMs` then spans its own
+   * yields and is no longer an uninterrupted block. `NodeDoneInfo.selfMetered`
+   * says which entries those are; `CookStats.elapsedMs` for the whole
+   * pass includes every yield the cook took and is likewise wall time,
+   * not work.
    */
   budgetMs?: number;
   /** Abort the cook; checked between nodes and via `checkCancelled` inside them. */
@@ -1035,6 +1094,11 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
     const node = graph.require(id);
     const def = node.def;
     const nodeStart = performance.now();
+    // Read from the DEF, never from a list of type names kept here: a
+    // node type that starts metering the budget itself is then flagged by
+    // declaring it, with nothing in the executor to keep in step. See
+    // NodeDef.selfMetered.
+    const selfMetered = def.selfMetered === true;
     const { inputs, inputSig } = assembleInputs(id, def);
 
     const seed = deriveNodeSeed(graph.seed, id);
@@ -1056,7 +1120,13 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
     if (node.cache !== undefined && node.cache.key === key && node.cache.volatile !== true) {
       node.dirty = false;
       stats.cached++;
-      onNodeDone?.({ id, type: def.type, cached: true, elapsedMs: performance.now() - nodeStart });
+      onNodeDone?.({
+        id,
+        type: def.type,
+        cached: true,
+        elapsedMs: performance.now() - nodeStart,
+        selfMetered,
+      });
     } else {
       let outputs: Record<string, DataCollection>;
       try {
@@ -1087,7 +1157,13 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
       node.cache = { key, outputs };
       node.dirty = false;
       stats.cooked++;
-      onNodeDone?.({ id, type: def.type, cached: false, elapsedMs: performance.now() - nodeStart });
+      onNodeDone?.({
+        id,
+        type: def.type,
+        cached: false,
+        elapsedMs: performance.now() - nodeStart,
+        selfMetered,
+      });
     }
   };
 
@@ -1184,6 +1260,12 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
           type: node.def.type,
           cached: true,
           elapsedMs: id === run.terminal ? elapsed : 0,
+          // The run, not the node type, is what meters `budgetMs` here
+          // (the executor hands it to `executeRun` below), and the
+          // terminal is the member carrying the run's number — so the
+          // flag rides the same `id === run.terminal` test `elapsedMs`
+          // does. An interior member's 0 spans nothing.
+          selfMetered: id === run.terminal,
         });
       }
       return true;
@@ -1327,6 +1409,8 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
         type: node.def.type,
         cached: false,
         elapsedMs: id === run.terminal ? elapsed : 0,
+        // See the cache-hit branch above.
+        selfMetered: id === run.terminal,
       });
     }
     return true;

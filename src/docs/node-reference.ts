@@ -66,6 +66,16 @@ interface CanonicalNodeType {
   readonly inputs: readonly CanonicalPin[];
   readonly outputs: readonly CanonicalPin[];
   readonly params: Record<string, CanonicalSchema>;
+  /**
+   * Carried through because a consumer reading THIS file is exactly the
+   * consumer who must not read a self-metering node's `elapsedMs` as an
+   * uninterrupted block. Field-by-field rebuilding is what keeps the
+   * emitted key order stable, and it is also how a registry field goes
+   * missing here while `listNodeTypes()` carries it — silently, since a
+   * field the generator cannot emit produces no docs diff and CI stays
+   * green. See {@link NodeTypeInfo.selfMetered}.
+   */
+  readonly selfMetered?: boolean;
 }
 
 function canonicalPin(pin: { name: string; kind: PinKind; multi?: boolean }): CanonicalPin {
@@ -99,6 +109,7 @@ function canonicalType(t: NodeTypeInfo): CanonicalNodeType {
     params: Object.fromEntries(
       Object.entries(t.params).map(([name, schema]) => [name, canonicalSchema(schema)]),
     ),
+    ...(t.selfMetered !== undefined ? { selfMetered: t.selfMetered } : {}),
   };
 }
 
@@ -187,6 +198,15 @@ function renderMarkdown(types: readonly NodeTypeInfo[]): string {
     lines.push("");
     if (t.category !== undefined) {
       lines.push(`**Category:** ${t.category}`);
+      lines.push("");
+    }
+    if (t.selfMetered === true) {
+      lines.push(
+        "**Meters the cook budget itself:** under `cook(graph, { budgetMs })` this node " +
+          "yields to the event loop inside its own execute, so its `NodeDoneInfo.elapsedMs` " +
+          "is wall time spanning those yields — not an uninterrupted block. Derive a " +
+          "longest-block figure from a cook with the budget unset.",
+      );
       lines.push("");
     }
     lines.push(`**Inputs:** ${formatPins(t.inputs)}`);

@@ -201,6 +201,11 @@ export function forEachNode(
     // forwarded into every inner cook, so the memo key carries GPU
     // provenance whenever one is present.
     gpu: "always",
+    // This node yields between iterations on the outer budget (see the
+    // slice clock in `runIterations`), so its `elapsedMs` spans those
+    // yields. Declared rather than inferred, because nothing at the
+    // executor's seam can see inside an execute. See NodeDef.selfMetered.
+    selfMetered: true,
     memoKey: () => transitiveVersionKey(inner, new Set()),
     async execute({ inputs, params, seed, signal, budgetMs, gpu, checkCancelled }) {
       const source = inputs[iterated.name] ?? [];
