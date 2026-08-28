@@ -128,7 +128,9 @@ pleasant API and the serializable one: a graph holding
 at all. Four cases still refuse:
 
 1. a field built by `makeField` — an arbitrary closure that nothing can
-   describe, and the deliberate escape hatch;
+   describe. This is the sanctioned extension point, not a mistake: see
+   [Hand-authoring a field](#hand-authoring-a-field-makefield) for what
+   it buys and what refusing to serialize actually costs;
 2. any field composed over one, because a combinator derives its spec
    from its arguments and one missing argument spec propagates;
 3. a tree nested deeper than the spec depth limit (256 levels).
@@ -1432,6 +1434,199 @@ type, `noiseOutputRange(field)` per field instance (fbm-aware; returns
 the normalized or raw range as built). `exact: true` on worley widens
 the cell search until provably exhaustive — slower, for when the fast
 approximation's rare wrong-neighbor artifacts matter.
+
+### Hand-authoring a field (`makeField`)
+
+The grammar above is the *serializable* half of fields, and it is
+**elementwise**: every fn sees one element at a time. When what you need
+is not that — an order statistic, a whole-column reduction, a table
+lookup, a call into a library the grammar has no name for — `makeField`
+is the supported way to write the evaluator yourself. It is the same
+door `constant`, `attribute` and every noise go through; at cook time a
+hand-authored field is not second-class in any way.
+
+It does cost something, and the cost is exact: a hand-authored field
+cannot be *described*, so it cannot leave the process. Both halves are
+below — write the field, then decide whether you can afford it.
+
+#### What a `Field` is at runtime
+
+Three members and a brand:
+
+```ts
+interface Field<N extends number = number> {
+  readonly key: string;                 // stable structural identity
+  readonly tupleSize: N | undefined;    // components, when statically known
+  evaluate(ctx: EvalContext): Column;   // compute the column
+}
+```
+
+`EvalContext` is `{ geo, domain, seed }` — the geometry, the domain the
+field is landing on, and the evaluation seed. `Column` is
+`{ data, tupleSize }`, where `data` is a `Float32Array`, `Int32Array` or
+`Uint32Array` holding `count * tupleSize` scalars in SoA layout
+(element `i`, component `k` at `i * tupleSize + k`). A column may alias
+live attribute storage — `attribute(name)` returns a `subarray` of the
+attribute, not a copy — which is why callers treat every column as
+read-only, and why a held column is valid only until the geometry is
+mutated or resized. Index the `Column`, not the attribute behind it: an
+attribute's own `data` is `capacity * tupleSize` long and capacity grows
+by doubling, so reading it directly runs past the live elements.
+
+`makeField(key, tupleSize, evaluate)` builds one and stamps the brand
+`isField` reads. **It is the only constructor.** A plain object literal
+`{ key, tupleSize, evaluate }` type-checks as a `Field` — the interface
+does not declare the brand — and `isField` still answers `false`.
+`isField` is the gate the library asks everywhere, so the literal is not
+quietly mis-cached; it is refused at the door, by the param validator,
+before the graph is even built:
+
+```text
+add: node "setAttribute_0" (type "setAttribute") param "value":
+expected a finite number, got {"key":"impostor()","tupleSize":1}
+```
+
+The brand is enumerable, so `{ ...field }` is still a field. There is
+nothing to import and nothing to stamp by hand: call `makeField`.
+
+#### The one contract: equal keys mean interchangeable columns
+
+`key` is a *structural identity* — kind, params, and child keys — and
+**two** caches key on it: the graph executor's node cache (which hashes
+a field as `F(<key>)`) and `evaluateField`'s per-context memo. The
+library will compute one field and hand the result to another that
+shares its key. So every input that can change the column must appear in
+the key, and nothing that cannot should. Three helpers exist for exactly
+this job, and they are meaningful only here:
+
+- **`elementCount(ctx)`** — how many elements the context's domain
+  currently holds. The first line of almost every evaluator: your output
+  column must cover exactly that many elements, so its `data` holds
+  `elementCount(ctx) * tupleSize` scalars. Read it per evaluation, never
+  captured at construction — one field instance is evaluated over
+  domains of different sizes.
+- **`keyNum(v)`** — a number as key text, `Object.is`-aware: `-0`
+  serializes as `"-0"` so it can never collide with `0`. Their columns
+  differ, so their keys must too.
+- **`keyRef(childKey)`** — embeds a child field's key inside yours,
+  length-prefixed. A child key is an arbitrary string — a hand-authored
+  one chooses its own — so raw concatenation is ambiguous: `f("x,y", "z")`
+  and `f("x", "y,z")` both concatenate to `f(x,y,z)` and would share a
+  cache entry, where `keyRef` writes `f(3#x,y,1#z)` against
+  `f(1#x,3#y,z)`. Every shipped combinator uses it for the same reason.
+
+Resolve child fields with **`evaluateField(child, ctx)`** rather than
+`child.evaluate(ctx)`: it memoizes per context on `key`, so a
+sub-expression shared with a sibling is computed once.
+
+#### A worked example
+
+Standardizing a field over the domain — subtract the mean, divide by the
+standard deviation — cannot be written in the grammar at any length,
+because mean and deviation are properties of the whole column while
+every grammar fn sees one element. It reads component 0 of its input:
+
+```ts
+import {
+  type Column, type EvalContext, type Field,
+  elementCount, evaluateField, keyNum, keyRef, makeField,
+} from "pcg-ts";
+
+function standardize(of: Field, epsilon = 1e-6): Field<1> {
+  const key = `standardize(${keyRef(of.key)},${keyNum(epsilon)})`;
+  return makeField<1>(key, 1, (ctx: EvalContext): Column => {
+    const n = elementCount(ctx);
+    const src = evaluateField(of, ctx);
+    const out = new Float32Array(n);
+    if (n === 0) return { data: out, tupleSize: 1 };
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += src.data[i * src.tupleSize];
+    const mean = sum / n;
+    let sq = 0;
+    for (let i = 0; i < n; i++) {
+      const d = src.data[i * src.tupleSize] - mean;
+      sq += d * d;
+    }
+    const sd = Math.sqrt(sq / n);
+    const scale = sd > epsilon ? 1 / sd : 0;
+    for (let i = 0; i < n; i++) out[i] = (src.data[i * src.tupleSize] - mean) * scale;
+    return { data: out, tupleSize: 1 };
+  });
+}
+```
+
+Both inputs are in the key — the child through `keyRef`, the epsilon
+through `keyNum` — so two `standardize` calls with equal arguments are
+one field to both caches, and two with different epsilons are two. The
+result drops into any field-capable param, and composes with the
+combinators in both directions (`mul(standardize(x), 10)` is a field,
+and `standardize` takes grammar fields as its input):
+
+```ts
+const g = new Graph(7);
+const src = g.add(pointGrid, { countX: 2, countY: 1, countZ: 2, spacing: [1, 0, 1] });
+const set = g.add(setAttribute, {
+  name: "rank", domain: "point", type: "f32", tupleSize: 1,
+  value: standardize(component(position(), 0)),
+});
+g.connect(src, "out", set, "in");
+g.output(set, "out", "points");
+const { outputs } = await cook(g);  // "rank" is ±1 over the four grid points
+```
+
+#### The trade: it cannot be described, so it cannot leave the process
+
+`getFieldSpec(field)` answers "can this be written down as grammar
+JSON". For a hand-authored field it returns `undefined`, and the absence
+propagates: anything composed over one is undescribable too, because a
+combinator derives its spec from its arguments. Three consequences, all
+of them the same fact:
+
+- **`serializeGraph` refuses**, so the graph cannot be saved, opened in
+  the editor, or pinned as a corpus fixture. It names the node, the
+  param and the cause:
+
+  ```text
+  node "setAttribute_0" param "value": fieldToJson: this field carries no
+  JSON spec, so it cannot be serialized. It was built by makeField, whose
+  evaluator is an arbitrary closure that nothing can name — the deliberate
+  escape hatch. Rebuild it with grammar constructors (combinators, inputs,
+  noise — see listFieldFns), or fieldFromJson
+  ```
+
+- **It cannot be cooked off-thread.** The worker pool serializes before
+  anything crosses the thread — `cook` takes a `SerializedGraph`
+  outright, and `cookCell`, the backend a `World` drives, is handed a
+  live `Graph` and calls `serializeGraph` itself. Both paths hit the
+  refusal above.
+- **It cannot run on the GPU.** WGSL is compiled from the spec; with no
+  spec the param evaluates on the CPU and counts a `no-spec` fallback
+  (see [Eligibility](#eligibility--what-runs-on-the-gpu)).
+
+What it does **not** cost is cooking. In-process, a hand-authored field
+is a first-class node param: it cooks, it caches, it is deterministic on
+the same terms as everything else, and the executor's node cache keys on
+its `key` exactly as it does for a grammar field.
+
+#### Which to reach for
+
+Write **grammar** — combinator or JSON, they serialize alike — when the
+expression is elementwise and the graph has to be saved, opened in the
+editor, shipped to a worker, or run on the GPU. That covers every graph
+under `graphs/` — a saved graph is JSON, and JSON holds no closures, so
+the grammar is the only field language a file can carry.
+
+Write **`makeField`** when the computation is not elementwise or simply
+has no name in the grammar, *and* the graph is built in code and cooked
+in the same process: a tool, a test, a measurement harness, an
+application that constructs its graph at startup and never saves it.
+
+If you need both — the computation *and* a graph that saves — put the
+computation in a **node** rather than in a field. A registered
+`standardNode`'s params are plain values, so nothing about it has to be
+describable as a field expression, and a graph using it serializes like
+any other. The field stays inside the node's `execute`, where the
+boundary never sees it.
 
 ## Recipes
 

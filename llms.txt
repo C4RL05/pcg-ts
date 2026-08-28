@@ -897,7 +897,9 @@ fields serialize back via `fieldToJson` — a combinator derives its spec
 from its arguments, so since v0.9 a graph holding
 `mul(position(), 0.1)` serializes (before v0.9 `serializeGraph` threw
 and pointed at `fieldFromJson`). Four cases refuse: a `makeField`
-closure; any field composed over one (the absent spec propagates); a
+closure (the sanctioned extension point, not a mistake — see
+"Hand-authoring a field" below for the trade it makes); any field
+composed over one (the absent spec propagates); a
 tree deeper than 256 levels — derivation refuses at exactly the depth
 `fieldFromJson` parses, so a spec that could not be re-parsed is never
 produced and no graph is written that cannot be read back; and an
@@ -943,6 +945,134 @@ agent choosing a fn before it writes one:
   `fieldFromJson` must be given before that spec can be built. It walks
   the whole tree including `opts.position`, and it READS rather than
   validates, so it is safe to hand raw JSON that has not been checked yet.
+
+### Hand-authoring a field (makeField)
+
+The grammar is ELEMENTWISE — every fn sees one element at a time — and
+it is the only field language a FILE can carry. When the computation is
+not elementwise (an order statistic, a whole-column reduction) or has no
+name in the grammar, `makeField` is the supported way to write the
+evaluator yourself. It is a real extension point, not a mistake; the
+price is exact and stated at the end of this section.
+
+A `Field` at runtime is three members plus a brand:
+
+```ts
+interface Field<N extends number = number> {
+  readonly key: string;                 // stable structural identity
+  readonly tupleSize: N | undefined;    // components, when statically known
+  evaluate(ctx: EvalContext): Column;   // compute the column
+}
+```
+
+- `EvalContext` = `{ geo, domain, seed }`.
+- `Column` = `{ data, tupleSize }`; `data` is a `Float32Array` /
+  `Int32Array` / `Uint32Array` of `count * tupleSize` scalars, SoA
+  (element `i`, component `k` at `i * tupleSize + k`). Columns may alias
+  live attribute storage (`attribute(name)` returns a `subarray`), so
+  treat them as read-only and re-evaluate after mutating the geometry.
+  Index the COLUMN, not the attribute behind it: an attribute's own
+  `data` is `capacity * tupleSize` long and capacity grows by doubling.
+- `makeField(key, tupleSize, evaluate)` is the ONLY constructor. It
+  stamps the brand `isField` reads. A plain `{ key, tupleSize, evaluate }`
+  literal type-checks as a `Field` (the interface does not declare the
+  brand) and `isField` still answers false. `isField` is the gate
+  everywhere, so such a literal is not quietly mis-cached — it is REFUSED
+  by param validation before the graph is built: `add: node
+  "setAttribute_0" (type "setAttribute") param "value": expected a finite
+  number, got {"key":"impostor()","tupleSize":1}`. The brand is
+  enumerable, so `{ ...field }` stays a field; there is nothing to import
+  and nothing to stamp by hand.
+
+THE CONTRACT: **equal keys mean interchangeable columns.** `key` is a
+structural identity (kind, params, child keys) and TWO caches key on it —
+the executor's node cache (hashing a field as `F(<key>)`) and
+`evaluateField`'s per-context memo. The library will compute one field
+and hand the column to another that shares its key. Every input that can
+change the column must be in the key; nothing that cannot should be.
+Three helpers exist for that job and are meaningful only here:
+
+- `elementCount(ctx)` — elements in the context's domain, so the output
+  column's `data` holds `elementCount(ctx) * tupleSize` scalars. The
+  first line of nearly every evaluator, and read per evaluation rather
+  than captured: one field instance is evaluated over domains of
+  different sizes.
+- `keyNum(v)` — a number as key text, `Object.is`-aware: `-0` becomes
+  `"-0"` so it never collides with `0` (their columns differ).
+- `keyRef(childKey)` — length-prefixed embedding of a child's key. A
+  child key is an arbitrary string, so raw concatenation is ambiguous:
+  `f("x,y","z")` and `f("x","y,z")` both concatenate to `f(x,y,z)` and
+  would share a cache entry; `keyRef` writes `f(3#x,y,1#z)` against
+  `f(1#x,3#y,z)`. Every shipped combinator uses it.
+
+Resolve inputs with `evaluateField(child, ctx)`, not
+`child.evaluate(ctx)`: it memoizes per context on `key`, so a
+sub-expression shared with a sibling is computed once.
+
+Worked example — standardize a field over the domain (mean 0, sd 1),
+which the grammar cannot express at any length because mean and
+deviation are properties of the whole column. Reads component 0:
+
+```ts
+import { elementCount, evaluateField, keyNum, keyRef, makeField } from "pcg-ts";
+import type { Column, EvalContext, Field } from "pcg-ts";
+
+function standardize(of: Field, epsilon = 1e-6): Field<1> {
+  const key = `standardize(${keyRef(of.key)},${keyNum(epsilon)})`;
+  return makeField<1>(key, 1, (ctx: EvalContext): Column => {
+    const n = elementCount(ctx);
+    const src = evaluateField(of, ctx);
+    const out = new Float32Array(n);
+    if (n === 0) return { data: out, tupleSize: 1 };
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += src.data[i * src.tupleSize];
+    const mean = sum / n;
+    let sq = 0;
+    for (let i = 0; i < n; i++) {
+      const d = src.data[i * src.tupleSize] - mean;
+      sq += d * d;
+    }
+    const sd = Math.sqrt(sq / n);
+    const scale = sd > epsilon ? 1 / sd : 0;
+    for (let i = 0; i < n; i++) out[i] = (src.data[i * src.tupleSize] - mean) * scale;
+    return { data: out, tupleSize: 1 };
+  });
+}
+
+// Drops into any field-capable param; composes with combinators both ways.
+const set = g.add(setAttribute, {
+  name: "rank", domain: "point", type: "f32", tupleSize: 1,
+  value: standardize(component(position(), 0)),
+});
+```
+
+THE TRADE, and it is the whole cost: a hand-authored field cannot be
+DESCRIBED, so it cannot leave the process. `getFieldSpec` returns
+`undefined` for one and the absence propagates outward through any
+combinator composed over it. Three consequences, one fact:
+
+- `serializeGraph` refuses — no saving, no editor, no corpus fixture.
+  The message names the node, the param and the cause: ``node "<id>"
+  param "<key>": fieldToJson: this field carries no JSON spec ... It was
+  built by makeField ... Rebuild it with grammar constructors``.
+- No off-thread cooking: the pool serializes before anything crosses the
+  thread — `cook` takes a `SerializedGraph`, and `cookCell` (the backend a
+  `World` drives) is handed a live `Graph` and calls `serializeGraph`
+  itself.
+- No GPU: WGSL is compiled from the spec, so the param evaluates on the
+  CPU and counts a `no-spec` fallback.
+
+What it does NOT cost is cooking. In-process a hand-authored field is a
+first-class node param — it cooks, caches on its `key`, and is
+deterministic on the same terms as everything else.
+
+CHOOSING: grammar (combinator or JSON — they serialize alike) whenever
+the graph must be saved, edited, sent to a worker or run on the GPU.
+`makeField` when the computation is not elementwise or has no name in
+the grammar AND the graph is built in code and cooked in the same
+process. If you need both, put the computation in a registered
+`standardNode` instead of in a field: a node's params are plain values,
+so nothing has to be describable and the graph serializes normally.
 
 ## Node types (full schemas: docs/nodes.md, machine-readable: docs/nodes.json)
 

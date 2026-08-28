@@ -28,7 +28,17 @@ export interface EvalContext {
   readonly seed: number;
 }
 
-/** Number of elements the context's domain currently holds. */
+/**
+ * Number of elements the context's domain currently holds — and so the
+ * length the column an evaluator returns must have (times its tuple
+ * size). The first line of nearly every {@link Field} evaluator, and one
+ * of the three helpers that only matter when hand-authoring one through
+ * {@link makeField}; see "Hand-authoring a field" in docs/authoring.md.
+ *
+ * Read per evaluation rather than captured at construction: a field is
+ * built long before any geometry exists, and the same field instance is
+ * evaluated over domains of different sizes.
+ */
 export function elementCount(ctx: EvalContext): number {
   return ctx.geo.attrs[ctx.domain].count;
 }
@@ -62,6 +72,13 @@ export type FieldLike = number | readonly number[] | Field;
 /**
  * @internal Brand stamped by {@link makeField} marking genuine Fields.
  * Enumerable so structural copies (`{ ...field }`) keep the brand.
+ *
+ * NOT part of the package's public surface, and deliberately so even
+ * though hand-authoring a Field IS supported: {@link makeField} stamps
+ * this for you and {@link isField} is the supported check, which leaves
+ * a hand-author with nothing to do about it. Published, its only use
+ * would be the spelling that must not spread — an object literal that
+ * skips `makeField` and freezes this representation.
  */
 export const FIELD_BRAND: unique symbol = Symbol("pcg-ts.field");
 
@@ -82,6 +99,12 @@ export function isField(v: unknown): v is Field {
 /**
  * Serialize a number for use in a structural key. Object.is-aware: -0
  * serializes as "-0" so it never collides with 0 (their columns differ).
+ *
+ * Use it for every numeric parameter a hand-authored {@link makeField}
+ * takes. `String(v)` is right for all of them except -0, and the one it
+ * gets wrong is silent: two fields would share a key, and the contract
+ * on {@link Field} says the library may then compute one and hand the
+ * column to the other.
  */
 export function keyNum(v: number): string {
   return Object.is(v, -0) ? "-0" : String(v);
@@ -91,12 +114,47 @@ export function keyNum(v: number): string {
  * Embed a child field's key inside a parent key, injection-proof: the
  * length prefix makes the embedding unambiguous no matter what
  * characters the child key contains (e.g. user attribute names).
+ *
+ * Use it for every child field a hand-authored {@link makeField} reads.
+ * A child key is an arbitrary string — a hand-authored one chooses its
+ * own — so raw concatenation is ambiguous: `f("x,y", "z")` and
+ * `f("x", "y,z")` both become `f(x,y,z)`. A collided key is a wrong
+ * COLUMN, not a parse error, because both caches trust the key.
  */
 export function keyRef(key: string): string {
   return `${key.length}#${key}`;
 }
 
-/** Build a Field from a structural key, static tuple size, and evaluator. */
+/**
+ * Build a Field from a structural key, static tuple size, and evaluator.
+ *
+ * **The supported extension point, and the only constructor.** Every
+ * shipped input, combinator and noise goes through it, and so does a
+ * hand-authored field — the door out of the field grammar for a
+ * computation that is not elementwise (a whole-column reduction, an
+ * order statistic) or simply has no name in it. `docs/authoring.md`,
+ * "Hand-authoring a field", is the write-up.
+ *
+ * Two things to know before writing one:
+ *
+ * - **`key` is a promise.** Equal keys mean interchangeable columns —
+ *   see {@link Field}. Put every input that can change the column in it
+ *   ({@link keyNum} for numbers, {@link keyRef} for child fields) and
+ *   nothing that cannot.
+ * - **A field built here carries no JSON spec**, and the absence
+ *   propagates through anything composed over it. So a graph holding one
+ *   cannot be serialized, cannot be sent to a worker, and cannot compile
+ *   to WGSL — it counts a `no-spec` GPU fallback and evaluates on the
+ *   CPU. Cooking in-process is unaffected.
+ *
+ * The brand it stamps is what {@link isField} reads. A plain
+ * `{ key, tupleSize, evaluate }` literal type-checks as a `Field` and is
+ * not one — but it fails loudly rather than quietly, because `isField`
+ * is the gate at every seam: `Graph.add`/`setParam` do not recognize it
+ * as a field value at all and report the schema's ordinary type error
+ * (`expected a finite number, got {"key":…}`), and `stableValueHash`
+ * shortcuts to `F(<key>)` only for a branded field.
+ */
 export function makeField<N extends number = number>(
   key: string,
   tupleSize: N | undefined,

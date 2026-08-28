@@ -31,11 +31,11 @@ import { createPointCloud } from "../data/index.js";
 import type { DeviceInstanceBatch, DeviceTransformsHandle } from "../fields/index.js";
 import {
   Graph,
-  makeDeviceInstancesItem,
   makeGeometryItem,
   makeInstancesItem,
   type DataItem,
 } from "../graph/index.js";
+import { makeDeviceInstancesItem } from "../graph/data.js";
 import { dataInput, World } from "../runtime/index.js";
 import type { CellCoord, CellOutputs, LevelDef } from "../runtime/types.js";
 import { buildInstanceBatches } from "../spawn/instances.js";

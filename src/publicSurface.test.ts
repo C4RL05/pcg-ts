@@ -3,6 +3,19 @@
  * See publicSurface.testsupport.ts for why this exists and how to respond
  * when it fails. The gpu and three entry points are pinned by their own
  * files, next to the code they cover.
+ *
+ * Nine names left this list in one deliberate withdrawal — a breaking
+ * change, taken while the package is pre-alpha:
+ * `ATTR_CTORS`, `FIELD_BRAND`, `MAX_INSTANCES`,
+ * `getSubgraphPlumbing`, `isDeviceInstanceBatch`,
+ * `makeDeviceInstancesItem`, `nextRev`, `paramSchemaError` and
+ * `paramValueError`. Each was reached by an `export *` through a barrel
+ * rather than by anyone deciding to publish it, none had a caller outside
+ * `src/`, and every one of them fails a different way when a consumer
+ * takes it up. All nine are still exported from their own modules, which
+ * is where the internal callers and the tests reach them; the barrels
+ * carry the reason each was withdrawn. Do not re-add one here without
+ * re-adding it to a barrel on purpose.
  */
 import { describe, expect, it } from "vitest";
 
@@ -10,10 +23,10 @@ import * as root from "./index.js";
 import { surfaceDiff, surfaceOf } from "./publicSurface.testsupport.js";
 
 const ROOT_SURFACE = [
-  "ATTR_CTORS", "Attribute", "AttributeSet", "CookCancelledError", "DOMAINS",
-  "FIELD_BRAND", "FieldJsonError", "GRAPH_META_KEYS", "Geometry", "Graph",
+  "Attribute", "AttributeSet", "CookCancelledError", "DOMAINS",
+  "FieldJsonError", "GRAPH_META_KEYS", "Geometry", "Graph",
   "GraphCycleError", "GraphError", "GraphSerializationError", "GraphValidationError",
-  "MAX_INSTANCES", "NOISE_RAW_RANGES", "NodeExecutionError", "PRIMTYPE_ATTR", "Pcg32",
+  "NOISE_RAW_RANGES", "NodeExecutionError", "PRIMTYPE_ATTR", "Pcg32",
   "STANDARD_POINT_ATTRS", "TRANSFER_AREA_EPS", "TRANSFER_BARY_EPS", "TRANSFER_BOX_PAD_REL",
   "TRANSFER_DET_EPS", "VERSION", "World", "WorldValidationError", "abs", "acos", "add",
   "applyGraphParamTargets", "applyParamPatches", "asin", "atan", "atan2", "attribute", "attributeIs", "attributeReduce",
@@ -38,7 +51,7 @@ const ROOT_SURFACE = [
   "transferByIndex",
   "ge",
   "getFieldSpec",
-  "getNodeType", "getRegisteredSubgraph", "graphParamBindings", "getSubgraphPlumbing", "getSubgraphSpec", "gt",
+  "getNodeType", "getRegisteredSubgraph", "graphParamBindings", "getSubgraphSpec", "gt",
   "hasNodeType", "hasRegisteredSubgraph", "hashCombine", "hashFloat", "hashString",
   "index",
   // Which wrapper a registered recipe was written for, read off its
@@ -46,13 +59,13 @@ const ROOT_SURFACE = [
   // registered recipe is something outside code does, and the recipe
   // deliberately does not record the answer.
   "inferWrapperKind",
-  "inlineParamMetaOf", "inlineParamSchema", "inlineParamValuesOf", "isDeviceInstanceBatch", "isDeviceResidentInstances", "isField", "jitterPoints",
+  "inlineParamMetaOf", "inlineParamSchema", "inlineParamValuesOf", "isDeviceResidentInstances", "isField", "jitterPoints",
   "keyNum", "keyRef", "le", "length", "lerp", "liveParamValueError", "listFieldFnInfos", "listFieldFns",
   "listNodeTypes", "listSubgraphs", "log", "log2",
-  "lt", "makeDeviceInstancesItem", "makeField",
+  "lt", "makeField",
   "makeGeometryItem", "makeInstancesItem", "makeValueItem", "max", "mergePoints", "mergePrimitives",
   "meshPrimitive", "min", "mod",
-  "mul", "ne", "nextRev", "nodeSeed", "noiseOutputRange", "normalize",
+  "mul", "ne", "nodeSeed", "noiseOutputRange", "normalize",
   // Drops points whose oriented box blocks a line of sight from a moving
   // eye, pushing them clear first and dropping only what cannot be moved.
   "occlusionCull",
@@ -66,7 +79,7 @@ const ROOT_SURFACE = [
   // Names the minimum set of points that must change category for every
   // category's share of the population to land inside a stated band.
   "quotaRebalance",
-  "orientAlongVector", "paramNamesOf", "paramSchemaError", "paramValueError", "parseFieldText",
+  "orientAlongVector", "paramNamesOf", "parseFieldText",
   "partitionByAttribute",
   // Writes, per path point, whether a fan of rays cast from it is blocked
   // by the box cloud — "is this stretch under cover", in world space

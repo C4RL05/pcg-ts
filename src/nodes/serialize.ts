@@ -9,9 +9,7 @@ import { isField } from "../fields/index.js";
 import {
   Graph,
   validateGraphMeta,
-  getSubgraphPlumbing,
   getSubgraphSpec,
-  paramValueError,
   subgraphNode,
   type ExposedParam,
   type ExposedPin,
@@ -26,8 +24,13 @@ import {
 // Reached by MODULE, like `../graph/subgraph.js` above: the validator is
 // the graph layer's own, not package API, and the reader needs the same one
 // the live setter uses so a value refused by one is refused by both.
-import { graphParamError } from "../graph/params.js";
-import { CARRIED_PIN_NAMES, ITERATED_PIN_NAMES, type WrapperKind } from "../graph/subgraph.js";
+import { graphParamError, paramValueError } from "../graph/params.js";
+import {
+  CARRIED_PIN_NAMES,
+  ITERATED_PIN_NAMES,
+  getSubgraphPlumbing,
+  type WrapperKind,
+} from "../graph/subgraph.js";
 import {
   type FieldSpec,
   fieldFromJson,

@@ -264,6 +264,18 @@ string table either, for the same reason, so a misspelled key is dead
 code that quietly takes the default. What you gain is that the
 fall-through is explicit and the case set is enumerable in one place.
 
+The grammar is elementwise — every fn sees one element at a time — and
+`makeField(key, tupleSize, evaluate)` is the supported way out of it,
+for a whole-column reduction, an order statistic, or anything the
+grammar has no name for. It is a real extension point, and the price is
+exact: a hand-authored field cannot be *described*, so a graph holding
+one cannot be serialized, sent to a worker, or compiled to WGSL. It
+cooks and caches like any other field, so the choice is between a graph
+that saves and a computation the grammar cannot express — and if you
+need both, put the computation in a registered node instead, where the
+params are plain values. See
+[Hand-authoring a field](./docs/authoring.md#hand-authoring-a-field-makefield).
+
 Every noise field takes `normalized: true` for a uniform [0, 1] output
 contract — an exact affine remap of the per-noise raw range, published
 in `NOISE_RAW_RANGES` and queryable per field via `noiseOutputRange()`.
@@ -379,6 +391,8 @@ its arguments and round-trips exactly as a `fieldFromJson` spec does.
 Only fields the grammar genuinely cannot describe refuse, chiefly
 `makeField` closures and anything composed over one, and the error names
 the offending node, param and leaf rather than a list to choose from.
+That refusal is the stated price of the
+[hand-authoring escape hatch](#fields), not a defect in it.
 
 Serialization is complete: subgraph nodes carry their inner graph as a
 nested payload or as a hash-pinned reference to a registered one, and
