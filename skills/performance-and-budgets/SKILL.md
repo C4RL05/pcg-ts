@@ -35,7 +35,13 @@ has a different fix behind it.
   `--stats` prints below (`id  type  state  elapsed`), because cost is
   never spread evenly. Every stage of the shipped pipeline spends ~8 ms
   inside one `terrain` subgraph node, so a 30 ms stage is 22 ms of
-  everything else and the terrain is not the thing to look at.
+  everything else and the terrain is not the thing to look at. Those
+  numbers are from an unbudgeted cook, which is what makes them work.
+  **Add `--budget` and they become wall time**, including the latency of
+  every yield the cook took — and the `terrain` node is a `subgraph`,
+  one of the three types that yield inside themselves. See "A budgeted
+  `elapsedMs` is wall time, not work" below before comparing any two
+  budget settings.
 
 Optimize the top row of that table. `pcg inspect` reports the same three
 numbers for one pin, which attributes cost to a branch rather than a graph.
@@ -93,14 +99,74 @@ readback inside ordinary leaf nodes. Read "granularity is one node" as a
 statement about the EXECUTOR, not a guarantee that every node is atomic in
 wall-clock time.
 
-That distinction has teeth for measurement. Because the executor cannot
-interrupt a leaf, the longest single leaf `elapsedMs` is a hard floor no
-budget can lower — which makes `onNodeDone.elapsedMs` enough to derive the
-longest uninterrupted block without any event-loop probe. Replaying the
-accumulate-and-reset policy over those timings is an UPPER BOUND rather than
-the real boundaries, because a composite's single `elapsedMs` spans yields
-it took internally, and a rejected fused-run plan does real work
-(`assembleInputs` plus member hashing) and reports no `onNodeDone` at all.
+**Do not hardcode that list — the library publishes it.** Those four names
+are the answer TODAY, and a consumer that copies them into its own code is
+keeping a second model of this scheduler. Two fields state the fact instead:
+
+- **`NodeTypeInfo.selfMetered`** (`listNodeTypes()`, `pcg nodes <type> --json`)
+  — `true` on `subgraph`, `forEach`, `repeatUntil`; the key is absent on
+  every other type, the way an absent `category` means uncategorized. It
+  answers the question *without cooking anything*. A node type declares it
+  with `NodeDef.selfMetered`, beside `gpu` and `resident`
+  (`src/graph/node.ts`), and `src/graph/execute.ts` reads it off the def —
+  there is no list of type names in the executor, so a fourth composite is
+  flagged by declaring it and nothing else has to change.
+- **`NodeDoneInfo.selfMetered`** — per entry, on every `onNodeDone` report.
+  `false` means the executor timed one uninterrupted run and `elapsedMs` is
+  a real block. `true` means it is wall time that may span the node's own
+  yields.
+
+The GPU run is the one case where the two disagree, on purpose. No
+resident-capable type declares `selfMetered` — on the per-node path
+`setAttribute` and friends really are atomic — so the flag is set by the
+EXECUTOR on the fused run's terminal, the member that carries the run's
+whole elapsed time (`src/graph/execute.ts`, both `cookResidentRun`
+branches). Interior members report `elapsedMs` 0 and `selfMetered` false.
+The same node reports false when its plan is rejected and it cooks per-node.
+
+### A budgeted `elapsedMs` is wall time, not work
+
+Say it plainly, because the number looks like work and is not: **under
+`budgetMs`, a self-metering node's `elapsedMs` includes the latency of
+every yield it took.** On this box each `setTimeout(0)` costs ~1 ms on an
+idle loop. Measured on `basics-repeat-until-settled` @6000, one
+`repeatUntil` node reported:
+
+| cook | node `elapsedMs` | what it is |
+| --- | --- | --- |
+| unbudgeted | 25.6 ms | one uninterrupted block |
+| `budgetMs: 1` | 450.7 ms | wall time; longest real block ~4.7 ms |
+
+That is a **95x** overstatement, and it INVERTS the verdict: `budgetMs: 1`
+is the setting that makes the graph most launchable, and ranking on the raw
+number ranks it as catastrophically the worst. `CookStats.elapsedMs` for
+the whole pass is wall time for the same reason.
+
+**The recipe: derive the longest block from an UNBUDGETED cook.** Every
+budget check in the library is `budgetMs !== undefined`, so with it unset
+nothing yields on the budget, every `elapsedMs` is a true block, and the
+largest is the floor no budget can lower — the figure you actually want,
+and it needs no event-loop probe. (One caveat, and it is not about the
+budget: with a GPU resolver, `src/nodes/util.ts:328-330` awaits a real
+device readback inside ordinary leaf nodes, so measure the CPU path when
+you want CPU block times.)
+
+```ts
+const seen: NodeDoneInfo[] = [];
+await cook(g, { onNodeDone: (i) => seen.push(i) }); // no budgetMs
+const longestBlock = Math.max(...seen.map((i) => i.elapsedMs));
+// nothing yielded on the budget, so every elapsedMs here is a real block
+// and `selfMetered` does not change how to read one
+```
+
+Then use a budgeted cook to check RESPONSIVENESS — that the event loop got
+control back — never to compare durations. If you must read timings out of
+a budgeted cook, an entry with `selfMetered === false` is directly
+comparable (that path is identical either way); an entry with `true` is an
+upper bound and nothing more. One gap the flag does not close, because it
+is not about yielding: a rejected fused-run plan does real work
+(`assembleInputs` plus member hashing) and reports no `onNodeDone` at
+all, so the per-node timings never sum to `CookStats.elapsedMs`.
 
 From the CLI, `--budget <ms>` takes any non-negative number. **`--budget 0`
 is allowed and meaningful** — every budget check is `budgetMs !== undefined`

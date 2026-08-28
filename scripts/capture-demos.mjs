@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * capture-demos.mjs — regenerate docs/manual-assets/*.jpg and docs/thumbs/*.jpg
- * from the editor (`editor/`) and the three hosted demos under `demos/`.
+ * from the editor (`editor/`) and the six hosted demos under `demos/`.
  * (Spelling that second path as a glob would end this comment early — the
  * star-slash closes it — and the file stops parsing. It did once.)
  *
@@ -10,7 +10,7 @@
  * ---------------------------------------------------------------------------
  * WHY THIS SCRIPT EXISTS
  *
- * These ten JPEGs are committed and are referenced from docs/manual.html and
+ * These JPEGs are committed and are referenced from docs/manual.html and
  * docs/index.html with hard-coded width/height attributes. They used to be
  * produced by an ad-hoc script that lived on one machine, so they drifted
  * silently whenever a demo changed. Everything below is the set of things that
@@ -127,6 +127,7 @@ const SIZES = {
   "gpu-world": { css: [1079, 791], out: [1079, 791] },
   racetrack: { css: [1454, 783], out: [1454, 783] },
   road: { css: [1454, 783], out: [1454, 783] },
+  lanterns: { css: [1454, 783], out: [1454, 783] },
 };
 
 /**
@@ -395,6 +396,22 @@ const DEMOS = [
       setCheckboxByLabel("autopilot", false);
       setRangeByLabel("speed", 0);
     },
+  },
+  {
+    id: "lanterns",
+    // One cook and no streaming, so there is exactly one thing to wait
+    // for. `cook` is written once, when that cook lands, and it fills
+    // every other readout with it -- until then it is the en dash `has`
+    // rejects.
+    path: "demos/lanterns/",
+    ready: (s, has) => has(s["cook"]),
+    // Colour, pulse and bob are all functions of a page clock, so no two
+    // frames are ever alike while it runs. `pause` stops that clock and
+    // nothing else -- the cook is already done and the panel keeps its
+    // numbers -- which is what lets this one settle on pixels instead of
+    // being declared `animated` and settled on the stats alone.
+    settleWait: () => !!window.__capRow("pause"),
+    settle: () => setCheckboxByLabel("pause", true),
   },
 ];
 

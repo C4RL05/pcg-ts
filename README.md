@@ -82,15 +82,16 @@ All of this runs in a browser. Nothing to check out, nothing to build.
   through the mental model, the JSON format, the field grammar, errors as
   an API, and a full agent loop.
 
-And five demos, each one something a single graph cannot be on its own:
+And six demos, each one something a single graph cannot be on its own:
 
 <table>
 <tr>
-<td width="20%"><a href="https://c4rl05.github.io/pcg-ts/demos/infinite-world/"><img alt="The infinite world demo, shown small: a dark plain seen from just above it, strewn with thousands of pale low-poly pebbles thinning toward the horizon, with a handful of large dark boulders standing among them as landmarks. A faint blue grid marks the streaming cells. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/infinite-world.jpg" width="100%"></a></td>
-<td width="20%"><a href="https://c4rl05.github.io/pcg-ts/demos/galaxy/"><img alt="The galaxy demo, shown small: tens of thousands of coloured stars wrapped in loose spiral arms around a soft glowing bulge, on black. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/galaxy.jpg" width="100%"></a></td>
-<td width="20%"><a href="https://c4rl05.github.io/pcg-ts/demos/gpu-world/"><img alt="The gpu-world demo, shown small: a dense field of tall teal blades tipped with small pale seed heads, receding to the horizon on a dark ground. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/gpu-world.jpg" width="100%"></a></td>
-<td width="20%"><a href="https://c4rl05.github.io/pcg-ts/demos/racetrack/"><img alt="The racetrack demo, shown small: a circuit drawn as a pale ribbon seen from above, its whole lap lined on both verges with hundreds of small green wireframe boxes and spanned overhead in places, with the driven view of the road running away beneath it. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/racetrack.jpg" width="100%"></a></td>
-<td width="20%"><a href="https://c4rl05.github.io/pcg-ts/demos/road/"><img alt="The road demo, shown small: the same circuit as the racetrack thumbnail, but with one evenly spaced row of identical small boxes along each verge instead of varied art. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/road.jpg" width="100%"></a></td>
+<td width="16%"><a href="https://c4rl05.github.io/pcg-ts/demos/infinite-world/"><img alt="The infinite world demo, shown small: a dark plain seen from just above it, strewn with thousands of pale low-poly pebbles thinning toward the horizon, with a handful of large dark boulders standing among them as landmarks. A faint blue grid marks the streaming cells. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/infinite-world.jpg" width="100%"></a></td>
+<td width="16%"><a href="https://c4rl05.github.io/pcg-ts/demos/galaxy/"><img alt="The galaxy demo, shown small: tens of thousands of coloured stars wrapped in loose spiral arms around a soft glowing bulge, on black. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/galaxy.jpg" width="100%"></a></td>
+<td width="16%"><a href="https://c4rl05.github.io/pcg-ts/demos/gpu-world/"><img alt="The gpu-world demo, shown small: a dense field of tall teal blades tipped with small pale seed heads, receding to the horizon on a dark ground. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/gpu-world.jpg" width="100%"></a></td>
+<td width="16%"><a href="https://c4rl05.github.io/pcg-ts/demos/racetrack/"><img alt="The racetrack demo, shown small: a circuit drawn as a pale ribbon seen from above, its whole lap lined on both verges with hundreds of small green wireframe boxes and spanned overhead in places, with the driven view of the road running away beneath it. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/racetrack.jpg" width="100%"></a></td>
+<td width="16%"><a href="https://c4rl05.github.io/pcg-ts/demos/road/"><img alt="The road demo, shown small: the same circuit as the racetrack thumbnail, but with one evenly spaced row of identical small boxes along each verge instead of varied art. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/road.jpg" width="100%"></a></td>
+<td width="16%"><a href="https://c4rl05.github.io/pcg-ts/demos/lanterns/"><img alt="The lanterns demo, shown small: a few thousand small glowing octahedra of many different hues hanging in a drifting sheet over a dark ground grid. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/lanterns.jpg" width="100%"></a></td>
 </tr>
 <tr>
 <td><b><a href="https://c4rl05.github.io/pcg-ts/demos/infinite-world/">infinite world</a></b><br>A world streamed around a flying camera, coarse to fine. Drag the cell size and watch the rocks not move.</td>
@@ -98,6 +99,7 @@ And five demos, each one something a single graph cannot be on its own:
 <td><b><a href="https://c4rl05.github.io/pcg-ts/demos/gpu-world/">gpu world</a></b><br>The same streaming, with every instance matrix composed on the GPU and drawn without ever being read back.</td>
 <td><b><a href="https://c4rl05.github.io/pcg-ts/demos/racetrack/">racetrack</a></b><br>Roadside art placed along a spline the page was handed, to six legibility rules measured from a racing game. Every repair says how much it had to do.</td>
 <td><b><a href="https://c4rl05.github.io/pcg-ts/demos/road/">road</a></b><br>The same page with the rules taken out — one evenly spaced row per side. Shot at the same station, so the diff is what the rules added.</td>
+<td><b><a href="https://c4rl05.github.io/pcg-ts/demos/lanterns/">lanterns</a></b><br>One u32 per instance, drawn. The graph settles where each lantern hangs and the seed it carries; the shader makes colour, pulse and bob out of that integer.</td>
 </tr>
 </table>
 

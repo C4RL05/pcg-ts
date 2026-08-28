@@ -106,9 +106,13 @@ a parent — these are three different kinds of thing and the old single
   edits it live. It carried a `01-` prefix once, which is exactly what
   made it read as the first demo
 - `demos/` — `infinite-world`, `galaxy`, `gpu-world`, `racetrack`,
-  `road`. Unnumbered on purpose: they encode no order. Each exists
-  because what it shows needs a host — a streamed world, a device-resident
-  renderer, a spline the page was handed rather than made. `racetrack` is
+  `road`, `lanterns`. Unnumbered on purpose: they encode no order. Each
+  exists because what it shows needs a host — a streamed world, a
+  device-resident renderer, a spline the page was handed rather than
+  made, a material to read a per-instance channel with. `lanterns` is
+  that last one: a `u32` `seed` channel drives hue, pulse phase and rate
+  through a `ShaderMaterial`, so the graph settles structure while the
+  host owns the clock — which no corpus graph can show. `racetrack` is
   the one the placement rules run on. `road` BEGAN as a copy of it, kept as
   the version with no placement rules in it, and the claim used to be that
   their identical module names made the diff between them read as what the

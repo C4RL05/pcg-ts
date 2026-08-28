@@ -2113,18 +2113,78 @@ instances become one instance to a host keying on it. Nothing
 downstream wants the widening either:
 `THREE.InstancedBufferAttribute` takes any typed array.
 
-> **The widening can come back at the shader, and preserving the dtype
-> is what creates the hazard.** three defaults an instanced attribute to
-> `FloatType`. So a `u32` channel bound without setting `gpuType` is read
-> back as a float and suffers at the shader exactly the 2^24 collision
-> the spawner just refused — the column is exact, the draw is not. The
-> library binds the attribute and leaves `normalized`/`gpuType` at
-> three's defaults, so this one is yours: set `gpuType` when you declare
-> an integer channel. The alternative, and the idiom an integrating host
-> arrived at independently, is to keep the column `f32` end to end and
-> convert in the shader (`int(attribute('aOrigIndex', 'float'))`) — which
-> is exact only while the values stay under 2^24, and is the right choice
-> precisely when they do.
+> **The 2^24 collision belongs to the COLUMN, not to the binding, and a
+> `u32` channel needs no `gpuType`.** This box said the opposite twice,
+> so the provenance of each claim below is marked. The `u32` and
+> f32-column ones are MEASURED, on a real draw call with a pixel
+> readback — `tests/instanceChannelRender.test.ts`, in a browser. Two of
+> its cases (`f32-tint`, `u32-default-gpuType`) also run under
+> `WebGPURenderer` and agree byte for byte; the f32 widening and the
+> `IntType` comparison run under WebGL only, so do not promote them to
+> "both renderers". The `Uint8Array` and `Float32Array` ones
+> are READ OUT OF three's source (r185) and the WebGL2 rules: nothing in
+> this repo binds those two yet.
+>
+> **A `Uint32Array` channel arrives exact with `gpuType` left alone.**
+> `WebGLAttributes` maps `Uint32Array` to `gl.UNSIGNED_INT` (and
+> `Int32Array` to `gl.INT`), and `WebGLBindingStates` picks the integer
+> pointer call as `type === gl.INT || type === gl.UNSIGNED_INT ||
+> geometryAttribute.gpuType === IntType` — `gpuType` is the third
+> disjunct, so for a 32-bit integer typed array it is short-circuited
+> before it is ever read. The same four ids at 2^24 and above read back
+> BYTE-IDENTICALLY with the flag unset and with `IntType` set (red bytes
+> `[0, 40, 80, 120]`, blue `1` for all four, so the top byte survived
+> too). Do not add the line. A no-op that reads as a requirement is
+> worse than no line at all: it gets copied into codebases that never
+> measure it, and then nobody can retire it.
+>
+> **Where the flag IS load-bearing: any integer array narrower than 32
+> bits — `Uint8Array` among them**, which is how a `bool` channel is
+> stored. `gl.UNSIGNED_BYTE` fails both GL-type tests, so `integer` is
+> decided entirely by `gpuType`, and with it left at `FloatType` the
+> pointer call still succeeds — the failure lands at the DRAW, as
+> `INVALID_OPERATION`, because a float-path pointer cannot feed an
+> integer shader input. Set it, and declare that channel `in uint`: the
+> WebGL2 rule is three-way, and `gl.UNSIGNED_BYTE` on the integer path
+> against an `in int` is the same error again. **Where it is actively
+> harmful: a `Float32Array`.** That expression carries no guard on the
+> array class, so `IntType` there makes three call
+> `vertexAttribIPointer` with `gl.FLOAT`, which that entry point does
+> not accept — `INVALID_ENUM`, raised synchronously at the pointer call,
+> which then does nothing, so the attribute quietly keeps whatever state
+> it already had. **three's own JSDoc denies this**: `BufferAttribute`
+> documents `gpuType` as having "an effect for integer arrays" only and
+> being "not configurable for float arrays", and the code enforces no
+> such thing. Read the source, not the doc comment — that disagreement
+> is why this paragraph is worth its length. So "set it to be safe" is
+> unsafe in both directions: the flag chooses which pointer call to
+> make, and only one of them is legal per buffer type. And it is a
+> WebGL concept — native WebGPU takes the vertex format from the array's
+> constructor and never reads it (zero occurrences under three's
+> `renderers/webgpu/`, which also widens a `Uint8Array` to
+> `Uint32Array` before upload, so even a bool channel needs no flag
+> there). It survives on that side only in the WebGL2 fallback backend,
+> in two places: the attribute binding, which repeats the short-circuit
+> verbatim, and the GLSL node builder, which reads it with the opposite
+> polarity and exempts the 32-bit integer arrays all the same.
+>
+> **A dtype mismatch at the shader is loud, not lossy.** Declaring a
+> `u32` channel as `in float` does not quietly round it: WebGL2 rejects
+> it — observed as `INVALID_OPERATION` (`0x502`) with no fragment
+> written, on the adapter this ran on. The test pins the loudness (a GL
+> error, or nothing drawn) rather than either specific, because the code
+> is the driver's.
+>
+> **So the 2^24 hazard is upstream of all of this, in the column
+> itself** — which is the honest motivation for preserving the dtype.
+> Carry `[2^24, 2^24+1, 2^24+2, 2^24+3]` through an f32 column and the
+> same shader reads back `[0, 0, 80, 160]`: the first two ids are one
+> f32 and therefore one pixel, while the last two are not — an asymmetry
+> that "the attribute never arrived" cannot produce. Keeping a column
+> `f32` end to end and converting in the shader
+> (`int(attribute('aOrigIndex', 'float'))`) is exact only while the
+> values stay under 2^24, and is the right choice precisely when they
+> do. `demos/lanterns` draws both columns of the same ids side by side.
 
 **A node is the unit of yielding, so one expensive node is a floor.**
 Under `cook(graph, { budgetMs })` the executor yields between nodes, never
@@ -2136,6 +2196,57 @@ the budget themselves — `forEach`, `repeatUntil`, `subgraph` and the
 resident GPU run — which is why the `forEach` section below can say budget
 is honoured inside iterations without contradicting this. `skills/performance-and-budgets`
 carries the full rule and the partition-safety check built on it.
+
+**Which nodes those are is PUBLISHED — never hardcode the list.** A
+self-metering node's timing means something different from every other
+node's, and nothing observable at the seam distinguishes the two, so the
+library states the fact in two machine-readable places:
+
+- `NodeTypeInfo.selfMetered` — `true` on `subgraph`, `forEach` and
+  `repeatUntil`, absent on every other type, exactly as an absent
+  `category` means uncategorized. Read it from `listNodeTypes()`,
+  `pcg nodes <type> --json`, or the generated catalog
+  ([nodes.json](./nodes.json), [nodes.md](./nodes.md)) — **without
+  cooking anything**. A node type
+  declares it with `NodeDef.selfMetered`, beside `gpu` and `resident`,
+  so a third-party node that meters the budget joins the set by saying
+  so.
+- `NodeDoneInfo.selfMetered` — per entry, on every `onNodeDone` report.
+  `false` means the executor timed one uninterrupted run and `elapsedMs`
+  is a real block. `true` means it is wall time that may span the node's
+  own yields.
+
+The fourth case, the resident GPU run, is deliberately absent from the
+catalog: it is a property of the RUN and not of any node type. No
+resident-capable type declares `selfMetered`, because on the per-node
+path (no resolver, or a rejected plan) `setAttribute` and friends really
+are atomic. The executor instead flags the fused run's **terminal** — the
+member that carries the whole run's elapsed time, and the one whose work
+crossed into `executeRun`, which receives `budgetMs` and yields between
+member kernel encodings. Interior members report `elapsedMs` 0 and
+`selfMetered` false. So a node type's catalog entry answers "is this type
+ever non-atomic on its own"; the per-report flag answers "was THIS
+number".
+
+**A budgeted `elapsedMs` includes yield latency and is not work.** This
+is the trap the flag exists for. Each `setTimeout(0)` costs about a
+millisecond on an idle loop, a self-metering node under a small budget
+takes many, and the wall time it reports is dominated by them: one
+measured `repeatUntil` reported **25.6 ms** unbudgeted and **450.7 ms**
+at `budgetMs: 1` — a 95x overstatement of a node whose longest real
+block is ~4.7 ms. `CookStats.elapsedMs` for the whole pass is wall time
+for the same reason. Rank budget settings on those numbers and you rank
+the most launchable setting as the worst.
+
+**To derive a longest-block figure, cook once with the budget UNSET.**
+Every budget check in the library is `budgetMs !== undefined`, so nothing
+yields on the budget then: every `elapsedMs` is a true uninterrupted
+block and the largest is the floor no budget can lower. Use the budgeted
+cook to check responsiveness — that the page got control back — not to
+compare durations, and ignore a flagged entry's duration entirely when
+the two runs are being compared. The one number a budgeted cook reports
+that is directly comparable is an UNflagged node's, because that path is
+identical either way.
 
 **`"color"` is reserved and `instanceAttrs` refuses it by name.** A
 renderer treats colour *structurally* rather than generically — three
@@ -2211,16 +2322,19 @@ here as "this stalls your frame", which is the opposite of what is true.
   `normalized`/`gpuType` are left at three's defaults, so declaring the
   attribute (a TSL `attribute()` node, a `ShaderMaterial`, an
   `onBeforeCompile` patch) — and the shader-side type of an integer
-  channel — is yours. Set that `gpuType`: three defaults an attribute to
-  `FloatType`, so an integer channel declared without it is read back as
-  a float and suffers at the shader exactly the 2^24 widening the
-  spawner refused to do to it. **Scope of the word "supported":** the
-  binding is pinned by unit tests, but no demo binds a custom channel
-  and no test in this repo issues a draw call, so the pixels are
-  intended and documented rather than proven by the suite. The one place
-  a custom channel is refused on the WebGPU side is the *device-resident*
-  adapter, which binds only the two channels three treats structurally;
-  see below.
+  channel — is yours. Do NOT reach for `gpuType` on the way: a 32-bit
+  integer typed array selects the integer pointer call by itself, and
+  the flag matters only for the narrower integer arrays (`Uint8Array`
+  among them, which is how a `bool` channel is stored) — the box under
+  "the dtype is preserved" above carries the whole rule, including the
+  array type where setting it breaks the draw instead.
+  **Scope of the word "supported":** `demos/lanterns` binds a `u32`
+  channel and draws with it, and `tests/instanceChannelRender.test.ts`
+  issues real draw calls in a browser and reads the pixels back under
+  both renderers — so the pixels are measured now, not merely intended.
+  The one place a custom channel is refused on the WebGPU side is the
+  *device-resident* adapter, which binds only the two channels three
+  treats structurally; see below.
 - **Cooking** on the main thread: **not required.** `pcg-ts/worker`
   cooks off-thread, and `EncodedInstanceBatch.attributes` carries every
   named channel — colour among them, since `colors` is an accessor over

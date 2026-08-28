@@ -134,6 +134,7 @@ export default defineConfig({
         "gpu-world": here("demos/gpu-world/index.html"),
         racetrack: here("demos/racetrack/index.html"),
         road: here("demos/road/index.html"),
+        lanterns: here("demos/lanterns/index.html"),
       },
     },
   },

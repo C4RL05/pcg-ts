@@ -1948,13 +1948,47 @@ multi-asset since v0.8.0:
   path for per-instance data in a shader and nothing in this section
   touches it. The library ships the data, not the shader — no `three/tsl`
   import, `normalized`/`gpuType` at three's defaults — so the material is
-  the host's to write. SET `gpuType` on an integer channel: three
-  defaults an attribute to `FloatType`, so an unset u32 channel is read
-  as a float in the shader and suffers exactly the 2^24 widening the
-  spawner refused to do to it. SCOPE OF "SUPPORTED": the binding is
-  pinned by unit tests, but NO demo binds a custom channel and NO test in
-  this repo issues a draw call — the pixels are intended and documented,
-  not proven by the suite. The lone WebGPU-side refusal is the
+  the host's to write. DO NOT SET `gpuType` ON AN INTEGER CHANNEL — this
+  file said the opposite twice and it was wrong both times. MEASURED on a
+  real draw call with a pixel readback: a `Uint32Array` channel arrives
+  EXACT with the flag left at three's default. `WebGLAttributes` maps
+  `Uint32Array` to `gl.UNSIGNED_INT`, and `WebGLBindingStates` picks the
+  integer pointer call as `type === gl.INT || type === gl.UNSIGNED_INT ||
+  gpuType === IntType`, so for an integer typed array the flag is
+  short-circuited before it is read; the same ids read back
+  BYTE-IDENTICALLY unset and with `IntType`. The flag IS load-bearing for
+  any integer array NARROWER than 32 bits — `Uint8Array`, how a `bool`
+  channel is stored, among them: `gl.UNSIGNED_BYTE` fails both GL-type
+  tests, so `IntType` is what selects the integer path, and without it
+  the pointer call still succeeds and the DRAW fails
+  (`INVALID_OPERATION`). Declare such a channel `in uint`, not `in int`:
+  the WebGL2 matching rule is three-way. And the flag is HARMFUL on a
+  `Float32Array`, where it makes three call `vertexAttribIPointer` with
+  `gl.FLOAT` — not an accepted type there, so `INVALID_ENUM` at the
+  pointer call, which then does nothing. THREE'S OWN JSDOC DENIES THIS
+  (`BufferAttribute` calls `gpuType` "not configurable for float
+  arrays"); the code has no such guard, and the code is what runs.
+  `gpuType` is a WebGL concept: native WebGPU takes the vertex format
+  from the array's constructor and never reads it (zero occurrences under
+  three's `renderers/webgpu/`, which widens a `Uint8Array` to
+  `Uint32Array` before upload, so even a bool channel needs no flag
+  there). Only the WebGL2 fallback backend consults it, in two places,
+  both of which exempt the 32-bit integer arrays anyway. NOT MEASURED HERE: the `Uint8Array` and `Float32Array`
+  cases are read out of three's source (r185) and the WebGL2 rules,
+  not bound by anything in this repo. What DOES have to agree is the
+  shader-side type: declaring a u32 channel as `in float` does not round
+  quietly, WebGL2 rejects it LOUDLY. The test pins the loudness — a GL
+  error, or nothing drawn — rather than either specific, because the code
+  is the driver's; on the adapter this ran on it was `INVALID_OPERATION`
+  (0x502) with no fragment written. The 2^24 collision is real but
+  belongs to an F32 COLUMN, not to a missing flag: the same four ids
+  carried through an f32 column read back `[0, 0, 80, 160]`, two of them
+  collapsed onto one. That is the argument for preserving dtype, and it
+  is what `demos/lanterns` draws both ways. SCOPE OF "SUPPORTED":
+  `demos/lanterns` binds a custom channel and draws with it, and
+  `tests/instanceChannelRender.test.ts` issues real draw calls in a
+  browser and reads the pixels back under both renderers — measured, no
+  longer merely intended. The lone WebGPU-side refusal is the
   DEVICE-RESIDENT adapter (`createWebGpuInstanceAdapter`), which binds
   only the instance matrix and the reserved colour, and which throws on a
   hand-built device batch carrying anything else, naming both ways out
@@ -2463,7 +2497,7 @@ not raised.
   switch, and export/import. It is the human half of the
   agent-and-human ergonomics claim — start here to see what a graph
   does before writing one.
-- demos/ — FIVE vite demos, sitting beside the editor and the graph
+- demos/ — SIX vite demos, sitting beside the editor and the graph
   corpus in `graphs/`. A demo exists only where a HOST is required to
   show the thing; anything that is one cook of one graph is a corpus
   file instead, because a graph an agent can run teaches more than a
@@ -2487,6 +2521,14 @@ not raised.
     shares not one line (505 against 1287), graph.ts and lap.ts have
     diverged in BOTH directions, and only spline.ts is still identical.
     Do not change one expecting the other to follow.
+  - lanterns is the one that BINDS a per-instance channel and draws with
+    it. `instanceAttrs` carries the point cloud's own u32 `seed` out as a
+    named channel; a `ShaderMaterial` reads it as a `uint` and derives
+    hue, pulse phase and pulse rate from its bits. The graph settles
+    structure and the page owns the clock, which is the whole reason it
+    needs a host: a graph carries no material, so the corpus cannot show
+    this. It carries the same ids a second time through an f32 column,
+    so the panel can draw what widening an identity hash costs.
   Retired into the corpus, and named here because older docs still cite
   them: the graph editor, the GPU-fields comparison, the headless demo,
   the forest, and the rig playground. The forest and the rig are

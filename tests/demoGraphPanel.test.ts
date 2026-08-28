@@ -282,7 +282,7 @@ describe("the param rows", () => {
 });
 
 describe("the demos are wired to it", () => {
-  const DEMOS = ["galaxy", "gpu-world", "infinite-world", "racetrack", "road"];
+  const DEMOS = ["galaxy", "gpu-world", "infinite-world", "lanterns", "racetrack", "road"];
 
   it.each(DEMOS)("%s attaches the graph panel", (demo) => {
     const src = readFileSync(`${ROOT}demos/${demo}/main.ts`, "utf8");
