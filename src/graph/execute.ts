@@ -1,5 +1,6 @@
 import {
   createGpuCookStats,
+  deviceInstanceAttributesOf,
   isField,
   type DeviceTransformsHandle,
   type GpuCookStats,
@@ -987,7 +988,19 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
       for (const collection of Object.values(delivered)) {
         for (const item of collection) {
           if (item.kind !== "instances" || item.deviceBatches === undefined) continue;
-          for (const batch of item.deviceBatches) kept.add(batch.transforms);
+          // Transforms AND every named per-instance channel. Colour has
+          // always been a second allocation with a second handle, and it
+          // was never registered here — an undelivered cook leaked one
+          // buffer per coloured batch. Enumerated through the one
+          // normalizer, which counts colour exactly once (it is a channel
+          // IN that record) and picks up a channel this site was never
+          // taught about.
+          for (const batch of item.deviceBatches) {
+            kept.add(batch.transforms);
+            for (const channel of Object.values(deviceInstanceAttributesOf(batch))) {
+              kept.add(channel.handle);
+            }
+          }
         }
       }
     }
@@ -1264,7 +1277,16 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
     // Take ownership of every handle the run minted BEFORE anything else
     // can throw, so no failure between here and delivery strands one.
     if (result.deviceBatches !== undefined) {
-      for (const batch of result.deviceBatches) produced.push(batch.transforms);
+      for (const batch of result.deviceBatches) {
+        produced.push(batch.transforms);
+        // Same enumeration as the `kept` set below, and it has to be the
+        // same one: a handle that is produced but never kept is disposed,
+        // and a handle that is kept but never produced is a leak. Both
+        // sides read the channel record.
+        for (const channel of Object.values(deviceInstanceAttributesOf(batch))) {
+          produced.push(channel.handle);
+        }
+      }
     }
     reportRunNonFinite(run, result, countSink);
     // Tags the CPU chain would have produced: every resident CHAIN node

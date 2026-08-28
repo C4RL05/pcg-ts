@@ -91,6 +91,7 @@
 // `../graph/index.js`, for the reason `forEach.ts` gives: the wrapper
 // machinery is `@internal` and re-exporting it there would carry it out
 // through `src/index.ts` into the package surface.
+import { deviceInstanceAttributesOf } from "../fields/index.js";
 import type { DataCollection } from "../graph/data.js";
 import { makeValueItem } from "../graph/data.js";
 import { CookCancelledError, GraphValidationError } from "../graph/errors.js";
@@ -270,7 +271,15 @@ function deviceHandlesIn(outputs: Record<string, DataCollection>): Set<{ dispose
       if (item.kind !== "instances" || item.deviceBatches === undefined) continue;
       for (const batch of item.deviceBatches) {
         handles.add(batch.transforms);
-        if (batch.colors !== undefined) handles.add(batch.colors);
+        // Every named per-instance channel, enumerated through the one
+        // normalizer rather than by naming `colors` here: colour is a
+        // channel IN that record (an accessor over it), so this counts it
+        // exactly once AND picks up a channel this function was never
+        // taught about. Naming fields by hand is how the next channel
+        // leaks a device buffer per batch per iteration, silently.
+        for (const channel of Object.values(deviceInstanceAttributesOf(batch))) {
+          handles.add(channel.handle);
+        }
       }
     }
   }

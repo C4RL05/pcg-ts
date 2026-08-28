@@ -25,6 +25,14 @@ export * from "./errors.js";
 //     `deviceBatches` as separate fields rather than a union of the two,
 //     so nothing public needs the union's NAME either.
 //
+//   - `makeInstanceBatch` joins them, and for the first reason: it is the
+//     constructor that installs `colors` as an accessor over the reserved
+//     channel, so calling it BY HAND is how a caller mints a batch whose
+//     two spellings of colour disagree. A caller building a batch writes
+//     the object literal the `InstanceBatch` type already documents;
+//     `instanceAttributesOf` — which IS published — is what reads one
+//     back, and is the half a host writing a renderer adapter needs.
+//
 // All four remain exported from ./data.js, which is what internal code
 // and the tests import. See publicSurface.test.ts.
 export {
@@ -34,6 +42,9 @@ export {
   filterByTag,
   firstGeometry,
   type GeometryItem,
+  INSTANCE_COLOR_CHANNEL,
+  type InstanceAttributes,
+  instanceAttributesOf,
   type InstanceBatch,
   type InstancesItem,
   isDeviceResidentInstances,

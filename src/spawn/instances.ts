@@ -3,10 +3,19 @@
  * point cloud's standard transform attributes. Core code — no renderer
  * (and no three.js) imports; the three adapter consumes the batches.
  */
-import type { Geometry } from "../data/index.js";
-import type { InstanceBatch } from "../graph/data.js";
+import type { AttrData, Geometry } from "../data/index.js";
+import {
+  INSTANCE_COLOR_CHANNEL,
+  makeInstanceBatch,
+  type InstanceBatch,
+} from "../graph/data.js";
 import { readRgb, requireRgbSource } from "./color.js";
 import { groupPointsByAsset } from "./grouping.js";
+import {
+  allocInstanceAttrs,
+  readInstanceAttr,
+  resolveInstanceAttrs,
+} from "./instanceAttrs.js";
 
 /** Options for {@link buildInstanceBatches}. */
 export interface BuildInstanceBatchesOptions {
@@ -26,6 +35,22 @@ export interface BuildInstanceBatchesOptions {
    * default, because every cloud carries `color` at [1,1,1,1].
    */
   readonly colorAttr?: string;
+  /**
+   * Point attributes to carry as named per-instance channels, in the
+   * order given. Each becomes `batch.attributes[name]` with its point
+   * dtype and tuple size preserved; the channel is named after the
+   * attribute. Undefined or empty carries none and allocates none.
+   *
+   * This is the general per-instance ABI, and `colorAttr` is the one
+   * special case beside it: colour is bound structurally by a renderer
+   * (three's `instanceColor`) rather than as a generic attribute, so
+   * `"color"` is reserved here and named through `colorAttr` instead.
+   * Everything else — an id, a phase, an RGBA, a species index — travels
+   * on this list. `string` attributes are refused (their table does not
+   * travel); see `resolveInstanceAttrs` for the full rule set and the
+   * messages.
+   */
+  readonly instanceAttrs?: readonly string[];
 }
 
 /**
@@ -114,8 +139,15 @@ export function composeTRS(
  *
  * With `colorAttr` set, each instance also carries the RGB of its own
  * point (alpha dropped); without it the batches carry no colour and
- * allocate none. Either way the total is bounded by
- * {@link MAX_INSTANCES}, checked once before anything is allocated.
+ * allocate none. `instanceAttrs` carries any other point attributes as
+ * named channels, dtype and tuple size preserved. Either way the total is
+ * bounded by {@link MAX_INSTANCES}, checked once before anything is
+ * allocated.
+ *
+ * Colour and the named channels are ONE mechanism: colour is written into
+ * the reserved `color` channel and `batch.colors` is an accessor over it
+ * (see `InstanceBatch.colors`), so there is one buffer per instance
+ * property and no second spelling for an adapter to serve.
  *
  * The grouping itself lives in {@link groupPointsByAsset}, which the
  * device-resident spawner terminal consumes too, so both paths order
@@ -168,6 +200,12 @@ export function buildInstanceBatches(
     opts.colorAttr !== undefined && opts.colorAttr !== ""
       ? requireRgbSource(points, opts.colorAttr, "buildInstanceBatches", "colorAttr")
       : undefined;
+  // Resolved after colour so the param failures report in param order.
+  // Empty means no channels: no allocation, no `attributes` key.
+  const channels =
+    opts.instanceAttrs !== undefined && opts.instanceAttrs.length > 0
+      ? resolveInstanceAttrs(points, opts.instanceAttrs, "buildInstanceBatches", "instanceAttrs")
+      : [];
 
   const pd = P.data;
   const batches: InstanceBatch[] = [];
@@ -176,15 +214,30 @@ export function buildInstanceBatches(
     const count = grouping.counts[j];
     const start = grouping.offsets[j];
     const transforms = new Float32Array(count * 16);
+    // One record per batch holding every channel, colour included: colour
+    // is the RESERVED channel rather than a second output, which is what
+    // makes `batch.colors` sugar over `batch.attributes` instead of a
+    // sibling of it.
+    const attributes: Record<string, AttrData> = allocInstanceAttrs(channels, count);
     const colors = color ? new Float32Array(count * 3) : undefined;
+    if (colors) attributes[INSTANCE_COLOR_CHANNEL] = colors;
+    // Hoisted out of the per-instance loop: the destination columns are
+    // looked up once per batch, never per instance — a channel lookup
+    // inside the inner loop would be a hash probe per instance per
+    // channel, and the record is fixed for the whole batch.
+    const dst: AttrData[] = channels.map((c) => attributes[c.name]);
     for (let k = 0; k < count; k++) {
       const i = grouping.perm[start + k];
-      // Colour is read HERE, from the same `i` that places the transform
-      // below, and never in a pass of its own: one loop, one index
-      // expression, so an instance's colour cannot come from a different
-      // point than its matrix did. There is no second traversal to fall
-      // out of step, and so no ordering to test into place.
+      // Colour and every channel are read HERE, from the same `i` that
+      // places the transform below, and never in a pass of their own: one
+      // loop, one index expression, so an instance's channel value cannot
+      // come from a different point than its matrix did. There is no
+      // second traversal to fall out of step — which is what makes
+      // `attributes[name][k]` and `transforms[k]` the same instance by
+      // construction. `tests/instanceAttributes.test.ts` pins it anyway,
+      // because every consumer of the ABI assumes it and none can check.
       if (color && colors) readRgb(colors, k * 3, color, i);
+      for (let c = 0; c < channels.length; c++) readInstanceAttr(dst[c], k, channels[c], i);
       composeTRS(
         transforms,
         k * 16,
@@ -200,7 +253,7 @@ export function buildInstanceBatches(
         scale ? scale[i * 3 + 2] : 1,
       );
     }
-    batches.push(colors ? { assetId, count, transforms, colors } : { assetId, count, transforms });
+    batches.push(makeInstanceBatch(assetId, count, transforms, attributes));
   }
   return batches;
 }

@@ -13,6 +13,7 @@ export interface SpawnInstancesParams {
   assetId: string;
   assetAttr: string;
   colorAttr: string;
+  instanceAttrs: readonly string[];
 }
 
 /** Spawner terminal: points → instance batches (plus point pass-through). */
@@ -27,7 +28,11 @@ export const spawnInstances = standardNode<SpawnInstancesParams>({
     "names a string point attribute holding per-point asset ids — empty per-point values fall " +
     "back to assetId. colorAttr (when non-empty) additionally carries a per-instance RGB read " +
     "from that point attribute, which is how instances of ONE asset id vary in appearance — " +
-    "age, health, season, a hue drift — without splitting into more assets. The 'instances' pin " +
+    "age, health, season, a hue drift — without splitting into more assets. instanceAttrs " +
+    "carries any other point attributes as NAMED channels on the batch, dtype and tuple size " +
+    "preserved, which is how graph-authored data a host must animate (a phase, an id, an RGBA) " +
+    "reaches it at all: the field grammar has no time input, so the graph settles the structure " +
+    "and the host drives it from these channels. The 'instances' pin " +
     "emits one instances item (input tags carried over); 'points' passes the input geometry " +
     `through unchanged for chaining or debug rendering. One cook may spawn at most ${MAX_INSTANCES} ` +
     "instances (one per input point); a runaway density is refused with a diagnostic rather " +
@@ -82,6 +87,48 @@ export const spawnInstances = standardNode<SpawnInstancesParams>({
         "setAttribute. Errors when the named attribute is missing or is not f32 with tupleSize " +
         ">= 3, listing the attributes that would fit.",
     },
+    instanceAttrs: {
+      type: "stringList",
+      default: [],
+      description:
+        "Point attributes to carry to the renderer as NAMED per-instance channels, in the order " +
+        "given: each becomes batch.attributes[<the attribute's own name>], a tightly packed " +
+        "column of count * tupleSize elements with instance k at k * tupleSize. This is the " +
+        "whole per-instance ABI between a graph and its host. The field grammar has no time " +
+        "input on purpose — a graph produces STRUCTURE and the host animates it — so anything " +
+        "the host must drive per instance at runtime (a phase offset, a stable id, a species " +
+        "index, an RGBA tint, a wind stiffness) has to leave the graph on this list; before it " +
+        "existed only transforms and RGB could cross, and a host had to re-derive the rest from " +
+        "a position, which stopped agreeing with the graph that authored it. DTYPE AND TUPLE " +
+        "SIZE ARE PRESERVED, not widened to f32: a u32 id past 2^24 does not survive f32, and " +
+        "THREE.InstancedBufferAttribute takes any typed array, so nothing downstream wants the " +
+        "widening. Item size is recovered by the consumer as column.length / count — it is not " +
+        "carried, so there is no second place for it to be wrong. The one exception to \"in the " +
+        "order given\" is the one JS imposes on every object: an integer-like channel name " +
+        '("12") is hoisted ahead of the string ones in the record — deterministic either way, ' +
+        "just not always the order written. Instance order is the " +
+        "invariant: attributes[name][k] and transforms[k] are the same instance, written in one " +
+        "loop from one source index. Empty (the default) carries nothing and allocates nothing. " +
+        "FIVE things error, each naming the way out — and all but the first the offending entry, " +
+        "since an empty name has none to give — in the order they are checked, per entry rather " +
+        "than as a ranking across the list: an EMPTY name (drop that entry, or clear " +
+        "instanceAttrs to carry nothing); " +
+        "the same name listed TWICE (a channel is named after its attribute, so a repeat would " +
+        'be one channel listed twice); the reserved name "color", which is checked BEFORE the ' +
+        "lookup and so reports as reserved even when no such attribute exists (a renderer binds " +
+        "instance colour structurally, so colorAttr carries it instead; copy the attribute to " +
+        "another name upstream to carry RGBA, which colorAttr's alpha drop cannot); an " +
+        "attribute MISSING from the point domain (the message lists the point attributes that " +
+        "could become channels); and a STRING attribute (its column is indices into a string " +
+        "table that does not travel with it — use assetAttr for per-point asset ids). " +
+        "TWO MORE refusals live at the RENDERER seam rather than here, so they cook clean and " +
+        "throw later, in toInstancedMeshes: a channel named after something three already means " +
+        "(position, normal, uv, instanceMatrix and more), which would overwrite the asset's " +
+        "vertex data, and a channel wider than 4 components, which a vertex attribute cannot " +
+        "carry — split it upstream into several narrower ones. " +
+        "Not device-resident: a spawn naming any channel falls back to the CPU spawner for the " +
+        "whole terminal, with the transforms it composes there.",
+    },
   },
   /**
    * Device-resident terminal: a resolver advertising the
@@ -96,7 +143,21 @@ export const spawnInstances = standardNode<SpawnInstancesParams>({
    * `deviceInstances`), so the default cook — CPU or GPU — is
    * byte-for-byte what it has always been.
    *
-   * No `eligible` gate, and none of the three params earns one. Both
+   * `instanceAttrs` is the ONE param that is not device-resident, and it
+   * is rejected by the run planner rather than gated here (an `eligible`
+   * predicate would keep the node off every resident run in the graph,
+   * where the planner rejects only the run that actually names channels).
+   * The compose kernel's widest form already binds seven storage buffers
+   * against the baseline `maxStorageBuffersPerShaderStage` of 8 (see
+   * `makeComposeInstancesApply`), so an arbitrary number of extra gather
+   * channels does not fit in it — the device twin of the channel exists
+   * on `DeviceInstanceBatch` for a host composing its own buffers, but
+   * this library's resident spawner does not fill it yet. Rejecting is
+   * what keeps that honest: the terminal falls back per-node and the CPU
+   * spawner produces the channels, rather than a device run silently
+   * dropping data a host is about to bind.
+   *
+   * No `eligible` gate, and none of the other three params earns one. Both
    * `assetId` and `assetAttr` spawns are device-resident: a multi-asset
    * spawn needs no device-side sort, since the asset column is
    * host-resident by construction, so the host plans the grouping (shared
@@ -128,6 +189,7 @@ export const spawnInstances = standardNode<SpawnInstancesParams>({
       defaultAssetId: params.assetId,
       ...(params.assetAttr !== "" ? { assetAttr: params.assetAttr } : {}),
       ...(params.colorAttr !== "" ? { colorAttr: params.colorAttr } : {}),
+      ...(params.instanceAttrs.length > 0 ? { instanceAttrs: params.instanceAttrs } : {}),
     });
     return {
       instances: [makeInstancesItem(batches, item.tags)],

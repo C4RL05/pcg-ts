@@ -63,16 +63,42 @@
  * it only when that mesh's material fires `dispose` — a shared asset
  * material never does, so without the clone every evicted cell leaves
  * its shader programs cached forever (see `cloneAssetMaterial` and
- * `renderStateRelease.test.ts`). What release must NOT do is let three
- * call `destroyAttribute` on an adopted attribute (that would
- * `destroy()` a buffer somebody else owns) — and it cannot: releasing a
- * render object's bindings destroys only its per-object uniform buffers
- * and samplers, never a storage attribute's buffer (pinned by the same
- * test).
+ * `renderStateRelease.test.ts`). The asset GEOMETRY (and any textures
+ * the cloned material still references) is the one thing the adapter
+ * does NOT own: it stays shared by reference across every mesh drawing
+ * that asset, so {@link WebGpuInstanceAdapter.release} leaves it alone
+ * and it is disposed with the asset map instead, never per mesh. What
+ * release must NOT do is let three call `destroyAttribute` on an
+ * adopted attribute (that would `destroy()` a buffer somebody else
+ * owns) — and it cannot: releasing a render object's bindings destroys
+ * only its per-object uniform buffers and samplers, never a storage
+ * attribute's buffer (pinned by the same test).
+ *
+ * **No geometry clone, and that is a consequence rather than a
+ * decision.** The CPU adapter (`toInstancedMeshes`) gives a batch
+ * carrying NAMED per-instance channels its own geometry clone and
+ * disposes it with the mesh, because such a channel becomes an attribute
+ * of the GEOMETRY and a shared geometry cannot hold two batches' values.
+ * This adapter binds the two channels three treats structurally — the
+ * matrix and the reserved `color` — and both hang on the MESH
+ * (`instanceMatrix`, `instanceColor`), never on the geometry. So there is
+ * nothing per-batch to put on a geometry, nothing to clone, and nothing
+ * extra to free: `release` leaves the asset's geometry alone exactly as
+ * it always has. A device batch carrying any OTHER channel is REFUSED by
+ * `build` rather than drawn without it — see the error there for why and
+ * for the way out. If such a channel ever becomes bindable here, the
+ * clone and its disposal arrive together (build clones, `release`
+ * disposes it), and this paragraph is where that rule changes.
  */
 import { InstancedMesh, Object3D, Sphere, Vector3, type Material } from "three";
-import type { DeviceInstanceBatch } from "../fields/index.js";
-import type { DeviceInstanceAdapter, DeviceInstanceContext } from "./worldBinding.js";
+import {
+  deviceInstanceAttributeLayout,
+  deviceInstanceAttributesOf,
+  type DeviceInstanceAttrType,
+  type DeviceInstanceBatch,
+} from "../fields/index.js";
+import { INSTANCE_COLOR_CHANNEL } from "../graph/data.js";
+import type { DeviceInstanceAdapter, DeviceInstanceContext } from "./deviceInstances.js";
 import { cloneAssetMaterial, materialListOf, type AssetMap } from "./instanced.js";
 
 /** Backend tag every WebGPU device-transforms handle carries. */
@@ -286,25 +312,47 @@ export function checkAdoptionSeam(
   delete backend.get(probe)[ADOPTION_SEAM.field];
 }
 
+/**
+ * A channel's device layout as an error message spells it, or why it has
+ * none. Used only for description, so an item size WGSL cannot lay out at
+ * all still reports through the message that names the batch.
+ */
+function describeChannelLayout(type: DeviceInstanceAttrType, itemSize: number): string {
+  try {
+    const layout = deviceInstanceAttributeLayout(type, itemSize);
+    return `${layout.wgslType} at ${layout.byteStride} bytes per instance`;
+  } catch {
+    return "which has no WGSL storage layout at all — see deviceInstanceAttributeLayout";
+  }
+}
+
 /** Zero-length backing array: the matrices never exist on the CPU. */
 function emptyMatrixArray(): Float32Array {
   return new Float32Array(0);
 }
 
 /**
- * Create the WebGPU device-instance adapter for a
- * {@link WorldThreeBinding}.
+ * Create the WebGPU device-instance adapter.
  *
  * `three/webgpu` is imported lazily so that importing `pcg-ts/three` at
  * all does not pull the 2 MB WebGPU build into a WebGL app — the
  * existing CPU/WebGL path stays exactly as costly as it was.
  *
+ * It is built once and reused: the two seam probes below run per
+ * adapter, and the adapter is what owns and releases every object it
+ * builds. Hand it to a `WorldThreeBinding` for a streamed world, or to
+ * `toDeviceInstanceObjects` for batches that have no world behind them:
+ *
  * ```ts
  * const adapter = await createWebGpuInstanceAdapter({ renderer, assets });
+ *
  * const binding = new WorldThreeBinding({
  *   group, assets,
  *   deviceInstances: { adapter, bounds: (level, coord) => cellSphere(level, coord) },
  * });
+ *
+ * // …or, with no World anywhere:
+ * const objects = toDeviceInstanceObjects(batches, adapter);
  * ```
  */
 export async function createWebGpuInstanceAdapter(
@@ -357,8 +405,8 @@ export async function createWebGpuInstanceAdapter(
       if (!asset) {
         const known = Object.keys(opts.assets).sort().join(", ");
         throw new Error(
-          `createWebGpuInstanceAdapter: unknown assetId "${batch.assetId}" for cell ` +
-            `"${ctx.levelName}|${ctx.coord.join(",")}"; known assets: ` +
+          `createWebGpuInstanceAdapter: unknown assetId "${batch.assetId}" for ` +
+            `${buildSite(ctx)}; known assets: ` +
             (known === "" ? "(none)" : known),
         );
       }
@@ -377,7 +425,67 @@ export async function createWebGpuInstanceAdapter(
             `${batch.transforms.byteLength} bytes`,
         );
       }
-      const colors = batch.colors;
+      // One record, colour included; a batch carrying only a plain
+      // `colors` handle is lifted into the reserved channel, so it takes
+      // this exact path and its handle is still counted exactly once.
+      const channels = deviceInstanceAttributesOf(batch);
+      for (const [name, channel] of Object.entries(channels)) {
+        if (name === INSTANCE_COLOR_CHANNEL) {
+          // The reserved channel is bound structurally below. Its shape
+          // is fixed by that binding (`storage(colors, "vec3", count)`),
+          // so a batch declaring anything else under this name would
+          // bind bytes the shader reads as something they are not.
+          if (channel.type !== "f32" || channel.itemSize !== 3) {
+            throw new Error(
+              `createWebGpuInstanceAdapter: batch "${batch.assetId}" declares its reserved ` +
+                `"${INSTANCE_COLOR_CHANNEL}" channel as ${channel.type}x${channel.itemSize}; ` +
+                "instance colour is bound as vec3<f32> (three's `storage(colors, \"vec3\", " +
+                'count)`), so it must be f32 with itemSize 3. Carry other shapes under another ' +
+                "channel name.",
+            );
+          }
+          continue;
+        }
+        // Refused, not dropped. A generic channel is a GEOMETRY attribute
+        // (that is how the CPU adapter binds one), and this adapter draws
+        // every batch of an asset from the asset map's SHARED geometry —
+        // so binding one here would publish this cell's values to every
+        // other cell drawing the same asset. Drawing without it is worse
+        // still: the host bound a shader to that name and would animate
+        // from whatever was left there. The device spawner does not
+        // produce these today either (the run planner rejects a
+        // `spawnInstances` naming any), so reaching this means a
+        // hand-built batch.
+        // The layout is only for the DESCRIPTION here, so a channel whose
+        // item size has no WGSL layout at all must still report as an
+        // unbindable channel of this adapter's rather than as a layout
+        // error with no batch name in it.
+        const layout = describeChannelLayout(channel.type, channel.itemSize);
+        throw new Error(
+          `createWebGpuInstanceAdapter: batch "${batch.assetId}" carries the per-instance ` +
+            `channel "${name}" (${channel.type}x${channel.itemSize}, ${layout}) for ` +
+            `${buildSite(ctx)}, and this adapter binds only the two channels three treats ` +
+            "structurally: the instance matrix and the reserved " +
+            `"${INSTANCE_COLOR_CHANNEL}". Drop \`deviceInstances: true\` from the ` +
+            "GpuFieldEvaluator to cook CPU batches, which carry every channel and render through " +
+            "toInstancedMeshes; or bind the channel's buffer yourself from " +
+            "`batch.attributes[name].handle.resource`, which is a GPUBuffer holding the batch's " +
+            "instances in the same order as its transforms.",
+        );
+      }
+      // From the CHANNEL RECORD, not from `batch.colors`. The two agree
+      // on every batch this library mints — `makeDeviceInstanceBatch`
+      // installs `colors` as an accessor over the reserved channel — but
+      // they do NOT agree on a hand-built batch that declares colour only
+      // under `attributes.color`, which is exactly the shape
+      // `src/fields/index.ts` tells such a caller to write (the
+      // constructor is deliberately withheld from the package surface).
+      // Reading `batch.colors` there yields `undefined` and the colour is
+      // dropped SILENTLY — indistinguishable from a batch that never
+      // asked for one. The record is the single reader for that reason,
+      // and it is already in hand: the shape check above validated this
+      // very entry.
+      const colors = channels[INSTANCE_COLOR_CHANNEL]?.handle;
       if (colors !== undefined) {
         if (colors.backend !== WEBGPU_BACKEND) {
           throw new Error(
@@ -494,6 +602,20 @@ export async function createWebGpuInstanceAdapter(
       // renderStateRelease.test.ts), so this is safe while the handle
       // is still shared with a live cell.
       for (const material of materialListOf(mesh.material)) material.dispose();
+      // AND NO `mesh.geometry.dispose()`, WHICH IS AN INVARIANT AND NOT
+      // AN OMISSION. `build` hands every mesh `asset.geometry` itself,
+      // unconditionally — it has no clone branch, because the only thing
+      // that would need one is a generic per-instance channel and `build`
+      // REFUSES a batch carrying any (it enumerates every channel through
+      // `deviceInstanceAttributesOf` and throws for every name but the
+      // reserved colour, which binds on the mesh). So the geometry
+      // reaching here is always the asset map's, shared with every other
+      // mesh drawing that asset and disposed with the map; there is no
+      // owned clone for `ownsGeometry` to find, which is why this path
+      // does not ask it. The CPU path does, because `toInstancedMeshes`
+      // does clone. If a generic channel ever becomes bindable here, the
+      // clone in `build` and the `ownsGeometry` check here are one change,
+      // not two — see the module docs' Ownership section.
     },
   };
 }
@@ -515,8 +637,24 @@ function adoptInto(backend: BackendLike, attribute: object, buffer: unknown): vo
 }
 
 /**
+ * Where a batch came from, as an error message says it.
+ *
+ * A World fills in both halves of {@link DeviceInstanceContext} and the
+ * cell is named exactly as it always was. `toDeviceInstanceObjects`
+ * fills in neither, and there the failure has to say so: naming a cell
+ * that does not exist would send a reader hunting for a level that is
+ * not in their graph.
+ */
+function buildSite(ctx: DeviceInstanceContext): string {
+  const { levelName, coord } = ctx;
+  if (levelName === undefined && coord === undefined) return "a batch built with no cell context";
+  const where = coord === undefined ? "(no coord)" : coord.join(",");
+  return `cell "${levelName ?? "(no level)"}|${where}"`;
+}
+
+/**
  * Frustum culling without CPU matrices: resolve the bounding sphere the
- * binding supplied for this batch's asset, or `null` when culling must
+ * caller supplied for this batch's asset, or `null` when culling must
  * be disabled instead (no bounds supplied, or an unbounded level's
  * infinite AABB that no sphere can express). Runs in `build`'s
  * validation phase — before any attribute, mesh or material is minted —
@@ -536,7 +674,7 @@ function resolveBoundingSphere(ctx: DeviceInstanceContext, assetId: string): Sph
   }
   if (!Number.isFinite(bounds.radius) || bounds.radius < 0) {
     throw new Error(
-      `createWebGpuInstanceAdapter: cell "${ctx.levelName}|${ctx.coord.join(",")}" supplied a ` +
+      `createWebGpuInstanceAdapter: ${buildSite(ctx)} supplied a ` +
         `bounding radius of ${String(bounds.radius)} for asset "${assetId}"; it must be a finite ` +
         "non-negative number (return undefined from `bounds` to disable frustum culling instead)",
     );

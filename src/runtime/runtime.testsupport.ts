@@ -3,7 +3,7 @@
  * standard node library, and byte-exact output comparison.
  */
 import type { Domain, Geometry } from "../data/index.js";
-import { Graph, type NodeHandle } from "../graph/index.js";
+import { Graph, instanceAttributesOf, type NodeHandle } from "../graph/index.js";
 import { jitterPoints, type JitterPointsParams } from "../nodes/pointOps.js";
 import { pointScatterInBounds, type PointScatterInBoundsParams } from "../nodes/sources.js";
 import { hashCombine } from "../random/index.js";
@@ -244,16 +244,36 @@ export function outputsDiff(a: CellOutputs, b: CellOutputs): string | null {
               return `${name}[${i}]: batch ${bi} transform[${t}] differs`;
             }
           }
-          if ((ba.colors === undefined) !== (bb.colors === undefined)) {
-            return `${name}[${i}]: batch ${bi} colors present on one side only`;
-          }
-          if (ba.colors !== undefined && bb.colors !== undefined) {
-            if (ba.colors.length !== bb.colors.length) {
-              return `${name}[${i}]: batch ${bi} colors length differs`;
+          // Every named per-instance channel, colour among them rather
+          // than beside it: `instanceAttributesOf` lifts a legacy plain
+          // `colors` into the reserved "color" channel, so one loop
+          // compares both shapes and a channel added later is compared
+          // without this differ being taught about it. Comparing the
+          // CONSTRUCTOR as well as the bytes is the point on this path —
+          // a channel that silently came back as f32 instead of u32 would
+          // pass an element-wise check for every value under 2^24.
+          const ca = instanceAttributesOf(ba);
+          const cb = instanceAttributesOf(bb);
+          const keys = [...new Set([...Object.keys(ca), ...Object.keys(cb)])].sort();
+          for (const key of keys) {
+            const xa = ca[key];
+            const xb = cb[key];
+            if ((xa === undefined) !== (xb === undefined)) {
+              return `${name}[${i}]: batch ${bi} channel "${key}" present on one side only`;
             }
-            for (let c = 0; c < ba.colors.length; c++) {
-              if (!Object.is(ba.colors[c], bb.colors[c])) {
-                return `${name}[${i}]: batch ${bi} colors[${c}] differs`;
+            if (xa === undefined || xb === undefined) continue;
+            if (xa.constructor !== xb.constructor) {
+              return (
+                `${name}[${i}]: batch ${bi} channel "${key}" dtype ${xa.constructor.name} vs ` +
+                `${xb.constructor.name}`
+              );
+            }
+            if (xa.length !== xb.length) {
+              return `${name}[${i}]: batch ${bi} channel "${key}" length differs`;
+            }
+            for (let c = 0; c < xa.length; c++) {
+              if (!Object.is(xa[c], xb[c])) {
+                return `${name}[${i}]: batch ${bi} channel "${key}"[${c}] differs`;
               }
             }
           }

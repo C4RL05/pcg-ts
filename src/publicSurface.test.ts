@@ -41,6 +41,12 @@ const ROOT_SURFACE = [
   "FieldJsonError", "GRAPH_META_KEYS", "Geometry", "Graph",
   "GraphCycleError", "GraphError", "GraphSerializationError", "GraphValidationError",
   "NOISE_RAW_RANGES", "NodeExecutionError", "PRIMTYPE_ATTR", "Pcg32",
+  // The one reserved per-instance channel name, "color". A host reading a
+  // spawner batch's channels needs the literal to tell instance colour
+  // (which a renderer binds structurally) from a generic channel, and a
+  // graph author needs it to know which name spawnInstances' instanceAttrs
+  // refuses. Published rather than left as a magic string in two adapters.
+  "INSTANCE_COLOR_CHANNEL",
   "STANDARD_POINT_ATTRS", "TRANSFER_AREA_EPS", "TRANSFER_BARY_EPS", "TRANSFER_BOX_PAD_REL",
   "TRANSFER_DET_EPS", "VERSION", "World", "WorldValidationError", "abs", "acos", "add",
   "applyGraphParamTargets", "applyParamPatches", "asin", "atan", "atan2", "attribute", "attributeIs", "attributeReduce",
@@ -48,6 +54,15 @@ const ROOT_SURFACE = [
   "cloneGeometry", "component", "composeTRS", "connectPoints", "constant", "cook",
   "copyToPoints", "cos", "createGpuCookStats", "createPointCloud", "createPolyline", "cross",
   "createTriangleMesh", "dataInput", "defineNode", "describeGraphAssets", "describeGraphParams",
+  // The three halves of the per-instance ABI a HOST needs and the library
+  // cannot use on its behalf: the CPU and device normalizers that read a
+  // batch's named channels as one record (colour included, so an adapter
+  // never serves two spellings of it), and the layout rule that says what
+  // a device channel's buffer must hold — the vec3 16-byte stride and the
+  // bool-as-u32 rule are WGSL's, not ours, and a host composing its own
+  // buffers has to obey both. The matching CONSTRUCTORS are deliberately
+  // absent: see src/fields/index.ts and src/graph/index.ts.
+  "deviceInstanceAttributeLayout", "deviceInstanceAttributesOf", "instanceAttributesOf",
   "describeSubgraphParams",
   "describeSubgraphPins", "deserializeGraph", "distance",
   "div", "dot", "elementCount", "eq",

@@ -326,6 +326,105 @@ export interface DeviceTransformsHandle {
 }
 
 /**
+ * Element types a per-instance channel can carry to a device. Every
+ * `AttrType` except `"string"`, which cannot cross a spawner on either
+ * residency — its column is indices into a per-attribute string table
+ * that does not travel with it.
+ */
+export type DeviceInstanceAttrType = Exclude<AttrType, "string">;
+
+/**
+ * One named per-instance channel, device-resident: the twin of a CPU
+ * batch's `attributes[name]` (see `InstanceAttributes` in
+ * src/graph/data.ts) with the column left in a device buffer.
+ *
+ * `type` and `itemSize` are the point attribute's own, carried through
+ * unchanged — the dtype is the ABI and is never widened to f32, for the
+ * same reason on both residencies: a u32 id past 2^24 does not survive
+ * one. What the BUFFER holds can still differ from what `type` and
+ * `itemSize` say, and never by choice: see
+ * {@link deviceInstanceAttributeLayout} for the two WGSL rules that make
+ * it differ and for the byte length this handle must have.
+ *
+ * A handle is an OWNER OBLIGATION. Whoever owns the batch disposes every
+ * channel's handle as well as `transforms`; the device path has no GC, so
+ * a dropped handle leaks (visibly, in `poolStats`) and a double free
+ * crashes. Enumerate them through {@link deviceInstanceAttributesOf} so
+ * the reserved colour channel is counted exactly once.
+ */
+export interface DeviceInstanceAttribute {
+  /** The device buffer. Its length must match {@link deviceInstanceAttributeLayout}. */
+  readonly handle: DeviceTransformsHandle;
+  /** Element type, preserved from the point domain. */
+  readonly type: DeviceInstanceAttrType;
+  /** Components per instance as the AUTHOR sees them; the buffer may pad. */
+  readonly itemSize: number;
+}
+
+/** What a device channel actually occupies, and how WGSL names it. */
+export interface DeviceInstanceAttributeLayout {
+  /** f32-sized slots the buffer spends per instance; `itemSize`, padded. */
+  readonly components: number;
+  /** Bytes per instance: `components * 4`. */
+  readonly byteStride: number;
+  /** WGSL element type of the storage array, e.g. `"vec3<f32>"`. */
+  readonly wgslType: string;
+  /** WGSL scalar the buffer's words are, e.g. `"u32"` for a `bool` channel. */
+  readonly wgslScalar: "f32" | "i32" | "u32";
+}
+
+/**
+ * The device layout of a channel: what a producer must write and what a
+ * renderer must expect. **Neither difference from the CPU column is a
+ * choice**; both are WGSL's rules, and getting either wrong renders as a
+ * growing skew that reads like a shader bug.
+ *
+ * 1. **A 3-component channel spends FOUR slots.** WGSL gives
+ *    `array<vec3<f32>>` a 16-byte element stride (vec3 has 16-byte
+ *    alignment in the storage address space), and three's own WebGPU
+ *    backend repacks an itemSize-3 storage attribute to 4 components
+ *    before upload for exactly that reason. This is the same rule
+ *    `DeviceInstanceBatch.colors` has always followed, stated once here
+ *    now that colour is one channel among others.
+ * 2. **A `bool` channel is `u32` words on the device.** WGSL `bool` is
+ *    not host-shareable and cannot appear in a storage buffer at all, so
+ *    a bool column is carried as u32 0/1 — which is already how this
+ *    library binds bool columns to kernels (`src/gpu/types.ts`). The CPU
+ *    column stays `Uint8Array`: one byte per element there, four here.
+ *
+ * `itemSize` above 4 is refused rather than laid out. WGSL has no vector
+ * wider than 4, so a 5-component channel would need an array-of-arrays
+ * element and a different binding convention on every renderer — a
+ * different ABI, not a bigger one. Split it into two channels.
+ */
+export function deviceInstanceAttributeLayout(
+  type: DeviceInstanceAttrType,
+  itemSize: number,
+): DeviceInstanceAttributeLayout {
+  if (!Number.isInteger(itemSize) || itemSize < 1 || itemSize > 4) {
+    throw new Error(
+      `deviceInstanceAttributeLayout: itemSize ${itemSize} is out of range; a device instance ` +
+        "channel binds as a WGSL storage array of a scalar or a vec2/vec3/vec4, so its item " +
+        "size must be a whole number in 1..4. Split a wider attribute into several channels " +
+        "(a mat3 as three vec3 channels, say) — WGSL has no wider vector, so carrying one " +
+        "would be a different binding convention on every renderer, not a larger buffer.",
+    );
+  }
+  // bool has no host-shareable WGSL spelling: carried as u32 0/1, which
+  // is what every other bool binding in this library already does.
+  const wgslScalar = type === "bool" ? "u32" : type;
+  // The vec3 stride rule. 1, 2 and 4 are their own component counts;
+  // only 3 pads, and it pads to 4.
+  const components = itemSize === 3 ? 4 : itemSize;
+  return {
+    components,
+    byteStride: components * 4,
+    wgslType: itemSize === 1 ? wgslScalar : `vec${itemSize}<${wgslScalar}>`,
+    wgslScalar,
+  };
+}
+
+/**
  * A device-resident instance batch: the same render-agnostic spawner
  * payload as `InstanceBatch` (see src/graph/data.ts), except that the packed 4x4 transforms
  * live in a device buffer ({@link transforms}) that was composed on the
@@ -354,10 +453,33 @@ export interface DeviceInstanceBatch {
   /** Device buffer of `count * 16` f32; see {@link DeviceTransformsHandle} for who frees it. */
   readonly transforms: DeviceTransformsHandle;
   /**
+   * Named per-instance channels, device-resident — the twin of
+   * `InstanceBatch.attributes`, in the same instance order as
+   * {@link transforms}. See {@link DeviceInstanceAttribute} for the
+   * per-channel shape and {@link deviceInstanceAttributeLayout} for the
+   * two ways a channel's device buffer differs from its CPU column.
+   *
+   * Enumerate this through {@link deviceInstanceAttributesOf}, never
+   * alongside {@link colors}: colour is a channel IN here, not beside it,
+   * so counting both would dispose one handle twice.
+   */
+  readonly attributes?: Readonly<Record<string, DeviceInstanceAttribute>>;
+  /**
    * Per-instance RGB, present exactly when the spawner's `colorAttr`
    * named an attribute — the device twin of `InstanceBatch.colors`, in
    * the same instance order as {@link transforms} (one kernel gathers
    * both from one index, so they cannot drift).
+   *
+   * **SUGAR over the reserved `"color"` entry of {@link attributes}**,
+   * exactly as `InstanceBatch.colors` is over its CPU twin: on a batch
+   * this library builds it is an accessor returning that channel's
+   * handle, so there is one buffer and one owner obligation, not two
+   * spellings of them. A hand-built batch may still set it as a plain
+   * property — with no `attributes`, with an empty record, or beside
+   * other channels — and {@link deviceInstanceAttributesOf} lifts it
+   * into the reserved channel in every one of those cases, so that batch
+   * takes the identical path. Setting BOTH spellings to different
+   * handles is the one shape that throws there.
    *
    * **The layout differs from the CPU batch's, and it is not a choice.**
    * The CPU array is tightly packed at 3 floats per instance; this buffer
@@ -368,7 +490,9 @@ export interface DeviceInstanceBatch {
    * pads an itemSize-3 storage attribute to vec4 before uploading one
    * ("WGSL does not support packed vec3 data in storage buffers"). A
    * 3-float device buffer would shift every colour by a growing offset
-   * and read like a shader bug rather than a layout one.
+   * and read like a shader bug rather than a layout one. It is the
+   * `itemSize === 3` case of {@link deviceInstanceAttributeLayout} and no
+   * longer a rule of its own.
    *
    * A SECOND handle means a second owner obligation: whoever owns the
    * batch disposes this as well as {@link transforms}. The device path
@@ -376,6 +500,108 @@ export interface DeviceInstanceBatch {
    * double free crashes.
    */
   readonly colors?: DeviceTransformsHandle;
+}
+
+/** No channels: the shared empty record every channel-less batch reads as. */
+const NO_DEVICE_INSTANCE_ATTRIBUTES: Readonly<Record<string, DeviceInstanceAttribute>> =
+  Object.freeze({});
+
+/**
+ * Does this record carry `name` the way its CONSUMERS see it — as an own,
+ * enumerable key, which is what `Object.keys` / `Object.values` /
+ * spreading report and what every adapter and handle-counting owner
+ * loops? The device twin of the CPU normalizer's helper (src/graph/data.ts),
+ * copied rather than imported because this module imports nothing from
+ * `src/graph` by design.
+ *
+ * A plain `record[name]` would also find an inherited or non-enumerable
+ * one, and answering "present" for a channel nothing downstream can
+ * enumerate means the colour handle a caller DID supply is neither drawn
+ * nor disposed.
+ */
+function hasChannel<T>(
+  record: Readonly<Record<string, T>> | undefined,
+  name: string,
+): record is Readonly<Record<string, T>> {
+  return record !== undefined && Object.prototype.propertyIsEnumerable.call(record, name);
+}
+
+/**
+ * The batch's channels in the ONE form a device adapter — or an owner
+ * counting handles to dispose — should read: the named channels, with a
+ * plain `colors` lifted into the reserved `"color"` entry whenever the
+ * record does not already carry that channel.
+ *
+ * The mirror of `instanceAttributesOf` for the CPU residency, and it
+ * exists for the same two reasons: an adapter that loops this never has
+ * to serve two spellings of instance colour, and an owner that loops this
+ * disposes every handle exactly once.
+ *
+ * **The lift is keyed on the CHANNEL, never on whether `attributes` is
+ * present** — the same rule as the CPU twin, for the same reason. A
+ * hand-built batch is what `colors` is kept for, and
+ * `{ attributes: {}, colors }` (what a host writes when it fills the
+ * record generically and finds nothing to put in it) would lose its
+ * colour to a presence test. Losing it here costs more than a wrong
+ * picture: the lost handle is an OWNER OBLIGATION nothing enumerates any
+ * more, so it leaks. Two DIFFERENT handles under the two spellings
+ * throws, because either choice would silently drop the other's buffer;
+ * `makeDeviceInstanceBatch` makes `colors` an accessor over the channel,
+ * so a batch this library builds is always the one-handle case.
+ */
+export function deviceInstanceAttributesOf(
+  batch: DeviceInstanceBatch,
+): Readonly<Record<string, DeviceInstanceAttribute>> {
+  const { attributes, colors } = batch;
+  if (colors === undefined) return attributes ?? NO_DEVICE_INSTANCE_ATTRIBUTES;
+  // Own and enumerable: the set a caller can actually enumerate. See
+  // {@link hasChannel} for why a plain lookup is the wrong test.
+  const channel = hasChannel(attributes, "color") ? attributes.color : undefined;
+  // Spreading `undefined` is `{}` — and a spread copies own enumerable
+  // keys, the same set — so absent / empty / populated `attributes` are
+  // one case here and not three.
+  if (channel === undefined) {
+    return { ...attributes, color: { handle: colors, type: "f32", itemSize: 3 } };
+  }
+  if (channel.handle !== colors) {
+    throw new Error(
+      `deviceInstanceAttributesOf: batch "${batch.assetId}" carries two different colour ` +
+        "handles — attributes[\"color\"].handle and colors. `colors` is sugar for the reserved " +
+        '"color" channel and not a second buffer, so there is no rule for which one a renderer ' +
+        "should draw and no way to dispose both exactly once. Set exactly one of them: keep the " +
+        "channel and omit `colors`, or keep the plain `colors` and drop the \"color\" entry " +
+        "from attributes. (Batches the library mints install `colors` as an accessor over the " +
+        "channel, so the two can never disagree there.)",
+    );
+  }
+  return attributes as Readonly<Record<string, DeviceInstanceAttribute>>;
+}
+
+/**
+ * Build a device instance batch, installing `colors` as an accessor over
+ * the reserved colour channel so the two can never hold different
+ * handles. The resident run's spawner terminal mints its batches here.
+ */
+export function makeDeviceInstanceBatch(
+  assetId: string,
+  count: number,
+  transforms: DeviceTransformsHandle,
+  attributes?: Readonly<Record<string, DeviceInstanceAttribute>>,
+): DeviceInstanceBatch {
+  if (attributes === undefined || Object.keys(attributes).length === 0) {
+    return { residency: "device", assetId, count, transforms };
+  }
+  const batch: DeviceInstanceBatch = { residency: "device", assetId, count, transforms, attributes };
+  if (attributes.color !== undefined) {
+    Object.defineProperty(batch, "colors", {
+      get(this: DeviceInstanceBatch): DeviceTransformsHandle | undefined {
+        return this.attributes?.color?.handle;
+      },
+      enumerable: true,
+      configurable: true,
+    });
+  }
+  return batch;
 }
 
 /** Result of {@link GpuFieldResolver.executeRun}. */

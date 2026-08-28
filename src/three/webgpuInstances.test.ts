@@ -23,9 +23,16 @@ import { dirname, join } from "node:path";
 import { BoxGeometry, InstancedMesh, MeshBasicMaterial, Sphere, Vector3 } from "three";
 import { StorageInstancedBufferAttribute, WebGPUBackend, WebGPURenderer } from "three/webgpu";
 import { describe, expect, it } from "vitest";
-import type { DeviceInstanceBatch, DeviceTransformsHandle } from "../fields/index.js";
+import {
+  deviceInstanceAttributeLayout,
+  deviceInstanceAttributesOf,
+  type DeviceInstanceAttrType,
+  type DeviceInstanceAttribute,
+  type DeviceInstanceBatch,
+  type DeviceTransformsHandle,
+} from "../fields/index.js";
+import { toDeviceInstanceObjects, type DeviceInstanceContext } from "./deviceInstances.js";
 import { checkAdoptionSeam, createWebGpuInstanceAdapter } from "./webgpuInstances.js";
-import type { DeviceInstanceContext } from "./worldBinding.js";
 
 const require = createRequire(import.meta.url);
 
@@ -1021,5 +1028,552 @@ describe("createWebGpuInstanceAdapter with several batches from one cell", () =>
     const third = adapter.build(stubBatch("fern", 9), CTX) as InstancedMesh;
     expect(third.count).toBe(9);
     expect(adapter.stats).toEqual({ built: 2, released: 0, adopted: 2, liveInstances: 13 });
+  });
+});
+
+// -- no World: toDeviceInstanceObjects --------------------------------------
+
+/**
+ * The device counterpart of `toInstancedMeshes`, and the reason
+ * `DeviceInstanceContext`'s cell fields are optional: a caller with
+ * batches from a resident spawner and no hierarchical runtime behind
+ * them. Nothing in this section constructs a `World` or a
+ * `WorldThreeBinding` — that is the claim, not an incidental fact of how
+ * the tests are written.
+ */
+describe("toDeviceInstanceObjects", () => {
+  it("builds every batch through the adapter with no World in sight", async () => {
+    const { adapter, backend } = await makeMultiAssetAdapter();
+    const counts = [11, 22, 33];
+    const handles = counts.map((n) => stubHandle(n));
+    const batches = MULTI_ASSETS.map((id, i) => stubBatch(id, counts[i], handles[i]));
+
+    const objects = toDeviceInstanceObjects(batches, adapter);
+
+    expect(objects).toHaveLength(3);
+    MULTI_ASSETS.forEach((id, i) => {
+      const mesh = objects[i] as InstancedMesh;
+      expect(mesh.name).toBe(id);
+      expect(mesh.count).toBe(counts[i]);
+      // Same claim as the World path, by identity: three binds the very
+      // buffer the resident run composed into.
+      expect(backend.get(mesh.instanceMatrix as unknown as object).buffer).toBe(
+        handles[i].resource,
+      );
+      // No bounds callback: culling is switched off rather than guessed.
+      expect(mesh.frustumCulled).toBe(false);
+      expect(handles[i].disposed, "the handles stay the caller's").toBe(false);
+    });
+    expect(adapter.stats).toEqual({ built: 3, released: 0, adopted: 3, liveInstances: 66 });
+  });
+
+  it("asks `bounds` once per batch, by asset id", async () => {
+    const { adapter } = await makeMultiAssetAdapter();
+    const asked: string[] = [];
+    const radii: Record<string, number> = { pine: 12, rock: 3, fern: 210 };
+    const objects = toDeviceInstanceObjects(
+      MULTI_ASSETS.map((id) => stubBatch(id, 4)),
+      adapter,
+      (assetId) => {
+        asked.push(assetId);
+        return { center: [0, radii[assetId], 0], radius: radii[assetId] };
+      },
+    );
+    expect(asked, "once per batch, in batch order, with that batch's asset").toEqual([
+      "pine",
+      "rock",
+      "fern",
+    ]);
+    expect(objects.map((o) => (o as InstancedMesh).boundingSphere?.radius)).toEqual([12, 3, 210]);
+    expect(objects.every((o) => (o as InstancedMesh).frustumCulled)).toBe(true);
+  });
+
+  it("releases the objects it already built when a later batch fails", async () => {
+    const { adapter } = await makeMultiAssetAdapter();
+    const batches = [
+      stubBatch("pine", 30),
+      // Batch 2 of 3 declares more instances than its handle holds.
+      { ...stubBatch("rock", 4), count: 5 },
+      stubBatch("fern", 7),
+    ];
+    expect(() => toDeviceInstanceObjects(batches, adapter)).toThrow(/declares 5 instances/);
+    // `pine` was built and then released; `fern` was never reached. The
+    // meter is what proves nothing outlived the throw.
+    expect(adapter.stats).toEqual({ built: 1, released: 1, adopted: 1, liveInstances: 0 });
+  });
+
+  it("names no cell in an error, because there is no cell to name", async () => {
+    const { adapter } = await makeMultiAssetAdapter();
+    // The failure a World would report as `for cell "spires|2,3"` has to
+    // say something true here instead — a level that is not in the
+    // caller's graph would send them hunting for it.
+    expect(() => toDeviceInstanceObjects([stubBatch("larch", 4)], adapter)).toThrow(
+      /unknown assetId "larch" for a batch built with no cell context; known assets: fern, pine, rock/,
+    );
+    expect(() =>
+      toDeviceInstanceObjects([stubBatch("fern", 4)], adapter, () => ({
+        center: [0, 0, 0],
+        radius: -3,
+      })),
+    ).toThrow(
+      /a batch built with no cell context supplied a bounding radius of -3 for asset "fern"/,
+    );
+    // Neither failure left anything behind. `built` is deliberately not
+    // asserted: a rejected radius increments it before it throws, which
+    // is the adapter's own pre-existing bookkeeping and not something
+    // this path introduced.
+    expect(adapter.stats.adopted, "no buffer was adopted by either failure").toBe(0);
+    expect(adapter.stats.liveInstances, "and nothing is drawing").toBe(0);
+  });
+
+  it("takes a context with every field omitted, straight through `build`", async () => {
+    // `{}` is what makes the cell fields optional worth anything: the
+    // adapter is reachable with no level name, no coordinate and no
+    // bounds, which is exactly the context a caller with no World has.
+    const { adapter } = await makeAdapter();
+    const empty: DeviceInstanceContext = {};
+    const mesh = adapter.build(stubBatch("spire", 5), empty) as InstancedMesh;
+    expect(mesh.count).toBe(5);
+    expect(mesh.frustumCulled, "no bounds means no culling, not a guessed sphere").toBe(false);
+    expect(mesh.boundingSphere).toBe(null);
+    // Bounds alone, with neither cell field, is a legal context too.
+    const boundsOnly: DeviceInstanceContext = { bounds: { center: [1, 2, 3], radius: 9 } };
+    const bounded = adapter.build(stubBatch("spire", 5), boundsOnly) as InstancedMesh;
+    expect(bounded.boundingSphere?.radius).toBe(9);
+    expect(bounded.frustumCulled).toBe(true);
+  });
+
+  it("builds nothing from no batches, leaving the adapter's meters untouched", async () => {
+    const { adapter } = await makeMultiAssetAdapter();
+    expect(toDeviceInstanceObjects([], adapter)).toEqual([]);
+    expect(adapter.stats).toEqual({ built: 0, released: 0, adopted: 0, liveInstances: 0 });
+  });
+});
+
+// -- named per-instance channels -------------------------------------------
+
+/**
+ * The CPU adapter binds any named channel as a geometry attribute; this
+ * one binds exactly the two channels three treats STRUCTURALLY — the
+ * instance matrix and the reserved `color` — because both hang on the
+ * mesh and neither needs a per-batch geometry. Anything else is REFUSED,
+ * not dropped: this adapter draws every batch of an asset from the asset
+ * map's SHARED geometry, so binding a generic channel there would publish
+ * one cell's values to every other cell, and drawing without it would let
+ * a host animate from whatever was left in the name it bound.
+ *
+ * What is pinned here is the refusal, its message (a host has to be able
+ * to act on it), and that it costs nothing — the channel loop runs before
+ * any attribute, material clone or mesh exists.
+ */
+
+/** The message of the error `fn` throws. Fails loudly when it does not throw. */
+function messageOf(fn: () => unknown): string {
+  try {
+    fn();
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+  throw new Error("expected the call to throw, but it returned normally");
+}
+
+/** One device channel of an arbitrary shape, its handle the right length for it. */
+function deviceChannel(
+  count: number,
+  type: DeviceInstanceAttrType,
+  itemSize: number,
+): DeviceInstanceAttribute {
+  const { byteStride } = deviceInstanceAttributeLayout(type, itemSize);
+  return { handle: stubHandle(count, "webgpu", byteStride), type, itemSize };
+}
+
+function channelledBatch(
+  assetId: string,
+  count: number,
+  attributes: Record<string, DeviceInstanceAttribute>,
+): DeviceInstanceBatch {
+  return { ...stubBatch(assetId, count), attributes };
+}
+
+/** An adapter whose asset material records every per-mesh clone minted. */
+async function makeCloneTrackingAdapter() {
+  const material = new MeshBasicMaterial();
+  const minted: MeshBasicMaterial[] = [];
+  const originalClone = material.clone.bind(material);
+  material.clone = () => {
+    const clone = originalClone();
+    minted.push(clone);
+    return clone;
+  };
+  const adapter = await createWebGpuInstanceAdapter({
+    renderer: fakeRenderer(new WebGPUBackend({})),
+    assets: { spire: { geometry: new BoxGeometry(), material } },
+  });
+  return { adapter, minted };
+}
+
+describe("createWebGpuInstanceAdapter and named per-instance channels", () => {
+  it("refuses a non-reserved channel, naming its WGSL type, its stride and both ways out", async () => {
+    const { adapter, minted } = await makeCloneTrackingAdapter();
+    const batch = channelledBatch("spire", 4, { seed: deviceChannel(4, "u32", 1) });
+
+    const message = messageOf(() => adapter.build(batch, CTX));
+    expect(message).toContain(
+      'createWebGpuInstanceAdapter: batch "spire" carries the per-instance channel "seed" ' +
+        "(u32x1, u32 at 4 bytes per instance)",
+    );
+    expect(message, "the cell, so a streamed world says which one").toContain(
+      'for cell "spires|2,3"',
+    );
+    expect(message).toContain(
+      "binds only the two channels three treats structurally: the instance matrix and the " +
+        'reserved "color"',
+    );
+    // Way out 1: cook CPU batches, which carry every channel.
+    expect(message).toContain(
+      "Drop `deviceInstances: true` from the GpuFieldEvaluator to cook CPU batches, which " +
+        "carry every channel and render through toInstancedMeshes",
+    );
+    // Way out 2: bind it yourself, told precisely where and in what order.
+    expect(message).toContain(
+      "bind the channel's buffer yourself from `batch.attributes[name].handle.resource`, " +
+        "which is a GPUBuffer holding the batch's instances in the same order as its transforms.",
+    );
+    // Nothing was minted: the channel loop runs before every allocation.
+    expect(adapter.stats).toEqual({ built: 0, released: 0, adopted: 0, liveInstances: 0 });
+    expect(minted, "no material clone left behind by the refusal").toHaveLength(0);
+  });
+
+  it("quotes the padded vec3 stride for a 3-component channel, not the tight one", async () => {
+    // 16 bytes, not 12: a host that packed the buffer tightly from this
+    // message would render a skew growing with the instance index.
+    const { adapter } = await makeCloneTrackingAdapter();
+    const batch = channelledBatch("spire", 4, { wind: deviceChannel(4, "f32", 3) });
+    expect(messageOf(() => adapter.build(batch, CTX))).toContain(
+      'carries the per-instance channel "wind" (f32x3, vec3<f32> at 16 bytes per instance)',
+    );
+  });
+
+  it("still names the batch for a channel WGSL cannot lay out at all", () => {
+    // The layout is only a description here. A raw
+    // `deviceInstanceAttributeLayout` throw would surface an itemSize
+    // complaint with no batch, no channel name and no cell in it — the
+    // author would not know which batch to look at.
+    const message = messageOf(() =>
+      deviceInstanceAttributeLayout("f32", 5),
+    );
+    expect(message).toContain("itemSize 5 is out of range");
+    expect(message).not.toContain("spire");
+  });
+
+  it("reports an unlayoutable channel as an unbindable channel of THIS adapter's", async () => {
+    const { adapter, minted } = await makeCloneTrackingAdapter();
+    // Built by hand: `deviceChannel` cannot lay this one out either.
+    const batch = channelledBatch("spire", 4, {
+      pose: { handle: stubHandle(4, "webgpu", 20), type: "f32", itemSize: 5 },
+    });
+    const message = messageOf(() => adapter.build(batch, CTX));
+    expect(message).toContain(
+      'createWebGpuInstanceAdapter: batch "spire" carries the per-instance channel "pose" ' +
+        "(f32x5, which has no WGSL storage layout at all — see deviceInstanceAttributeLayout)",
+    );
+    expect(message).toContain('for cell "spires|2,3"');
+    expect(adapter.stats.built).toBe(0);
+    expect(minted).toHaveLength(0);
+  });
+
+  it("a valid colour channel beside a generic one does not buy the batch a pass", async () => {
+    const { adapter, minted } = await makeCloneTrackingAdapter();
+    const batch = channelledBatch("spire", 4, {
+      color: deviceChannel(4, "f32", 3),
+      seed: deviceChannel(4, "u32", 1),
+    });
+    expect(messageOf(() => adapter.build(batch, CTX))).toContain(
+      'carries the per-instance channel "seed"',
+    );
+    expect(adapter.stats.built).toBe(0);
+    expect(minted).toHaveLength(0);
+  });
+
+  it("refuses the reserved colour channel declared with any other shape", async () => {
+    const { adapter } = await makeCloneTrackingAdapter();
+    const wide = channelledBatch("spire", 4, { color: deviceChannel(4, "f32", 4) });
+    const message = messageOf(() => adapter.build(wide, CTX));
+    expect(message).toContain(
+      'createWebGpuInstanceAdapter: batch "spire" declares its reserved "color" channel as f32x4',
+    );
+    expect(message).toContain(
+      'instance colour is bound as vec3<f32> (three\'s `storage(colors, "vec3", count)`), so it ' +
+        "must be f32 with itemSize 3",
+    );
+    expect(message).toContain("Carry other shapes under another channel name.");
+
+    const ints = channelledBatch("spire", 4, { color: deviceChannel(4, "u32", 3) });
+    expect(messageOf(() => adapter.build(ints, CTX))).toContain(
+      'declares its reserved "color" channel as u32x3',
+    );
+    expect(adapter.stats, "neither refusal minted anything").toEqual({
+      built: 0,
+      released: 0,
+      adopted: 0,
+      liveInstances: 0,
+    });
+  });
+
+  it("the refusal is why release never disposes geometry: every mesh draws the asset's own", async () => {
+    // The consequence of everything above, and the invariant `release`
+    // states rather than checks. The CPU adapter asks `ownsGeometry`
+    // because `toInstancedMeshes` clones the geometry for a channelled
+    // batch; this adapter has no clone branch AT ALL, because the one
+    // thing that would earn a clone is refused outright. So a released
+    // mesh can never hold an owned clone to leak, and what it does hold is
+    // the asset map's geometry — shared with every other mesh drawing that
+    // asset and freed with the map, never here.
+    const backend = new WebGPUBackend({});
+    const renderer = { backend } as { readonly backend: unknown };
+    const geometry = new BoxGeometry();
+    let geometryDisposals = 0;
+    geometry.addEventListener("dispose", () => geometryDisposals++);
+    const adapter = await createWebGpuInstanceAdapter({
+      renderer,
+      assets: { spire: { geometry, material: new MeshBasicMaterial() } },
+    });
+    const first = adapter.build(stubBatch("spire", 4), CTX) as InstancedMesh;
+    const second = adapter.build(stubBatch("spire", 6), CTX) as InstancedMesh;
+    expect(first.geometry, "by identity: no clone on this path").toBe(geometry);
+    expect(second.geometry, "and two meshes of one asset share the one geometry").toBe(geometry);
+
+    adapter.release(first);
+    expect(geometryDisposals, "the sibling mesh still draws it").toBe(0);
+    adapter.release(second);
+    expect(geometryDisposals, "and the asset map still owns it").toBe(0);
+  });
+
+  it("colour through the reserved channel builds identically to the legacy `colors` handle", async () => {
+    const { adapter, backend } = await makeAdapter();
+
+    // The older spelling: a plain handle beside the transforms.
+    const legacy = colouredBatch("spire", 12);
+    const legacyMesh = adapter.build(legacy, BOUNDED) as InstancedMesh;
+    const afterLegacy = adapter.stats;
+
+    // The channel spelling, minted the way `makeDeviceInstanceBatch`
+    // mints one: `colors` is an accessor over the reserved channel, so
+    // there is one buffer and one owner obligation, not two spellings of
+    // them. What the getter adds HERE is the agreement itself — a batch
+    // carrying both spellings must resolve to one handle, not two — which
+    // is the case the next test deliberately drops.
+    const transforms = stubHandle(12);
+    const colour = stubHandle(12, "webgpu", COLOR_BYTES_PER_INSTANCE);
+    const channelled: DeviceInstanceBatch = {
+      residency: "device",
+      assetId: "spire",
+      count: 12,
+      transforms,
+      attributes: { color: { handle: colour, type: "f32", itemSize: 3 } },
+      get colors(): DeviceTransformsHandle {
+        return colour;
+      },
+    };
+    const channelledMesh = adapter.build(channelled, BOUNDED) as InstancedMesh;
+
+    // `deviceInstanceAttributesOf` is what makes them one path: it LIFTS
+    // the legacy handle into the reserved channel, so both batches read
+    // back as the same one-entry record.
+    expect(deviceInstanceAttributesOf(legacy)).toEqual({
+      color: { handle: legacy.colors, type: "f32", itemSize: 3 },
+    });
+    expect(deviceInstanceAttributesOf(channelled)).toEqual({
+      color: { handle: colour, type: "f32", itemSize: 3 },
+    });
+
+    for (const [label, mesh] of [
+      ["legacy", legacyMesh],
+      ["channel", channelledMesh],
+    ] as const) {
+      expect(mesh.instanceColor, `${label}: a coloured batch sets instanceColor`).not.toBe(null);
+      expect(mesh.instanceColor?.itemSize, `${label}: three reads vec3`).toBe(3);
+      expect(mesh.instanceColor?.name).toBe("pcg:instanceColor:spire");
+      expect(mesh.count).toBe(12);
+    }
+    // Identity: each mesh binds ITS batch's buffers and no other's.
+    expect(backend.get(channelledMesh.instanceColor as unknown as object).buffer).toBe(
+      colour.resource,
+    );
+    expect(backend.get(channelledMesh.instanceMatrix as unknown as object).buffer).toBe(
+      transforms.resource,
+    );
+    expect(backend.get(legacyMesh.instanceColor as unknown as object).buffer).toBe(
+      legacy.colors.resource,
+    );
+    // Two buffers adopted per coloured batch, whichever spelling it used.
+    expect(afterLegacy).toEqual({ built: 1, released: 0, adopted: 2, liveInstances: 12 });
+    expect(adapter.stats).toEqual({ built: 2, released: 0, adopted: 4, liveInstances: 24 });
+  });
+
+  it("REGRESSION: colour reaches the mesh from a batch with `attributes` and no `colors`", async () => {
+    // The literal `src/fields/index.ts` tells a host to write — "write the
+    // object literal the `DeviceInstanceBatch` type documents, with
+    // `attributes`" — with `colors` GENUINELY absent, because
+    // `makeDeviceInstanceBatch` (the only thing that installs the
+    // accessor) is deliberately withheld from the package surface. So this
+    // is the shape a hand-built batch actually has, not a contrived one.
+    //
+    // `build` used to adopt colour from `batch.colors`, which is undefined
+    // here, and dropped it SILENTLY — no error, and indistinguishable from
+    // a batch that never asked for colour. It now reads the same channel
+    // record whose shape it already validated; see the comment on that
+    // read in src/three/webgpuInstances.ts.
+    const { adapter, backend } = await makeAdapter();
+    const transforms = stubHandle(12);
+    const colour = stubHandle(12, "webgpu", COLOR_BYTES_PER_INSTANCE);
+    const batch: DeviceInstanceBatch = {
+      residency: "device",
+      assetId: "spire",
+      count: 12,
+      transforms,
+      attributes: { color: { handle: colour, type: "f32", itemSize: 3 } },
+    };
+    // The absence is the whole point of the case — assert it, so a future
+    // edit cannot quietly turn this back into the accessor test above.
+    expect(batch.colors, "no accessor: this is the raw documented literal").toBeUndefined();
+
+    const mesh = adapter.build(batch, BOUNDED) as InstancedMesh;
+
+    expect(mesh.instanceColor, "the silent drop is the regression").not.toBe(null);
+    expect(mesh.instanceColor?.itemSize).toBe(3);
+    expect(mesh.instanceColor?.count).toBe(12);
+    expect(mesh.instanceColor?.name).toBe("pcg:instanceColor:spire");
+    // By identity: three binds the very buffer the batch's channel owns.
+    expect(backend.get(mesh.instanceColor as unknown as object).buffer).toBe(colour.resource);
+    expect(backend.get(mesh.instanceMatrix as unknown as object).buffer).toBe(transforms.resource);
+    // TWO buffers, the count that says the colour was adopted at all —
+    // the bug's signature was `adopted: 1` with everything else identical.
+    expect(adapter.stats).toEqual({ built: 1, released: 0, adopted: 2, liveInstances: 12 });
+    // Still nobody else's to free: the handles stay the caller's.
+    expect(colour.disposed).toBe(false);
+    adapter.release(mesh);
+    expect(colour.disposeCalls, "handle ownership belongs to WorldThreeBinding").toBe(0);
+  });
+
+  it("REGRESSION: the same batch shape is validated, not waved through", async () => {
+    // The fix must not have bought colour adoption by skipping the checks
+    // the legacy spelling gets. A tightly packed 12-bytes-per-instance
+    // buffer is the failure that renders as a growing skew rather than an
+    // error, and it has to be caught through `attributes` too.
+    const { adapter } = await makeAdapter();
+    const tight: DeviceInstanceBatch = {
+      ...stubBatch("spire", 4),
+      attributes: { color: { handle: stubHandle(4, "webgpu", 12), type: "f32", itemSize: 3 } },
+    };
+    expect(messageOf(() => adapter.build(tight, CTX))).toContain(
+      "instance-colour handle must be 64 bytes",
+    );
+    const foreign: DeviceInstanceBatch = {
+      ...stubBatch("spire", 4),
+      attributes: {
+        color: { handle: stubHandle(4, "webgl", COLOR_BYTES_PER_INSTANCE), type: "f32", itemSize: 3 },
+      },
+    };
+    expect(messageOf(() => adapter.build(foreign, CTX))).toContain(
+      'carries a "webgl" instance-colour handle',
+    );
+    expect(adapter.stats).toEqual({ built: 0, released: 0, adopted: 0, liveInstances: 0 });
+  });
+});
+
+/**
+ * `deviceInstanceAttributeLayout` in isolation. Neither difference from
+ * the CPU column is a choice — a 3-component channel spends four slots
+ * because WGSL gives `array<vec3<f32>>` a 16-byte element stride, and a
+ * `bool` channel is carried as u32 words because WGSL `bool` is not
+ * host-shareable at all — so both are pinned by value rather than
+ * re-derived. Nothing here needs a device; it is arithmetic and a name.
+ */
+describe("deviceInstanceAttributeLayout", () => {
+  it("lays a scalar channel out as itself", () => {
+    expect(deviceInstanceAttributeLayout("f32", 1)).toEqual({
+      components: 1,
+      byteStride: 4,
+      wgslType: "f32",
+      wgslScalar: "f32",
+    });
+    expect(deviceInstanceAttributeLayout("u32", 1)).toEqual({
+      components: 1,
+      byteStride: 4,
+      wgslType: "u32",
+      wgslScalar: "u32",
+    });
+  });
+
+  it("spends FOUR slots on a 3-component channel — the WGSL vec3 stride", () => {
+    // Settled behaviour, and the one number a producer gets wrong: a
+    // tightly packed 12-byte buffer renders as a skew that grows with the
+    // instance index rather than as an error.
+    expect(deviceInstanceAttributeLayout("f32", 3)).toEqual({
+      components: 4,
+      byteStride: 16,
+      wgslType: "vec3<f32>",
+      wgslScalar: "f32",
+    });
+    expect(deviceInstanceAttributeLayout("i32", 3)).toEqual({
+      components: 4,
+      byteStride: 16,
+      wgslType: "vec3<i32>",
+      wgslScalar: "i32",
+    });
+  });
+
+  it("leaves 2 and 4 components alone: only 3 pads", () => {
+    expect(deviceInstanceAttributeLayout("u32", 2)).toEqual({
+      components: 2,
+      byteStride: 8,
+      wgslType: "vec2<u32>",
+      wgslScalar: "u32",
+    });
+    expect(deviceInstanceAttributeLayout("f32", 4)).toEqual({
+      components: 4,
+      byteStride: 16,
+      wgslType: "vec4<f32>",
+      wgslScalar: "f32",
+    });
+  });
+
+  it("carries a bool channel as u32 words, because WGSL bool is not host-shareable", () => {
+    expect(deviceInstanceAttributeLayout("bool", 1)).toEqual({
+      components: 1,
+      byteStride: 4,
+      wgslType: "u32",
+      wgslScalar: "u32",
+    });
+    // …and the vector spelling follows the scalar, not the CPU dtype:
+    // the column is a Uint8Array on the CPU and four bytes per component
+    // here.
+    expect(deviceInstanceAttributeLayout("bool", 2)).toEqual({
+      components: 2,
+      byteStride: 8,
+      wgslType: "vec2<u32>",
+      wgslScalar: "u32",
+    });
+  });
+
+  it("refuses an item size WGSL has no vector for, and says to split the attribute", () => {
+    for (const itemSize of [0, 5, 2.5]) {
+      const message = messageOf(() => deviceInstanceAttributeLayout("f32", itemSize));
+      expect(message).toContain(
+        `deviceInstanceAttributeLayout: itemSize ${itemSize} is out of range`,
+      );
+      expect(message).toContain(
+        "binds as a WGSL storage array of a scalar or a vec2/vec3/vec4, so its item size must " +
+          "be a whole number in 1..4",
+      );
+      expect(message).toContain(
+        "Split a wider attribute into several channels (a mat3 as three vec3 channels, say)",
+      );
+      // WHY it is a refusal rather than a bigger buffer.
+      expect(message).toContain(
+        "a different binding convention on every renderer, not a larger buffer",
+      );
+    }
   });
 });

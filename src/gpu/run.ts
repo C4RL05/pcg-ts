@@ -109,6 +109,9 @@
  * no longer owns; releasing a detached buffer would throw.
  */
 import type { AttrType, Geometry } from "../data/index.js";
+// `makeDeviceInstanceBatch` by path: the fields barrel withholds it from
+// the package surface (see its comment), and this is the one producer.
+import { makeDeviceInstanceBatch } from "../fields/gpuResolver.js";
 import {
   isField,
   type DeviceInstanceBatch,
@@ -904,6 +907,24 @@ export function planResidentRun(
             if (key === undefined) throw new PlanFail(`assetAttr "${assetAttr}" not on the point domain`);
             if (key.type !== "string") throw new PlanFail(`assetAttr "${assetAttr}" is ${key.type}, not string`);
           }
+          // Named per-instance channels are not device-resident. The
+          // compose kernel's widest form already binds seven storage
+          // buffers against the baseline
+          // `maxStorageBuffersPerShaderStage` of 8, so an arbitrary
+          // number of gather channels does not fit in it — and a run that
+          // dropped them silently would hand a host an ABI with holes in
+          // it. Reject, so the terminal falls back per-node and the CPU
+          // spawner composes the transforms AND the channels together.
+          const rawChannels = p.instanceAttrs;
+          if (rawChannels !== undefined) {
+            if (!Array.isArray(rawChannels)) throw new PlanFail("instanceAttrs");
+            if (rawChannels.length > 0) {
+              throw new PlanFail(
+                `instanceAttrs names ${rawChannels.length} per-instance channel(s); the device ` +
+                  "spawner composes transforms and colour only",
+              );
+            }
+          }
           const rawColor = p.colorAttr;
           if (rawColor !== undefined && typeof rawColor !== "string") throw new PlanFail("colorAttr");
           const colorAttr = rawColor === undefined ? "" : rawColor;
@@ -1392,7 +1413,7 @@ export async function executeResidentRun(
         );
         retainedHandles.push(handle);
         if (!wantsColor) {
-          batches.push({ residency: "device", assetId, count: batchCount, transforms: handle });
+          batches.push(makeDeviceInstanceBatch(assetId, batchCount, handle));
           continue;
         }
         const colors = retain(
@@ -1401,13 +1422,15 @@ export async function executeResidentRun(
           `${batchCount} instance colours of "${assetId}"`,
         );
         retainedHandles.push(colors);
-        batches.push({
-          residency: "device",
-          assetId,
-          count: batchCount,
-          transforms: handle,
-          colors,
-        });
+        // Colour goes in as the RESERVED channel, not beside the channels:
+        // `batch.colors` is then an accessor over it, so a consumer
+        // looping `deviceInstanceAttributesOf` sees exactly one handle for
+        // it and disposes it exactly once.
+        batches.push(
+          makeDeviceInstanceBatch(assetId, batchCount, handle, {
+            color: { handle: colors, type: "f32", itemSize: 3 },
+          }),
+        );
       }
       deviceBatches = batches;
     }

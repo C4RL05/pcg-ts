@@ -23,75 +23,33 @@ import {
   type Points,
   type PointsMaterial,
 } from "three";
-import type { DeviceInstanceBatch, DeviceTransformsHandle } from "../fields/index.js";
+import {
+  deviceInstanceAttributesOf,
+  type DeviceInstanceBatch,
+  type DeviceTransformsHandle,
+} from "../fields/index.js";
 import { isDeviceResidentInstances } from "../graph/data.js";
 import type { CellCoord, CellOutputs } from "../runtime/types.js";
 import { toPointsObject } from "./debug.js";
-import { materialListOf, toInstancedMeshes, type AssetMap } from "./instanced.js";
+import type {
+  DeviceCellBounds,
+  DeviceInstanceAdapter,
+  DeviceInstanceContext,
+} from "./deviceInstances.js";
+import { materialListOf, ownsGeometry, toInstancedMeshes, type AssetMap } from "./instanced.js";
+import { attempt, type TeardownFailure } from "./teardown.js";
 
 /**
- * Bounding sphere for a cell, supplied out of band because a
- * device-resident batch has no CPU instance matrices to compute one
- * from (`InstancedMesh.computeBoundingSphere()` reads
- * `instanceMatrix.array`, which no longer holds the transforms).
- *
- * Centre and radius are in the coordinate space of the object's parent
- * — the same space `World` cell bounds are expressed in — because
- * three applies `matrixWorld` to the sphere before testing the frustum.
- * Derive it from `CellContext.min`/`max`: the cell AABB's centre, and
- * half its diagonal plus the radius of the asset being drawn, so
- * instances straddling the cell border are not culled while still on
- * screen. A cell can hold several assets and the sphere is asked for
- * per asset, so that padding is the *drawn* asset's radius,
- * not the largest one in the map — see {@link DeviceInstanceBinding.bounds}.
+ * The device-instancing seam itself lives in `./deviceInstances.ts`,
+ * because a World is one way to drive it and not the only one — see that
+ * module's header. Re-exported here so an import of these three from the
+ * World binding, which is where they were first published, still works.
  */
-export interface DeviceCellBounds {
-  /** Sphere centre `[x, y, z]`. */
-  readonly center: readonly [number, number, number];
-  /** Sphere radius; must cover every instance the cell draws. */
-  readonly radius: number;
-}
-
-/** What the binding knows about the cell a device batch belongs to. */
-export interface DeviceInstanceContext {
-  readonly levelName: string;
-  readonly coord: CellCoord;
-  /**
-   * Bounds from {@link DeviceInstanceBinding.bounds} for **this batch's
-   * asset**, or undefined when none was supplied — in which case the
-   * adapter must disable frustum culling rather than guess, since a
-   * wrong sphere culls visible instances silently.
-   *
-   * One context is built per batch, so a cell holding several assets can
-   * give each its own sphere; see {@link DeviceInstanceBinding.bounds}.
-   */
-  readonly bounds: DeviceCellBounds | undefined;
-}
-
-/**
- * Renderer-side half of the device-resident spawner protocol: turns one
- * {@link DeviceInstanceBatch} into a scene object that draws its
- * instances straight from the batch's GPU buffer.
- *
- * Ownership split, exactly: the ADAPTER owns the three-side objects it
- * creates (geometry, material, attributes) and frees them in
- * {@link release}; the BINDING owns EVERY `DeviceTransformsHandle` the
- * batch carries — its `transforms`, and its `colors` when the spawner was
- * asked for colour — and disposes each when no live cell references it
- * any more. An adapter must never call `handle.dispose()`.
- *
- * See `createWebGpuInstanceAdapter` for the WebGPU implementation.
- */
-export interface DeviceInstanceAdapter {
-  /**
-   * Build the scene object for `batch`. Throwing is allowed and safe:
-   * the binding releases every handle it retained for the partial cell
-   * and rethrows, leaving the cell's previous content in place.
-   */
-  build(batch: DeviceInstanceBatch, ctx: DeviceInstanceContext): Object3D;
-  /** Free the three-side resources of an object {@link build} returned. */
-  release(object: Object3D): void;
-}
+export type {
+  DeviceCellBounds,
+  DeviceInstanceAdapter,
+  DeviceInstanceContext,
+} from "./deviceInstances.js";
 
 /** Device-resident instancing configuration for {@link WorldThreeBinding}. */
 export interface DeviceInstanceBinding {
@@ -150,8 +108,9 @@ interface CellEntry {
   /**
    * One entry per retain this cell took out — repeated if the same
    * handle appears twice in the cell's outputs, so releases balance. A
-   * coloured device batch contributes TWO distinct handles (transforms
-   * and colours), each refcounted on its own identity.
+   * device batch contributes its transforms plus ONE handle per named
+   * per-instance channel (a coloured batch has one channel, the reserved
+   * `color`, so two handles in all), each refcounted on its own identity.
    */
   readonly handles: DeviceTransformsHandle[];
 }
@@ -173,7 +132,12 @@ interface CellEntry {
  * `renderStateRelease.test.ts`). Without it a streaming world's renderer
  * caches grow by every mesh ever cooked. The asset GEOMETRY (and any
  * textures) stays shared across cells and is NOT disposed — it belongs to
- * the caller's asset map, and the clone shares those by reference.
+ * the caller's asset map, and the clone shares those by reference. The
+ * ONE exception is a mesh whose batch carried named per-instance
+ * channels: those become attributes of the geometry, so
+ * `toInstancedMeshes` gives that mesh a geometry clone of its own and
+ * `ownsGeometry(mesh)` is true — the clone is disposed here, with the
+ * mesh, because nothing else can ever reach it.
  *
  * Device-resident batches add a second disposal contract. `World` never
  * frees a `DeviceTransformsHandle` and the graph refuses to own one, so
@@ -373,27 +337,76 @@ export class WorldThreeBinding {
    * `deviceInstances` adapter) — an unrenderable buffer is still a
    * buffer, and leaking one per cook is worse than freeing one that was
    * never going to be drawn.
+   *
+   * **The pass itself can throw, and must not abandon what it has not
+   * reached yet.** `deviceInstanceAttributesOf` refuses a batch whose two
+   * colour spellings hold DIFFERENT handles (see the per-instance channel
+   * section of `docs/authoring.md`), so a single malformed hand-built
+   * batch used to end the pass where it stood — stranding its own
+   * transforms and every handle of every batch and item after it. That is
+   * the same invariant `./teardown.ts` states for the release paths, read
+   * in the other direction: every step runs, the bookkeeping is
+   * committed, and only then does the first failure propagate to
+   * `cellReady`'s catch, which releases everything the pass retained.
    */
   private retainCellHandles(entry: CellEntry, outputs: CellOutputs): void {
+    let failure: TeardownFailure;
     for (const name of Object.keys(outputs)) {
       for (const item of outputs[name]) {
         // Residency first: reading `batches` on a device item throws by
         // design, so this test must precede any other item access.
         if (item.kind !== "instances" || !isDeviceResidentInstances(item)) continue;
         for (const batch of item.deviceBatches ?? []) {
-          // Every handle the batch carries, not just the transforms: the
-          // colour buffer is a separate allocation with a separate
-          // handle, and the device path has no GC behind it. Missing it
-          // here leaks one buffer per coloured batch per cook — silently,
-          // because nothing else in the library will ever free it.
-          for (const handle of [batch.transforms, batch.colors]) {
-            if (handle === undefined) continue;
-            entry.handles.push(handle);
-            this.retainHandle(handle);
-          }
+          failure = attempt(failure, () => {
+            this.retainBatchHandles(entry, batch);
+          });
         }
       }
     }
+    if (failure !== undefined) throw failure.err;
+  }
+
+  /**
+   * Retain every handle of ONE device batch.
+   *
+   * Every handle the batch carries, not just the transforms: each
+   * per-instance channel is a separate allocation with a separate handle,
+   * and the device path has no GC behind it. Missing one here leaks a
+   * buffer per channel per batch per cook — silently, because nothing
+   * else in the library will ever free it. The channels are enumerated
+   * through `deviceInstanceAttributesOf` and NOT alongside
+   * `batch.colors`: colour is a channel IN that record (an accessor over
+   * it), so counting both would retain one handle twice.
+   *
+   * **`transforms` is retained BEFORE that call, and the order is the
+   * point.** The normalizer throws on a batch carrying two different
+   * colour handles, and `transforms` is reachable without asking it
+   * anything — retained after, a refused batch's largest buffer would be
+   * stranded by the very check that noticed the batch was malformed.
+   */
+  private retainBatchHandles(entry: CellEntry, batch: DeviceInstanceBatch): void {
+    this.retainOne(entry, batch.transforms);
+    let handles: readonly DeviceTransformsHandle[];
+    try {
+      handles = Object.values(deviceInstanceAttributesOf(batch)).map((c) => c.handle);
+    } catch (err) {
+      // Refused: there is no normalized record, so fall back to the raw
+      // reachable set (see `reachableHandles`) to keep the batch's colour
+      // buffers freeable. That sweep is itself guarded — a hostile
+      // `attributes` getter must not replace the diagnosis with the
+      // symptom — and the refusal is what propagates either way.
+      attempt(undefined, () => {
+        for (const handle of reachableHandles(batch)) this.retainOne(entry, handle);
+      });
+      throw err;
+    }
+    for (const handle of handles) this.retainOne(entry, handle);
+  }
+
+  /** Record one retain against the cell, so `disposeEntry` can balance it. */
+  private retainOne(entry: CellEntry, handle: DeviceTransformsHandle): void {
+    entry.handles.push(handle);
+    this.retainHandle(handle);
   }
 
   /** Build the adapter objects for one device item's batches. */
@@ -483,6 +496,14 @@ export class WorldThreeBinding {
       for (const material of materialListOf(mesh.material)) {
         failure = attempt(failure, () => material.dispose());
       }
+      // ONLY a per-batch geometry clone, which `toInstancedMeshes` mints
+      // for a batch carrying named per-instance channels because those
+      // become attributes of the geometry (see `ownsGeometry`). The
+      // asset map's shared geometry is left alone — disposing it would
+      // break every other cell drawing the same asset. Its own guarded
+      // step for the reason the whole block is guarded: a `dispose`
+      // listener that throws must not strand the device buffers below.
+      if (ownsGeometry(mesh)) failure = attempt(failure, () => mesh.geometry.dispose());
     }
     // Debug points own their geometry and material — created per cell.
     for (const points of entry.debug) {
@@ -521,31 +542,25 @@ function cellKey(levelName: string, coord: CellCoord): string {
   return `${levelName}|${coord.join(",")}`;
 }
 
-/** The first failure a teardown hit, or undefined if every step ran clean. */
-type TeardownFailure = { readonly err: unknown } | undefined;
-
 /**
- * Run one teardown step to completion, capturing what it throws instead
- * of letting it escape, and return the failure to carry forward.
+ * Every device handle the batch REACHES, deduplicated by identity — the
+ * raw set, not the normalized one.
  *
- * This exists to state one invariant in one place, because the binding
- * needs it in four: **a throwing teardown must never abort the ownership
- * bookkeeping around it.** The binding is the owner of last resort for
- * device buffers, and every teardown site here sits next to a step that
- * decides what is still reachable — `cells.set` on the swap, the handle
- * releases in `disposeEntry`, the next cell in `dispose`. An exception
- * that escapes one of those windows does not merely fail loudly; it
- * removes the resource from every index that could later free it, and no
- * `dispose()` can recover what it can no longer find. Every step runs,
- * state is committed, and only then does the first failure propagate
- * (the rest are suppressed — only one error can propagate, and the first
- * is the one with a live cause).
+ * Only for the path where {@link deviceInstanceAttributesOf} refused the
+ * batch and there is therefore no normalized record to enumerate. The
+ * normalizer is still the authority everywhere else, and deliberately so:
+ * it counts the reserved colour channel exactly once, which is the whole
+ * reason a caller must not walk `attributes` and `colors` side by side.
+ *
+ * Here the two spellings are known to disagree (that is what the refusal
+ * says), so walking both is not double-counting: the `Set` collapses them
+ * whenever they are the same object and keeps both when they are not.
+ * The batch is being discarded either way — a buffer nothing in this
+ * process will ever free is worse than one freed a moment early.
  */
-function attempt(failure: TeardownFailure, step: () => void): TeardownFailure {
-  try {
-    step();
-  } catch (err) {
-    return failure ?? { err };
-  }
-  return failure;
+function reachableHandles(batch: DeviceInstanceBatch): DeviceTransformsHandle[] {
+  const seen = new Set<DeviceTransformsHandle>();
+  if (batch.colors !== undefined) seen.add(batch.colors);
+  for (const channel of Object.values(batch.attributes ?? {})) seen.add(channel.handle);
+  return [...seen];
 }

@@ -27,6 +27,10 @@ import {
   type DataValue,
   type InstanceBatch,
 } from "../graph/index.js";
+// By path: `makeInstanceBatch` is internal (the barrel publishes the
+// item constructors, not the batch one), and `instanceAttributesOf` comes
+// from the same module so the pair reads as one import.
+import { instanceAttributesOf, makeInstanceBatch } from "../graph/data.js";
 import { GraphSerializationError, type SerializedGraph } from "../nodes/serialize.js";
 import type { CellOutputs, ParamPatch } from "../runtime/types.js";
 
@@ -72,12 +76,20 @@ export interface EncodedValueItem {
   readonly value: DataValue;
 }
 
-/** One instance batch in wire form (CPU batches only). */
+/**
+ * One instance batch in wire form (CPU batches only).
+ *
+ * `attributes` carries EVERY named per-instance channel, colour included
+ * — `colors` is an accessor over the reserved `"color"` channel and has
+ * no wire form of its own, so a batch encodes one buffer per instance
+ * property and `decodeOutputs` rebuilds the accessor. Encoding both would
+ * put the colour array on the transfer list twice.
+ */
 export interface EncodedInstanceBatch {
   readonly assetId: string;
   readonly count: number;
   readonly transforms: Float32Array;
-  readonly colors?: Float32Array;
+  readonly attributes?: Readonly<Record<string, AttrData>>;
 }
 
 /** An instances item in wire form. */
@@ -263,13 +275,23 @@ export function encodeOutputs(outputs: CellOutputs): {
         batches: item.batches.map((b): EncodedInstanceBatch => {
           const transforms = b.transforms.slice();
           transfer.push(transforms.buffer as ArrayBuffer);
-          const colors = b.colors?.slice();
-          if (colors !== undefined) transfer.push(colors.buffer as ArrayBuffer);
+          // One loop over the channels — colour among them, never beside
+          // them. A batch built before `attributes` existed (a hand-built
+          // one carrying a plain `colors`) is lifted into the reserved
+          // channel by `instanceAttributesOf`, so it encodes identically.
+          const channels: Record<string, AttrData> = {};
+          let any = false;
+          for (const [name, column] of Object.entries(instanceAttributesOf(b))) {
+            const copy = column.slice();
+            transfer.push(copy.buffer as ArrayBuffer);
+            channels[name] = copy;
+            any = true;
+          }
           return {
             assetId: b.assetId,
             count: b.count,
             transforms,
-            ...(colors !== undefined ? { colors } : {}),
+            ...(any ? { attributes: channels } : {}),
           };
         }),
       };
@@ -291,13 +313,11 @@ export function decodeOutputs(encoded: EncodedOutputs): CellOutputs {
       if (item.kind === "value") return makeValueItem(item.value, item.tags);
       if (item.kind === "geometry") return makeGeometryItem(decodeGeometry(item), item.tags);
       return makeInstancesItem(
-        item.batches.map(
-          (b): InstanceBatch => ({
-            assetId: b.assetId,
-            count: b.count,
-            transforms: b.transforms,
-            ...(b.colors !== undefined ? { colors: b.colors } : {}),
-          }),
+        // Through the constructor, so the decoded batch reinstalls
+        // `colors` as an accessor over the reserved channel exactly as
+        // the spawner's own batches carry it.
+        item.batches.map((b): InstanceBatch =>
+          makeInstanceBatch(b.assetId, b.count, b.transforms, b.attributes),
         ),
         item.tags,
       );

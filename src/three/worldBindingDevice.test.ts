@@ -138,6 +138,17 @@ function makeAdapter(): FakeAdapter {
       // handle must never reach here.
       void batch.transforms.resource;
       const object = new Object3D();
+      // Both halves are optional on the context — a caller with no World
+      // (`toDeviceInstanceObjects`) supplies neither. The BINDING must
+      // still supply both, and every name below depends on it, so assert
+      // rather than default: a silent `undefined|undefined` would make
+      // every cell's objects collide under one name.
+      if (ctx.levelName === undefined || ctx.coord === undefined) {
+        throw new Error(
+          "WorldThreeBinding built a device batch without naming its cell: levelName=" +
+            `${String(ctx.levelName)}, coord=${String(ctx.coord)}`,
+        );
+      }
       object.name = `${ctx.levelName}|${ctx.coord.join(",")}/${batch.assetId}`;
       handles.set(object, batch.transforms);
       adapter.built.push(object);

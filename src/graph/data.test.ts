@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { createPointCloud, createTriangleMesh } from "../data/index.js";
 import { cloneGeometry } from "./clone.js";
-import { filterByTag, firstGeometry, makeGeometryItem, makeValueItem } from "./data.js";
+import {
+  INSTANCE_COLOR_CHANNEL,
+  filterByTag,
+  firstGeometry,
+  instanceAttributesOf,
+  makeGeometryItem,
+  makeInstanceBatch,
+  makeValueItem,
+  type InstanceBatch,
+} from "./data.js";
 
 describe("data items", () => {
   it("assigns strictly increasing revs", () => {
@@ -84,5 +93,94 @@ describe("cloneGeometry", () => {
     const dst = cloneGeometry(src);
     dst.attrs.point.resize(src.pointCount + 1);
     expect(dst.attrs.point.require("density").get(src.pointCount)).toBe(0.5);
+  });
+});
+
+describe("instanceAttributesOf", () => {
+  const transforms = new Float32Array(32);
+  const colors = new Float32Array([1, 0, 0, 0, 1, 0]);
+  const phase = new Float32Array([0.25, 0.75]);
+
+  /** A batch as a HOST writes one: a plain object literal, no accessor. */
+  function handBuilt(rest: Partial<InstanceBatch>): InstanceBatch {
+    return { assetId: "rock", count: 2, transforms, ...rest };
+  }
+
+  it("returns the empty record for a batch with neither spelling", () => {
+    expect(instanceAttributesOf(handBuilt({}))).toEqual({});
+  });
+
+  it("returns the record itself when there is no plain colors", () => {
+    const attributes = { phase };
+    expect(instanceAttributesOf(handBuilt({ attributes }))).toBe(attributes);
+  });
+
+  it("lifts a plain colors when the batch carries no attributes at all", () => {
+    expect(instanceAttributesOf(handBuilt({ colors }))).toEqual({
+      [INSTANCE_COLOR_CHANNEL]: colors,
+    });
+  });
+
+  // The regression. A host filling `attributes` generically writes `{}`
+  // when it has no named channels, and the colour used to be dropped on
+  // the floor by a `!== undefined` presence test.
+  it("lifts a plain colors past an EMPTY attributes record", () => {
+    const channels = instanceAttributesOf(handBuilt({ attributes: {}, colors }));
+    expect(channels[INSTANCE_COLOR_CHANNEL]).toBe(colors);
+    expect(Object.keys(channels)).toEqual([INSTANCE_COLOR_CHANNEL]);
+  });
+
+  it("lifts a plain colors beside other channels, keeping both", () => {
+    const channels = instanceAttributesOf(handBuilt({ attributes: { phase }, colors }));
+    expect(channels[INSTANCE_COLOR_CHANNEL]).toBe(colors);
+    expect(channels.phase).toBe(phase);
+    expect(Object.keys(channels).sort()).toEqual([INSTANCE_COLOR_CHANNEL, "phase"].sort());
+  });
+
+  it("counts the colour once when both spellings are the same buffer", () => {
+    // What `makeInstanceBatch` builds: `colors` is an accessor over the
+    // reserved channel, so the two spellings are one array.
+    const batch = makeInstanceBatch("rock", 2, transforms, {
+      [INSTANCE_COLOR_CHANNEL]: colors,
+      phase,
+    });
+    expect(batch.colors).toBe(colors);
+    const channels = instanceAttributesOf(batch);
+    expect(channels).toBe(batch.attributes);
+    expect(Object.keys(channels).sort()).toEqual([INSTANCE_COLOR_CHANNEL, "phase"].sort());
+  });
+
+  it("throws, naming both spellings, when they hold DIFFERENT buffers", () => {
+    const other = new Float32Array([0, 0, 1, 0, 0, 1]);
+    expect(() =>
+      instanceAttributesOf(handBuilt({ attributes: { [INSTANCE_COLOR_CHANNEL]: other }, colors })),
+    ).toThrow(/batch "rock".*attributes\["color"\].*colors/s);
+  });
+});
+
+describe("instanceAttributesOf: records a caller cannot enumerate", () => {
+  const transforms = new Float32Array(32);
+  const colors = new Float32Array([1, 0, 0, 0, 1, 0]);
+  const other = new Float32Array([0, 0, 1, 0, 0, 1]);
+
+  // Adapters read this record with `Object.keys` / `Object.entries`, so a
+  // `color` they cannot see is not a colour anyone can draw. Answering
+  // "the channel is present" for one would drop the `colors` the caller
+  // DID supply in favour of one nothing downstream can reach.
+  it("lifts colors past a `color` reachable only through the prototype", () => {
+    const attributes = Object.create({ [INSTANCE_COLOR_CHANNEL]: other }) as Record<
+      string,
+      Float32Array
+    >;
+    const channels = instanceAttributesOf({ assetId: "rock", count: 2, transforms, attributes, colors });
+    expect(channels[INSTANCE_COLOR_CHANNEL]).toBe(colors);
+    expect(Object.keys(channels)).toEqual([INSTANCE_COLOR_CHANNEL]);
+  });
+
+  it("lifts colors past a NON-ENUMERABLE own `color`", () => {
+    const attributes: Record<string, Float32Array> = {};
+    Object.defineProperty(attributes, INSTANCE_COLOR_CHANNEL, { value: other, enumerable: false });
+    const channels = instanceAttributesOf({ assetId: "rock", count: 2, transforms, attributes, colors });
+    expect(channels[INSTANCE_COLOR_CHANNEL]).toBe(colors);
   });
 });

@@ -52,6 +52,15 @@ const ROOT_TYPE_SURFACE = [
   "DataValue", "DescribedConnection", "DescribedDrivenParam", "DescribedGraphParam",
   "DescribedGraphScopedParam", "DescribedNode", "DescribedNodeParam", "DescribedOutput",
   "DescribedParamBase", "DescribedSpawner", "DescribedSubgraphParam", "DescribedSubgraphPin",
+  // The device twin of the per-instance attribute channel: one channel
+  // (`DeviceInstanceAttribute`), the element types one may carry
+  // (`DeviceInstanceAttrType` — every AttrType but "string", whose table
+  // does not travel), and what a channel's buffer actually holds
+  // (`DeviceInstanceAttributeLayout`). Published because a host composing
+  // its own device buffers has to obey the two WGSL rules that make the
+  // buffer differ from the CPU column, and reading them off a type is how
+  // it finds out. See src/fields/gpuResolver.ts.
+  "DeviceInstanceAttrType", "DeviceInstanceAttribute", "DeviceInstanceAttributeLayout",
   "DeviceInstanceBatch", "DeviceTransformsHandle", "Domain", "EvalContext", "ExposedParam",
   "ExposedParamDecl", "ExposedParamTarget", "ExposedParamTargetDecl", "ExposedPin",
   "ExposedPinNames", "ExtrudePolygonParams", "FbmOpts", "Field", "FieldBindingValue",
@@ -61,6 +70,12 @@ const ROOT_TYPE_SURFACE = [
   "FilterPrimitivesByBoundsParams", "Geometry", "GeometryItem", "GpuCookStats",
   "GpuFieldResolver", "Graph", "GraphCycleError", "GraphDescription", "GraphError", "GraphMeta",
   "GraphParam", "GraphSerializationError", "GraphValidationError", "InlineParamMeta",
+  // Named per-instance columns on a CPU batch — the whole graph→host ABI
+  // for anything the host must drive per instance. Published with
+  // `InstanceBatch` because it IS that field's type, and a host reading
+  // one needs the layout rules the alias documents (dtype preserved, item
+  // size derived as length / count). See src/graph/data.ts.
+  "InstanceAttributes",
   "InstanceBatch", "InstancesItem", "JitterPointsParams", "LevelDef", "MergePointsParams",
   "MergePrimitivesParams", "MeshPrimitiveParams", "NodeDef", "NodeDoneInfo", "NodeExecuteArgs",
   "NodeExecutionError", "NodeHandle", "NodeOutputs", "NodeSeedRef", "NodeSpec", "NodeTypeInfo",

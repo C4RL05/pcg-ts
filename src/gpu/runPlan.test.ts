@@ -1018,6 +1018,133 @@ describe("resident run planning: instance colour", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Named per-instance channels: the one spawner condition that is NOT a
+// mistake. The library promises that a path which cannot run on the GPU
+// falls back with a machine-readable reason rather than silently doing
+// something else — and a resident run that composed the transforms while
+// dropping the channels would be exactly the silent something else, since
+// the host is about to bind those columns by name. So the planner refuses
+// the run, the terminal falls back per-node, and the CPU spawner produces
+// the transforms AND the channels together.
+
+/** TRS layout plus channel-shaped columns: a u32 id, an f32x2, a string. */
+const CHANNEL_LAYOUT: ResidentRunContext["attributes"] = {
+  ...TRS_LAYOUT,
+  color: { type: "f32", tupleSize: 4 },
+  tint: { type: "f32", tupleSize: 3 },
+  plantId: { type: "u32", tupleSize: 1 },
+  phase: { type: "f32", tupleSize: 2 },
+  species: { type: "string", tupleSize: 1 },
+};
+
+describe("resident run planning: the spawner's per-instance channels", () => {
+  /**
+   * The outcome of ONE spawn as a plain string, planned or rejected.
+   *
+   * `rejection()` THROWS when the planner hands back a plan, which is the
+   * right shape for a lone assertion and the wrong one inside a loop: the
+   * throw happens before `expect()` runs, so vitest never renders the
+   * message argument and the report names a line rather than the value
+   * that tripped it. Returning "planned" instead makes the ASSERTION the
+   * thing that fails, so its label survives.
+   */
+  const outcomeOf = (instanceAttrs: unknown): string => {
+    const outcome = planResidentRun(
+      [spawn({ instanceAttrs })],
+      { attributes: CHANNEL_LAYOUT, count: 16, needsGeometry: true },
+      Number.MAX_SAFE_INTEGER,
+      false,
+    );
+    return "plan" in outcome ? "planned" : outcome.reason;
+  };
+
+  it("rejects a spawn naming ANY channel, with the EXISTING reason", () => {
+    // One channel is enough, and the reason is assetAttr's and the
+    // budget's — no new fallback vocabulary. A caller observes the
+    // counter key and nothing else: `PlanRejection` carries only
+    // `reason`, so the planner's own sentence ("instanceAttrs names N
+    // per-instance channel(s)...") never leaves planResidentRun. There
+    // is nothing else here to assert, and asserting a message would pin
+    // a string no cook can ever hand back.
+    expect(rejection([spawn({ instanceAttrs: ["plantId"] })], 16, CHANNEL_LAYOUT)).toBe(
+      "run-plan-failed",
+    );
+    for (const instanceAttrs of [["phase"], ["plantId", "phase"], ["tint", "plantId", "phase"]]) {
+      expect(outcomeOf(instanceAttrs), instanceAttrs.join("+")).toBe("run-plan-failed");
+    }
+  });
+
+  it("rejects on the CHANNEL, not on anything wrong with it", () => {
+    // The reason is a binding budget, not a validation failure: the
+    // compose kernel's widest form already binds seven storage buffers
+    // against the baseline maxStorageBuffersPerShaderStage of 8, so an
+    // ARBITRARY number of gather channels does not fit in it. So a
+    // perfectly good, device-eligible u32 column rejects exactly as a
+    // nonexistent name does — the two are indistinguishable here, which
+    // is the point. A future kernel that fitted them would flip both.
+    expect(rejection([spawn({ instanceAttrs: ["plantId"] })], 16, CHANNEL_LAYOUT)).toBe(
+      "run-plan-failed",
+    );
+    expect(rejection([spawn({ instanceAttrs: ["absent"] })], 16, CHANNEL_LAYOUT)).toBe(
+      "run-plan-failed",
+    );
+    // A string channel is the CPU spawner's own refusal (its column is
+    // indices into a table that does not travel). It rejects here too,
+    // so the per-node path raises that message rather than this planner
+    // wording a second copy of it.
+    expect(rejection([spawn({ instanceAttrs: ["species"] })], 16, CHANNEL_LAYOUT)).toBe(
+      "run-plan-failed",
+    );
+    // Not an array at all is not a valid graph either, and the shapes
+    // split in a way worth keeping apart rather than looping over as one
+    // list. A STRING is caught by the LENGTH check ("plantId".length is
+    // 8), so it pins nothing about the Array.isArray guard on its own —
+    // it is here for the param contract, not for the guard.
+    expect(outcomeOf("plantId"), "string").toBe("run-plan-failed");
+    // These are what pin the guard. Each has NO length, so with
+    // Array.isArray gone they read as 0 channels and PLAN — handing back
+    // a device-resident spawner with the channels silently dropped, the
+    // one outcome this rejection exists to prevent. Verified by mutation:
+    // remove the guard and every one of these turns into "planned".
+    for (const instanceAttrs of [{}, 7, true, null]) {
+      expect(outcomeOf(instanceAttrs), `lengthless: ${JSON.stringify(instanceAttrs)}`).toBe(
+        "run-plan-failed",
+      );
+    }
+  });
+
+  it("decides on the channels ALONE: a spawn that would otherwise plan still rejects", () => {
+    // `tint` is f32x3 and plans as colour on its own (asserted just
+    // below). Naming a channel alongside it still rejects, so the
+    // channel list is decisive rather than one input among several.
+    expect(
+      rejection([spawn({ colorAttr: "tint", instanceAttrs: ["plantId"] })], 16, CHANNEL_LAYOUT),
+    ).toBe("run-plan-failed");
+  });
+
+  it("EMPTY costs the device path nothing: the spawn plans, colour included", () => {
+    // The load-bearing boundary. `instanceAttrs` defaults to `[]` on
+    // every graph in the corpus, so an empty list that rejected would
+    // take the whole device-resident spawner off the table for everyone
+    // — the param would have silently ended the feature it shipped
+    // beside. Absent (a graph serialized before the param existed) has
+    // to plan for the same reason.
+    const empty = plan([spawn({ instanceAttrs: [] })], 16, CHANNEL_LAYOUT);
+    expect(empty.instances?.count).toBe(16);
+    expect(empty.instances?.bytes).toBe(16 * 64);
+
+    const absent = plan([spawn()], 16, CHANNEL_LAYOUT);
+    expect(absent.instances).toEqual(empty.instances);
+
+    // And an empty list does not disturb the colour path it sits next to.
+    const coloured = plan([spawn({ colorAttr: "tint", instanceAttrs: [] })], 16, CHANNEL_LAYOUT);
+    expect(coloured.instances?.colorAttr).toBe("tint");
+    expect(coloured.instances?.colorTupleSize).toBe(3);
+    expect(coloured.instances?.colorBytes).toBe(16 * 16);
+  });
+});
+
 describe("resident run planning: the spawner's instance budget", () => {
   const P_ONLY: ResidentRunContext["attributes"] = { P: { type: "f32", tupleSize: 3 } };
   const MAX = 1_048_576;
