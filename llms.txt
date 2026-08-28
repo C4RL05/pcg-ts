@@ -11,12 +11,31 @@ driven programmatically: node capabilities are enumerable at runtime
 (`listNodeTypes()`), graphs round-trip through versioned JSON
 (`serializeGraph`/`deserializeGraph`), and all errors are actionable.
 
+Two version numbers, and they are not the same number. `VERSION` is the
+released package version as a string — the only one a consumer can read
+at runtime, and what `pcg --version` prints. `formatVersion` is the
+serialized-graph schema version, carried in every graph document, and it
+is `1`; see "Authoring a graph as JSON" for what would move it. A release
+bump never touches `formatVersion`, and a graph written today states `1`
+whatever `VERSION` says.
+
 ## Core mental model
 
 - Data flows through graphs as collections of items: geometry items,
   value items (plain numbers/strings/bools), instances items (transform
   batches for renderers, each optionally carrying per-instance RGB).
   Items carry tags and a revision id (`rev`).
+- You BUILD those three with `makeGeometryItem(geo, tags?)`,
+  `makeValueItem(value, tags?)` and `makeInstancesItem(batches, tags?)` —
+  the constructor set `dataInput` names by hand when it refuses something
+  ("expected a geometry, value or instances item; see
+  makeGeometryItem/makeValueItem/makeInstancesItem"). Use them rather
+  than an object literal of the same shape: each stamps a fresh `rev`,
+  and `rev` is what the memo cache keys on instead of hashing the data,
+  so a hand-rolled item reusing a number is a cache HIT on changed
+  content — a stale cook with nothing to report. Binding live data into a
+  graph (`graph.setParam(node, "items", [...])`) and returning outputs
+  from a node implementation are the same call.
 - A pin carries a COLLECTION, and one connection can put many geometries
   on it (`partitionByAttribute` emits one per distinct value; a subgraph
   or `dataInput` forwards however many it holds). A node that processes
@@ -72,11 +91,40 @@ driven programmatically: node capabilities are enumerable at runtime
   not change serves its cache instead of cooking again.
 - A `Geometry` holds four attribute domains: point, vertex, primitive,
   detail (always 1 element), plus topology (vertex->point map, primitive
-  vertex ranges). Point-only clouds are the common fast path.
+  vertex ranges). Point-only clouds are the common fast path. `DOMAINS`
+  is those four names as a runtime array in canonical order — read it
+  rather than hardcoding the list, so a "for every domain" walk cannot
+  disagree with the library about what the domains are or what order
+  they come in.
+- Each domain is an `AttributeSet`: an ordered collection of attributes
+  sharing one element count, which is what `geo.attrs.point` (and
+  `.vertex` / `.primitive` / `.detail`) IS. Iteration is insertion
+  order — stable and deterministic, and `rename` keeps an attribute's
+  position rather than moving it to the end, so nothing that walks a
+  domain depends on when a column was added.
 - Attributes are named typed-array columns (f32/i32/u32/bool/string)
   with a tuple size. Standard point attributes: P (f32x3), rot (quat
   f32x4, xyzw), scale (f32x3), density (f32), boundsMin/boundsMax
-  (f32x3), color (f32x4), seed (u32).
+  (f32x3), color (f32x4), seed (u32). `STANDARD_POINT_ATTRS` is that
+  table at runtime — `{ name, type, tupleSize, defaultValue }` each, in
+  the order `createPointCloud` adds them — and it is the only statement
+  of the DEFAULTS, which the prose list above does not carry: rot
+  `[0,0,0,1]` (identity quat), scale `[1,1,1]`, density `1`, color
+  `[1,1,1,1]`, and `[0,0,0]` / `0` for the rest. A fresh cloud is not
+  zeroed, and code that assumes it is will read a scale of 0 where the
+  library put 1.
+- What a geometry IS, before you decide what to do with it, is a
+  question about its PRIMITIVES, not its point count:
+  `primitiveTypeCounts(geo)` returns how many primitives carry each
+  `primtype` value — `poly` for a mesh (surface sampler, triangle
+  renderer), `polyline` for a path or edge network (arc-length sampler,
+  line renderer). Two different things return `{}`: a geometry with no
+  primitives at all, and one whose topology was set through
+  `Geometry.setTopology` directly, which stamps no tag — so an empty
+  record is "nothing tagged", never "no primitives". `PRIMTYPE_ATTR` is
+  the attribute name (`"primtype"`, a string column on the primitive
+  domain) for the cases that must read or write the tag directly;
+  `primitiveTypeCounts` is the door that saves you knowing that.
 - A `Field` is a deferred computation resolved per element of a domain.
   Field-capable node params accept a constant OR a field expression;
   scalars broadcast against tuples.
@@ -94,14 +142,35 @@ Format (`SerializedGraph`, formatVersion 1 — field names exactly):
 - `seed`: number (graph seed; node seeds derive from it)
 - `meta`: optional `{ title, description, tags }` — the only place
   descriptive text belongs; excluded from the content hash
-- `params`: optional [{ `name`, `value`, `min`?, `max`?, `description`? }] —
+- `params`: optional [{ `name`, `value`, `targets`?, `min`?, `max`?,
+  `description`? }] —
   GRAPH-SCOPED params, in declaration order, written only when non-empty.
-  One value declared once at the top level; any node's field expression
-  reads it by name as `{ fn: "param", name }` with NO inline `value`
-  (below). Binding happens at DESERIALIZE, by substitution into the spec,
-  so the graph cooks byte-identically to one with that number written out
-  in every reading slot. `value` is a finite number or a non-empty array
-  of them — never a spec, never a reference to another param. `name` may
+  One value declared once at the top level, reaching a node by one of TWO
+  routes. READ: any node's field expression names it as
+  `{ fn: "param", name }` with NO inline `value` (below); binding happens
+  at DESERIALIZE, by substitution into the spec, so the graph cooks
+  byte-identically to one with that number written out in every reading
+  slot. WRITE: `targets` is [{ `node`, `param` }], param slots the value
+  is written into at load, in write order — which is the only way a
+  declaration reaches an `i32`, `bool`, `string`, `enum` or non-field
+  vector, since every field-capable param in the registry is `f32`,
+  `vec3` or `vec4` and so no expression could carry one. A targeted
+  param's schema is DERIVED from the slots it drives (types and enums must
+  agree, `acceptsField`/`acceptsInfinite` ANDed, bounds intersected and
+  narrowable only), and a driven slot is NOT independently editable — the
+  declaration wins on every load and serialization writes it back over the
+  node's literal, so that literal is dead text. Refused: two declarations
+  on one slot, a target that already holds a field expression, a target
+  naming a missing node or param, and a node literal THE FILE ACTUALLY
+  CARRIED that disagrees with its driver — a slot merely holding a
+  schema default is overwritten silently, since nothing there was
+  authored to object to. A declaration with neither a reader nor a target
+  is legal and reported (`read by nothing`), not refused. Untargeted,
+  `value` is a finite number or an array of exactly 3 or 4 of them (a
+  vec3 or a vec4 — any other width is refused by name, the param
+  vocabulary having nothing to call it), never a spec and never a
+  reference to another param; targeted, it is whatever the merged schema
+  admits. `name` may
   not contain a `.` or start with `$` (the address is `"$<name>"`). A
   declared `min`/`max` is enforced on the value, componentwise, by the
   graph itself, since a hoisted value has no spec of its own to be
@@ -210,6 +279,26 @@ g.output(b, "out", "points");
 const { outputs, stats } = await cook(g); // stats: { cooked, cached, elapsedMs }
 ```
 
+Two ways to get a node DEF, and they are not interchangeable.
+`standardNode(spec)` REGISTERS a type under a name: that is what puts it
+in `listNodeTypes()`, gives its params a schema to be validated against,
+and makes a graph that uses it serializable — a duplicate name throws and
+there is no unregister. `defineNode(def)` registers nothing and returns
+its argument unchanged; its whole job is type inference, pinning the
+def's param type `P` so that `execute`'s `params` is typed rather than
+widened, which a bare object literal does not give you.
+`serializeGraph` is stricter than "a registered type": it wants THE
+registered def object for that type, so redeclaring a name is not a
+loophole. A def you only `defineNode`d therefore builds and cooks but
+cannot be saved. The wrappers are the exception and the reason the helper
+exists: `subgraphNode`, `forEachNode` and `repeatUntilNode` build their
+PER-INSTANCE defs with `defineNode`, because a wrapper's pins and params
+come from the body it wraps and cannot be written down once in a
+registered schema — and those DO serialize, because their defs carry a
+recorded subgraph spec that serialization looks for before it asks the
+registry anything. Build one by hand instead of through its factory and
+serialization refuses it by name, pointing at the factory to use.
+
 ## Graph mutation and introspection (editor/tooling surface)
 
 Every mutation bumps the graph version; the introspection reads are
@@ -246,11 +335,25 @@ frozen snapshots with no mutation path that bypasses version bumps.
   values are live references under the library-wide aliasing rule: treat
   them as frozen, change params only through `setParam`.
 - `describeSubgraphPins(def)` — per-instance pins of a `subgraphNode`
-  def: frozen `{ inputs, outputs }` of `{ name, kind }` in exposure
-  order, kinds resolved live from the recorded spec through nested
-  subgraphs. Returns `undefined` for non-subgraph defs; throws
-  (GraphValidationError, naming pin and inner node) when later edits
-  broke the wrapper.
+  def: frozen `{ inputs, outputs }`, the body's exposed pins first in
+  exposure order with kinds resolved live from the recorded spec through
+  nested subgraphs, then any pin the WRAPPER adds on top, in the order
+  the def declares them. A wrapper pin is an ordinary entry carrying
+  `synthesized: true` — today only `repeatUntil`'s `rounds` and
+  `converged`, since `forEach` synthesizes none. Read the flag as BOTH
+  halves of the fact, because they pull opposite ways: the pin is REAL —
+  it is on the def, it can be wired, and leaving it out would tell you a
+  loop node has fewer outputs than it has, when those two are the only
+  way to tell a settled result from one that hit `maxRounds` — but it is
+  NOT the body's, so it traces to no exposed inner pin, does not move
+  when the recipe's exposed outputs are renamed, and survives editing the
+  body. The key is ABSENT rather than `false` on an ordinary pin, so a
+  consumer comparing against `{ name, kind }` still matches the ordinary
+  case exactly. A body may not expose an output named `rounds` or
+  `converged` — `repeatUntilNode` refuses it outright rather than
+  shadowing, which is what keeps the two sets disjoint. Returns
+  `undefined` for non-subgraph defs; throws (GraphValidationError, naming
+  pin and inner node) when later edits broke the wrapper.
 - `describeSubgraphParams(def)` — per-instance params of a `subgraphNode`
   def: frozen list of `{ name, schema, targets }` in exposure order,
   where `schema` is the ParamSchema merged from the inner targets and
@@ -307,6 +410,35 @@ frozen snapshots with no mutation path that bypasses version bumps.
   line: `pcg validate <graph.json> --params` (add `--json` for the same
   list machine-readable), which prints the graph-scoped rows first and
   annotates each with `read by <n> slots: …`, or `read by nothing`.
+- `describeGraphAssets(graph)` — the same shape of answer for the OTHER
+  free-text surface: every `spawnInstances` in the graph and in every
+  subgraph body, in node order, as
+  `{ node, assetId, assetAttr?, ids, open }`. `node` is the node id, or
+  `"wrapper > inner"` for one inside a body. `ids` is every asset id that
+  node can emit, deduplicated in first-occurrence order, each tagged with
+  where it came from — `{ from: "assetId" }` for the param, or
+  `{ from: "attribute", writtenBy }`, which ALWAYS names the
+  `setAttribute` that wrote it, because there is no table entry nobody
+  wrote. The point is that an asset id is a promise to a renderer the
+  library has never met, so it cannot validate one — but it can tell you
+  which promises a graph makes, before it cooks, and without a seed
+  having to happen to reach a branch. `open` is the completeness flag and
+  the ONLY one: empty means the id set is closed, and a non-empty entry
+  (`{ node, type, reason }`) says why the list is a LOWER BOUND. Reported
+  OPEN rather than guessed at: an id arriving through promotion,
+  transfer, `attributeRemap`, `copyToPoints`, a partition or a wrapper
+  boundary; a `setAttribute` whose value is a field, or whose `values`
+  the walk cannot read as a string list; and — the case a typo'd
+  `assetAttr` actually hits — nothing upstream writing the attribute at
+  all, where the entry names the SPAWNER itself rather than some node
+  above it. `reason` is written to be printed verbatim. From the command
+  line: `pcg assets <graph.json>`.
+- `graphParamBindings(params)` / `applyGraphParamTargets(graph, params,
+  authored)` / `strandedGraphParamValues(graph)` — the graph-scoped-param
+  surface for anything that rebuilds a graph itself rather than going
+  through `deserializeGraph`, plus the lint for values that stopped
+  tracking their declaration. See docs/authoring.md, "One value, many
+  nodes: graph-scoped params".
 - `resolveExposedParam(inner, decl)` — build one exposed param for
   `subgraphNode`'s fourth argument. `decl` is
   `{ name, targets, description, default?, min?, max? }`; the schema is
@@ -782,6 +914,36 @@ Note this is about DESCRIBING a field, not about where it runs: device
 eligibility is narrower and additionally requires either an AUTHORED
 spec or `acceptDerivedSpecs` (see the GPU section).
 
+Reading the grammar back, for anything that has to SHOW a spec rather
+than only evaluate one — a palette, an error message, a diagram, an
+agent choosing a fn before it writes one:
+
+- `listFieldFnInfos()` is the grammar's counterpart of `listNodeTypes()`,
+  and it is the catalog to read BEFORE writing a field-valued param.
+  Same names in the same order as `listFieldFns()`, but each entry is
+  `{ fn, keys, usage, description, args?, outputRange? }` instead of a
+  bare string: `keys` are the spec keys allowed beside `fn`, `args` names
+  the positional arguments (a `…` name marks a repeated position),
+  `description` is never empty and covers the edges that bite, and
+  `outputRange` is the documented range where one exists. `listFieldFns()`
+  is the same list as names only, which is what error messages quote.
+  Prefer the Infos form whenever you need the argument NAMES — the specs
+  themselves carry positions, not names.
+- `specChildEntries(node)` walks one spec node's children WITH each
+  position named, which `specChildren` (values only) cannot do: `sub(a, b)`
+  is unreadable as two anonymous children, and `byAttribute`'s case keys
+  are the whole content of its branches. Order is part of the contract —
+  args in order, then `position`, then `variant`, then `cases` in
+  insertion order, then `default` — so a renderer can rely on it. The
+  names it gives are STRUCTURAL (`args[0]`, never `edge`), because the
+  walk sits below the registry; join to `listFieldFnInfos()` and index
+  its `args` when you want the registered name.
+- `paramNamesOf(spec)` lists every `{ fn: "param", name }` a spec
+  references, sorted and deduplicated — the catalog of what
+  `fieldFromJson` must be given before that spec can be built. It walks
+  the whole tree including `opts.position`, and it READS rather than
+  validates, so it is safe to hand raw JSON that has not been checked yet.
+
 ## Node types (full schemas: docs/nodes.md, machine-readable: docs/nodes.json)
 
 `listNodeTypes()` entries carry an optional `category` grouping label
@@ -1075,7 +1237,16 @@ Three rules an agent needs before choosing one:
   combining. Same graph + seed = byte-identical output across runs,
   platforms, cook orders, and streaming paths. Seed chain: graph seed ->
   node seed = hashCombine(graphSeed, hashString(nodeId)) -> per-point
-  hashCombine(seed, index, axis). No Math.random anywhere.
+  hashCombine(seed, index, axis). No Math.random anywhere. The chain's
+  last link — the one that turns a u32 into a number you can use — is
+  `hashFloat(h)`, and it is a public function precisely so a host does
+  not invent a second one: it takes the TOP 24 bits (`(h >>> 8) * 2**-24`),
+  which puts the result in [0, 1), makes it exactly representable as an
+  f32, and keeps it BELOW 1 once stored in a Float32Array, where the
+  obvious `h / 2**32` can round up to exactly 1 and put a "probability"
+  outside its own range. `randomField` resolves through it, so anything
+  reproducing a draw the graph made on the host side agrees with the
+  graph by construction rather than by luck.
 - The ONE exception to that chain: `pointScatterInWorld`'s lattice is a
   function of its own `seed` param alone — the graph seed is not an input
   at all, exactly as a noise field carries its seed inside its own spec.
@@ -1936,6 +2107,30 @@ valid pins). Typed classes: GraphValidationError, GraphCycleError,
 NodeExecutionError (has .nodeId), CookCancelledError,
 GraphSerializationError, FieldJsonError, WorldValidationError.
 
+`GraphError` is the base class, and it covers FOUR of those seven, not
+all of them: GraphValidationError, GraphCycleError, NodeExecutionError
+and CookCancelledError extend it; GraphSerializationError, FieldJsonError
+and WorldValidationError extend `Error` directly. So
+`catch (e) { if (e instanceof GraphError) ... }` is the right net for
+"building or cooking this graph went wrong" and the WRONG one for a load,
+a field-spec parse or a World misconfiguration — those three are caught by
+their own classes or not at all, and a handler written on the assumption
+that one base covers the list will drop them. `GraphError` adds no fields
+of its own: `.nodeId` on NodeExecutionError is the only one anywhere in
+the set, and everything else — the offending node, pin or param, and the
+valid alternatives — is carried by the message TEXT, which is why the
+messages are part of the API rather than decoration.
+
+Across a worker thread the message always survives and the CLASS
+sometimes does. `pcg-ts/worker` rebuilds six names — GraphError, its four
+subclasses, and GraphSerializationError — so `instanceof` on those keeps
+working off-thread. Any other name, FieldJsonError and
+WorldValidationError included, arrives as a plain `Error` carrying the
+right `.name` and the message verbatim, so match on `err.name` rather
+than `instanceof` for those two. A rehydrated NodeExecutionError also
+loses its `cause`, and reports `nodeId` as `"(unknown)"` if the wire form
+carried none.
+
 A field-capable param that RESOLVES to NaN or ±Infinity is refused where
 it lands on a domain, naming the node and the param, with how many
 elements of how many are non-finite. A schema's min/max binds a plain
@@ -2073,7 +2268,7 @@ not raised.
   switch, and export/import. It is the human half of the
   agent-and-human ergonomics claim — start here to see what a graph
   does before writing one.
-- demos/ — THREE vite demos, sitting beside the editor and the graph
+- demos/ — FIVE vite demos, sitting beside the editor and the graph
   corpus in `graphs/`. A demo exists only where a HOST is required to
   show the thing; anything that is one cook of one graph is a corpus
   file instead, because a graph an agent can run teaches more than a
@@ -2084,6 +2279,19 @@ not raised.
   - gpu-world streams a World rendering from device-resident instance
     transforms, with the binding's live handle count and the evaluator
     pool's detached-buffer accounting shown side by side.
+  - racetrack sweeps a road along a centreline the page was HANDED
+    rather than made, then dresses its verges. It is the one the
+    placement rules run on, and the only consumer of `cellMode: "path"`:
+    an unbounded `lap` level settles the whole placement list, and a
+    `dressing` level of 20W arc sectors turns settled placements into
+    instances as the car reaches them. A sector reads no neighbour, so
+    there is no halo and the union of the sectors is the whole lap bit
+    for bit.
+  - road began as a copy of racetrack and is kept as the version with no
+    placement rules in it. READ THEM AS TWO DEMOS, not as a diff: main.ts
+    shares not one line (505 against 1287), graph.ts and lap.ts have
+    diverged in BOTH directions, and only spline.ts is still identical.
+    Do not change one expecting the other to follow.
   Retired into the corpus, and named here because older docs still cite
   them: the graph editor, the GPU-fields comparison, the headless demo,
   the forest, and the rig playground. The forest and the rig are

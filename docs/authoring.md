@@ -29,7 +29,7 @@ A serialized graph is one JSON object (`SerializedGraph`):
 | --- | --- |
 | `formatVersion` | Always `1`. Other values are rejected with the supported version named. |
 | `seed` | Graph seed (finite number, used as u32). Every node's seed is `hashCombine(seed, hashString(nodeId))`. |
-| `params` | Optional. Graph-scoped params, in declaration order: `{ name, value, min?, max?, description? }` each. One value declared once, read by name from any node's field expression (see [Graph-scoped params](#one-value-many-nodes-graph-scoped-params)). Written only when non-empty, so a graph that declares none serializes exactly as it did before the key existed. |
+| `params` | Optional. Graph-scoped params, in declaration order: `{ name, value, targets?, min?, max?, description? }` each. One value declared once, which reaches a node either by being READ (a field expression names it) or by being WRITTEN (a `targets` entry `{ node, param }` names a param slot) — see [Graph-scoped params](#one-value-many-nodes-graph-scoped-params). Written only when non-empty, so a graph that declares none serializes exactly as it did before the key existed. |
 | `meta` | Optional `{ title, description, tags }` — the only place descriptive text belongs; there is no comment or annotation key. Excluded from the content hash, so retitling a graph invalidates nothing. |
 | `nodes` | Node instances. `id` must be unique and non-empty; `type` must be a registered node type; `params` maps param names to values. Omitted params take their schema defaults. A `subgraph` node additionally carries either a `subgraph` payload or a `ref` (below); no other node type may carry either. |
 | `connections` | Directed edges `from: [nodeId, outputPin]` to `to: [nodeId, inputPin]`. Pin kinds must be compatible (`any` matches everything); an input pin accepts one connection unless declared `multi`; cycles are rejected. |
@@ -86,6 +86,31 @@ polices.
 There is no annotation or comment key either; descriptive text belongs in
 the `meta` block, in a graph param's own `description`, or — for an
 exposed param — in its own `description`.
+
+The `meta` block has ONE validator, and both ends of the round trip go
+through it. `validateGraphMeta(value, where)` takes an untrusted value
+and returns a frozen canonical copy — known keys only, absent keys
+omitted, and `tags` copied so a caller mutating its own array afterwards
+cannot reach into the graph. `Graph.setMeta` and the JSON reader both
+call it, deliberately: the two ends disagreeing is exactly how you get a
+graph that saves and cannot be reopened, since a writer that accepts
+`{ title: 7 }` hands the reader something it is right to refuse. It
+throws `GraphValidationError` for a non-object (or `null`, or an array),
+for any key outside `GRAPH_META_KEYS` — the message lists the valid ones
+— for a non-string `title` or `description`, for a `tags` that is not an
+array, and for a non-string entry in `tags`. That last check is an
+indexed loop rather than a `forEach` for a reason worth knowing if you
+build a `meta` block programmatically: `forEach` SKIPS holes, so a sparse
+`tags` array would validate clean and then serialize its holes as
+`null`s — saved, and unreadable on the way back in. `where` is the
+caller's label for the offender's location, and it is what puts
+`"meta"` or `"setMeta"` at the front of the message.
+
+`GRAPH_META_KEYS` is that key list at runtime — `["title", "description",
+"tags"]`, in canonical order, and frozen. It is frozen because the
+validator reads it twice, once to decide what is legal and once to write
+the error that lists the alternatives; a caller who could push to it
+could make the library advertise a key it then silently drops.
 
 The rule holds at every object position, not only the outer ones, because
 a lenient nested object is the same near-miss one level down and the
@@ -1018,11 +1043,16 @@ and where the body must also stand alone.
 
 The rest of the rules, each with a reason:
 
-- **`value` is a literal**: a finite number, or a non-empty array of
-  them. Not a spec, and not a reference to another graph param — a value
-  that computes is a node, and params referring to params would need a
-  topological order and cycle detection for nobody who has asked. Write
-  the `mul` at the reading site, or declare both values.
+- **`value` is a literal**: a finite number, or an array of exactly
+  three or four of them — a vec3 or a vec4. Any other width is refused
+  by name, because the param vocabulary has nothing to call it: a
+  two-number array is not a type the format can express. (A TARGETED
+  declaration is judged by its merged schema instead, and may hold
+  whatever that admits.) Not a spec, and not a reference to another
+  graph param — a value that computes is a node, and params referring to
+  params would need a topological order and cycle detection for nobody
+  who has asked. Write the `mul` at the reading site, or declare both
+  values.
 - **An array, not an object keyed by name.** `JSON.parse` collapses
   duplicate object keys before any reader sees them; in an array a
   repeated name is detectable, so it is detected and refused. The array
@@ -1070,6 +1100,124 @@ params:  12 addresses, 1 declared worth turning (*)
      grid.countX          i32   8        >= 1
      ...
 ```
+
+**The other route: `targets`, for the values an expression cannot carry.**
+Everything above is the READ route — a field expression names the param
+and the value is substituted in when the field is built. That route can
+only carry what a field can carry, which is a number: every field-capable
+param in the registry is `f32`, `vec3` or `vec4`. So a declaration may
+also list `targets`, an array of `{ node, param }` naming param slots to
+WRITE the value into, in write order:
+
+```json
+{
+  "name": "tubeSides",
+  "value": 8,
+  "min": 3,
+  "max": 32,
+  "targets": [
+    { "node": "trussChordSkin", "param": "sides" },
+    { "node": "wrapWraps", "param": "sides" }
+  ]
+}
+```
+
+Writing rather than substituting is what reaches the other half of the
+format — `i32`, `u32`, `bool`, `string`, `enum`, the list types and
+non-field vectors — none of which any expression could have carried.
+That block is abridged from `graphs/examples-rig.json`, which declares
+`tubeSides` as an `i32` narrowed to 3..32 and drives six slots with it:
+five `sweepProfile.sides`, plus a `forEach` wrapper whose own exposed
+`sides` carries the value on into the cable body. A declaration with
+neither a target nor a reader is legal, and
+reported rather than refused: it is what a rename leaves behind, and
+`pcg validate --params` prints it as `read by nothing`.
+
+The schema a targeted param is judged by is DERIVED from the slots it
+drives, through the same resolver a subgraph's exposed param uses, and
+the merge rules are the soundness argument rather than a convenience:
+`type` and `enum` must be identical across targets, `acceptsField` and
+`acceptsInfinite` are ANDed, and bounds intersect — an authored `min`/`max`
+may only NARROW what the targets already allow, never widen it. A
+declaration therefore cannot claim a capability the params it drives do
+not have, which is what lets it reach `i32` and `enum` safely. The
+derived schema is not serialized; it is re-derived on every load.
+
+Four things are refused rather than resolved:
+
+- **Two declarations on one slot**, or one declaration listing a slot
+  twice. Measured before the guard existed, two params targeting one
+  `countX` simply let the last one win — 90 points against 40, with
+  nothing said.
+- **A target that already holds a field expression.** Writing the value
+  would leave the expression in the file and dead in the cook: a
+  `translate` of `mul(position, 2)` under a declared `3` cooks a flat
+  `3` while the JSON still shows the expression. Drop the expression, or
+  drop the target and let the expression READ the name instead — a
+  `param` reference inside it binds to the same declared value.
+- **A target naming a node or param that does not exist**, listing what
+  does.
+- **A node literal that disagrees with its driver**, when the loader can
+  tell an authored value from a filled-in default. The declaration wins
+  on every load, so the literal would be discarded silently.
+
+That last point is the consequence worth carrying away: **a node param a
+graph param drives is not independently editable.** The write happens at
+deserialize, once, after every node exists, and it is permanent — unlike
+a wrapper's write into a body, which happens at cook time and is undone,
+because a body is shared and a top-level graph has exactly one owner.
+Saving then writes the declaration's current value straight back over the
+node's literal. So the number standing in the file for a driven slot is
+dead text in both directions, and whatever a knob or an agent writes
+there is gone by the next load with no error to say so.
+
+Three exports make this surface reachable from outside:
+
+- `graphParamBindings(params)` builds the binding record `fieldFromJson`
+  takes, which is how a `{"fn":"param"}` reference resolves at BUILD time
+  — the only moment a value can reach `Field.key`, and therefore the only
+  moment it can reach a memo key. It keeps only what an expression can
+  hold: a number, or an array of numbers. A declaration carrying a string,
+  a bool or an enum is dropped, and an expression naming one stays
+  unbound and is reported against the name the author typed. The filter
+  reads the VALUE's shape, not whether the param has targets.
+- `applyGraphParamTargets(graph, params, authored)` resolves every
+  targeted declaration against the nodes it drives, writes the values in,
+  and hands back the params carrying their merged schemas. It is exported
+  because `deserializeGraph` is not the only thing that builds a graph
+  from a `SerializedGraph` — the editor rebuilds its own mirror node by
+  node, and skipping this step left every driven slot holding whatever
+  the file said instead of what its declaration says. That is the second
+  time a hand-rolled rebuild missed a step this performs, so it is the
+  thing both call rather than a shape both imitate. `authored` maps node
+  id to the param keys that node's JSON actually carried; it decides only
+  whether a disagreeing literal is an error, so a caller that cannot tell
+  an authored value from a default passes an empty map.
+- `strandedGraphParamValues(graph)` is a LINT, and the one that catches
+  the failure this whole feature invites: a constant frozen inside a
+  subgraph body that was plainly derived from a declared param and no
+  longer tracks it. A body is bound by its wrapper and by nothing else,
+  so the `params` block cannot reach in; these cook correctly today and
+  desync the moment the knob moves. Three conditions must hold at once,
+  and the narrowness is the point. The constant must equal the declared
+  value EXACTLY, or equal it times √2 — the "half width against half
+  diagonal" pair, a relationship no coincidence produces. It must be
+  DISTINCTIVE: ten or more significant digits, which is what a computed
+  value looks like and not what anyone types. And it must not be a value
+  that stands on its own merits (√2, √3 and π over the usual small
+  factors, plus the degree/radian pair). Distinctiveness is required in
+  BOTH branches, so a √2 relation between two round numbers is not
+  reported either. Tuples are matched whole rather than componentwise —
+  every component equal, and at least one of them distinctive and not
+  self-standing — and they have no √2 branch at all. Each hit is
+  `{ name, slot, innerSlot, value }`, `slot` joining nested bodies
+  outermost-first with `>`. Its blind spots are stated rather than hidden:
+  a body that freezes a declared `0.5` is not caught, and neither is one
+  that freezes a declared √2 or π — a short round number matching exactly
+  is what a coincidence looks like, and a lint nobody believes is worse
+  than none. `pcg validate` reports it with or without `--params`, since
+  a suspected defect is worth volunteering, and it does not fail the
+  command.
 
 What a save writes back is the REFERENCE, not the value it was bound to:
 the declaration stays in `params` and each reading slot round-trips as
@@ -1670,7 +1818,23 @@ introspection API — preserving node caches that a rebuild through
 - `describeSubgraphPins(def)` resolves a subgraph def's per-instance
   pins — exposed name plus the concrete kind of the inner pin, through
   nested subgraphs — live from the recorded spec; `undefined` for
-  non-subgraph defs. `describeSubgraphParams(def)` is its sibling for
+  non-subgraph defs. The body's exposed pins come first, in exposure
+  order, followed by any the WRAPPER adds, in the order the def declares
+  them. Those carry `synthesized: true`, and today they are exactly
+  `repeatUntil`'s `rounds` and `converged` (`forEach` adds none). The
+  flag is worth reading in both directions. The pin is REAL: it is on
+  the def, it can be wired, and a description that omitted it would
+  claim a loop node has fewer outputs than it has — leaving no way to
+  tell a converged result from one truncated at `maxRounds`, which is
+  what those two pins exist to answer. But it is not the body's, so it
+  resolves to no inner pin, it does not move when the recipe's exposed
+  outputs are renamed, and it survives editing the body. It is reported
+  as an ordinary entry rather than in a second list precisely so that
+  "what can I read off this node" stays one array; the key is ABSENT
+  rather than `false` on an exposed pin, so an equality check against
+  `{ name, kind }` still describes the ordinary case exactly. The
+  primitive catalog prints them the same way, annotated `wrapper`.
+  `describeSubgraphParams(def)` is its sibling for
   params: exposed name, resolved schema, and the inner targets the value
   is written into. Together they are a subgraph node's real interface —
   `listNodeTypes()` reports the `subgraph` type as pinless and paramless
@@ -3215,6 +3379,23 @@ and topology, with untouched attributes passing through byte-identically.
 the node def's `resident` descriptor; `seed` is exactly what the CPU
 `execute` would have received). `ResidentRunContext` is
 `{ attributes: Record<name, { type, tupleSize }>, count }`.
+
+The `stats` both methods take is the `GpuCookStats` the cook is
+accumulating into, and `createGpuCookStats()` is where one comes from: a
+fresh all-zero set of the counters described under
+[Introspection](#introspection), with empty `fallbacks` and empty
+`nonFinite` records. A resolver implementing these methods writes
+into the object it is handed when it is handed one — the parameter is
+optional, so it must also work with `undefined` — and never constructs
+one. What does need to construct one is a HOST that cooks more than once
+and wants a single figure for the lot: a page cooking each declared
+output in its own pass, or a streaming World cooking a cell at a time.
+`CookStats.gpu` describes ONE cook, so the device counters of every
+earlier pass are otherwise dropped on the floor. Start from
+`createGpuCookStats()` and fold each cook's counters into it — the
+editor's per-output loop and `demos/infinite-world` both do, and neither
+could have used a literal instead, since adding a counter to the struct
+would have left their zero object silently short a field.
 
 **What fuses.** Four *chain* kinds, all count-preserving with one
 geometry input and one geometry output, plus one *terminal* kind:
