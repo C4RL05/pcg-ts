@@ -359,7 +359,7 @@ describe("3D validation and accessors", () => {
     const def = scatterLevel({ name: "vox", cellSize: 10, generationRadius: 8 }).def;
     const bad = { ...def, cellMode: "diagonal" as never };
     expect(() => new World({ seed: 1, levels: [bad] })).toThrow(
-      /cellMode must be "xz" or "xyz", got diagonal/,
+      /cellMode must be "xz", "xyz" or "path", got diagonal/,
     );
   });
 

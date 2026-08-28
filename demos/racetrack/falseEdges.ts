@@ -51,6 +51,7 @@
  * repair exists whatever the originals turn out to do.
  */
 import type { StationedPlacement } from "./legibility.js";
+import { SAME_PLACE_W } from "./tolerance.js";
 
 export const FALSE_EDGE = {
   /** Z2-Z3: the verge and near bands, where a line reads as the edge. */
@@ -130,14 +131,33 @@ export const BARRIER = {
   furnitureCv: [1.5, 2.5],
 } as const;
 
-/** Is this placement in the band where a line would be mistaken for the edge? */
+/**
+ * Is this placement in the band where a line would be mistaken for the edge?
+ *
+ * EVERY RUNG SLACKED OUTWARD, AND THE SLACK IS NOT DEFENSIVE — it is what
+ * makes this test mean the same thing as the one `dressGraph.ts` states in
+ * f32 attribute columns. The two spellings have to agree on a boundary
+ * this demo lands on BY CONSTRUCTION: Z-1 stands large art off at exactly
+ * `1 + across/2`, which is the lower lateral bound for a piece of no width
+ * and the upper one for a piece exactly 3W wide, and Z-3's bands take
+ * their heights from a table whose entries are the bounds themselves.
+ *
+ * The graph MUST slack: `f32(0.6)` is 0.600000024, above 0.6, so an
+ * untoleranced `<=` there drops a placement this function keeps — and the
+ * whole run around it changes span, slope, residual and midpoint. Having
+ * established that one side has to, the only way the two can agree is for
+ * both to, which is the same conclusion `inCorridor` reached in `zones.ts`
+ * and for the same reason. Slacking OUTWARD keeps the f64 answer for any
+ * value sitting exactly on a rung, and `SAME_PLACE_W` is sized so that
+ * nothing on these populations sits inside the slack.
+ */
 export function inEdgeBand(p: StationedPlacement): boolean {
   const a = Math.abs(p.t);
   return (
-    a >= FALSE_EDGE.lateralW[0] &&
-    a <= FALSE_EDGE.lateralW[1] &&
-    p.h >= FALSE_EDGE.heightW[0] &&
-    p.h <= FALSE_EDGE.heightW[1]
+    a >= FALSE_EDGE.lateralW[0] - SAME_PLACE_W &&
+    a <= FALSE_EDGE.lateralW[1] + SAME_PLACE_W &&
+    p.h >= FALSE_EDGE.heightW[0] - SAME_PLACE_W &&
+    p.h <= FALSE_EDGE.heightW[1] + SAME_PLACE_W
   );
 }
 
@@ -161,6 +181,30 @@ export interface EdgeRun {
  * signed lateral would give the two sides opposite signs for the same
  * defect and halve the detector's sensitivity on whichever side the
  * threshold was written for.
+ *
+ * AND FITTED ON RUN-LOCAL ARC, NOT ON LAP ARC. `stations` arrive as
+ * distances round the whole lap — 0 to ~360W, and past a lap where the
+ * run crosses the start line — while the run itself spans forty W at the
+ * outside and the |t| it is fitted against is order one. The regression
+ * only ever uses `s - mean(s)`, so every one of those leading digits is
+ * subtracted away again: this is a difference of two nearly equal large
+ * numbers, computed to decide a threshold on a small one.
+ *
+ * In f64 that costs four of seventeen digits and nobody notices. In f32
+ * there are seven digits and the spacing at station 360 is 3e-5, so a
+ * forty-W span is written with about six of them and the deviation from
+ * its mean keeps two — against a divergence band of 0.02 to 0.3 W of
+ * lateral per W of lap, which is where the whole of L-5 lives. The
+ * detector would be reading its own quantisation.
+ *
+ * Subtracting the run's own start first is THE SAME LINE THROUGH THE SAME
+ * POINTS — a least-squares fit is translation-invariant in s, and both
+ * the slope and the residual are unchanged by it — computed where the
+ * numbers are small. It is free in f64 and it is the difference between a
+ * detector and a noise source in f32. It also puts the degenerate-run
+ * guard below back above the floor it was sitting in: `den` is a sum of
+ * squared deviations, and at lap arc those squares were ~1e-9 of pure
+ * cancellation, which is the guard's own threshold.
  */
 function fitRun(
   placements: readonly StationedPlacement[],
@@ -179,7 +223,22 @@ function fitRun(
   // construction and there is one call site — but deriving the length
   // from one array while averaging over the other is how a mismatch
   // becomes a silent misfit rather than an error.
-  const s = stations;
+  //
+  // AND AN EMPTY RUN IS ANSWERED, NOT REBASED. Rebasing reads
+  // `stations[0]`, which is `undefined` on an empty array and turns every
+  // element into NaN — where the un-rebased version this replaced just
+  // produced `n = 0` and fell through to the `den` guard. The one call
+  // site can never send an empty run (it returns early below
+  // `FALSE_EDGE.minMembers`), so this is unreachable today; it is here
+  // because the change made an exported function newly able to answer
+  // NaN, and a guard is cheaper than the argument that nobody will.
+  if (stations.length === 0) return { slope: 0, residualW: 0 };
+
+  // Rebased on the run's own start, per the note above. The run's first
+  // member is the origin, so `s` runs 0 to `spanW` however far round the
+  // lap the run sits, and the slope and residual it produces are the lap
+  // arc's own.
+  const s = stations.map((v) => v - stations[0]);
   const n = s.length;
   const t = members.map((i) => Math.abs(placements[i].t));
   const ms = s.reduce((a, b) => a + b, 0) / n;
@@ -337,9 +396,19 @@ export function repairFalseEdges(
     for (const run of bad) {
       const mid = run.members[Math.floor(run.members.length / 2)];
       const p = out[mid];
-      // Already below the band? Then this run cannot be broken this way,
-      // and the pass bound stops the repair rather than spinning.
-      if (p.h < FALSE_EDGE.heightW[0]) continue;
+      // NO GUARD AGAINST A MEMBER THAT IS ALREADY BELOW THE BAND, because
+      // there cannot be one, and the guard that used to stand here said
+      // otherwise. Every member of every run came through `inEdgeBand`,
+      // which requires `h >= heightW[0]`; `bad` is recomputed at the top
+      // of each pass, so a member lowered in pass k is not in the band in
+      // pass k+1 and cannot be a member of anything; and runs are disjoint
+      // within a side while a placement has only one side, so no placement
+      // is the midpoint of two runs in one pass. The branch was therefore
+      // unreachable, and its comment described a state this loop cannot
+      // produce — which is worse than no comment, because it implies the
+      // pass bound is what stops a spin. It is not: every pass strictly
+      // lowers at least one member out of the band, so the repair
+      // terminates on its own and `maxPasses` is a ceiling, not a brake.
       log.push({ index: mid, before: p });
       out[mid] = { ...p, h: FALSE_EDGE.heightW[0] - 0.05 };
       moves++;

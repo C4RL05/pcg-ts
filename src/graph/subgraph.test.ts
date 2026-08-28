@@ -384,6 +384,29 @@ describe("describeSubgraphPins", () => {
     });
   });
 
+  it("flags nothing on a plain subgraph, whose pins are all the body's", () => {
+    // The description now also reports pins the WRAPPER declares on top of
+    // the exposed ones, flagged `synthesized` — `repeatUntil`'s "rounds" and
+    // "converged" are the only two in the library, and they are covered
+    // where that node lives (src/docs/primitivesSynthesizedPins.test.ts,
+    // which drives the real def). Here is the other half of the rule: a
+    // `subgraph` declares EXACTLY its exposed pins, so the difference the
+    // flag is computed from must come out empty and the key must be absent
+    // rather than false — an ordinary pin still deep-equals { name, kind },
+    // which the case above relies on.
+    const inner = new Graph();
+    const t = inner.add(transformNode(), undefined, "t");
+    const def = subgraphNode(inner, [{ name: "geo", node: t, pin: "in" }], [
+      { name: "res", node: t, pin: "out" },
+    ]);
+    const pins = describeSubgraphPins(def);
+    if (pins === undefined) throw new Error("expected a pin description");
+    for (const pin of [...pins.inputs, ...pins.outputs]) {
+      expect(Object.hasOwn(pin, "synthesized")).toBe(false);
+    }
+    expect(pins.outputs).toEqual([{ name: "res", kind: "geometry" }]);
+  });
+
   it("returns a frozen snapshot", () => {
     const inner = new Graph();
     const t = inner.add(transformNode(), undefined, "t");

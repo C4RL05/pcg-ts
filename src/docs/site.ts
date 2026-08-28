@@ -617,6 +617,788 @@ export function extractFieldFnList(html: string): string[] | undefined {
 }
 
 /* ------------------------------------------------------------------ *
+ * Transcripts
+ * ------------------------------------------------------------------ */
+
+/**
+ * The other half of the drift problem, and the half a count cannot reach.
+ *
+ * `COUNT_CLAIMS` above gates the numbers the manual states ABOUT the
+ * library — how many node types there are, how many field fns. What it
+ * cannot see is the much larger set of numbers and strings the manual
+ * QUOTES AS OUTPUT: "Actual output", "a real trace", "every string below
+ * is real output, produced by feeding the named mistake to the published
+ * build". Those are the strongest sentences on the page, because they are
+ * the ones a reader will copy and expect to reproduce, and they were the
+ * only ones with nothing behind them. Two were already wrong when this
+ * section was written (see the notes on ERROR_TRANSCRIPTS and on the
+ * chapter 1 sample below), and neither had a count attached, so neither
+ * could ever have been caught by the mechanism above.
+ *
+ * The rule these follow, and the reason they are worth gating at all:
+ * **the expected value is re-derived by running the live library, never
+ * written down here.** A check that compared the manual against a literal
+ * copied out of the manual would only move the stale number into a second
+ * file. So:
+ *
+ *  - Chapter 9 prints a complete JSON document and says it "deserializes,
+ *    cooks, and round-trips as written". The test EXTRACTS THAT DOCUMENT
+ *    FROM THE PAGE, deserializes it, cooks it, and every number the manual
+ *    prints about it — in chapters 2, 9 and 14 — is compared against that
+ *    one live cook. Nothing is transcribed; edit the document on the page
+ *    and the expectations move with it.
+ *  - The error transcripts are produced by triggering the real error and
+ *    comparing the whole message.
+ *  - Chapters 1 and 8 print CODE rather than a document, so their graphs
+ *    ARE transcribed into the test. Those two transcriptions are pinned to
+ *    the printed code by CODE_ECHOES below, so the copy cannot drift from
+ *    the page in silence.
+ *  - Chapter 2.3 is a third case and NOT a CODE_ECHOES one, which is worth
+ *    saying because the obvious reading is wrong: it prints no graph at
+ *    all, only two bare `cook()` calls, and names its graph in the PROSE
+ *    above them. There is no code block to pin literals against, so that
+ *    transcription is guarded by a test on the sentence instead. See
+ *    chapter23Graph() in site.test.ts.
+ *
+ * Numbers are compared by `matchesPrinted`: round the LIVE value to as
+ * many decimals as the page chose to print, then require equality — and,
+ * where the page printed no decimal point at all, require the measurement
+ * to be a whole number too. One rule covers an integer count, a
+ * coordinate printed to three places and a bound printed to six, and it
+ * has the property you want from a documentation check: printing more
+ * digits demands more accuracy, so the page can be as precise as it likes
+ * and never more precise than it is.
+ */
+export interface TranscriptClaim {
+  /** File the transcript appears in, relative to the repository root. */
+  readonly page: string;
+  /** What the transcript shows, as the reader sees it. */
+  readonly label: string;
+  /**
+   * Named capture group → the live measurement it must equal. The name is
+   * quoted verbatim in failures, so it should read as an instruction for
+   * reproducing the value ("cook(chapter 9 document).stats.cooked").
+   */
+  readonly sources: Readonly<Record<string, string>>;
+  /**
+   * Locates the transcript. Global, with one NAMED group per source.
+   * Anchored on literal surrounding markup so it matches this transcript
+   * and nothing else; every match is checked, not just the first.
+   */
+  readonly pattern: RegExp;
+}
+
+/**
+ * Every quoted-output transcript that a live run can re-derive.
+ *
+ * Grouped by chapter, and every `sources` key names something the test
+ * measures rather than something anyone typed here. A claim whose pattern
+ * stops matching FAILS — a silently-matching-nothing claim would pass
+ * forever while checking nothing, which is the failure mode the whole
+ * file exists against.
+ */
+export const TRANSCRIPT_CLAIMS: readonly TranscriptClaim[] = [
+  /* --- Chapter 1: "Actual output" of the first graph in the book --- */
+  {
+    page: "docs/manual.html",
+    label: "chapter 1 — the printed console.log of pointCount and P[0..3]",
+    sources: {
+      count: "cook(chapter 1 graph).pointCount",
+      x: "cook(chapter 1 graph).P[0]",
+      y: "cook(chapter 1 graph).P[1]",
+      z: "cook(chapter 1 graph).P[2]",
+    },
+    pattern:
+      /<pre><code>(?<count>[\d,]+) \[ (?<x>-?[\d.]+), (?<y>-?[\d.]+), (?<z>-?[\d.]+) \]$/gm,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 1 — cook stats of the first cook",
+    sources: {
+      cooked: "cook(chapter 1 graph).stats.cooked",
+      cached: "cook(chapter 1 graph).stats.cached",
+    },
+    pattern: /\{ cooked: (?<cooked>\d+), cached: (?<cached>\d+), elapsedMs: [\d.]+ \}<\/code>/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 1 — cook stats of the second, fully cached cook",
+    sources: {
+      cooked: "second cook(chapter 1 graph).stats.cooked",
+      cached: "second cook(chapter 1 graph).stats.cached",
+    },
+    pattern:
+      /served from the memo cache — <code>\{ cooked: (?<cooked>\d+), cached: (?<cached>\d+) \}<\/code>/g,
+  },
+
+  /* --- Chapter 2.3: what per-output cooking actually schedules --- */
+  {
+    page: "docs/manual.html",
+    label: "chapter 2.3 — stats of a cook restricted to one output",
+    sources: {
+      cooked: 'cook(scatter→jitter→spawn, { outputs: ["points"] }).stats.cooked',
+      cached: 'cook(scatter→jitter→spawn, { outputs: ["points"] }).stats.cached',
+    },
+    pattern:
+      /cook<\/span>\(graph, \{ outputs: \[<span class="s">"points"<\/span>\] \}\);\s*<span class="c">\/\/ \{ cooked: (?<cooked>\d+), cached: (?<cached>\d+) \}/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 2.3 — stats of the follow-up full cook",
+    sources: {
+      cooked: "second cook(scatter→jitter→spawn).stats.cooked",
+      cached: "second cook(scatter→jitter→spawn).stats.cached",
+    },
+    pattern:
+      /cook<\/span>\(graph\);\s*<span class="c">\/\/ \{ cooked: (?<cooked>\d+), cached: (?<cached>\d+) \}<\/span>/g,
+  },
+
+  /* --- Chapter 2.6 + 9: the instance batch the document produces --- */
+  {
+    page: "docs/manual.html",
+    label: "chapter 2.6 — the cloud the spawner example was cooked from",
+    sources: { count: "cook(chapter 9 document).pointCount" },
+    pattern: /From a real cook of the (?<count>[\d,]+)-point cloud in chapter 9/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "batch.count (chapters 2.6 and 9)",
+    sources: { count: "cook(chapter 9 document).batches[0].count" },
+    pattern: /batch\.count;?\s+<span class="c">\/\/ (?<count>[\d,]+)<\/span>/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "batch.transforms length (chapters 2.6 and 9)",
+    sources: { n: "cook(chapter 9 document).batches[0].transforms.length" },
+    pattern:
+      /batch\.transforms(?:\.length)?(?:; +| {2,})<span class="c">\/\/ (?:Float32Array\()?(?<n>[\d,]+)/g,
+  },
+
+  /* --- Chapter 8: a graph built from the registry --- */
+  {
+    page: "docs/manual.html",
+    label: "chapter 8 — pointCount of the 3×3 pointGrid built from getNodeType",
+    sources: { count: "cook(chapter 8 pointGrid graph).pointCount" },
+    pattern: /outputs\.p\)\.pointCount;\s*<span class="c">\/\/ (?<count>[\d,]+)<\/span>/g,
+  },
+
+  /* --- Chapter 9: the document the page tells you it cooked --- */
+  {
+    page: "docs/manual.html",
+    label: "chapter 9 — pointCount of the printed document",
+    sources: { count: "cook(chapter 9 document).pointCount" },
+    pattern:
+      /result\.outputs\.points\)\.pointCount;\s*<span class="c">\/\/ (?<count>[\d,]+)<\/span>/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 9 — cook stats of the printed document",
+    sources: {
+      cooked: "cook(chapter 9 document).stats.cooked",
+      cached: "cook(chapter 9 document).stats.cached",
+    },
+    pattern:
+      /result\.stats;\s*<span class="c">\/\/ \{ cooked: (?<cooked>\d+), cached: (?<cached>\d+), elapsedMs/g,
+  },
+
+  /* --- Chapter 14: the same document, through the CLI --- */
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — the `pcg cook --stats` headline",
+    sources: {
+      cooked: "cook(chapter 9 document).stats.cooked",
+      cached: "cook(chapter 9 document).stats.cached",
+    },
+    pattern: /\n(?<cooked>\d+) cooked, (?<cached>\d+) cached, [\d.]+ ms/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — the geometry line of `pcg cook --stats`",
+    sources: {
+      points: "cook(chapter 9 document).pointCount",
+      vertices: "cook(chapter 9 document).vertexCount",
+      primitives: "cook(chapter 9 document).primitiveCount",
+    },
+    pattern:
+      /\[0\] geometry\s+points (?<points>[\d,]+)\s+vertices (?<vertices>[\d,]+)\s+primitives (?<primitives>[\d,]+)/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — the bounds line of `pcg cook --stats`",
+    sources: {
+      minX: "cook(chapter 9 document).P.min.x",
+      minY: "cook(chapter 9 document).P.min.y",
+      minZ: "cook(chapter 9 document).P.min.z",
+      maxX: "cook(chapter 9 document).P.max.x",
+      maxY: "cook(chapter 9 document).P.max.y",
+      maxZ: "cook(chapter 9 document).P.max.z",
+    },
+    pattern:
+      /bounds (?<minX>-?[\d.]+),(?<minY>-?[\d.]+),(?<minZ>-?[\d.]+) \.\. (?<maxX>-?[\d.]+),(?<maxY>-?[\d.]+),(?<maxZ>-?[\d.]+)/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — the instances line of `pcg cook --stats`",
+    sources: {
+      count: "cook(chapter 9 document).instance count",
+      // The batch COUNT was a literal `1` in this pattern until an audit
+      // pointed out that it made the per-asset number vacuous: with one
+      // batch asserted by the regex, "rock x1038" could only ever repeat
+      // the total beside it. Measured, the two say different things.
+      batches: "cook(chapter 9 document).batches.length",
+      perAsset: "cook(chapter 9 document).batches[0].count",
+    },
+    pattern:
+      /\[0\] instances\s+(?<count>[\d,]+) instances in (?<batches>\d+) batch \(cpu\) — rock x(?<perAsset>[\d,]+)/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — the survivors-of-scattered sentence",
+    sources: {
+      survivors: "cook(chapter 9 document).pointCount",
+      scattered: "chapter 9 document's scatter `count` param",
+    },
+    pattern: /<p>(?<survivors>[\d,]+) survivors of (?<scattered>[\d,]+) scattered/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — `pcg inspect --node density` cook stats",
+    sources: {
+      cooked: "cook(chapter 9 document, up to the density node).stats.cooked",
+      cached: "cook(chapter 9 document, up to the density node).stats.cached",
+    },
+    pattern: /1 item, cooked (?<cooked>\d+), cached (?<cached>\d+)/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — the geometry line of `pcg inspect --node density`",
+    sources: {
+      points: "cook(chapter 9 document, up to the density node).pointCount",
+      vertices: "cook(chapter 9 document, up to the density node).vertexCount",
+      primitives: "cook(chapter 9 document, up to the density node).primitiveCount",
+    },
+    pattern:
+      /item 0: geometry\s+points (?<points>[\d,]+)\s+vertices (?<vertices>[\d,]+)\s+primitives (?<primitives>[\d,]+)/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — the element count of the inspected point domain",
+    sources: { n: "cook(chapter 9 document, up to the density node).pointCount" },
+    pattern: /point — (?<n>[\d,]+) elements:/g,
+  },
+  {
+    // The `of N` here is what stops the sample table below it from being
+    // quietly trimmable: the sample-rows test requires the page to print
+    // as many rows as this header promises, and this claim pins the
+    // population that header is a sample OF.
+    page: "docs/manual.html",
+    label: "chapter 14 — the sample table's header",
+    sources: { total: "cook(chapter 9 document, up to the density node).pointCount" },
+    pattern: /first \d+ of (?<total>[\d,]+) point rows:/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — the density row of the per-attribute table",
+    sources: {
+      min: "cook(chapter 9 document, up to the density node).density.min",
+      max: "cook(chapter 9 document, up to the density node).density.max",
+      mean: "cook(chapter 9 document, up to the density node).density.mean",
+    },
+    pattern: /density\s+f32\s+1\s+(?<min>[\d.]+)\s+(?<max>[\d.]+)\s+(?<mean>[\d.]+)\s+0$/gm,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — the P row of the per-attribute table",
+    sources: {
+      minX: "cook(chapter 9 document, up to the density node).P.min.x",
+      minY: "cook(chapter 9 document, up to the density node).P.min.y",
+      minZ: "cook(chapter 9 document, up to the density node).P.min.z",
+      maxX: "cook(chapter 9 document, up to the density node).P.max.x",
+      maxY: "cook(chapter 9 document, up to the density node).P.max.y",
+      maxZ: "cook(chapter 9 document, up to the density node).P.max.z",
+      meanX: "cook(chapter 9 document, up to the density node).P.mean.x",
+      meanY: "cook(chapter 9 document, up to the density node).P.mean.y",
+      meanZ: "cook(chapter 9 document, up to the density node).P.mean.z",
+    },
+    pattern:
+      /P\s+f32\s+3\s+(?<minX>-?[\d.]+),(?<minY>-?[\d.]+),(?<minZ>-?[\d.]+)\s+(?<maxX>-?[\d.]+),(?<maxY>-?[\d.]+),(?<maxZ>-?[\d.]+)\s+(?<meanX>-?[\d.]+),(?<meanY>-?[\d.]+),(?<meanZ>-?[\d.]+)\s+0$/gm,
+  },
+  {
+    // The MEAN of this row is deliberately not checked. It is the one
+    // number in the table the page prints at a precision that does not
+    // bound it: a u32 column's mean is rendered as a whole number, so
+    // "round the measurement to the printed precision" — the rule every
+    // other float here is compared under — has nothing to work with, and
+    // the live mean (…434.83) differs from the printed …434 by more than
+    // that rule allows while being the same measurement. min and max are
+    // exact integers and are checked.
+    page: "docs/manual.html",
+    label: "chapter 14 — the seed row of the per-attribute table",
+    sources: {
+      min: "cook(chapter 9 document, up to the density node).seed.min",
+      max: "cook(chapter 9 document, up to the density node).seed.max",
+    },
+    pattern: /seed\s+u32\s+1\s+(?<min>[\d.]+)\s+(?<max>[\d.]+)\s+[\d.]+\s+0$/gm,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — the world bounds `pcg render` reports",
+    sources: {
+      minX: "cook(chapter 9 document).P.min.x",
+      maxX: "cook(chapter 9 document).P.max.x",
+      minZ: "cook(chapter 9 document).P.min.z",
+      maxZ: "cook(chapter 9 document).P.max.z",
+    },
+    pattern:
+      /bounds \(world\) x (?<minX>-?[\d.]+)\.\.(?<maxX>-?[\d.]+)\s+z (?<minZ>-?[\d.]+)\.\.(?<maxZ>-?[\d.]+)/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — the density prose under the inspect table",
+    sources: {
+      min: "cook(chapter 9 document, up to the density node).density.min",
+      max: "cook(chapter 9 document, up to the density node).density.max",
+      mean: "cook(chapter 9 document, up to the density node).density.mean",
+    },
+    pattern:
+      /density channel spans (?<min>[\d.]+) to (?<max>[\d.]+) with a mean of (?<mean>[\d.]+)/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — the `pcg render` decimation report",
+    sources: {
+      drawn: "cook(chapter 9 document).pointCount",
+      total: "cook(chapter 9 document).pointCount",
+    },
+    pattern: /(?<drawn>[\d,]+) of (?<total>[\d,]+) points, 0 of 0 primitives/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — the decimation report quoted back in prose",
+    sources: {
+      drawn: "cook(chapter 9 document).pointCount",
+      total: "cook(chapter 9 document).pointCount",
+    },
+    pattern: /<code>(?<drawn>[\d,]+) of (?<total>[\d,]+)<\/code> means nothing was decimated/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — the `--json` twin's cook stats",
+    sources: {
+      cooked: 'cook(chapter 9 document, { outputs: ["points"] }).stats.cooked',
+      cached: 'cook(chapter 9 document, { outputs: ["points"] }).stats.cached',
+    },
+    pattern:
+      /<span class="s">"cooked"<\/span>: <span class="n">(?<cooked>\d+)<\/span>, <span class="s">"cached"<\/span>: <span class="n">(?<cached>\d+)<\/span>/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — the `--json` twin's geometry counts",
+    sources: {
+      points: "cook(chapter 9 document).pointCount",
+      vertices: "cook(chapter 9 document).vertexCount",
+      primitives: "cook(chapter 9 document).primitiveCount",
+    },
+    pattern:
+      /<span class="s">"points"<\/span>: <span class="n">(?<points>[\d,]+)<\/span>, <span class="s">"vertices"<\/span>: <span class="n">(?<vertices>[\d,]+)<\/span>, <span class="s">"primitives"<\/span>: <span class="n">(?<primitives>[\d,]+)<\/span>/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — cook stats after the one-parameter edit",
+    sources: {
+      cooked: "cook(chapter 9 document, density frequency 0.09).stats.cooked",
+      cached: "cook(chapter 9 document, density frequency 0.09).stats.cached",
+    },
+    pattern: /r2\.stats;\s*<span class="c">\/\/ \{ cooked: (?<cooked>\d+), cached: (?<cached>\d+) \}/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — pointCount after the one-parameter edit, and before it",
+    sources: {
+      after: "cook(chapter 9 document, density frequency 0.09).pointCount",
+      before: "cook(chapter 9 document).pointCount",
+    },
+    pattern:
+      /r2\.outputs\.points\)\.pointCount;\s*<span class="c">\/\/ (?<after>[\d,]+)\s+\(was (?<before>[\d,]+)\)<\/span>/g,
+  },
+  {
+    page: "docs/manual.html",
+    label: "chapter 14 — cook stats after removeNode",
+    sources: {
+      cooked: "cook(chapter 9 document, spawn removed).stats.cooked",
+      cached: "cook(chapter 9 document, spawn removed).stats.cached",
+    },
+    pattern:
+      /<span class="c">\/\/ \{ cooked: (?<cooked>\d+), cached: (?<cached>\d+) \} — survivors all served warm<\/span>/g,
+  },
+];
+
+export interface TranscriptMatch {
+  /** Group name → the number as written, commas stripped. */
+  readonly values: Readonly<Record<string, string>>;
+  /** The matched text, for quoting back in a failure. */
+  readonly text: string;
+  /** 1-based line in the page. */
+  readonly line: number;
+}
+
+/** Every place a transcript claim's pattern matches, with line numbers. */
+export function findTranscriptMatches(html: string, pattern: RegExp): TranscriptMatch[] {
+  const found: TranscriptMatch[] = [];
+  const re = new RegExp(
+    pattern.source,
+    pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`,
+  );
+  for (let m = re.exec(html); m !== null; m = re.exec(html)) {
+    const values: Record<string, string> = {};
+    for (const [name, raw] of Object.entries(m.groups ?? {})) {
+      if (raw !== undefined) values[name] = raw.replaceAll(",", "");
+    }
+    found.push({ values, text: m[0], line: lineOf(html, m.index) });
+    if (m[0].length === 0) re.lastIndex++;
+  }
+  return found;
+}
+
+/**
+ * Round `value` to as many decimal places as `printed` carries.
+ *
+ * Half-away-from-zero, like `toFixed` and unlike `Math.round`, which
+ * rounds half toward +Infinity and would therefore disagree with the
+ * page's own rounding on a NEGATIVE value that lands exactly on a half.
+ * That would be a false failure, and a false failure in a documentation
+ * check trains people to edit the number without reading it.
+ */
+export function roundLike(value: number, printed: string): number {
+  const dot = printed.indexOf(".");
+  const places = dot < 0 ? 0 : printed.length - dot - 1;
+  const scale = 10 ** places;
+  const scaled = Math.abs(value) * scale;
+  return (Math.sign(value) * Math.round(scaled)) / scale;
+}
+
+/**
+ * Does the page's `printed` number agree with the measured `value`?
+ *
+ * The comparison rule for every number in a transcript, and the reason it
+ * is the right one: THE PAGE DECIDES HOW PRECISE ITS OWN CLAIM IS. Print
+ * `39.718` and three places have to agree; print `0.004381` and six do.
+ * A fixed epsilon would either reject the page's own rounding or accept a
+ * number that visibly disagrees with it.
+ *
+ * The second clause is what keeps that from being too generous. Rounding
+ * alone gives a printed `0` a tolerance of ±0.5, and `0` is the most
+ * common thing on this page — twelve of a transform's sixteen floats, the
+ * whole Y axis of a flat scatter, every `vertices`/`primitives` count. A
+ * Y that drifted to 0.4 would have been accepted. So where the page
+ * printed no decimal point, the measurement has to be a whole number as
+ * well: the page said "exactly zero", not "about zero", and it is held to
+ * that.
+ *
+ * The one measurement that legitimately fails the second clause is a u32
+ * column's MEAN, which the CLI renders as a whole number without being
+ * one. That is not worked around here — the claim that would need it
+ * omits the group and says why, which keeps the rule uniform.
+ */
+export function matchesPrinted(value: number, printed: string): boolean {
+  if (!printed.includes(".") && !Number.isInteger(value)) return false;
+  return Number(printed) === roundLike(value, printed);
+}
+
+/**
+ * The chapter 9 JSON document, taken from the page rather than copied.
+ *
+ * "This document deserializes, cooks, and round-trips as written" is a
+ * claim about the exact bytes on the page, so the test cooks the exact
+ * bytes on the page. Everything chapters 2, 9 and 14 print about it —
+ * point counts, cook stats, bounds, the instance batch — is then a
+ * measurement of one live cook rather than a number anybody maintains.
+ */
+export function extractManualExample(html: string): string | undefined {
+  return extractCodeBlock(html, "<h3>A complete working example</h3>");
+}
+
+/**
+ * Plain text of the first `<pre><code>` block at or after `anchor`.
+ *
+ * Highlighting spans are stripped before the entities are decoded, so a
+ * `class="s"` can never be read as part of the code, and a `&lt;` in the
+ * code can never be read as a tag.
+ */
+export function extractCodeBlock(html: string, anchor: string): string | undefined {
+  const at = html.indexOf(anchor);
+  if (at < 0) return undefined;
+  const block = /<pre><code>([\s\S]*?)<\/code><\/pre>/.exec(html.slice(at));
+  if (block === null) return undefined;
+  return decodeCode(block[1] as string);
+}
+
+/** Every `<pre><code>` block on the page, as plain text, in order. */
+export function listCodeBlocks(html: string): string[] {
+  const blocks: string[] = [];
+  const re = /<pre><code>([\s\S]*?)<\/code><\/pre>/g;
+  for (let m = re.exec(html); m !== null; m = re.exec(html)) {
+    blocks.push(decodeCode(m[1] as string));
+  }
+  return blocks;
+}
+
+function decodeCode(raw: string): string {
+  return raw
+    .replace(/<[^>]*>/g, "")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
+}
+
+/**
+ * The 16 floats of the first instance transform, printed in chapter 2.6.
+ *
+ * A transform is where a silent change shows up as a plausible-looking
+ * number rather than a crash — a row/column swap keeps sixteen floats and
+ * moves the translation into the wrong slot — so the whole matrix is
+ * compared rather than the count of it.
+ */
+export function extractTransformRow(html: string): string[] | undefined {
+  const at = html.indexOf("batch.transforms.<span class=\"n\">subarray</span>");
+  if (at < 0) return undefined;
+  const row = /\/\/ \[([^\]]*)\]/.exec(html.slice(at));
+  if (row === null) return undefined;
+  return (row[1] as string).split(",").map((n) => n.trim());
+}
+
+/**
+ * The `point attrs:` line of chapter 14's `pcg cook --stats` transcript.
+ *
+ * Verbatim for the same reason the field-fn list is: this states the
+ * standard attribute set a scatter mints, in order, with types and tuple
+ * sizes. A count would miss a renamed attribute, a changed tuple size, or
+ * a reordering — and reordering is exactly what a change to the scatter
+ * node would do.
+ */
+export function extractPointAttrList(html: string): string[] | undefined {
+  const block = listCodeBlocks(html).find((b) => b.includes("point attrs:"));
+  if (block === undefined) return undefined;
+  const lines = block.split("\n");
+  const start = lines.findIndex((l) => l.includes("point attrs:"));
+  if (start < 0) return undefined;
+  // The list wraps across lines, continuing while the indentation holds.
+  // The next thing at a shallower indent is the next section of the
+  // report, not more attributes.
+  const indent = (lines[start] as string).search(/\S/);
+  const parts = [(lines[start] as string).split("point attrs:")[1] as string];
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i] as string;
+    if (line.trim() === "" || line.search(/\S/) < indent) break;
+    parts.push(line);
+  }
+  return parts
+    .join(" ")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s !== "");
+}
+
+/** One printed row of chapter 14's `pcg inspect --rows 3` sample table. */
+export interface SampleRow {
+  readonly index: string;
+  /** The three components of `P`, as printed. */
+  readonly p: readonly string[];
+  /** The `density` column, as printed. */
+  readonly density: string;
+  /** The `seed` column, as printed. */
+  readonly seed: string;
+}
+
+/**
+ * The sample rows chapter 14 prints from `pcg inspect --node density`.
+ *
+ * The densest verbatim measurement on the page: three positions, three
+ * densities and three seeds, all of which move if anything at all changes
+ * in the scatter, the field, or the seed derivation. Nothing else on the
+ * page would notice a reseeding that kept every count identical.
+ */
+export function extractSampleRows(html: string): SampleRow[] | undefined {
+  const block = listCodeBlocks(html).find((b) => b.includes("point rows:"));
+  if (block === undefined) return undefined;
+  const rows: SampleRow[] = [];
+  const re = /^\s*(\d+)\s+\[([^\]]*)\]\s+(\S+)\s+(\S+)\s*$/gm;
+  for (let m = re.exec(block); m !== null; m = re.exec(block)) {
+    rows.push({
+      index: m[1] as string,
+      p: (m[2] as string).split(",").map((s) => s.trim()),
+      density: m[3] as string,
+      seed: m[4] as string,
+    });
+  }
+  return rows.length > 0 ? rows : undefined;
+}
+
+/* ------------------------------------------------------------------ *
+ * Error transcripts
+ * ------------------------------------------------------------------ */
+
+/**
+ * Chapter 11 opens with "Every string below is real output, produced by
+ * feeding the named mistake to the published build." Nothing checked it,
+ * and the first transcript in the chapter — the one that enumerates the
+ * whole node registry — was TWENTY TYPES BEHIND when this table was
+ * written. That is the worst possible place for a stale list, because it
+ * is presented to an agent as the authoritative answer to "what types
+ * exist"; a reader taking the chapter at its word would have concluded
+ * that `pathScan`, `repeatUntil` and eighteen others do not exist.
+ *
+ * So each entry names a mistake, and the test FEEDS THAT MISTAKE to the
+ * live library and compares the whole message. `startsWith` locates the
+ * transcript by its first line; a transcript ends at the next blank line,
+ * or at `endsBefore` where the page shows something alongside the message
+ * that is not part of it.
+ *
+ * Errors that need a live `Graph`, a cook, or a `World` are deliberately
+ * absent — not because they are less important, but because each needs a
+ * scenario built rather than a value fed, and a scenario built HERE could
+ * drift from the one the page describes without either side noticing.
+ * The ones listed are exactly the ones whose input is fully stated by the
+ * page itself.
+ */
+export interface ErrorTranscript {
+  /** The mistake, as the test's producer is registered under. */
+  readonly mistake: string;
+  /** First line of the transcript, verbatim, used to locate it. */
+  readonly startsWith: string;
+  /** A line that follows the message but is not part of it. */
+  readonly endsBefore?: string;
+}
+
+export const ERROR_TRANSCRIPTS: readonly ErrorTranscript[] = [
+  {
+    mistake: 'a graph object with an unrecognized key "notes"',
+    startsWith: 'deserializeGraph: unknown key "notes"',
+  },
+  {
+    mistake: 'a node of unknown type "pointScatterInBox"',
+    startsWith: 'GraphSerializationError: node "a": unknown node type "pointScatterInBox"',
+  },
+  {
+    mistake: 'pointScatterInBounds with an unknown param "counts"',
+    startsWith: 'GraphSerializationError: node "a": unknown param "counts"',
+  },
+  {
+    mistake: "pointScatterInBounds with count -5",
+    startsWith: 'GraphSerializationError: node "a" param "count": -5 is below the minimum',
+  },
+  {
+    mistake: 'filterByDensity with mode "probablistic"',
+    startsWith: 'GraphSerializationError: node "a" param "mode": expected one of',
+  },
+  {
+    mistake: 'a connection from an output pin named "output"',
+    startsWith: 'GraphSerializationError: connections[0]: node "a" has no output pin',
+  },
+  {
+    mistake: 'a field spec with fn "perlin"',
+    startsWith: 'FieldJsonError: $: unknown field fn "perlin"',
+  },
+  {
+    mistake: 'a "clamp" field spec with two args',
+    startsWith: 'FieldJsonError: $: fn "clamp" expects exactly 3 args',
+  },
+];
+
+/**
+ * The transcript beginning with `startsWith`, as one whitespace-normalized
+ * line.
+ *
+ * The page hard-wraps these messages to fit its column, so the newlines
+ * and indentation in the page are typesetting rather than content —
+ * comparing them would fail on a rewrap that changed nothing. Everything
+ * else is compared exactly.
+ */
+export function extractErrorTranscript(
+  html: string,
+  startsWith: string,
+  endsBefore?: string,
+): { text: string; raw: string } | undefined {
+  for (const block of listCodeBlocks(html)) {
+    const lines = block.split("\n");
+    const start = lines.findIndex((l) => l.startsWith(startsWith));
+    if (start < 0) continue;
+    const kept: string[] = [];
+    for (let i = start; i < lines.length; i++) {
+      const line = lines[i] as string;
+      if (i > start && line.trim() === "") break;
+      if (endsBefore !== undefined && i > start && line.trim().startsWith(endsBefore)) break;
+      kept.push(line);
+    }
+    const raw = kept.join("\n");
+    return { text: raw.replace(/\s+/g, " ").trim(), raw };
+  }
+  return undefined;
+}
+
+/* ------------------------------------------------------------------ *
+ * Transcribed code
+ * ------------------------------------------------------------------ */
+
+/**
+ * Chapters 1 and 8 print CODE, not a document, so the test cannot feed
+ * the page to the library the way it can with chapter 9 — it has to build
+ * the same graph itself. That transcription is the one place in this file
+ * where a value could go stale without anything noticing: edit the code
+ * block, and the test happily keeps checking the old graph.
+ *
+ * Chapter 2.3 is transcribed too but is NOT here, because it prints no
+ * graph code to pin against — its shape is stated in prose, and a test on
+ * that sentence guards it instead.
+ *
+ * These are the guard. Every literal the transcription depends on has to
+ * still be on the page, in that page's code, or the test says so and
+ * names the transcription to update. It is a weaker guarantee than
+ * chapter 9's — a reordering the substrings survive would go unnoticed —
+ * and it is stated as weaker rather than dressed up: prefer moving a
+ * future example into a JSON document the test can just read.
+ */
+export interface CodeEcho {
+  /** The transcription in site.test.ts this guards. */
+  readonly transcription: string;
+  /** Markup identifying the code block the literals must appear in. */
+  readonly anchor: string;
+  /** Literals the transcription depends on, as they appear in the code. */
+  readonly literals: readonly string[];
+}
+
+export const CODE_ECHOES: readonly CodeEcho[] = [
+  {
+    transcription: "chapter1Graph()",
+    anchor: "<h3>A graph that cooks</h3>",
+    literals: [
+      "new Graph(42)",
+      "graph.add(pointScatterInBounds, {",
+      "count: 500",
+      "boundsMin: [0, 0, 0]",
+      "boundsMax: [50, 0, 50]",
+      "graph.add(jitterPoints, {",
+      "amount: remap(fbm(perlinNoise, { seed: 7, frequency: 0.05 }), -1, 1, 0, 1)",
+      'graph.connect(scatter, "out", jitter, "in")',
+      'graph.output(jitter, "out", "points")',
+      "P.data.subarray(0, 3)",
+    ],
+  },
+  {
+    transcription: "chapter8GridGraph()",
+    anchor: "<h3>Building a graph in code from a type name</h3>",
+    literals: [
+      'getNodeType("pointGrid")',
+      "new Graph(5)",
+      "g.add(def, { countX: 3, countZ: 3 })",
+      'g.output(n, "out", "p")',
+    ],
+  },
+];
+
+/* ------------------------------------------------------------------ *
  * Shared
  * ------------------------------------------------------------------ */
 

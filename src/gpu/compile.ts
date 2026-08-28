@@ -598,6 +598,36 @@ HANDLERS.set("randomField", (spec, path, ctx) => {
   return ctx.emit(`pcg_hash_float(pcg_hash3(params.seed, ${wgslHexU32(keyHash)}, ${ident}))`, 1);
 });
 
+// randomFrom keys on a VALUE the graph computes rather than on the
+// element's identity, which is what makes it compile here at all: the
+// identity `randomField` needs is a gather over P and the `seed` column
+// on a domain a layout does not carry, while a key is just another
+// elementwise expression. So this handler has none of that one's
+// fallthroughs — it lowers on any domain, and the only thing it insists
+// on is that the key be a scalar, for the CPU's reason: folding a tuple
+// into one key would let two different keys share a stream.
+HANDLERS.set("randomFrom", (spec, path, ctx) => {
+  const key = spec.key;
+  const keyHash = typeof key === "string" ? hashString(key) : ((key as number | undefined) ?? 0) >>> 0;
+  const args = specArgs(spec);
+  const val = compileArg(args[0], `${path}.args[0]`, ctx);
+  if (val.size !== 1) {
+    throw new GpuCompileError(
+      `${path}: randomFrom's key must be ONE number per element, got width ${val.size}; reduce it first, e.g. component(<expr>, 0)`,
+    );
+  }
+  ctx.usesSeed = true;
+  ctx.libRoots.add("pcg_hash3");
+  ctx.libRoots.add("pcg_hash_float");
+  // Bits, never the value, exactly as `randomField` hashes a position:
+  // `hashCombine` truncates toward zero, so a whole interval of keys
+  // would collapse onto one stream.
+  return ctx.emit(
+    `pcg_hash_float(pcg_hash3(params.seed, ${wgslHexU32(keyHash)}, bitcast<u32>(${splat(val, 1)})))`,
+    1,
+  );
+});
+
 // -- elementwise combinators ------------------------------------------------
 
 /**
@@ -625,6 +655,11 @@ registerElementwise("min", 2, (a) => `min(${a[0]}, ${a[1]})`);
 registerElementwise("max", 2, (a) => `max(${a[0]}, ${a[1]})`);
 registerElementwise("abs", 1, (a) => `abs(${a[0]})`);
 registerElementwise("floor", 1, (a) => `floor(${a[0]})`);
+// trunc IS emitted as the builtin, unlike fract and mod below, and for the
+// reason floor is: rounding to an integer has no interior to get wrong.
+// Whatever either path returns was already a representable f32, so there is
+// nothing left for the two to round differently.
+registerElementwise("trunc", 1, (a) => `trunc(${a[0]})`);
 // fract and mod are emitted as their EXPANSIONS rather than as WGSL's
 // `fract()` and `%`. fract() is specified as exactly `x - floor(x)` so the
 // builtin would do, but writing it out costs nothing and keeps the CPU
@@ -635,6 +670,25 @@ registerElementwise("floor", 1, (a) => `floor(${a[0]})`);
 // world that crosses its own origin.
 registerElementwise("fract", 1, (a) => `${a[0]} - floor(${a[0]})`);
 registerElementwise("mod", 2, (a) => `${a[0]} - ${a[1]} * floor(${a[0]} / ${a[1]})`);
+// `rem` IS WGSL's `%` semantically, and is still emitted as the expansion.
+// That makes it the SECOND builtin this file declines despite correct
+// semantics — `fract()` above is the first — but for a stronger reason than
+// that one's (which is only that writing it out costs nothing).
+// WGSL specifies `%` on floats as exactly `e1 - e2 * trunc(e1 / e2)`, but
+// the backends it lowers through need not agree: a true fmod (MSL's, and
+// SPIR-V's OpFRem) is EXACT for any operands, where the expansion loses the
+// quotient's low bits once |x / y| passes 2^24 and answers something else
+// entirely. Both are defensible; only one is what the CPU runs. Writing the
+// expansion out pins which, so `rem` is bit-exact by construction rather
+// than by whichever backend an adapter happens to use.
+//
+// This is a PORTABILITY argument and nothing stronger, which is measured
+// rather than assumed: emitting `%` here leaves the reference adapter's
+// whole parity table green, including the past-2^24 probe added for it in
+// parity.device.test.ts, because this one does implement `%` as the spec's
+// expansion. No test on this hardware can distinguish the two, so the
+// expansion is the form that stays right on hardware that does not.
+registerElementwise("rem", 2, (a) => `${a[0]} - ${a[1]} * trunc(${a[0]} / ${a[1]})`);
 // sign lowers to the same pair of comparisons the CPU runs, not to WGSL's
 // sign() builtin, for the reason `step` lowers to `ge`'s: the builtin's
 // answer for a NaN is not specified tightly enough to lean on, and a rule
@@ -661,10 +715,26 @@ registerElementwise("atan2", 2, (a) => `atan2(${a[0]}, ${a[1]})`);
 // lowering's DOMAIN, so the two agree on where the answer is NaN.
 registerElementwise("sqrt", 1, (a) => `sqrt(${a[0]})`);
 registerElementwise("pow", 2, (a) => `pow(${a[0]}, ${a[1]})`);
-// The two transcendentals that are genuinely the device's own: both carry a
+// The transcendentals that are genuinely the device's own: all four carry a
 // measured budget rather than a construction that makes them exact.
+//
+// exp2 and log2 emit the WGSL BUILTINS rather than `exp(x * LN2)` and
+// `log(x) * LOG2E`, and that is a MEASURED decision rather than a taste.
+// The base-2 pair is what the hardware actually has — the base-e pair is
+// the scaled composition built on top of it, which is why `pow` lowers to
+// exp2 of a log2 — so the composition carries the builtin's error plus the
+// multiply's. Measured on the reference adapter at 65k, rangeUlp:
+//
+//   exp2  builtin 0.50   as exp(x * LN2)      3.00   (6.0x worse)
+//   log2  builtin 0.65   as log(x) * LOG2E    1.30   (2.0x worse)
+//
+// Both alternatives BUST the budgets in parity.testsupport.ts, so the two
+// spellings are not interchangeable and swapping one in reddens the table
+// rather than passing quietly.
 registerElementwise("exp", 1, (a) => `exp(${a[0]})`);
+registerElementwise("exp2", 1, (a) => `exp2(${a[0]})`);
 registerElementwise("log", 1, (a) => `log(${a[0]})`);
+registerElementwise("log2", 1, (a) => `log2(${a[0]})`);
 registerElementwise("clamp", 3, (a) => `clamp(${a[0]}, ${a[1]}, ${a[2]})`);
 // CPU lerp is a + (b - a) * t; WGSL mix() is specified as a*(1-t)+b*t,
 // which rounds differently — emit the CPU formula.

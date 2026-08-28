@@ -7,10 +7,13 @@ import type { GpuFieldResolver } from "../fields/index.js";
 import { CookCancelledError, cook, type Graph } from "../graph/index.js";
 import { hashCombine } from "../random/index.js";
 import { applyParamPatches } from "./patches.js";
+import { neighborReach } from "./reach.js";
 import type {
   BindPatches,
   CellContext,
   CellCoord,
+  CellCoord1,
+  CellCoord2,
   CellCoord3,
   CellMode,
   CellOutputs,
@@ -106,6 +109,32 @@ export interface UpdateOptions {
    * `WorldOptions.gpu` when both are set. See that option for semantics.
    */
   gpu?: GpuFieldResolver;
+  /**
+   * Arc anchor of each `"path"` level, in the units of that level's
+   * `path.length`, keyed by LEVEL NAME.
+   *
+   * Keyed by name rather than shared, because two `"path"` levels may
+   * ride different centrelines at different `cellSize`s and be at
+   * different arc positions. A mixed World therefore streams in one
+   * call: the world point drives the `"xz"` and `"xyz"` levels, each
+   * entry here drives its own `"path"` level.
+   *
+   * Every `"path"` level must have a finite entry — the anchor is the
+   * only way such a level gets a position — and a non-finite value, an
+   * unknown level name, or a name that is not a `"path"` level throws
+   * `WorldValidationError`, exactly like a non-finite viewpoint. On a
+   * closed table the anchor wraps, so any real number is in range;
+   * on an open one it is used as given.
+   *
+   * An anchor is the whole of what a `"path"` level takes per update.
+   * How much track it wants around that anchor — symmetric or directional
+   * — is `LevelDef` policy, not something this options bag carries: a
+   * window that could change per frame would make the wanted set, and so
+   * the cook schedule, a function of the frame that asked, and the
+   * determinism contract this file is built around would have nothing
+   * left to pin.
+   */
+  readonly anchors?: Readonly<Record<string, number>>;
 }
 
 /** One cell identified by its level name and coordinate. */
@@ -160,10 +189,37 @@ interface LevelState {
   readonly index: number;
   /** Resolved cell mode ("xz" for unbounded levels — one global cell). */
   readonly mode: CellMode;
-  /** Validated generation radius (Infinity for an unbounded level, unused). */
+  /**
+   * Validated generation radius, read only by the world-space modes
+   * (Infinity, and unused, for an unbounded level and for every `"path"`
+   * level — those read the two window halves below).
+   */
   readonly genRadius: number;
-  /** Resolved retain radius (Infinity for an unbounded level). */
+  /**
+   * Resolved retain radius (Infinity for an unbounded level, and for a
+   * `"path"` level, whose hysteresis is the two halves below).
+   */
   readonly retainRadius: number;
+  /**
+   * "path" levels: the resolved window, always as two halves whichever
+   * spelling the level used — `generationRadius` resolves to equal halves
+   * and the directional pair to its own. Nothing below this point
+   * branches on which spelling was written, which is the whole reason the
+   * resolution happens once, here. 0 for other modes (never read).
+   */
+  readonly aheadArc: number;
+  readonly behindArc: number;
+  /** "path" levels: the retain band of each half (see `LevelDef.retainAheadArc`). */
+  readonly retainAhead: number;
+  readonly retainBehind: number;
+  /** "path" levels: the table's total arc length (0 for other modes). */
+  readonly pathLength: number;
+  /** "path" levels: whether the table closes on itself. */
+  readonly pathClosed: boolean;
+  /** "path" levels: `round(length / cellSize)` sectors, at least 1. */
+  readonly sectorCount: number;
+  /** "path" levels: arc length of one sector (`pathLength / sectorCount`). */
+  readonly sectorSize: number;
   /** Stored cells in insertion order, keyed by the joined coordinate. */
   readonly cells: Map<string, CellRecord>;
   /**
@@ -176,10 +232,19 @@ interface LevelState {
   baselineVersion: number | undefined;
 }
 
-/** @internal A wanted cell with its squared distance to the viewpoint. */
+/**
+ * @internal A wanted cell with its cook priority — lower cooks first.
+ *
+ * The scale differs by mode and that is deliberate rather than sloppy: a
+ * world-space level ranks by SQUARED DISTANCE to the viewpoint (exactly
+ * the number it always did, so no float comparison anywhere in the 2D/3D
+ * paths moves), a `"path"` level by the normalized window fraction
+ * {@link sectorWindowRank} argues for. The two never meet, because a
+ * queue is built, sorted and drained within one level.
+ */
 interface WantedCell {
   readonly coord: CellCoord;
-  readonly distSq: number;
+  readonly rank: number;
 }
 
 function cellKey(coord: CellCoord): string {
@@ -204,6 +269,155 @@ function coordCompare(a: CellCoord, b: CellCoord): number {
     if (d !== 0) return d;
   }
   return 0;
+}
+
+/**
+ * Sector count of a `"path"` level: `round(length / cellSize)` equal
+ * sectors, so the seam falls exactly at `s = 0` rather than leaving a
+ * short remainder sector before it. At least one — a table shorter than
+ * half a cell is still one cell, not zero.
+ */
+function sectorCountOf(length: number, cellSize: number): number {
+  return Math.max(1, Math.round(length / cellSize));
+}
+
+/**
+ * Arc length at sector boundary `i` (0..n). The last boundary is the
+ * table length itself rather than `n * sectorSize`, so on a closed table
+ * the final sector meets sector 0 exactly at the seam.
+ */
+function sectorBound(i: number, n: number, sectorSize: number, length: number): number {
+  return i >= n ? length : i * sectorSize;
+}
+
+/**
+ * @internal Where a sector sits relative to an anchor, as TWO ONE-WAY
+ * gaps rather than one unsigned distance: `ahead` is how far you travel
+ * FORWARD (increasing arc) from the anchor to reach the sector, `behind`
+ * how far you travel backward. Both are 0 when the anchor is inside the
+ * sector, and one of them is `Infinity` on an open table, where the side
+ * the sector is not on cannot be reached at all.
+ *
+ * A single unsigned distance is enough while every window is a disc. A
+ * directional window has to know WHICH SIDE a sector is on, and a signed
+ * offset would have needed a stated tie-break
+ * at the half-lap of a closed table, where the two copies of a sector are
+ * equidistant. Two gaps need no tie-break: the sector half a lap round is
+ * genuinely both `length/2` ahead and `length/2` behind, and the window
+ * that claims it is whichever half is deep enough — which is the answer
+ * a driver would give.
+ */
+interface SectorGaps {
+  readonly ahead: number;
+  readonly behind: number;
+}
+
+/**
+ * The forward and backward gaps from `a` to sector `sec`'s half-open
+ * range `[sMin, sMax)`.
+ *
+ * WRAPPING: the seam at `s = 0` is not a boundary on a CLOSED table,
+ * where sector `n-1` is adjacent to sector 0 and both gaps are cyclic; on
+ * an OPEN table the seam is a hard boundary, the two ends of the table
+ * are as far apart as their arc lengths say, and the unreachable
+ * direction is `Infinity` rather than a long way round. `a` is expected
+ * already wrapped into `[0, length)` on a closed table.
+ */
+function sectorGaps(
+  a: number,
+  sec: number,
+  n: number,
+  sectorSize: number,
+  length: number,
+  closed: boolean,
+): SectorGaps {
+  const sMin = sectorBound(sec, n, sectorSize, length);
+  const sMax = sectorBound(sec + 1, n, sectorSize, length);
+  const startsAhead = sMin - a;
+  const endsBehind = a - sMax;
+  // Inside the half-open range: zero either way, which is what makes a
+  // window of 0 still want the sector under the anchor.
+  if (startsAhead <= 0 && endsBehind < 0) return { ahead: 0, behind: 0 };
+  if (!closed) {
+    return startsAhead > 0
+      ? { ahead: startsAhead, behind: Number.POSITIVE_INFINITY }
+      : { ahead: Number.POSITIVE_INFINITY, behind: endsBehind };
+  }
+  return { ahead: wrapArc(startsAhead, length), behind: wrapArc(endsBehind, length) };
+}
+
+/**
+ * Whether a sector falls inside a window of `ahead` units forward and
+ * `behind` units back — the ONE predicate generation and retention both
+ * run, with different pairs of numbers.
+ *
+ * The window is exactly "the sector's range meets the closed interval
+ * `[anchor - behind, anchor + ahead]`", which is why the two comparisons
+ * are not spelled the same. A sector is the HALF-OPEN range
+ * `[sMin, sMax)`: its start belongs to it and its end belongs to the next
+ * one, so a sector starting exactly `ahead` units in front is inside the
+ * window (`<=`) and a sector ENDING exactly `behind` units back is not
+ * (`<`) — all of its content lies strictly further back than that. The
+ * asymmetry is the half-open convention being applied honestly at both
+ * ends rather than an inclusivity bug, and it is what makes the candidate
+ * range `wantedPathCells` enumerates exact instead of merely generous:
+ * `floor((a - behind) / ss)` is precisely the lowest index this predicate
+ * can accept, and `floor((a + ahead) / ss)` precisely the highest.
+ *
+ * Compared as raw gaps rather than as the normalized fraction
+ * {@link sectorWindowRank} sorts by, deliberately: `gap <= arc` is exact,
+ * while `gap / arc <= 1` can round a hair's-breadth miss into a hit. The
+ * boundary of the wanted set is a thing tests pin to the unit, so it is
+ * computed without a division.
+ */
+function sectorInWindow(gaps: SectorGaps, ahead: number, behind: number): boolean {
+  return gaps.ahead <= ahead || gaps.behind < behind;
+}
+
+/**
+ * Cook priority of a wanted sector: how deep into its own half of the
+ * window it sits, as a fraction in `[0, 1]`. Lower cooks first.
+ *
+ * WHAT "NEAREST" MEANS WHEN THE WINDOW IS ASYMMETRIC — an asymmetric
+ * window does change it, and this is the change. Under a disc, "nearest"
+ * and "most urgent" are the same ordering, so raw distance served both.
+ * Under `aheadArc: 400, behindArc: 100` they part company: the sector 90
+ * units back is nearer than the one 150 ahead, and the car will be at
+ * +150 in a moment and will never see -90 again. Ranking by raw distance
+ * would spend a starved budget on the road already driven — the exact
+ * failure the directional window exists to fix, reintroduced one layer
+ * down in the scheduler.
+ *
+ * So the rank normalizes by the half that claims the sector. Both halves
+ * then drain inward-out at the same PROPORTIONAL rate: the sectors
+ * hugging the anchor still cook first on either side (nothing starves the
+ * near field), and past that the longer half gets proportionally more of
+ * a partial budget, which is what asking for a longer half meant.
+ *
+ * It degenerates exactly, not approximately, to the old ordering when the
+ * halves are equal: `min(a/r, b/r)` is `min(a, b) / r`, a monotone
+ * rescale of the distance that was sorted on before, so a symmetric level
+ * cooks its sectors in the same order it always did.
+ */
+function sectorWindowRank(gaps: SectorGaps, ahead: number, behind: number): number {
+  return Math.min(windowFraction(gaps.ahead, ahead), windowFraction(gaps.behind, behind));
+}
+
+/**
+ * One half's contribution to {@link sectorWindowRank}. A zero gap ranks 0
+ * whatever the half's depth — the sector under the anchor is the first
+ * thing wanted even from a half of depth 0 — and any real gap against a
+ * half of depth 0 is unreachable rather than `0 / 0`.
+ */
+function windowFraction(gap: number, arc: number): number {
+  if (gap === 0) return 0;
+  return arc > 0 ? gap / arc : Number.POSITIVE_INFINITY;
+}
+
+/** Wrap an arc position into `[0, length)`. */
+function wrapArc(s: number, length: number): number {
+  const m = s % length;
+  return m < 0 ? m + length : m;
 }
 
 /** Component-wise coordinate equality across either arity. */
@@ -237,12 +451,23 @@ function settleQuietly(dispatched: readonly { result: Promise<unknown> }[]): voi
  * Viewpoint-driven hierarchical cell streamer.
  *
  * Each level partitions the XZ plane into square cells (default), space
- * into cube cells (`cellMode: "xyz"`), or is a single unbounded cell.
+ * into cube cells (`cellMode: "xyz"`), ARC LENGTH along a curve into
+ * sectors (`cellMode: "path"`), or is a single unbounded cell.
  * `update(viewpoint)` cooks, per level from coarse to fine, every
  * missing or stale cell whose center lies within the level's
  * `generationRadius` of the viewpoint — nearest first — then evicts cells
  * whose center left `retainRadius` and LRU-trims each level to
- * `maxCellsPerLevel` (the unbounded cell never evicts).
+ * `maxCellsPerLevel` (the unbounded cell never evicts). A `"path"` level
+ * measures both radii as arc distance from its own anchor
+ * (`UpdateOptions.anchors`) instead, so "nearest first" reads as nearest
+ * along the track — and its window may be DIRECTIONAL
+ * (`LevelDef.aheadArc` / `LevelDef.behindArc`), in which case "nearest"
+ * means nearest as a fraction of the half it falls in, so a starved
+ * budget spends itself on the road ahead rather than the road just
+ * driven. The window is level configuration and never an `update`
+ * argument: the anchor is a coordinate and moves per frame, the window is
+ * policy and does not, and a per-frame window would make WHICH cells are
+ * wanted a function of the frame that asked.
  *
  * Determinism: cell content depends only on (world seed, level index,
  * cell coord, level graph structure+params, parent cell content) — see
@@ -264,6 +489,21 @@ function settleQuietly(dispatched: readonly { result: Promise<unknown> }[]): voi
 export class World {
   private readonly worldSeed: number;
   private readonly levels: LevelState[];
+  /**
+   * The anchor array a world with no `"path"` level always resolves to.
+   *
+   * ONE ALLOCATION FOR THE LIFE OF THE WORLD, RATHER THAN ONE PER FRAME.
+   * `resolveAnchors` runs on every `update`, and its general form maps over
+   * the levels — which builds an array and calls a closure per level, sixty
+   * times a second, to produce a row of zeros that cannot change. Three of
+   * the four shipped demos have no path level at all and were paying it.
+   *
+   * Safe to precompute because `levels` is readonly and built once in the
+   * constructor: a world's level stack is its configuration, not its state.
+   */
+  private readonly zeroAnchors: number[];
+  /** Whether any level takes an arc anchor, decided once for the same reason. */
+  private readonly anyPathLevel: boolean;
   private readonly maxCellsPerLevel: number;
   private readonly onCellReady: WorldOptions["onCellReady"];
   private readonly onCellEvicted: WorldOptions["onCellEvicted"];
@@ -286,7 +526,10 @@ export class World {
     }
     const levels = opts.levels;
     const seen = new Set<string>();
-    let prevBounded: { name: string; size: number } | undefined;
+    // Coarse-to-fine is checked per MODE FAMILY: "path" cellSizes are arc
+    // lengths and "xz"/"xyz" cellSizes are world lengths, so comparing one
+    // against the other would compare two different quantities.
+    const prevBounded = new Map<"world" | "path", { name: string; size: number }>();
     levels.forEach((def, i) => {
       const label = `level ${i} ("${def.name}")`;
       if (typeof def.name !== "string" || def.name === "") {
@@ -296,17 +539,61 @@ export class World {
         throw new WorldValidationError(`duplicate level name "${def.name}"; level names must be unique`);
       }
       seen.add(def.name);
-      if (def.cellMode !== undefined && def.cellMode !== "xz" && def.cellMode !== "xyz") {
+      if (
+        def.cellMode !== undefined &&
+        def.cellMode !== "xz" &&
+        def.cellMode !== "xyz" &&
+        def.cellMode !== "path"
+      ) {
         throw new WorldValidationError(
-          `${label}: cellMode must be "xz" or "xyz", got ${String(def.cellMode)}`,
+          `${label}: cellMode must be "xz", "xyz" or "path", got ${String(def.cellMode)}`,
         );
       }
+      // Which halves of a directional window this level states, in
+      // declaration order. Computed before the unbounded branch because
+      // that branch has to answer for them too.
+      const directionalFields = (
+        [
+          ["aheadArc", def.aheadArc],
+          ["behindArc", def.behindArc],
+          ["retainAheadArc", def.retainAheadArc],
+          ["retainBehindArc", def.retainBehindArc],
+        ] as const
+      ).filter((entry) => entry[1] !== undefined);
       if (def.cellSize === "unbounded") {
         if (i !== 0) {
           throw new WorldValidationError(
             levels[0].cellSize === "unbounded"
               ? `only one unbounded level is allowed ("${levels[0].name}" is already unbounded); give ${label} a finite cellSize`
               : `unbounded ${label} must be the first (coarsest) level`,
+          );
+        }
+        // REFUSED HERE RATHER THAN IGNORED, unlike `cellMode` and
+        // `generationRadius`, which an unbounded level accepts and drops.
+        // Those two are tolerated for a stated reason — configs written
+        // before `generationRadius` became optional must keep working —
+        // and that reason cannot apply to a window that did not exist
+        // until now, so nothing is owed backward compatibility. Ignoring
+        // it would instead be the exact failure the directional pair's own
+        // validation argues against one screen below: a number that is
+        // present, reads as live, and is never looked at. One global cell
+        // partitions nothing, so there is no sector for a window to pick
+        // and no interpretation to fall back on.
+        if (directionalFields.length > 0) {
+          const named = directionalFields.map((entry) => entry[0]).join(", ");
+          throw new WorldValidationError(
+            `${label}: a directional window (${named}) on an unbounded level, which is one global cell and partitions no arc length, so there is no sector for the window to choose between; remove ${named}, or give this level a finite cellSize with cellMode: "path" and a path table`,
+          );
+        }
+        // Same argument, for the QUERY window rather than the streaming
+        // one: a halo is the band of a NEIGHBOUR's content a cell has to
+        // generate to answer correctly at its own boundary, and one global
+        // cell has neither a neighbour nor a boundary. Refused rather than
+        // ignored, because a level that states one is describing a
+        // partitioning it does not have.
+        if (def.halo !== undefined) {
+          throw new WorldValidationError(
+            `${label}: declares halo (${String(def.halo)}) on an unbounded level, which is ONE global cell holding the whole world — it has no neighbouring cell to borrow points from and no seam to be wrong at, so there is nothing for a halo to do and nothing to check it against. Remove halo, or give this level a finite cellSize`,
           );
         }
         return;
@@ -316,41 +603,243 @@ export class World {
           `${label}: cellSize must be a positive finite number or "unbounded", got ${String(def.cellSize)}`,
         );
       }
-      if (def.generationRadius === undefined) {
+      // The arc table: required by "path", meaningless (and so refused)
+      // anywhere else, because a square cell has no arc length to split.
+      const mode = def.cellMode ?? "xz";
+      if (mode === "path") {
+        if (def.path === undefined) {
+          throw new WorldValidationError(
+            `${label}: cellMode "path" requires a path table; add path: { length: <total arc length of the centreline>, closed: true | false } to the level — length and closed are all the World needs to cut sectors, and it must be static configuration rather than something a parent level produces`,
+          );
+        }
+        if (!Number.isFinite(def.path.length) || def.path.length <= 0) {
+          throw new WorldValidationError(
+            `${label}: path.length must be a positive finite number (the centreline's total arc length), got ${String(def.path.length)}`,
+          );
+        }
+        if (typeof def.path.closed !== "boolean") {
+          throw new WorldValidationError(
+            `${label}: path.closed must be a boolean — true when the centreline joins its own start, so the last sector is adjacent to sector 0 across the s = 0 seam; got ${String(def.path.closed)}`,
+          );
+        }
+      } else if (def.path !== undefined) {
         throw new WorldValidationError(
-          `${label}: a bounded level requires generationRadius (a positive finite number); only an unbounded level may omit it`,
+          `${label}: has a path table but cellMode is "${mode}", which partitions space rather than arc length; set cellMode: "path" to stream sectors along the centreline, or remove the path field`,
         );
       }
-      if (!Number.isFinite(def.generationRadius) || def.generationRadius <= 0) {
+      // THE QUERY WINDOW, which is a different window from everything
+      // else on this level. `generationRadius` and the directional pair
+      // say which cells exist and stay resident; `halo` says how far
+      // OUTSIDE its own rectangle one cell has to generate content it will
+      // then throw away, so that the points it keeps answer the way they
+      // would in one unpartitioned cook. The two are validated apart
+      // because they fail apart: an undersized streaming window shows up
+      // as a hole in the world, and an undersized halo shows up as
+      // nothing at all — a truncated neighbour set, a deterministic wrong
+      // answer, at the seams only.
+      if (def.halo !== undefined) {
+        if (mode === "path") {
+          throw new WorldValidationError(
+            `${label}: declares halo (${String(def.halo)}) on a "path" level, whose cells are arc sectors measured in ARC LENGTH, while every neighbour-query reach in a graph is a WORLD distance; the two are not comparable quantities and do not convert without the centreline, which the World never sees (the same reason cellSize is only compared within a mode family). Remove halo — a sector that reads no neighbour needs none — or stream this content on an "xz"/"xyz" level, where a halo is a world distance and can be checked against the graph`,
+          );
+        }
+        if (typeof def.halo !== "number" || !Number.isFinite(def.halo) || def.halo < 0) {
+          throw new WorldValidationError(
+            `${label}: halo must be a finite number >= 0 — the world-unit width of the band of neighbouring content each cell generates and then clips away — got ${String(def.halo)}`,
+          );
+        }
+        const reach = neighborReach(def.graph);
+        // Reported before the width comparison, because it is not a
+        // comparison: for these nodes NO halo is wide enough, so passing
+        // the width check would be the more misleading outcome.
+        const blocked = reach.unpartitionable[0];
+        if (blocked !== undefined) {
+          throw new WorldValidationError(
+            `${label}: node "${blocked.node}" ${blocked.why}. This level declares halo ${def.halo}; widening it is not the fix`,
+          );
+        }
+        if (reach.width > def.halo) {
+          // Everything printed here is bounded by neighborReach's own
+          // sampling: a nested graph can hold millions of query nodes (a
+          // wrapper chain that instantiates the level below it twice
+          // doubles per level), and a message that named them all
+          // measured 3.2 million characters — an error nobody can read,
+          // produced instead of the one-line answer they needed.
+          // `widest`, NOT a reduce over `sources`. That list is capped at
+          // EXEMPLAR_LIMIT, so reducing over it names whichever of the
+          // first eight happened to be widest — which on a graph with
+          // more than eight queries is usually not the node the number
+          // came from. The message then named a node whose reach was
+          // BELOW the declared halo, called it "the widest of 20", and
+          // told the reader to raise the halo past a number that node
+          // never asked for: three false statements in one sentence, in
+          // the one place an author is trying to find the offending node.
+          const worst = reach.widest;
+          const named = reach.sources.map((s) => `"${s.node}" ${s.param} ${s.reach}`).join(", ");
+          const more = reach.sourceCount - reach.sources.length;
+          // "N named here" rather than "N in this graph", because the
+          // list IS a sample and saying otherwise invites the reader to
+          // conclude something from its absence. The count beside it is
+          // exact, so both numbers are true as written.
+          const others =
+            reach.sourceCount > 1
+              ? ` (${reach.sourceCount} readable reaches in this graph, ${reach.sources.length} named here: ${named}${
+                  more > 0 ? `, and ${more} more` : ""
+                })`
+              : "";
+          const unreadMore = reach.unboundedCount - reach.unbounded.length;
+          const unreadable =
+            reach.unboundedCount > 0
+              ? `. Note also that ${reach.unboundedCount} reach${
+                  reach.unboundedCount === 1 ? "" : "es"
+                } in this graph could not be read at all and are NOT covered by this check: ${reach.unbounded
+                  .map((g) => `"${g.node}" (${g.type}): ${g.why}`)
+                  .join("; ")}${unreadMore > 0 ? `; and ${unreadMore} more` : ""}`
+              : "";
+          // `widest` is undefined exactly when `width` is 0, and `width`
+          // is above a halo of at least 0 here, so it is always set. The
+          // narrowing keeps that a compile-time fact rather than a `!`.
+          const blame =
+            worst !== undefined
+              ? `node "${worst.node}" (${worst.type}) queries ${worst.param} ${worst.reach}`
+              : `no single node could be named`;
+          throw new WorldValidationError(
+            `${label}: halo ${def.halo} is narrower than the neighbour-query reach its own graph asks for — ${blame}${others}. A cell widened by ${def.halo} hands that query a neighbour set truncated at the cell boundary, so the streamed result differs from an unpartitioned cook at every seam, deterministically and without throwing. Raise halo to at least ${reach.width}, or bring the reach down to ${def.halo} or less${unreadable}`,
+          );
+        }
+      }
+      // THE STREAMING WINDOW, IN EXACTLY ONE SPELLING.
+      // `generationRadius` is the
+      // symmetric one and applies in every mode; `aheadArc`/`behindArc`
+      // are the directional one and mean something only along a curve. On
+      // a "path" level the two describe the SAME policy — generationRadius
+      // there IS aheadArc = behindArc = generationRadius — so a level
+      // carrying both would leave one of the numbers present and never
+      // read, which is the configuration equivalent of a param that
+      // silently does nothing: someone tunes it, nothing moves, and the
+      // config is no longer evidence of what the level does. Ranked
+      // precedence would have made that failure quieter, not rarer, so a
+      // level that states both is refused with the two ways to fix it.
+      if (directionalFields.length > 0) {
+        const named = directionalFields.map((entry) => entry[0]).join(", ");
+        if (mode !== "path") {
+          throw new WorldValidationError(
+            `${label}: a directional window (${named}) describes travel along a centreline and applies only to cellMode: "path"; a "${mode}" cell is wanted by distance from the viewpoint in every direction at once, so it has no ahead. Remove ${named}, or give this level cellMode: "path" and a path table`,
+          );
+        }
+        const ahead = def.aheadArc;
+        const behind = def.behindArc;
+        if (ahead === undefined || behind === undefined) {
+          const missing = [
+            ...(ahead === undefined ? ["aheadArc"] : []),
+            ...(behind === undefined ? ["behindArc"] : []),
+          ];
+          throw new WorldValidationError(
+            `${label}: a directional window states both halves, and ${missing.join(" and ")} ${
+              missing.length === 1 ? "is" : "are"
+            } missing (this level sets ${named}). Add aheadArc: <arc units wanted ahead of the anchor> and behindArc: <arc units wanted behind it>; behindArc: 0 is legal and wants only the sector under the anchor and the road in front of it. A half-stated window would have to borrow its other half from generationRadius, and then two spellings of one window would be live on one level at once`,
+          );
+        }
+        if (def.generationRadius !== undefined) {
+          throw new WorldValidationError(
+            `${label}: declares generationRadius (${String(def.generationRadius)}) as well as a directional window (aheadArc ${ahead}, behindArc ${behind}); on a "path" level generationRadius IS the symmetric window — aheadArc = behindArc = generationRadius — so one of these numbers would be present and never read. Drop generationRadius to stream ${ahead} ahead and ${behind} behind, or drop aheadArc/behindArc to stream ${String(def.generationRadius)} in both directions`,
+          );
+        }
+        if (def.retainRadius !== undefined) {
+          throw new WorldValidationError(
+            `${label}: declares retainRadius (${String(def.retainRadius)}) alongside a directional window (aheadArc ${ahead}, behindArc ${behind}); one hysteresis scalar cannot describe two halves of different depths — applied to both it either grows the shorter half to the longer half's depth or strips the longer half's band, and a cell parked just past a boundary then cooks and evicts on alternate updates. Use retainAheadArc and retainBehindArc, which default to aheadArc * 1.25 and behindArc * 1.25`,
+          );
+        }
+        for (const [name, value] of [
+          ["aheadArc", ahead],
+          ["behindArc", behind],
+        ] as const) {
+          if (!Number.isFinite(value) || value < 0) {
+            throw new WorldValidationError(
+              `${label}: ${name} must be a finite number >= 0 (arc units along the centreline; 0 wants only the sector the anchor is standing in, on that side), got ${String(value)}`,
+            );
+          }
+        }
+        for (const [name, value, half, halfName] of [
+          ["retainAheadArc", def.retainAheadArc, ahead, "aheadArc"],
+          ["retainBehindArc", def.retainBehindArc, behind, "behindArc"],
+        ] as const) {
+          if (value !== undefined && (!Number.isFinite(value) || value < half)) {
+            throw new WorldValidationError(
+              `${label}: ${name} (${String(value)}) must be a finite number >= ${halfName} (${half}); the retain band is hysteresis AROUND its own half of the generation window, not a shorter window inside it`,
+            );
+          }
+        }
+      } else {
+        if (def.generationRadius === undefined) {
+          throw new WorldValidationError(
+            mode === "path"
+              ? `${label}: a bounded level requires a window: generationRadius (a positive finite number) for the symmetric one, or aheadArc and behindArc together (finite, >= 0) for a directional one; only an unbounded level may omit both`
+              : `${label}: a bounded level requires generationRadius (a positive finite number); only an unbounded level may omit it`,
+          );
+        }
+        if (!Number.isFinite(def.generationRadius) || def.generationRadius <= 0) {
+          throw new WorldValidationError(
+            `${label}: generationRadius must be a positive finite number, got ${String(def.generationRadius)}`,
+          );
+        }
+        if (
+          def.retainRadius !== undefined &&
+          (!Number.isFinite(def.retainRadius) || def.retainRadius < def.generationRadius)
+        ) {
+          throw new WorldValidationError(
+            `${label}: retainRadius (${String(def.retainRadius)}) must be a finite number >= generationRadius (${def.generationRadius})`,
+          );
+        }
+      }
+      const family = mode === "path" ? "path" : "world";
+      const prev = prevBounded.get(family);
+      if (prev !== undefined && def.cellSize >= prev.size) {
         throw new WorldValidationError(
-          `${label}: generationRadius must be a positive finite number, got ${String(def.generationRadius)}`,
+          family === "path"
+            ? `levels must be ordered coarse to fine: ${label} cellSize ${def.cellSize} (arc length) must be strictly smaller than "path" level "${prev.name}" cellSize ${prev.size}`
+            : `levels must be ordered coarse to fine: ${label} cellSize ${def.cellSize} must be strictly smaller than "${prev.name}" cellSize ${prev.size}`,
         );
       }
-      if (
-        def.retainRadius !== undefined &&
-        (!Number.isFinite(def.retainRadius) || def.retainRadius < def.generationRadius)
-      ) {
-        throw new WorldValidationError(
-          `${label}: retainRadius (${String(def.retainRadius)}) must be a finite number >= generationRadius (${def.generationRadius})`,
-        );
-      }
-      if (prevBounded !== undefined && def.cellSize >= prevBounded.size) {
-        throw new WorldValidationError(
-          `levels must be ordered coarse to fine: ${label} cellSize ${def.cellSize} must be strictly smaller than "${prevBounded.name}" cellSize ${prevBounded.size}`,
-        );
-      }
-      prevBounded = { name: def.name, size: def.cellSize };
+      prevBounded.set(family, { name: def.name, size: def.cellSize });
     });
     // Nesting across cell modes: a 2D ("xz") level cannot sit under a 3D
     // ("xyz") bounded parent — a 2D column crosses every Y layer of the
     // parent, so no single parent cell contains it (see LevelDef.cellMode).
+    // The same containment argument rejects mixing "path" with either
+    // world-space mode in both directions: an arc sector is a tube along a
+    // curve, so no square cell contains it and it contains no square cell.
     for (let i = 1; i < levels.length; i++) {
       const parentDef = levels[i - 1];
       const childDef = levels[i];
       if (parentDef.cellSize === "unbounded") continue;
-      if ((parentDef.cellMode ?? "xz") === "xyz" && (childDef.cellMode ?? "xz") === "xz") {
+      const parentMode = parentDef.cellMode ?? "xz";
+      const childMode = childDef.cellMode ?? "xz";
+      if (parentMode === "xyz" && childMode === "xz") {
         throw new WorldValidationError(
           `level ${i} ("${childDef.name}") uses 2D "xz" cells under the 3D "xyz" parent "${parentDef.name}": a 2D column spans every Y layer of the parent, so no single parent cell contains it; set the parent's cellMode to "xz" or this level's to "xyz"`,
+        );
+      }
+      if (childMode === "path" && parentMode !== "path") {
+        throw new WorldValidationError(
+          `level ${i} ("${childDef.name}") uses "path" cells under the "${parentMode}" parent "${parentDef.name}": an arc sector is a tube along a curve, so no single square parent cell contains it; make the parent "path" with the same centreline, or make this level "${parentMode}"`,
+        );
+      }
+      if (parentMode === "path" && childMode !== "path") {
+        throw new WorldValidationError(
+          `level ${i} ("${childDef.name}") uses "${childMode}" cells under the "path" parent "${parentDef.name}": an arc sector is a tube along a curve, so it contains no whole square cell; make this level "path" with the same centreline, or make the parent "${childMode}"`,
+        );
+      }
+      if (
+        childMode === "path" &&
+        parentMode === "path" &&
+        childDef.path !== undefined &&
+        parentDef.path !== undefined &&
+        (childDef.path.length !== parentDef.path.length ||
+          childDef.path.closed !== parentDef.path.closed)
+      ) {
+        throw new WorldValidationError(
+          `level ${i} ("${childDef.name}") declares path { length: ${childDef.path.length}, closed: ${childDef.path.closed} } but its "path" parent "${parentDef.name}" declares { length: ${parentDef.path.length}, closed: ${parentDef.path.closed} }: nested "path" levels ride ONE table, and the parent sector of a sector is found by arc length alone; give both levels the same path table (they may still differ in cellSize)`,
         );
       }
     }
@@ -413,24 +902,67 @@ export class World {
     this.onCellEvicted = opts.onCellEvicted;
     this.gpu = opts.gpu;
     this.pool = opts.pool;
-    this.levels = levels.map((def, index) => ({
-      def,
-      index,
-      mode: def.cellSize === "unbounded" ? "xz" : def.cellMode ?? "xz",
-      genRadius: def.generationRadius ?? Infinity,
-      retainRadius:
-        def.cellSize === "unbounded"
-          ? Infinity
-          : def.retainRadius ?? (def.generationRadius ?? 0) * 1.25,
-      cells: new Map<string, CellRecord>(),
-      baselineVersion: undefined,
-    }));
+    this.levels = levels.map((def, index) => {
+      const mode: CellMode = def.cellSize === "unbounded" ? "xz" : def.cellMode ?? "xz";
+      // Sectors are derived once: a "path" level's cellSize is a TARGET
+      // arc length, rounded to a whole number of equal sectors so the
+      // seam lands exactly at s = 0.
+      const pathLength = mode === "path" ? (def.path?.length ?? 0) : 0;
+      const sectorCount =
+        mode === "path" ? sectorCountOf(pathLength, def.cellSize as number) : 0;
+      // The window, resolved to two halves once and for all. A level that
+      // spelled it symmetrically gets equal halves; validation has already
+      // guaranteed that a level with either directional field has both,
+      // and neither generationRadius nor retainRadius alongside them. From
+      // here down the runtime knows only halves — the two spellings cannot
+      // drift apart later because there is nothing later to drift.
+      const directional = def.aheadArc !== undefined;
+      const aheadArc = directional ? (def.aheadArc as number) : def.generationRadius ?? 0;
+      const behindArc = directional ? (def.behindArc as number) : def.generationRadius ?? 0;
+      // 1.25 per half, not one band across both: see LevelDef.retainAheadArc
+      // for why a shared scalar cannot serve two unequal halves.
+      const symmetricRetain = def.retainRadius ?? (def.generationRadius ?? 0) * 1.25;
+      return {
+        def,
+        index,
+        mode,
+        genRadius: def.generationRadius ?? Infinity,
+        retainRadius:
+          def.cellSize === "unbounded" || mode === "path"
+            ? Infinity
+            : def.retainRadius ?? (def.generationRadius ?? 0) * 1.25,
+        aheadArc: mode === "path" ? aheadArc : 0,
+        behindArc: mode === "path" ? behindArc : 0,
+        retainAhead:
+          mode !== "path"
+            ? 0
+            : directional
+              ? def.retainAheadArc ?? aheadArc * 1.25
+              : symmetricRetain,
+        retainBehind:
+          mode !== "path"
+            ? 0
+            : directional
+              ? def.retainBehindArc ?? behindArc * 1.25
+              : symmetricRetain,
+        pathLength,
+        pathClosed: mode === "path" && def.path?.closed === true,
+        sectorCount,
+        sectorSize: sectorCount > 0 ? pathLength / sectorCount : 0,
+        cells: new Map<string, CellRecord>(),
+        baselineVersion: undefined,
+      };
+    });
+    this.anyPathLevel = this.levels.some((l) => l.mode === "path");
+    this.zeroAnchors = this.levels.map(() => 0);
   }
 
   /**
    * Stream cells around `viewpoint` (`[x, y, z]`; `"xz"` levels use only
-   * X and Z, `"xyz"` levels use all three axes). Levels are processed
-   * coarse to fine,
+   * X and Z, `"xyz"` levels use all three axes). A `"path"` level ignores
+   * the viewpoint entirely and streams around its arc anchor from
+   * `opts.anchors` instead, so a mixed World updates in one call.
+   * Levels are processed coarse to fine,
    * so a cell's parent cooks earlier in the same update; a wanted cell
    * whose parent cell is not yet cooked (or is stale awaiting a recook)
    * stays pending instead of cooking with missing or outdated parent
@@ -468,6 +1000,9 @@ export class World {
         );
       }
     }
+    // The anchors are the viewpoint of every "path" level, so they are
+    // validated with the same strictness and before any cell cooks.
+    const anchors = this.resolveAnchors(opts.anchors);
     if (budgetMs !== undefined && (!Number.isFinite(budgetMs) || budgetMs < 0)) {
       throw new WorldValidationError(
         `budgetMs must be a finite number >= 0, got ${String(budgetMs)}`,
@@ -502,12 +1037,12 @@ export class World {
       // Wanted set, LRU touch, and the cook queue (missing or stale cells),
       // nearest first with a deterministic component-wise coord tie-break.
       const queue: WantedCell[] = [];
-      for (const w of this.wantedCells(level, vx, vy, vz)) {
+      for (const w of this.wantedCells(level, vx, vy, vz, anchors[level.index])) {
         const rec = level.cells.get(cellKey(w.coord));
         if (rec !== undefined) rec.lastUsed = ++this.useCounter;
         if (rec === undefined || rec.stale) queue.push(w);
       }
-      queue.sort((a, b) => a.distSq - b.distSq || coordCompare(a.coord, b.coord));
+      queue.sort((a, b) => a.rank - b.rank || coordCompare(a.coord, b.coord));
 
       if (level.def.bindPatches !== undefined && this.pool !== undefined) {
         // Pooled level: dispatch every affordable cell to the backend,
@@ -539,9 +1074,8 @@ export class World {
     // The unbounded level's single cell never evicts.
     for (const level of this.levels) {
       if (level.def.cellSize !== "unbounded") {
-        const rr2 = level.retainRadius * level.retainRadius;
         for (const rec of [...level.cells.values()]) {
-          if (this.centerDistSq(level, rec.coord, vx, vy, vz) > rr2) {
+          if (this.hasLeftRetain(level, rec.coord, vx, vy, vz, anchors[level.index])) {
             this.evict(level, rec, evicted);
           }
         }
@@ -606,9 +1140,68 @@ export class World {
     };
   }
 
-  /** Cells whose center is within the level's generation radius (inclusive). */
-  private wantedCells(level: LevelState, vx: number, vy: number, vz: number): WantedCell[] {
-    if (level.def.cellSize === "unbounded") return [{ coord: [0, 0], distSq: 0 }];
+  /**
+   * Per-level arc anchor for this update, indexed by level index: the
+   * validated `UpdateOptions.anchors` entry of each `"path"` level
+   * (wrapped into `[0, length)` on a closed table), and 0 — never read —
+   * for every other level.
+   *
+   * Every anchor is checked before any cell cooks, so a typo cannot
+   * half-stream a World.
+   */
+  private resolveAnchors(anchors: Readonly<Record<string, number>> | undefined): number[] {
+    // THE COMMON CASE, ANSWERED WITHOUT TOUCHING THE LEVELS. No anchors
+    // passed and no level that could take one: every entry is 0 and the
+    // array is the same array every frame. Everything below is validation
+    // of an argument that is not here and of levels that cannot want it.
+    if (anchors === undefined && !this.anyPathLevel) return this.zeroAnchors;
+    if (anchors !== undefined) {
+      for (const name of Object.keys(anchors)) {
+        const level = this.levels.find((l) => l.def.name === name);
+        if (level === undefined) {
+          throw new WorldValidationError(
+            `anchors names unknown level "${name}"; levels: ${this.levels.map((l) => l.def.name).join(", ")}`,
+          );
+        }
+        if (level.mode !== "path") {
+          throw new WorldValidationError(
+            `anchors names level "${name}", which uses "${level.mode}" cells and follows the viewpoint; an arc anchor only positions a level with cellMode: "path", so drop this entry or give that level cellMode: "path"`,
+          );
+        }
+      }
+    }
+    return this.levels.map((level) => {
+      if (level.mode !== "path") return 0;
+      const raw = anchors?.[level.def.name];
+      if (raw === undefined) {
+        throw new WorldValidationError(
+          `level ${level.index} ("${level.def.name}") uses "path" cells and has no arc anchor: pass update(viewpoint, { anchors: { "${level.def.name}": s } }) with s the arc length along its centreline`,
+        );
+      }
+      if (typeof raw !== "number" || !Number.isFinite(raw)) {
+        throw new WorldValidationError(
+          `anchors["${level.def.name}"] must be a finite number (an arc length along the level's centreline), got ${String(raw)}`,
+        );
+      }
+      return level.pathClosed ? wrapArc(raw, level.pathLength) : raw;
+    });
+  }
+
+  /**
+   * Cells whose center is within the level's generation radius
+   * (inclusive) — or, for a `"path"` level, whose arc range falls inside
+   * the level's window around its anchor: `aheadArc` units forward or
+   * `behindArc` units back, both bounds inclusive.
+   */
+  private wantedCells(
+    level: LevelState,
+    vx: number,
+    vy: number,
+    vz: number,
+    anchor: number,
+  ): WantedCell[] {
+    if (level.def.cellSize === "unbounded") return [{ coord: [0, 0], rank: 0 }];
+    if (level.mode === "path") return this.wantedPathCells(level, anchor);
     const s = level.def.cellSize;
     const r = level.genRadius;
     const r2 = r * r;
@@ -627,7 +1220,7 @@ export class World {
             const dy = (cy + 0.5) * s - vy;
             const dz = (cz + 0.5) * s - vz;
             const d2 = dx * dx + dy * dy + dz * dz;
-            if (d2 <= r2) out.push({ coord: [nz(cx), nz(cy), nz(cz)], distSq: d2 });
+            if (d2 <= r2) out.push({ coord: [nz(cx), nz(cy), nz(cz)], rank: d2 });
           }
         }
       }
@@ -638,16 +1231,106 @@ export class World {
         const dx = (cx + 0.5) * s - vx;
         const dz = (cz + 0.5) * s - vz;
         const d2 = dx * dx + dz * dz;
-        if (d2 <= r2) out.push({ coord: [nz(cx), nz(cz)], distSq: d2 });
+        if (d2 <= r2) out.push({ coord: [nz(cx), nz(cz)], rank: d2 });
       }
     }
     return out;
   }
 
   /**
-   * Squared distance from the viewpoint to a bounded cell's center, in
-   * the level's own metric: XZ for `"xz"` levels, XYZ for `"xyz"` — the
-   * same metric `wantedCells` applies, so generation and retention agree.
+   * Sectors of a `"path"` level inside its window: `aheadArc` arc units
+   * forward of the anchor and `behindArc` back — "the next N metres, and
+   * a little of the last N" rather than a disc. A symmetric level resolved
+   * both halves to `generationRadius`, so there is one code path here.
+   *
+   * Candidates come from the sector indices `[a - behind, a + ahead]`
+   * spans; on a closed table those indices are taken modulo the sector
+   * count, so a window straddling the `s = 0` seam wraps onto the far end
+   * of the table, and a window that reaches a full lap collapses to every
+   * sector exactly once — the clamp is what stops the two halves from
+   * wanting the same sector twice when they overlap round the back.
+   */
+  private wantedPathCells(level: LevelState, anchor: number): WantedCell[] {
+    const n = level.sectorCount;
+    const ss = level.sectorSize;
+    const len = level.pathLength;
+    const ahead = level.aheadArc;
+    const behind = level.behindArc;
+    const closed = level.pathClosed;
+    const out: WantedCell[] = [];
+    let iMin = Math.floor((anchor - behind) / ss);
+    let iMax = Math.floor((anchor + ahead) / ss);
+    if (closed) {
+      if (iMax - iMin + 1 >= n) {
+        iMin = 0;
+        iMax = n - 1;
+      }
+    } else {
+      // The seam is a hard boundary on an open table: nothing exists
+      // before sector 0 or after the last one.
+      iMin = Math.max(0, iMin);
+      iMax = Math.min(n - 1, iMax);
+    }
+    const seen = new Set<number>();
+    for (let i = iMin; i <= iMax; i++) {
+      const sec = closed ? ((i % n) + n) % n : i;
+      if (seen.has(sec)) continue;
+      seen.add(sec);
+      const gaps = sectorGaps(anchor, sec, n, ss, len, closed);
+      if (sectorInWindow(gaps, ahead, behind)) {
+        out.push({ coord: [sec], rank: sectorWindowRank(gaps, ahead, behind) });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Whether a stored cell has left the level's RETAIN window and should
+   * be evicted — the hysteresis counterpart of `wantedCells`, and the
+   * reason both live on this class: generation and retention have to
+   * measure a cell the same way, or a cell can be simultaneously wanted
+   * and evictable and thrash forever.
+   *
+   * A world-space level compares the same squared center distance it
+   * always did against `retainRadius`. A `"path"` level runs the SAME
+   * predicate its wanted set runs — `sectorInWindow` on the same
+   * `sectorGaps` — with the retain halves substituted for the generation
+   * halves. That is a stronger form of the agreement than "two functions
+   * that compute the same number": under an asymmetric window there is no
+   * single scalar to compare, so the metric could not have been shared by
+   * accident, and sharing the predicate is what makes
+   * `retainAhead >= aheadArc` and `retainBehind >= behindArc` actually
+   * mean "the retain window contains the generation window".
+   */
+  private hasLeftRetain(
+    level: LevelState,
+    coord: CellCoord,
+    vx: number,
+    vy: number,
+    vz: number,
+    anchor: number,
+  ): boolean {
+    if (level.mode === "path") {
+      const gaps = sectorGaps(
+        anchor,
+        coord[0],
+        level.sectorCount,
+        level.sectorSize,
+        level.pathLength,
+        level.pathClosed,
+      );
+      return !sectorInWindow(gaps, level.retainAhead, level.retainBehind);
+    }
+    const rr = level.retainRadius;
+    return this.centerDistSq(level, coord, vx, vy, vz) > rr * rr;
+  }
+
+  /**
+   * Squared distance from the viewpoint to a bounded WORLD-SPACE cell's
+   * center: XZ for `"xz"` levels, XYZ for `"xyz"`. The same metric
+   * `wantedCells` applies in each case, so generation and retention
+   * agree. A `"path"` level never reaches here — an arc window has no
+   * center distance to take, and `hasLeftRetain` measures it in arc gaps.
    */
   private centerDistSq(
     level: LevelState,
@@ -664,7 +1347,8 @@ export class World {
       const dz = (c[2] + 0.5) * size - vz;
       return dx * dx + dy * dy + dz * dz;
     }
-    const dz = (coord[1] + 0.5) * size - vz;
+    const c = coord as CellCoord2;
+    const dz = (c[1] + 0.5) * size - vz;
     return dx * dx + dz * dz;
   }
 
@@ -672,13 +1356,29 @@ export class World {
    * Coordinate of the parent-level cell containing this cell's center.
    * Modes map as documented on {@link LevelDef.cellMode}: like under
    * like contains the center; a 3D child under a 2D parent maps to the
-   * XZ column cell; 2D under 3D was rejected at construction.
+   * XZ column cell; a `"path"` child maps to the parent SECTOR containing
+   * its arc midpoint (both levels ride one table, enforced at
+   * construction); 2D under 3D, and any mix of `"path"` with a
+   * world-space mode, were rejected at construction.
    */
   private parentCoordOf(level: LevelState, coord: CellCoord): CellCoord {
     const parent = this.levels[level.index - 1];
     if (parent.def.cellSize === "unbounded") return [0, 0];
     const size = level.def.cellSize as number;
     const psize = parent.def.cellSize;
+    if (level.mode === "path") {
+      const n = level.sectorCount;
+      const sMid =
+        (sectorBound(coord[0], n, level.sectorSize, level.pathLength) +
+          sectorBound(coord[0] + 1, n, level.sectorSize, level.pathLength)) /
+        2;
+      // Against the PARENT's sector size, not its cellSize: cellSize is a
+      // target that round() turned into whole sectors, so only the
+      // parent's own sector size addresses its cells. The clamp catches
+      // the last sector, whose midpoint can land on the table length.
+      const pi = Math.floor(sMid / parent.sectorSize);
+      return [Math.min(Math.max(pi, 0), parent.sectorCount - 1)];
+    }
     if (level.mode === "xyz") {
       const c = coord as CellCoord3;
       const px = nz(Math.floor(((c[0] + 0.5) * size) / psize));
@@ -687,20 +1387,25 @@ export class World {
         ? [px, nz(Math.floor(((c[1] + 0.5) * size) / psize)), pz]
         : [px, pz];
     }
+    const c2 = coord as CellCoord2;
     return [
-      nz(Math.floor(((coord[0] + 0.5) * size) / psize)),
-      nz(Math.floor(((coord[1] + 0.5) * size) / psize)),
+      nz(Math.floor(((c2[0] + 0.5) * size) / psize)),
+      nz(Math.floor(((c2[1] + 0.5) * size) / psize)),
     ];
   }
 
   /** Reject a coordinate whose arity does not match the level's mode. */
   private checkCoordArity(level: LevelState, coord: CellCoord): void {
-    const expected = level.mode === "xyz" ? 3 : 2;
+    const expected = level.mode === "xyz" ? 3 : level.mode === "path" ? 1 : 2;
     if (coord.length !== expected) {
-      throw new WorldValidationError(
+      const shape =
         level.mode === "xyz"
-          ? `level "${level.def.name}" uses 3D "xyz" cells addressed [cx, cy, cz]; got a ${coord.length}-component coordinate`
-          : `level "${level.def.name}" uses 2D "xz" cells addressed [cx, cz]; got a ${coord.length}-component coordinate`,
+          ? `3D "xyz" cells addressed [cx, cy, cz]`
+          : level.mode === "path"
+            ? `"path" cells addressed [cs] (one sector index)`
+            : `2D "xz" cells addressed [cx, cz]`;
+      throw new WorldValidationError(
+        `level "${level.def.name}" uses ${shape}; got a ${coord.length}-component coordinate`,
       );
     }
   }
@@ -734,6 +1439,11 @@ export class World {
     // is itself derived from. See CellContextBase.worldSeed.
     const worldSeed = this.worldSeed;
     const levelSeed = hashCombine(worldSeed, idx);
+    // The query window's widening, done here so a bind spends the number
+    // the level DECLARED rather than one of its own. A level with no halo
+    // gets 0, and haloMin/haloMax then are min/max — same objects' values,
+    // so a bind may read the widened pair unconditionally.
+    const h = def.halo ?? 0;
     let ctx: CellContext;
     if (def.cellSize === "unbounded") {
       ctx = {
@@ -743,11 +1453,32 @@ export class World {
         coord: [0, 0],
         min: [-Infinity, -Infinity],
         max: [Infinity, Infinity],
+        // An unbounded level refuses a halo (see the constructor), and
+        // ±Infinity is already every point there is.
+        haloMin: [-Infinity, -Infinity],
+        haloMax: [Infinity, Infinity],
         worldSeed,
         levelSeed,
         // One global cell has no coordinates to fold: the per-cell seed IS
         // the level seed, and the two are documented as equal here.
         seed: levelSeed,
+        ...(parent !== undefined ? { parent } : {}),
+      };
+    } else if (level.mode === "path") {
+      const c = coord as CellCoord1;
+      const n = level.sectorCount;
+      ctx = {
+        levelIndex: idx,
+        levelName: def.name,
+        cellMode: "path",
+        coord: c,
+        sMin: sectorBound(c[0], n, level.sectorSize, level.pathLength),
+        sMax: sectorBound(c[0] + 1, n, level.sectorSize, level.pathLength),
+        pathLength: level.pathLength,
+        closed: level.pathClosed,
+        worldSeed,
+        levelSeed,
+        seed: hashCombine(worldSeed, idx, c[0]),
         ...(parent !== undefined ? { parent } : {}),
       };
     } else if (level.mode === "xyz") {
@@ -760,6 +1491,8 @@ export class World {
         coord: c,
         min: [c[0] * s, c[1] * s, c[2] * s],
         max: [(c[0] + 1) * s, (c[1] + 1) * s, (c[2] + 1) * s],
+        haloMin: [c[0] * s - h, c[1] * s - h, c[2] * s - h],
+        haloMax: [(c[0] + 1) * s + h, (c[1] + 1) * s + h, (c[2] + 1) * s + h],
         worldSeed,
         levelSeed,
         seed: hashCombine(worldSeed, idx, c[0], c[1], c[2]),
@@ -767,16 +1500,19 @@ export class World {
       };
     } else {
       const s = def.cellSize;
+      const c = coord as CellCoord2;
       ctx = {
         levelIndex: idx,
         levelName: def.name,
         cellMode: "xz",
-        coord: [coord[0], coord[1]],
-        min: [coord[0] * s, coord[1] * s],
-        max: [(coord[0] + 1) * s, (coord[1] + 1) * s],
+        coord: [c[0], c[1]],
+        min: [c[0] * s, c[1] * s],
+        max: [(c[0] + 1) * s, (c[1] + 1) * s],
+        haloMin: [c[0] * s - h, c[1] * s - h],
+        haloMax: [(c[0] + 1) * s + h, (c[1] + 1) * s + h],
         worldSeed,
         levelSeed,
-        seed: hashCombine(worldSeed, idx, coord[0], coord[1]),
+        seed: hashCombine(worldSeed, idx, c[0], c[1]),
         ...(parent !== undefined ? { parent } : {}),
       };
     }

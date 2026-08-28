@@ -399,7 +399,7 @@ console.<span class="n">log</span>(geo.pointCount, [...P.data.<span class="n">su
 console.<span class="n">log</span>(result.stats);</code></pre></div>
 
     <p class="code-label">Actual output</p>
-    <div class="codeblock"><pre><code>500 [ 33.082, -0.3688, 6.8829 ]
+    <div class="codeblock"><pre><code>500 [ 32.577, -0.057389, 6.8524 ]
 { cooked: 2, cached: 0, elapsedMs: 6.69 }</code></pre></div>
 
     <p>Cook the same graph again and both nodes are served from the memo cache — <code>{ cooked: 0, cached: 2 }</code>. Change one parameter with <code>graph.setParam(scatter, "count", 1000)</code> and only that node and everything downstream of it recooks. Nothing else moves; nothing is deep-hashed.</p>
@@ -517,6 +517,7 @@ level.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
     <p><code>update</code> resolves to <code>{ cooked, evicted, pending, elapsedMs }</code>, where <code>cooked</code> and <code>evicted</code> are arrays of <code>{ level, coord }</code> — enough to drive a renderer without a separate bookkeeping layer. Cells cook nearest-first; eviction uses a <code>retainRadius</code> (default 1.25× the generation radius) plus LRU, so a viewpoint hovering on a boundary does not thrash.</p>
     <p>The determinism claim here is stronger than "the same seed gives the same world". Cell content is a pure function of (world seed, level, coordinate, graph, parent cell content) — never of cook order, viewpoint path, or eviction history. Fly away and back and the identical cells return, because they were never a function of how you got there. The contract you owe in exchange is narrow: derive parameters only from <code>ctx</code>, and route <code>ctx.seed</code> into anything stochastic. Setting per-node seed parameters and calling <code>graph.setSeed(...)</code> inside <code>bind</code> are both sanctioned; bind-time writes are not counted as user edits, so neither causes phantom recooks.</p>
     <p>Levels use square XZ cells by default. <code>cellMode: "xyz"</code> switches a level to cube cells addressed <code>[cx, cy, cz]</code>, with radii measured in full XYZ distance. A leading <code>cellSize: "unbounded"</code> level covers the world with a single global cell and needs no radius — the natural home for landmarks and anything global. Lower levels see their parent cell's outputs through <code>ctx.parent</code>, typically injected via a <code>dataInput</code> node, and a parent recook marks its children stale automatically.</p>
+    <p><code>cellMode: "path"</code> partitions a curve instead of a box: a cell is a half-open arc range <code>[sMin, sMax)</code> along a centreline, addressed by one sector index. It exists because one-dimensional content — a road, a river, a racetrack — should stream as "the next N metres", not as a disc around the viewer, which loads the stretch just left behind and under-loads the road ahead. The level declares <code>path: { length, closed }</code>, a ruler rather than a curve, so the World never becomes content-aware; the caller supplies its own arc position through <code>update(vp, { anchors: { level: s } })</code>, because a game already tracks it. <code>aheadArc</code> and <code>behindArc</code> replace <code>generationRadius</code> to make the window directional. A path cell carries no <code>min</code>/<code>max</code> — there is no box — so a bind written for square cells fails to compile rather than misreading a coordinate; narrow with <code>xzCell(ctx)</code>. See <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">docs/authoring.md</a> for the nesting rules and the seam.</p>
 
     <h3 id="anchoring">2.5 · Anchoring: content that crosses a cell boundary</h3>
     <p>The guarantee above is per cell, and a world is not made of independent cells. The moment a rock's size depends on how crowded its surroundings are, a cell has to see slightly outside itself — and the naive fix does not work. <code>pointScatterInBounds</code> computes its positions <em>as a function of</em> <code>boundsMin</code> and <code>boundsMax</code>, so widening the box to form a halo moves every point in it. The halo reproduces nothing the neighbour will see. Every neighbourhood-style operation inherits that, not only the ones near an edge.</p>
@@ -898,12 +899,12 @@ graph.<span class="n">setParam</span>(density, <span class="s">"value"</span>, <
     <p>There are three registries, and an agent should know all three before emitting anything: <code>listNodeTypes()</code> for node types, <code>listFieldFns()</code> for the field-expression vocabulary, and <code>listSubgraphs()</code> for the named primitives — the ready-made recipes a graph can reference by name instead of rebuilding. Each has a generated twin on disk and a <code>pcg</code> subcommand that prints the same thing from a shell.</p>
 
     <h3>listNodeTypes()</h3>
-    <p>Returns every registered node type. Each entry has exactly these keys: <code>type</code>, <code>description</code>, <code>category</code>, <code>inputs</code>, <code>outputs</code>, <code>params</code>. There are 48 types in the standard library, all categorized.</p>
+    <p>Returns every registered node type. Each entry has exactly these keys: <code>type</code>, <code>description</code>, <code>category</code>, <code>inputs</code>, <code>outputs</code>, <code>params</code>. There are 58 types in the standard library, all categorized.</p>
 
     <div class="codeblock"><pre><code><span class="k">import</span> { listNodeTypes } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
 
 <span class="k">const</span> types = <span class="n">listNodeTypes</span>();
-types.length;                                <span class="c">// 48</span>
+types.length;                                <span class="c">// 58</span>
 <span class="k">const</span> jitter = types.<span class="n">find</span>(t => t.type === <span class="s">"jitterPoints"</span>);</code></pre></div>
 
     <p class="code-label">The entry, verbatim</p>
@@ -966,15 +967,15 @@ g.<span class="n">output</span>(n, <span class="s">"out"</span>, <span class="s"
     <p>Note the generated id: a code-built node is named <code>&lt;type&gt;_&lt;n&gt;</code>, whereas a node loaded from JSON keeps the id you gave it. Both appear verbatim in error messages and in <code>describe()</code>, so meaningful ids in your documents pay for themselves the first time something fails.</p>
 
     <h3>listFieldFns()</h3>
-    <p>Returns the complete field-expression vocabulary as a sorted array of 57 names. This is the closed set — an <code>fn</code> not in this list is not a field function, and emitting one produces the error in chapter 11.</p>
+    <p>Returns the complete field-expression vocabulary as a sorted array of 62 names. This is the closed set — an <code>fn</code> not in this list is not a field function, and emitting one produces the error in chapter 11.</p>
     <div class="codeblock"><pre><code>[<span class="s">"abs"</span>, <span class="s">"acos"</span>, <span class="s">"add"</span>, <span class="s">"asin"</span>, <span class="s">"atan"</span>, <span class="s">"atan2"</span>, <span class="s">"attribute"</span>, <span class="s">"attributeIs"</span>,
  <span class="s">"byAttribute"</span>, <span class="s">"clamp"</span>, <span class="s">"component"</span>, <span class="s">"constant"</span>, <span class="s">"cos"</span>, <span class="s">"cross"</span>, <span class="s">"distance"</span>,
- <span class="s">"div"</span>, <span class="s">"dot"</span>, <span class="s">"eq"</span>, <span class="s">"exp"</span>, <span class="s">"fbm"</span>, <span class="s">"floor"</span>, <span class="s">"fract"</span>, <span class="s">"fraction"</span>, <span class="s">"ge"</span>,
- <span class="s">"gt"</span>, <span class="s">"index"</span>, <span class="s">"le"</span>, <span class="s">"length"</span>, <span class="s">"lerp"</span>, <span class="s">"log"</span>, <span class="s">"lt"</span>, <span class="s">"max"</span>, <span class="s">"min"</span>,
+ <span class="s">"div"</span>, <span class="s">"dot"</span>, <span class="s">"eq"</span>, <span class="s">"exp"</span>, <span class="s">"exp2"</span>, <span class="s">"fbm"</span>, <span class="s">"floor"</span>, <span class="s">"fract"</span>, <span class="s">"fraction"</span>, <span class="s">"ge"</span>,
+ <span class="s">"gt"</span>, <span class="s">"index"</span>, <span class="s">"le"</span>, <span class="s">"length"</span>, <span class="s">"lerp"</span>, <span class="s">"log"</span>, <span class="s">"log2"</span>, <span class="s">"lt"</span>, <span class="s">"max"</span>, <span class="s">"min"</span>,
  <span class="s">"mod"</span>, <span class="s">"mul"</span>, <span class="s">"ne"</span>, <span class="s">"nodeSeed"</span>, <span class="s">"normalize"</span>, <span class="s">"param"</span>, <span class="s">"perlinNoise"</span>,
- <span class="s">"position"</span>, <span class="s">"pow"</span>, <span class="s">"ramp"</span>, <span class="s">"randomField"</span>, <span class="s">"remap"</span>, <span class="s">"select"</span>, <span class="s">"sign"</span>,
+ <span class="s">"position"</span>, <span class="s">"pow"</span>, <span class="s">"ramp"</span>, <span class="s">"randomField"</span>, <span class="s">"randomFrom"</span>, <span class="s">"rem"</span>, <span class="s">"remap"</span>, <span class="s">"select"</span>, <span class="s">"sign"</span>,
  <span class="s">"simplexNoise"</span>, <span class="s">"sin"</span>, <span class="s">"smoothstep"</span>, <span class="s">"sqrt"</span>, <span class="s">"step"</span>, <span class="s">"sub"</span>, <span class="s">"tan"</span>,
- <span class="s">"valueNoise"</span>, <span class="s">"vec"</span>, <span class="s">"worleyNoise"</span>]</code></pre></div>
+ <span class="s">"trunc"</span>, <span class="s">"valueNoise"</span>, <span class="s">"vec"</span>, <span class="s">"worleyNoise"</span>]</code></pre></div>
 
     <h3>listSubgraphs()</h3>
     <p>The third registry, and the one an agent gains most from: the <strong>named primitives</strong>. A primitive is a registered subgraph — a tested recipe with exposed params — that a graph references by name rather than rebuilding out of node types. 37 named primitives ship with the library, and <code>listSubgraphs()</code> returns them as <code>{ name, subgraph, hash, meta }</code>: the canonical payload, its content hash, and a <code>meta</code> block whose <code>title</code> and <code>description</code> say what the recipe is for and how its knobs behave.</p>
@@ -990,14 +991,14 @@ all.<span class="n">find</span>(s => s.name === <span class="s">"fill/scatter-ev
     <h3>The same catalogs, from a shell</h3>
     <p>Two of those registries are also commands. The <code>pcg</code> CLI is the library's other front door — <code>npx pcg …</code> when the package is installed, <code>node bin/pcg.mjs …</code> from a clone — and its discovery commands read the same registries this chapter has been calling:</p>
     <div class="codeblock"><pre><code><span class="c"># the whole registry, grouped by category</span>
-pcg nodes                      <span class="c"># -> "48 node types, by category"</span>
+pcg nodes                      <span class="c"># -> "58 node types, by category"</span>
 
 <span class="c"># one type: its pins and its full param table, with ranges, enums and</span>
 <span class="c"># which params accept a field</span>
 pcg nodes pointGrid
 
 <span class="c"># the field vocabulary, and one fn's allowed keys</span>
-pcg fields                     <span class="c"># -> "57 field fns"</span>
+pcg fields                     <span class="c"># -> "62 field fns"</span>
 pcg fields randomField         <span class="c"># -> usage: { fn: "randomField", key?: 0 | "salt" }</span>
 
 <span class="c"># every command takes --json and prints the machine-readable report instead</span>
@@ -1012,9 +1013,9 @@ pcg nodes pointGrid --json</code></pre></div>
     <table>
       <thead><tr><th>Prose</th><th>Machine-readable</th><th>What it indexes</th></tr></thead>
       <tbody>
-        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a></td><td>Every node type: pins, params, defaults, ranges. The JSON is a plain top-level array of the same 48 entries in the same shape <code>listNodeTypes()</code> returns.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a></td><td>Every node type: pins, params, defaults, ranges. The JSON is a plain top-level array of the same 58 entries in the same shape <code>listNodeTypes()</code> returns.</td></tr>
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.md">docs/primitives.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.json">docs/primitives.json</a></td><td>Every named primitive: its pins, its exposed params with their derived schemas, its content hash, and a <code>pcg run</code> line to cook it standalone.</td></tr>
-        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/graphs.md">docs/graphs.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/graphs.json">docs/graphs.json</a></td><td>The example corpus: 68 graphs under <code>graphs/</code>, indexed by what each one teaches, with its tags, seed, node types and referenced primitives.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/graphs.md">docs/graphs.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/graphs.json">docs/graphs.json</a></td><td>The example corpus: 78 graphs under <code>graphs/</code>, indexed by what each one teaches, with its tags, seed, node types and referenced primitives.</td></tr>
       </tbody>
     </table>
     </div>
@@ -1235,7 +1236,7 @@ graph.<span class="n">setParam</span>(inputHandle, <span class="s">"items"</span
 
     <h3>What an agent can emit — and what it cannot</h3>
     <p>This is the boundary that matters most, because it is asymmetric and easy to get wrong in the safe-looking direction.</p>
-    <p><strong>You can emit any field the grammar describes.</strong> Those 57 functions, nested arbitrarily, are a complete generation target. Fields built from JSON via <code>fieldFromJson</code> carry their spec: <code>getFieldSpec(field)</code> returns it, <code>fieldToJson(field)</code> gives the JSON back, and the round trip is exact — <code>fieldToJson(fieldFromJson(spec))</code> deep-equals <code>spec</code>, verified.</p>
+    <p><strong>You can emit any field the grammar describes.</strong> Those 62 functions, nested arbitrarily, are a complete generation target. Fields built from JSON via <code>fieldFromJson</code> carry their spec: <code>getFieldSpec(field)</code> returns it, <code>fieldToJson(field)</code> gives the JSON back, and the round trip is exact — <code>fieldToJson(fieldFromJson(spec))</code> deep-equals <code>spec</code>, verified.</p>
     <p><strong>You cannot emit a code-authored field, and you cannot serialize one.</strong> A field composed with the code combinators — <code>clamp(add(0.2, mul(worleyNoise(...), 0.9)), 0, 1)</code> — cooks perfectly well but has no spec. <code>getFieldSpec</code> returns <code>undefined</code> for it, and <code>serializeGraph</code> on a graph containing one cannot represent that parameter. There is no specification for arbitrary code-authored fields, and there will not be one, because there is nothing finite to specify.</p>
     <p>Two consequences follow directly, and both are practical rather than theoretical:</p>
     <ul>
@@ -1258,15 +1259,19 @@ graph.<span class="n">setParam</span>(inputHandle, <span class="s">"items"</span
 
     <div class="code-label">Unknown node type — the message enumerates the entire registry</div>
     <div class="codeblock"><pre><code>GraphSerializationError: node <span class="s">"a"</span>: unknown node type <span class="s">"pointScatterInBox"</span>;
-registered types: attributeReduce, attributeRemap, connectPoints, copyToPoints,
-dataInput, filterByAttribute, filterByBounds, filterByDensity,
-filterByExpression, filterPrimitivesByBounds, jitterPoints, mergePoints,
-meshPrimitive, orientAlongVector, partitionByAttribute, pathResample, pointGrid,
-pointLine, pointNeighborhood, pointScatterInBounds, pointScatterInWorld,
-pointsToPath, projectToPlane, promoteAttribute, removeAttribute,
+registered types: arcTile, attributeReduce, attributeRemap, connectPoints,
+copyToPoints, dataInput, extrudePolygon, filterByAttribute, filterByBounds,
+filterByDensity, filterByExpression, filterPrimitivesByAttribute,
+filterPrimitivesByBounds, forEach, jitterPoints, mergePoints, mergePrimitives,
+meshPrimitive, occlusionCull, orientAlongVector, partitionByAttribute,
+pathCoverage, pathPointAt, pathResample, pathRuns, pathScan, pathSegments,
+pathShift, pointGrid, pointLine, pointNeighborhood, pointScatterInBounds,
+pointScatterInWorld, pointScatterOnPath, pointsToPath, projectToPlane,
+promoteAttribute, quotaRebalance, removeAttribute, repeatUntil, runFit,
 sampleNearestPoint, selfPrune, setAttribute, setBounds, spawnInstances,
-splineSample, subgraph, surfaceSample, transferAttribute, transformPoints,
-valueConstant, volumeSample, writeTangents</code></pre></div>
+splineSample, subgraph, surfaceSample, sweepProfile, transferAlongPath,
+transferAttribute, transferByIndex, transformPoints, valueConstant,
+volumeSample, writeCurveFrame, writeTangents</code></pre></div>
 
     <div class="code-label">Unknown parameter — the message enumerates that type's parameters</div>
     <div class="codeblock"><pre><code>GraphSerializationError: node <span class="s">"a"</span>: unknown param <span class="s">"counts"</span> for type
@@ -1293,10 +1298,11 @@ GraphValidationError: unknown output <span class="s">"pts"</span>; declared outp
     <div class="code-label">Field grammar — the fn list and the exact arity</div>
     <div class="codeblock"><pre><code>FieldJsonError: $: unknown field fn <span class="s">"perlin"</span>; valid fns: abs, acos, add, asin,
 atan, atan2, attribute, attributeIs, byAttribute, clamp, component, constant,
-cos, cross, distance, div, dot, eq, exp, fbm, floor, fract, fraction, ge, gt,
-index, le, length, lerp, log, lt, max, min, mod, mul, ne, nodeSeed, normalize,
-param, perlinNoise, position, pow, ramp, randomField, remap, select, sign,
-simplexNoise, sin, smoothstep, sqrt, step, sub, tan, valueNoise, vec,
+cos, cross, distance, div, dot, eq, exp, exp2, fbm, floor, fract, fraction, ge, gt,
+index, le, length, lerp, log, log2, lt, max, min, mod, mul, ne, nodeSeed, normalize,
+param, perlinNoise, position, pow, ramp, randomField, randomFrom, rem, remap, select,
+sign,
+simplexNoise, sin, smoothstep, sqrt, step, sub, tan, trunc, valueNoise, vec,
 worleyNoise
 
 FieldJsonError: $: fn <span class="s">"clamp"</span> expects exactly 3 args, got 2</code></pre></div>
@@ -1375,6 +1381,8 @@ WorldValidationError: level 0 (<span class="s">"a"</span>): cookOutputs names un
     </div>
 
     <p>For composites, <code>describeSubgraphPins(def)</code> resolves a subgraph definition's per-instance pins — the exposed name plus the concrete kind of the inner pin, resolved live through nested subgraphs. It returns <code>{"inputs":[],"outputs":[{"name":"out","kind":"geometry"}]}</code> for a single-output wrapper, <code>undefined</code> for a non-subgraph definition, and throws (naming the pin and inner node) when later edits have broken the wrapper.</p>
+
+    <p><strong>A wrapper can add pins the body never exposed, and those carry a flag.</strong> A <code>repeatUntil</code> definition publishes <code>rounds</code> and <code>converged</code> itself, so they appear here as ordinary outputs with <code>"synthesized": true</code> — <code>{"name":"rounds","kind":"value","synthesized":true}</code>. They are real and wirable, and on a loop they are the only way to tell a settled result from one that ran out of rounds. The flag carries the other half: the pin is <em>not the body's</em>, so it will not be found among the exposed outputs and does not move when those are renamed. The key is <em>absent</em> rather than <code>false</code> on an ordinary pin, so code comparing against <code>{name, kind}</code> still matches the ordinary case. <code>forEach</code> synthesizes nothing, so this is <code>repeatUntil</code>-only today.</p>
 
     <h3>Writing: the mutation API and its exact cache semantics</h3>
     <p>Every mutation bumps the graph version. The cache consequences are specified, not incidental:</p>
@@ -1502,7 +1510,7 @@ cmp a.json b.json</code></pre></div>
     <p>Look up what you are about to type rather than recalling it. From a shell that is two commands, and the answers are the same registries chapter 8 describes:</p>
     <div class="codeblock"><pre><code>pcg nodes pointScatterInBounds   <span class="c"># pins, and every param with its range</span>
 pcg fields fbm                   <span class="c"># the field fn's allowed keys and usage line</span></code></pre></div>
-    <p>Before either, though, ask whether the thing already exists. <code>docs/primitives.md</code> opens with a one-line summary of each named primitive and <code>docs/graphs.md</code> indexes 68 corpus graphs by what each one teaches — and copying the shape of a graph near your goal beats composing one from schemas. A primitive that fits collapses this whole step into one <code>ref</code> node.</p>
+    <p>Before either, though, ask whether the thing already exists. <code>docs/primitives.md</code> opens with a one-line summary of each named primitive and <code>docs/graphs.md</code> indexes 78 corpus graphs by what each one teaches — and copying the shape of a graph near your goal beats composing one from schemas. A primitive that fits collapses this whole step into one <code>ref</code> node.</p>
 
     <h3>2 · Emit</h3>
     <p>Write the document to a file. Use the chapter 9 example verbatim — four nodes, three connections, two outputs — saved as <code>g.json</code>. From here on the file on disk is the artifact; every command below reads it and none of them modifies it.</p>

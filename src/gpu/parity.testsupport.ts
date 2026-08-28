@@ -30,6 +30,7 @@ import {
   div,
   dot,
   exp,
+  exp2,
   floor,
   fract,
   fraction,
@@ -37,6 +38,7 @@ import {
   length,
   lerp,
   log,
+  log2,
   max,
   min,
   mod,
@@ -46,6 +48,7 @@ import {
   pow,
   ramp,
   randomField,
+  rem,
   remap,
   select,
   sign,
@@ -55,6 +58,7 @@ import {
   step,
   sub,
   tan,
+  trunc,
   type Field,
   vec,
 } from "../fields/index.js";
@@ -90,10 +94,19 @@ export const MINIMAL_SPECS: Record<string, FieldSpecArg> = {
   // Dividend on the NEGATIVE side, because a floored modulo only differs
   // from a truncated one there.
   mod: { fn: "mod", args: [{ fn: "component", args: [{ fn: "position" }], index: 0 }, 8] },
+  // Same dividend as `mod` above and for the same reason, the two being
+  // the pair that only differ below zero.
+  rem: { fn: "rem", args: [{ fn: "component", args: [{ fn: "position" }], index: 0 }, 8] },
   sign: { fn: "sign", args: [{ fn: "component", args: [{ fn: "position" }], index: 0 }] },
+  // Negative coordinates included: rounding toward zero is only
+  // distinguishable from rounding down on that side.
+  trunc: { fn: "trunc", args: [{ fn: "component", args: [{ fn: "position" }], index: 0 }] },
   exp: { fn: "exp", args: [{ fn: "attribute", name: "density" }] },
+  exp2: { fn: "exp2", args: [{ fn: "attribute", name: "density" }] },
   // Guarded strictly positive: 0 is -Infinity and negatives are NaN.
   log: { fn: "log", args: [{ fn: "add", args: [{ fn: "abs", args: [{ fn: "attribute", name: "density" }] }, 0.5] }] },
+  // Guarded the same way, for the same two reasons.
+  log2: { fn: "log2", args: [{ fn: "add", args: [{ fn: "abs", args: [{ fn: "attribute", name: "density" }] }, 0.5] }] },
   smoothstep: { fn: "smoothstep", args: [-4, 4, { fn: "component", args: [{ fn: "position" }], index: 0 }] },
   distance: { fn: "distance", args: [{ fn: "position" }, [0.25, -1.5, 2]] },
   constant: { fn: "constant", value: 1 },
@@ -120,6 +133,11 @@ export const MINIMAL_SPECS: Record<string, FieldSpecArg> = {
   fraction: { fn: "fraction" },
   nodeSeed: { fn: "nodeSeed" },
   randomField: { fn: "randomField" },
+  // Keyed on a VALUE, so unlike `randomField` above it needs no identity
+  // and lowers on any domain. The key is an attribute rather than a
+  // literal so the case exercises a real per-element hash rather than a
+  // constant the fold could swallow.
+  randomFrom: { fn: "randomFrom", args: [{ fn: "attribute", name: "density" }], key: 0 },
   // Unbound: the front end must accept the uniform-slot lowering on the
   // name alone (a bound one produces the same kernel — the value never
   // reaches the WGSL text).
@@ -549,6 +567,14 @@ export const PARITY_CASES: ParityCase[] = [
   { name: "clamp/min/max", spec: { fn: "clamp", args: [PX, { fn: "min", args: [PY, 0] }, { fn: "max", args: [{ fn: "abs", args: [PY] }, 1] }] }, exact: true, budget: 0, meanAbs: 0 },
   // rangeUlp 0 and maxUlp 0 at every count.
   { name: "floor", spec: { fn: "floor", args: [PX] }, exact: true, budget: 0, meanAbs: 0 },
+  // rangeUlp 0 and maxUlp 0 at every count, for `floor`'s reason: an
+  // integer-valued result was already a representable f32, so neither path
+  // has anything left to round. This is the one of the four new rows that
+  // emits the WGSL BUILTIN rather than an expansion, which is why it sits
+  // beside `floor` rather than beside `rem`. The coordinate spans both
+  // signs, so a lowering that rounded DOWN instead of toward zero would
+  // redden the negative half — falsifiable, and checked.
+  { name: "trunc", spec: { fn: "trunc", args: [PX] }, exact: true, budget: 0, meanAbs: 0 },
   // rangeUlp 0 and meanAbs 0 at every count, over a non-degenerate span:
   // this remap divides by 16, so the one division is exact. Budgeted at
   // the `div` family's bound rather than at 0 anyway — the family is one
@@ -606,6 +632,18 @@ export const PARITY_CASES: ParityCase[] = [
   // row, and only the negative half of the cloud can be what does it,
   // since the two definitions agree above zero.
   { name: "mod", spec: { fn: "mod", args: [PX, 8] }, exact: true, budget: 0, meanAbs: 0 },
+  // The floored row's twin, exact for the same earned reason: the CPU
+  // rounds the divide, the multiply and the subtraction to f32 one at a
+  // time so it runs `x - y * trunc(x / y)` step for step with the kernel.
+  // Same dividend and same divisor as `mod` above ON PURPOSE — the two rows
+  // read the identical cloud, so every lane where they differ is one whose
+  // operands disagree in sign, and neither row can be passing because its
+  // own domain avoided the disagreement. (They also agree on the lanes 8
+  // divides exactly, which is measure-zero in a float cloud.)
+  // rangeUlp 0 and maxUlp 0 at every count. Falsifiable, and checked:
+  // emitting `floor` in place of `trunc` reddens this row on the negative
+  // half of the cloud and only there.
+  { name: "rem", spec: { fn: "rem", args: [PX, 8] }, exact: true, budget: 0, meanAbs: 0 },
   // rangeUlp 0 and maxUlp 0 at every count. Exact for `step`'s reason: the
   // lowering is a pair of comparisons, and a comparison has no interior to
   // round. The coordinate read here spans both signs, so a reversed
@@ -631,6 +669,18 @@ export const PARITY_CASES: ParityCase[] = [
   // is exp2 of a product and so is the same machinery.
   // meanAbs 3.8e-5 = 1.24x of the measured 3.06e-5 at 1M.
   { name: "exp", spec: { fn: "exp", args: [PX] }, budget: 8, meanAbs: 3.8e-5, countSensitive: true },
+  // rangeUlp 0.50/0.50 over 10k -> 131k — dead flat, and maxUlp is 2, so
+  // the worst lane in the whole cloud is two f32 ULP and nearly every other
+  // one is correctly rounded. budget 1 = 2.00x, the same budget the other
+  // 0.50 families take; meanAbs 9.8e-7 = 1.25x of the measured 7.83e-7.
+  //
+  // IT MEASURES 8x TIGHTER THAN `exp` (0.50 against 4.12), which is the
+  // quantitative half of the argument that this is not a synonym. The
+  // device HAS a base-2 exponential; its `exp` is that instruction with a
+  // scale factor in front, so `exp` carries this row's error plus the
+  // multiply's, and `Math.exp` and `Math.pow(2, x)` are not equally close
+  // to the truth either. The cheaper spelling is also the accurate one.
+  { name: "exp2", spec: { fn: "exp2", args: [PX] }, budget: 1, meanAbs: 9.8e-7, countSensitive: true },
   // rangeUlp 0.93/0.93 over 10k -> 131k and 0.93 again at 1M — dead flat to
   // three significant figures across two further decades. budget 2 = 2.15x;
   // meanAbs 5.5e-8 = 1.25x of 4.38e-8.
@@ -641,6 +691,19 @@ export const PARITY_CASES: ParityCase[] = [
   // one ULP of the family's range. Budgeting the raw figure would demand
   // 6000 here and would still say nothing about the answers anyone reads.
   { name: "log", spec: { fn: "log", args: [{ fn: "add", args: [{ fn: "abs", args: [PX] }, 0.5] }] }, budget: 2, meanAbs: 5.5e-8, countSensitive: true },
+  // rangeUlp 0.65/0.65 over 10k -> 131k, flat, against `log`'s 0.93 — the
+  // mirror of `exp2`'s advantage over `exp` and from the same cause: the
+  // base-2 logarithm is the instruction the hardware has and the natural
+  // one is a scaled composition on top of it. budget 1 = 1.54x; meanAbs
+  // 6.3e-8 = 1.25x of the measured 5.05e-8.
+  // Its raw maxUlp is 6986 and that is not a defect, for exactly the reason
+  // spelled out on the `log` row above: this domain straddles x = 1, where
+  // the output passes through zero and an absolute error of 5e-8 is
+  // thousands of ULP OF THAT OUTPUT while being nothing at all against the
+  // family's range. Guarded to [0.5, 8.5] the way `log` is, since 0 is
+  // -Infinity and a negative input is NaN, and a NaN lane would make the
+  // whole comparison vacuous rather than red.
+  { name: "log2", spec: { fn: "log2", args: [{ fn: "add", args: [{ fn: "abs", args: [PX] }, 0.5] }] }, budget: 1, meanAbs: 6.3e-8, countSensitive: true },
   // rangeUlp 0.52/0.51 — saturated, and 0.5 is the floor rather than a
   // coincidence: maxUlp is 1, so the worst lane is a single f32 ULP and the
   // result is correctly rounded everywhere else. It measures BETTER than
@@ -864,6 +927,7 @@ export const DERIVED_FIELDS: Record<string, () => Field> = {
   lerp: () => lerp(px(), py(), density()),
   "clamp/min/max": () => clamp(px(), min(py(), 0), max(abs(py()), 1)),
   floor: () => floor(px()),
+  trunc: () => trunc(px()),
   remap: () => remap(px(), -8, 8, 0, 1),
   ramp: () =>
     ramp(length(position()), [
@@ -876,10 +940,13 @@ export const DERIVED_FIELDS: Record<string, () => Field> = {
   step: () => step(py(), px()),
   fract: () => fract(px()),
   mod: () => mod(px(), 8),
+  rem: () => rem(px(), 8),
   sign: () => sign(px()),
   smoothstep: () => smoothstep(-4, 4, px()),
   exp: () => exp(px()),
+  exp2: () => exp2(px()),
   log: () => log(add(abs(px()), 0.5)),
+  log2: () => log2(add(abs(px()), 0.5)),
   distance: () => distance(position(), vec(0.25, -1.5, 2)),
   sqrt: () => sqrt(abs(px())),
   pow: () => pow(add(abs(px()), 0.5), mul(py(), 0.375)),

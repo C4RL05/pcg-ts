@@ -24,6 +24,7 @@ import {
   pointScatterInBounds,
   pointsToPath,
   projectToPlane,
+  promoteAttribute,
   serializeGraph,
   setAttribute,
   splineSample,
@@ -43,6 +44,34 @@ function row(n: number): Geometry {
   const P = geo.attrs.point.require("P");
   for (let i = 0; i < n; i++) P.setTuple(i, [i, 0, 0]);
   return geo;
+}
+
+/** A point cloud with one point per given x, at (x, 0, 0). */
+function rowAt(xs: readonly number[]): Geometry {
+  const geo = createPointCloud(xs.length);
+  const P = geo.attrs.point.require("P");
+  xs.forEach((x, i) => P.setTuple(i, [x, 0, 0]));
+  return geo;
+}
+
+/**
+ * The x of every point each polyline walks, path by path. What "the same
+ * paths" means when the clouds under them differ: dropping a point
+ * renumbers every index behind it, so two cooks that build the same paths
+ * over different clouds agree on positions rather than on indices.
+ */
+function pathXs(geo: Geometry): number[][] {
+  const P = geo.attrs.point.require("P");
+  const out: number[][] = [];
+  for (let p = 0; p < geo.primitiveCount; p++) {
+    const start = geo.primVertexStart[p];
+    const xs: number[] = [];
+    for (let v = start; v < start + geo.primVertexCount[p]; v++) {
+      xs.push(P.get(geo.vertexToPoint[v], 0));
+    }
+    out.push(xs);
+  }
+  return out;
 }
 
 /** A cloud with a scalar numeric point attribute set per point. */
@@ -265,6 +294,211 @@ describe("pointsToPath", () => {
         ),
       );
     expect(await run()).toEqual(await run());
+  });
+
+  it("skips a group too short for the path, keeping its points and attributes", async () => {
+    const src = withAttr(withAttr(row(5), "grp", [0, 0, 1, 2, 2]), "tag", [5, 6, 7, 8, 9]);
+    // The paired case: the same input is still a hard error by default.
+    await expect(
+      runNode(pointsToPath, { groupAttr: "grp" }, { in: [makeGeometryItem(src)] }),
+    ).rejects.toThrow(/group 1 \(attribute "grp"\) has 1 point/);
+    const geo = firstGeo(
+      (
+        await runNode(
+          pointsToPath,
+          { groupAttr: "grp", shortGroups: "skip" },
+          { in: [makeGeometryItem(src)] },
+        )
+      ).out,
+    );
+    // Group 1 built no primitive; groups 0 and 2 are the paths they were.
+    expect(topologyOf(geo)).toEqual({ v: [0, 1, 3, 4], start: [0, 2], count: [2, 2] });
+    expect(geo.primitiveCount).toBe(2);
+    // Point 2 is still in the cloud, at its own index, with every column
+    // it arrived with — the whole point domain is the input's, unmoved.
+    expect(geo.pointCount).toBe(5);
+    expect(snapshotGeometry(geo).point).toEqual(snapshotGeometry(src).point);
+    expect(geo.attrs.point.require("tag").get(2)).toBe(7);
+  });
+
+  it("leaves the surviving paths exactly as if the short group had never arrived", async () => {
+    const sparse = withAttr(rowAt([0, 1, 2, 3, 4, 5]), "grp", [0, 0, 1, 2, 2, 2]);
+    const skipped = firstGeo(
+      (
+        await runNode(
+          pointsToPath,
+          { groupAttr: "grp", shortGroups: "skip" },
+          { in: [makeGeometryItem(sparse)] },
+        )
+      ).out,
+    );
+    // The control: the same cloud with the lone point of group 1 never
+    // scattered at all, cooked with no skipping involved.
+    const control = withAttr(rowAt([0, 1, 3, 4, 5]), "grp", [0, 0, 2, 2, 2]);
+    const built = firstGeo(
+      (await runNode(pointsToPath, { groupAttr: "grp" }, { in: [makeGeometryItem(control)] })).out,
+    );
+    expect(pathXs(skipped)).toEqual([
+      [0, 1],
+      [3, 4, 5],
+    ]);
+    expect(pathXs(skipped)).toEqual(pathXs(built));
+    // And WHERE the skipped group sorts changes nothing: keyed last rather
+    // than in the middle, the survivors keep the same vertex ranges — a
+    // start pushed before the skip was decided would show up right here.
+    const trailing = firstGeo(
+      (
+        await runNode(
+          pointsToPath,
+          { groupAttr: "grp", shortGroups: "skip" },
+          { in: [makeGeometryItem(withAttr(rowAt([0, 1, 2, 3, 4, 5]), "grp", [0, 0, 9, 2, 2, 2]))] },
+        )
+      ).out,
+    );
+    expect(topologyOf(trailing)).toEqual(topologyOf(skipped));
+    expect(topologyOf(skipped)).toEqual({ v: [0, 1, 3, 4, 5], start: [0, 2], count: [2, 3] });
+  });
+
+  it("counts a 2-point group as short only when closed is true", async () => {
+    const src = withAttr(row(5), "grp", [0, 0, 1, 1, 1]);
+    const open = firstGeo(
+      (
+        await runNode(
+          pointsToPath,
+          { groupAttr: "grp", shortGroups: "skip" },
+          { in: [makeGeometryItem(src)] },
+        )
+      ).out,
+    );
+    // Open, 2 points is a path: nothing is short and nothing is skipped.
+    expect(topologyOf(open)).toEqual({ v: [0, 1, 2, 3, 4], start: [0, 2], count: [2, 3] });
+    const loop = firstGeo(
+      (
+        await runNode(
+          pointsToPath,
+          { groupAttr: "grp", closed: true, shortGroups: "skip" },
+          { in: [makeGeometryItem(src)] },
+        )
+      ).out,
+    );
+    // Closed, the SAME group is short: only the 3-point loop survives.
+    expect(topologyOf(loop)).toEqual({ v: [2, 3, 4, 2], start: [0], count: [4] });
+    expect(loop.pointCount).toBe(5);
+    // Paired: closing without the skip is the error it always was.
+    await expect(
+      runNode(
+        pointsToPath,
+        { groupAttr: "grp", closed: true },
+        { in: [makeGeometryItem(src)] },
+      ),
+    ).rejects.toThrow(/group 0 \(attribute "grp"\) has 2 points and closed is true/);
+  });
+
+  it("passes a cloud too small for any path straight through under skip", async () => {
+    // THE WHOLE-INPUT FLOOR, WHICH USED TO IGNORE `shortGroups` — and the
+    // case it excused was strictly less sparse than the case it refused.
+    // A streamed cell that lands ONE point in a cloud is sparser than one
+    // that lands one point in a lane, so a param whose whole purpose is
+    // "the population is data and cannot be sized in advance" has to
+    // govern both or it fails the harder case further from the author.
+    for (const n of [0, 1]) {
+      await expect(
+        runNode(pointsToPath, {}, { in: [makeGeometryItem(row(n))] }),
+      ).rejects.toThrow(/a path needs at least 2/);
+      const out = firstGeo(
+        (await runNode(pointsToPath, { shortGroups: "skip" }, { in: [makeGeometryItem(row(n))] }))
+          .out,
+      );
+      expect(out.pointCount).toBe(n);
+      expect(out.primitiveCount).toBe(0);
+      expect(out.vertexCount).toBe(0);
+    }
+    // PAIRED WITH THE BOUND IN PLACE: two points is not short for an open
+    // path, so `skip` changes nothing there and a path is still built.
+    // Without this the test above would pass for a node that had simply
+    // stopped building paths.
+    const two = firstGeo(
+      (await runNode(pointsToPath, { shortGroups: "skip" }, { in: [makeGeometryItem(row(2))] }))
+        .out,
+    );
+    expect(two.primitiveCount).toBe(1);
+    expect(two.vertexCount).toBe(2);
+  });
+
+  it("defaults to error, and skips the implicit whole-cloud group too", async () => {
+    expect(pointsToPath.defaultParams.shortGroups).toBe("error");
+    // With no groupAttr the only way to be short is 2 points, closed.
+    await expect(
+      runNode(pointsToPath, { closed: true }, { in: [makeGeometryItem(row(2))] }),
+    ).rejects.toThrow(/the input has 2 points and closed is true/);
+    const none = firstGeo(
+      (
+        await runNode(
+          pointsToPath,
+          { closed: true, shortGroups: "skip" },
+          { in: [makeGeometryItem(row(2))] },
+        )
+      ).out,
+    );
+    expect(none.primitiveCount).toBe(0);
+    expect(none.vertexCount).toBe(0);
+    expect(positionsOf(none)).toEqual([
+      [0, 0, 0],
+      [1, 0, 0],
+    ]);
+    // Paired: open, those same two points are still a path under skip.
+    expect(
+      topologyOf(
+        firstGeo(
+          (await runNode(pointsToPath, { shortGroups: "skip" }, { in: [makeGeometryItem(row(2))] }))
+            .out,
+        ),
+      ),
+    ).toEqual({ v: [0, 1], start: [0], count: [2] });
+    // The whole-input floor obeys `shortGroups` as well; it has its own
+    // test above, which is where the argument for that lives.
+  });
+
+  it("refuses an unrecognised shortGroups, before it looks at the geometry", async () => {
+    expect(
+      await rejection(
+        runNode(pointsToPath, { shortGroups: "ignore" }, { in: [makeGeometryItem(row(4))] }),
+      ),
+    ).toMatch(/shortGroups must be "error" or "skip", got "ignore"/);
+    // Ahead of the input check, so an author reads about their typo rather
+    // than about a pin they did wire in a real graph.
+    expect(await rejection(runNode(pointsToPath, { shortGroups: "ignore" }, {}))).toMatch(
+      /shortGroups must be "error" or "skip"/,
+    );
+    // Paired: with a value it recognises, the pin is what gets named.
+    expect(await rejection(runNode(pointsToPath, { shortGroups: "skip" }, {}))).toMatch(
+      /input pin "in"/,
+    );
+  });
+
+  it("is deterministic with short groups skipped", async () => {
+    const src = withAttr(row(7), "grp", [2, 0, 1, 0, 2, 0, 4]);
+    const run = async () =>
+      snapshotGeometry(
+        firstGeo(
+          (
+            await runNode(
+              pointsToPath,
+              { groupAttr: "grp", shortGroups: "skip" },
+              { in: [makeGeometryItem(src)] },
+            )
+          ).out,
+        ),
+      );
+    const first = await run();
+    expect(first).toEqual(await run());
+    // Groups 1 and 4 hold one point each and are gone; 0 and 2 are the
+    // paths they would have been, in ascending key order.
+    expect(first.topology).toEqual({
+      vertexToPoint: [1, 3, 5, 0, 4],
+      primVertexStart: [0, 3],
+      primVertexCount: [3, 2],
+    });
   });
 });
 
@@ -1076,6 +1310,407 @@ describe("pathResample", () => {
     // The carry itself is unchanged: the old length still rides onto the
     // points, exactly as every other primitive attribute does here.
     expect(twice.attrs.point.require("pathLength").get(0)).toBe(7);
+  });
+
+  /**
+   * The chord length of the polyline each output primitive WALKS, path by
+   * path, measured off the topology rather than off the sample order.
+   *
+   * Deliberately not a copy of the node's own accumulation: it reads
+   * `vertexToPoint`, which repeats the first point as a closed path's last
+   * vertex, so the closing chord comes from the structure that declares the
+   * path closed rather than from a second `if (closed)` that could agree
+   * with the first while both are wrong.
+   */
+  function walkedChordSums(geo: Geometry): number[] {
+    const P = geo.attrs.point.require("P");
+    const sums: number[] = [];
+    for (let p = 0; p < geo.primitiveCount; p++) {
+      const start = geo.primVertexStart[p];
+      let sum = 0;
+      for (let v = start + 1; v < start + geo.primVertexCount[p]; v++) {
+        const a = geo.vertexToPoint[v - 1];
+        const b = geo.vertexToPoint[v];
+        const dx = P.get(b, 0) - P.get(a, 0);
+        const dy = P.get(b, 1) - P.get(a, 1);
+        const dz = P.get(b, 2) - P.get(a, 2);
+        sum += Math.sqrt(dx * dx + dy * dy + dz * dz);
+      }
+      sums.push(sum);
+    }
+    return sums;
+  }
+
+  /** The `name` column of every point, as a plain array. */
+  function scalarsOf(geo: Geometry, name: string): number[] {
+    const attr = geo.attrs.point.require(name);
+    return Array.from({ length: geo.pointCount }, (_, i) => attr.get(i));
+  }
+
+  /** Run pathResample over one geometry and return the output. */
+  async function resampled(params: Record<string, unknown>, src: Geometry): Promise<Geometry> {
+    return firstGeo((await runNode(pathResample, params, { in: [makeGeometryItem(src)] })).out);
+  }
+
+  it("reports the EMITTED polyline's length, which is SHORTER wherever the path bends", async () => {
+    // The right angle again: 3 along +X then 4 along +Y, arc 7. Three
+    // samples land at 0, 3.5 and 7, so the middle one sits half a unit up
+    // the second leg and the corner is CUT — the emitted polyline is
+    // hypot(3, 0.5) + 3.5, and that is what anything walking this output
+    // actually has to walk.
+    const bend = createPolyline([0, 0, 0, 3, 0, 0, 3, 4, 0]);
+    const geo = await resampled(
+      { mode: "count", count: 3, lengthAttr: "pathLength", resampledLengthAttr: "sampleLength" },
+      bend,
+    );
+    const curve = geo.attrs.primitive.require("pathLength").get(0);
+    const emitted = geo.attrs.primitive.require("sampleLength").get(0);
+    expect(curve).toBe(7);
+    // STRICTLY less. The whole reason the second report exists is that a
+    // consumer stepping `curve` over these samples runs off the end.
+    expect(emitted).toBeLessThan(curve);
+    expect(emitted).toBeCloseTo(Math.sqrt(9.25) + 3.5, 5);
+    // ...and it is the chord sum of the points actually emitted, to f32
+    // exactness — the column is f32, so the value a graph reads is that
+    // f64 sum rounded once on the way in and not a number near it.
+    expect(emitted).toBe(Math.fround(walkedChordSums(geo)[0]));
+    // On the primitive domain, one per path, and nowhere else.
+    expect(geo.attrs.point.has("sampleLength")).toBe(false);
+  });
+
+  it("reports the length the NEXT node measures, bit for bit", async () => {
+    // The load-bearing property, and the reason the sum is accumulated
+    // from the f32 positions just written rather than from the f64
+    // expressions above them: `polylineArcTables` re-measures an f32 P
+    // column downstream, so this number has to be the one IT arrives at.
+    // Resampling the output again puts that recomputation on the same
+    // column under a name we can compare — an f64 accumulation here would
+    // land a few ulps away and this would be a toBeCloseTo.
+    const bend = createPolyline([0, 0, 0, 3, 0, 0, 3, 4, 0]);
+    const once = await resampled({ mode: "count", count: 3, resampledLengthAttr: "emitted" }, bend);
+    const twice = await resampled({ mode: "count", count: 3, lengthAttr: "pathLength" }, once);
+    expect(twice.attrs.primitive.require("pathLength").get(0)).toBe(
+      once.attrs.primitive.require("emitted").get(0),
+    );
+  });
+
+  it("agrees with the true length on a straight path, which has no corner to cut", async () => {
+    const straight = createPolyline([0, 0, 0, 10, 0, 0]);
+    const geo = await resampled(
+      { mode: "count", count: 5, lengthAttr: "pathLength", resampledLengthAttr: "sampleLength" },
+      straight,
+    );
+    // Equal, not merely close: resampling a line loses nothing, so the gap
+    // between the two reports is exactly the corner-cutting and zero when
+    // there are no corners.
+    expect(geo.attrs.primitive.require("sampleLength").get(0)).toBe(10);
+    expect(geo.attrs.primitive.require("pathLength").get(0)).toBe(10);
+  });
+
+  it("writes each sample's own chord arc, starting at 0 on every path", async () => {
+    // Two bent paths of different lengths: 3 + 4 = 7, and 6 + 8 = 14. The
+    // arc has to restart per path, so the second path's first sample is 0
+    // and not 7 — a coordinate that kept running would place every prop on
+    // the second road as far along as the first road was long.
+    const cloud = createPointCloud(6);
+    const P = cloud.attrs.point.require("P");
+    P.setTuple(0, [0, 0, 0]);
+    P.setTuple(1, [3, 0, 0]);
+    P.setTuple(2, [3, 4, 0]);
+    P.setTuple(3, [10, 0, 0]);
+    P.setTuple(4, [10, 6, 0]);
+    P.setTuple(5, [18, 6, 0]);
+    setPolylineTopology(cloud, [0, 1, 2, 3, 4, 5], [0, 3], [3, 3]);
+    const geo = await resampled(
+      {
+        mode: "count",
+        count: 5,
+        lengthAttr: "pathLength",
+        resampledLengthAttr: "sampleLength",
+        sampleArcAttr: "sampleArc",
+      },
+      cloud,
+    );
+    const arcs = scalarsOf(geo, "sampleArc");
+    expect(arcs).toHaveLength(10);
+    expect([arcs[0], arcs[5]]).toEqual([0, 0]);
+    for (const path of [arcs.slice(0, 5), arcs.slice(5)]) {
+      for (let i = 1; i < path.length; i++) expect(path[i]).toBeGreaterThan(path[i - 1]);
+    }
+    // Each primitive gets its own two lengths, and both pairs disagree in
+    // the same direction: the curve is longer than what came out of it.
+    const curve = geo.attrs.primitive.require("pathLength");
+    const emitted = geo.attrs.primitive.require("sampleLength");
+    expect([curve.get(0), curve.get(1)]).toEqual([7, 14]);
+    expect(emitted.get(0)).toBeLessThan(7);
+    expect(emitted.get(1)).toBeLessThan(14);
+    // On an OPEN path the last sample IS the far end, so its arc is the
+    // whole emitted length — exactly, since both are the same f64 sum
+    // rounded to f32 once.
+    expect(arcs[4]).toBe(emitted.get(0));
+    expect(arcs[9]).toBe(emitted.get(1));
+    // World units, not a fraction: `curveU` is the fraction and it is the
+    // OTHER curve's. The two disagree by the corner-cutting above, which
+    // is why one is not a rescaling of the other.
+    const us = scalarsOf(geo, "curveU");
+    expect(us[4]).toBe(1);
+    expect(arcs[2] / emitted.get(0)).not.toBe(us[2]);
+  });
+
+  it("leaves a closed path's seam chord out of the arcs and inside the length", async () => {
+    // The unit square, arc 4, sampled 5 times: the step is 0.8 and no
+    // sample lands on a corner, so every one of the five chords is cut.
+    const square = createPolyline([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], { closed: true });
+    const geo = await resampled(
+      { mode: "count", count: 5, resampledLengthAttr: "sampleLength", sampleArcAttr: "sampleArc" },
+      square,
+    );
+    const arcs = scalarsOf(geo, "sampleArc");
+    const emitted = geo.attrs.primitive.require("sampleLength").get(0);
+    expect(arcs[0]).toBe(0);
+    expect(emitted).toBeLessThan(4);
+    expect(emitted).toBe(Math.fround(walkedChordSums(geo)[0]));
+    // The closing chord runs from the last sample at (0, 0.8, 0) back to
+    // the start, and no SAMPLE holds it: the arc coordinate stops at the
+    // last sample, and the length is that plus the seam. Close rather than
+    // exact because the node rounds the whole f64 sum to f32 once while
+    // this adds two numbers that were rounded separately.
+    const last = arcs[arcs.length - 1];
+    expect(last).toBeLessThan(emitted);
+    expect(last + 0.8).toBeCloseTo(emitted, 5);
+  });
+
+  it("closes the SECOND path's loop, not the first path's start", async () => {
+    // The seam chord runs from a path's last sample back to ITS OWN first
+    // sample, and the index of that first sample is only 0 for the first
+    // path. Every other closed-path test here has one path, so a closing
+    // chord measured to output point 0 would pass all of them and be off
+    // by the whole distance between two roads on this one — which is why
+    // the loop sits 100 units away from the open path in front of it.
+    const cloud = createPointCloud(7);
+    const P = cloud.attrs.point.require("P");
+    P.setTuple(0, [0, 0, 0]);
+    P.setTuple(1, [3, 0, 0]);
+    P.setTuple(2, [3, 4, 0]);
+    P.setTuple(3, [100, 0, 0]);
+    P.setTuple(4, [101, 0, 0]);
+    P.setTuple(5, [101, 1, 0]);
+    P.setTuple(6, [100, 1, 0]);
+    // Prim 0 open over points 0..2; prim 1 the unit square over 3..6,
+    // closed by repeating point 3 as its last vertex.
+    setPolylineTopology(cloud, [0, 1, 2, 3, 4, 5, 6, 3], [0, 3], [3, 5]);
+    const geo = await resampled(
+      { mode: "count", count: 5, resampledLengthAttr: "sampleLength", sampleArcAttr: "sampleArc" },
+      cloud,
+    );
+    const emitted = geo.attrs.primitive.require("sampleLength");
+    const walked = walkedChordSums(geo);
+    // Both paths, both measured off the topology — which for prim 1
+    // includes the seam because setPolylineTopology repeated its start.
+    expect(emitted.get(0)).toBe(Math.fround(walked[0]));
+    expect(emitted.get(1)).toBe(Math.fround(walked[1]));
+    // The loop is 4 units around and the samples cut it, so the emitted
+    // length is under 4 — and nowhere near the ~100 a seam measured to the
+    // wrong path's first sample would produce.
+    expect(emitted.get(1)).toBeGreaterThan(3);
+    expect(emitted.get(1)).toBeLessThan(4);
+    const arcs = scalarsOf(geo, "sampleArc");
+    expect(arcs[5]).toBe(0);
+    expect(arcs[9]).toBeLessThan(emitted.get(1));
+  });
+
+  it("measures what spacing mode emits, remainder segment and all", async () => {
+    // 'spacing' places its samples from a step rather than a division, and
+    // leaves a short last segment: on a closed path the seam remainder,
+    // on an open one the run to the true endpoint. Both are chords of the
+    // emitted polyline like any other, so the report has to include them.
+    const square = createPolyline([0, 0, 0, 10.75, 0, 0, 10.75, 10.75, 0, 0, 10.75, 0], {
+      closed: true,
+    });
+    const geo = await resampled(
+      {
+        mode: "spacing",
+        spacing: 5,
+        lengthAttr: "pathLength",
+        stepAttr: "sampleStep",
+        resampledLengthAttr: "sampleLength",
+        sampleArcAttr: "sampleArc",
+      },
+      square,
+    );
+    expect(geo.pointCount).toBe(9);
+    expect(geo.attrs.primitive.require("pathLength").get(0)).toBe(43);
+    expect(geo.attrs.primitive.require("sampleStep").get(0)).toBe(5);
+    const emitted = geo.attrs.primitive.require("sampleLength").get(0);
+    expect(emitted).toBe(Math.fround(walkedChordSums(geo)[0]));
+    expect(emitted).toBeLessThan(43);
+    // The arcs are NOT multiples of the step: a sample that steps 5 along
+    // the curve moves less than 5 across the corner it cut, which is the
+    // whole disagreement `resampledLengthAttr` exists to report.
+    const arcs = scalarsOf(geo, "sampleArc");
+    expect(arcs[0]).toBe(0);
+    expect(arcs[1]).toBe(5);
+    expect(arcs[3]).toBeLessThan(15);
+  });
+
+  it("gives the arc to the column the param named, even when that is curveU", async () => {
+    // `curveU` is f32 tuple 1, exactly this report's shape, so the slot
+    // rule RESETS it rather than refusing — and reset means the two names
+    // are one buffer. Which of the two writes lands last is therefore a
+    // real decision, not an implementation detail: a column an author
+    // explicitly pointed at the arc must not come back holding fractions,
+    // because that cook looks fine and answers the other question.
+    const geo = await resampled(
+      { mode: "count", count: 3, sampleArcAttr: "curveU" },
+      createPolyline([0, 0, 0, 3, 0, 0, 3, 4, 0]),
+    );
+    const values = scalarsOf(geo, "curveU");
+    expect(values[0]).toBe(0);
+    expect(values[1]).toBeCloseTo(Math.sqrt(9.25), 5);
+    // 0.5 and 1 are what the fraction would have been at those samples.
+    expect(values[1]).not.toBe(0.5);
+    expect(values[2]).not.toBe(1);
+  });
+
+  it("names sampleArcAttr itself when the carry would land on it", async () => {
+    // The collision is real either way — every primitive attribute is
+    // carried onto these samples, so "roadWidth" and this report want the
+    // same POINT column. What is pinned here is WHICH refusal fires:
+    // caught downstream by carryPrimitiveAttributes, the message is about
+    // the CARRIED attribute, never says "sampleArcAttr", and sends the
+    // reader to rename the setAttribute that produced roadWidth — when the
+    // fix is to rename the param that asked for the name.
+    const roads = withPrimValue(twoPaths(), "roadWidth", [2, 7]);
+    const msg = await rejection(
+      runNode(pathResample, { sampleArcAttr: "roadWidth" }, { in: [makeGeometryItem(roads)] }),
+    );
+    expect(msg).toContain('pathResample: sampleArcAttr "roadWidth"');
+    expect(msg).toContain("carried onto this node's samples");
+    expect(msg).toContain("RENAME THE PARAM");
+    expect(msg).toContain('"sampleArc"');
+    // The carry's own wording, which would mean the wrong refusal won.
+    expect(msg).not.toContain("is already the");
+    // A string column collides just as hard: the carry has no shape rule,
+    // so neither does this — the point is the NAME, not what would fit.
+    const kinds = withPrimString(twoPaths(), "roadKind", ["avenue", "lane"]);
+    const strMsg = await rejection(
+      runNode(pathResample, { sampleArcAttr: "roadKind" }, { in: [makeGeometryItem(kinds)] }),
+    );
+    expect(strMsg).toContain('pathResample: sampleArcAttr "roadKind"');
+    expect(strMsg).toContain("(string)");
+  });
+
+  it("refuses sampleArcAttr naming the type tag", async () => {
+    // Inert today — every reader of `primtype` looks at the PRIMITIVE
+    // domain, and setPolylineTopology restamps it there — which is exactly
+    // why it has to be refused rather than left to be discovered: one
+    // promoteAttribute point -> primitive on that name later replaces the
+    // string tag with a float and every path node stops seeing a path.
+    // Refused from the param alone, before any geometry is read.
+    const msg = await rejection(
+      runNode(
+        pathResample,
+        { sampleArcAttr: PRIMTYPE_ATTR },
+        { in: [makeGeometryItem(createPointCloud(0))] },
+      ),
+    );
+    expect(msg).toContain(`pathResample: sampleArcAttr may not be "${PRIMTYPE_ATTR}"`);
+    expect(msg).toContain("TYPE TAG");
+    expect(msg).toContain('"sampleArc"');
+    // And it does not become a point column on a real cook.
+    const ok = await resampled(
+      { mode: "count", count: 3, sampleArcAttr: "sampleArc" },
+      createPolyline([0, 0, 0, 4, 0, 0]),
+    );
+    expect(ok.attrs.point.has(PRIMTYPE_ATTR)).toBe(false);
+    expect(ok.attrs.primitive.require(PRIMTYPE_ATTR).getString(0)).toBe("polyline");
+  });
+
+  it("writes neither new report by default, and an empty name is not a name", async () => {
+    const src = withPrimValue(twoPaths(), "roadWidth", [2, 7]);
+    const byDefault = await resampled({ mode: "count", count: 5 }, src);
+    expect(byDefault.attrs.primitive.names()).toEqual([PRIMTYPE_ATTR, "roadWidth"]);
+    expect(byDefault.attrs.point.names()).toEqual([
+      "P",
+      "rot",
+      "scale",
+      "density",
+      "boundsMin",
+      "boundsMax",
+      "color",
+      "seed",
+      "tangent",
+      "curveU",
+      "roadWidth",
+    ]);
+    // Spelled out rather than compared: two runs that both leaked the
+    // columns would compare equal just as happily.
+    const named = await resampled(
+      { mode: "count", count: 5, resampledLengthAttr: "", sampleArcAttr: "" },
+      src,
+    );
+    expect(snapshotGeometry(named)).toEqual(snapshotGeometry(byDefault));
+  });
+
+  it("refuses a new report that would delete a differently shaped column", async () => {
+    // The primitive one is checked against the INPUT first, where the
+    // colliding column is the author's own and removeAttribute is a fix.
+    const roads = withPrimString(twoPaths(), "roadKind", ["avenue", "lane"]);
+    const primMsg = await rejection(
+      runNode(
+        pathResample,
+        { resampledLengthAttr: "roadKind" },
+        { in: [makeGeometryItem(roads)] },
+      ),
+    );
+    expect(primMsg).toContain('pathResample: resampledLengthAttr "roadKind"');
+    expect(primMsg).toContain("already exists on the input's primitive domain");
+    expect(primMsg).toContain('"sampleLength"');
+    // The per-sample one is checked against the OUTPUT'S POINT domain, and
+    // `tangent` is the column that proves it is the right set: it is f32x3
+    // and it does not exist on the input at all, so a check against the
+    // primitive domain would have waved this straight through.
+    const pointMsg = await rejection(
+      runNode(pathResample, { sampleArcAttr: "tangent" }, { in: [makeGeometryItem(twoPaths())] }),
+    );
+    expect(pointMsg).toContain('pathResample: sampleArcAttr "tangent"');
+    expect(pointMsg).toContain("already exists on the output's point domain");
+    expect(pointMsg).toContain("removeAttribute upstream cannot help here");
+  });
+
+  it("refuses two per-path reports naming one attribute, but not the per-sample one", async () => {
+    // All three per-path reports are f32 tuple 1, so a shared name passes
+    // the shape check and the later write silently replaces the earlier.
+    const clash = await rejection(
+      runNode(
+        pathResample,
+        { lengthAttr: "size", resampledLengthAttr: "size" },
+        { in: [makeGeometryItem(createPointCloud(0))] },
+      ),
+    );
+    expect(clash).toContain(
+      'pathResample: params "lengthAttr" and "resampledLengthAttr" are both "size"',
+    );
+    expect(clash).toContain("two attributes");
+    const pair = await rejection(
+      runNode(
+        pathResample,
+        { stepAttr: "size", resampledLengthAttr: "size" },
+        { in: [makeGeometryItem(createPointCloud(0))] },
+      ),
+    );
+    expect(pair).toContain(
+      'pathResample: params "stepAttr" and "resampledLengthAttr" are both "size"',
+    );
+    // `sampleArcAttr` is on the POINT domain, so the same name is a
+    // DIFFERENT column and nothing collides — refusing it would refuse a
+    // graph in which the two values coexist perfectly well.
+    const geo = await resampled(
+      { mode: "count", count: 3, lengthAttr: "size", sampleArcAttr: "size" },
+      createPolyline([0, 0, 0, 4, 0, 0]),
+    );
+    expect(geo.attrs.primitive.require("size").get(0)).toBe(4);
+    expect(scalarsOf(geo, "size")).toEqual([0, 2, 4]);
   });
 });
 
@@ -2670,6 +3305,271 @@ describe("pathScan", () => {
     // And they are spread through the dense half rather than piled up.
     expect(new Set(stations).size).toBe(N);
   });
+
+  it("leaves reduce 'sum' exactly where it was, named or defaulted", async () => {
+    // The byte-identity claim, pinned against a hand-computed column
+    // rather than against another cook.
+    const src = () => pathWith("w", [1, 2, 3, 4]);
+    expect(col(await scan({ name: "w", outName: "s", reduce: "sum" }, src()), "s")).toEqual([
+      1, 3, 6, 10,
+    ]);
+    // And the default is that same value, so no serialized graph written
+    // before this param existed changes meaning.
+    expect(snapshotGeometry(await scan({ name: "w", outName: "s", reduce: "sum" }, src()))).toEqual(
+      snapshotGeometry(await scan({ name: "w", outName: "s" }, src())),
+    );
+  });
+
+  it("keeps the smallest or largest value so far under reduce min and max", async () => {
+    // [5, 2, 8, 3]. A sum here says 5, 7, 15, 18, which answers a
+    // different question entirely.
+    const src = () => pathWith("w", [5, 2, 8, 3]);
+    const M = { name: "w", outName: "s" };
+    expect(col(await scan({ ...M, reduce: "min" }, src()), "s")).toEqual([5, 2, 2, 2]);
+    expect(col(await scan({ ...M, reduce: "max" }, src()), "s")).toEqual([5, 5, 8, 8]);
+    // The running value only ever moves one way and then stays, which is
+    // the property that makes a min a staircase and a sum a ramp — and
+    // the reason it can never be a distribution.
+    const mins = col(await scan({ ...M, reduce: "min" }, src()), "s");
+    for (let i = 1; i < mins.length; i++) expect(mins[i]).toBeLessThanOrEqual(mins[i - 1]);
+  });
+
+  it("opens each path at the fold's identity, which is what exclusive reads first", async () => {
+    // THE SHARP END. Exclusive means a point's own value is not in its
+    // own total, so a path's first point has folded in nothing — and the
+    // minimum of nothing is +Infinity, exactly as attributeReduce
+    // answers an empty domain. Not a sentinel: it is the only value x
+    // with min(x, v) = v, f32 carries it exactly, and unlike a sum's 0
+    // it can never be mistaken for a measurement.
+    const src = () => pathWith("w", [5, 2, 8]);
+    const E = { name: "w", outName: "s", mode: "exclusive" };
+    expect(col(await scan({ ...E, reduce: "min" }, src()), "s")).toEqual([
+      Number.POSITIVE_INFINITY,
+      5,
+      2,
+    ]);
+    expect(col(await scan({ ...E, reduce: "max" }, src()), "s")).toEqual([
+      Number.NEGATIVE_INFINITY,
+      5,
+      5,
+    ]);
+    // It survives the f32 column, so a caller really can test with
+    // isFinite rather than remembering a magic number.
+    const first = col(await scan({ ...E, reduce: "min" }, src()), "s")[0];
+    expect(Number.isFinite(first)).toBe(false);
+    expect(first).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it("differs between the two modes only where a record is set", async () => {
+    // The mode/reduce interaction worth stating: a sum's inclusive and
+    // exclusive columns differ at EVERY point, by that point's own
+    // value; an extreme's differ only where the point beat the record,
+    // because min and max are idempotent.
+    const src = () => pathWith("w", [5, 2, 8, 3]);
+    const M = { name: "w", outName: "s", reduce: "min" };
+    const incl = col(await scan(M, src()), "s");
+    const excl = col(await scan({ ...M, mode: "exclusive" }, src()), "s");
+    const values = [5, 2, 8, 3];
+    expect(excl).toEqual([Number.POSITIVE_INFINITY, 5, 2, 2]);
+    expect(incl).toEqual([5, 2, 2, 2]);
+    for (let i = 0; i < values.length; i++) expect(incl[i]).toBe(Math.min(excl[i], values[i]));
+  });
+
+  it("reports each path's whole fold on the primitive domain, in every fold", async () => {
+    // Two paths in one geometry, so this also pins that the accumulator
+    // RESETS between them rather than running on from the first.
+    const src = () => withAttr(twoPaths(), "w", [1, 2, 10, 20]);
+    const T = { name: "w", outName: "s", totalAttr: "tot" };
+    const totals = async (reduce: string): Promise<number[]> => {
+      const out = await scan({ ...T, reduce }, src());
+      const tot = out.attrs.primitive.require("tot");
+      return [tot.get(0), tot.get(1)];
+    };
+    expect(await totals("sum")).toEqual([3, 30]);
+    expect(await totals("min")).toEqual([1, 10]);
+    expect(await totals("max")).toEqual([2, 20]);
+  });
+
+  it("reports the fold in exclusive mode, where the column holds it only by luck", async () => {
+    // A sum's total is nowhere in an exclusive column: no point holds
+    // it. Under a min the last point's value USUALLY is the whole fold
+    // — and the exception is the dangerous half, because nothing in the
+    // column says which case you are in. Here are both, one apart.
+    const E = { name: "w", outName: "s", mode: "exclusive", reduce: "min", totalAttr: "tot" };
+    const lucky = await scan(E, pathWith("w", [5, 2, 8]));
+    expect(col(lucky, "s")).toEqual([Number.POSITIVE_INFINITY, 5, 2]);
+    expect(lucky.attrs.primitive.require("tot").get(0)).toBe(2); // the column's last entry, by luck
+    const unlucky = await scan(E, pathWith("w", [5, 2, 1]));
+    expect(col(unlucky, "s")).toEqual([Number.POSITIVE_INFINITY, 5, 2]);
+    // The record was set by the LAST point, so 1 appears nowhere in the
+    // column. Only the report has it.
+    expect(unlucky.attrs.primitive.require("tot").get(0)).toBe(1);
+    expect(col(unlucky, "s")).not.toContain(1);
+  });
+
+  it("folds a signed comparison rather than a magnitude", async () => {
+    // A max over negatives is the LEAST negative. Getting this wrong is
+    // invisible on any all-positive fixture, which most of them are.
+    const src = () => pathWith("w", [-5, -1, -9]);
+    const M = { name: "w", outName: "s" };
+    expect(col(await scan({ ...M, reduce: "max" }, src()), "s")).toEqual([-5, -1, -1]);
+    expect(col(await scan({ ...M, reduce: "min" }, src()), "s")).toEqual([-5, -5, -9]);
+  });
+
+  it("folds each component of a tuple independently under an extreme", async () => {
+    const pos: number[] = [];
+    for (let i = 0; i < 3; i++) pos.push(i, 0, 0);
+    const geo = createPolyline(pos);
+    const w = geo.attrs.point.add("w", "f32", 2, [0, 0]);
+    w.setTuple(0, [5, 10]);
+    w.setTuple(1, [2, 90]);
+    w.setTuple(2, [8, 30]);
+    // Componentwise, and NOT the tuple that held the smallest component:
+    // point 1 wins component 0 and loses component 1, and the row that
+    // comes out is a pair neither point ever carried.
+    const out = await scan({ name: "w", outName: "s", reduce: "min", totalAttr: "tot" }, geo);
+    expect(col(out, "s")).toEqual([5, 10, 2, 10, 2, 10]);
+    expect(out.attrs.primitive.require("tot").getTuple(0)).toEqual([2, 10]);
+  });
+
+  it("lets a NaN fail to be a record instead of poisoning the tail", async () => {
+    const M = { name: "w", outName: "s", totalAttr: "tot" };
+    expect(col(await scan({ ...M, reduce: "min" }, pathWith("w", [3, NaN, 1, 5])), "s")).toEqual([
+      3, 3, 1, 1,
+    ]);
+    // A path whose every value was unmeasurable folded in nothing, and
+    // says so with the identity rather than inventing a number — in the
+    // column and in the report alike.
+    const allNaN = await scan({ ...M, reduce: "min" }, pathWith("w", [NaN, NaN]));
+    expect(col(allNaN, "s")).toEqual([Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]);
+    expect(allNaN.attrs.primitive.require("tot").get(0)).toBe(Number.POSITIVE_INFINITY);
+    const allNaNMax = await scan({ ...M, reduce: "max" }, pathWith("w", [NaN, NaN]));
+    expect(col(allNaNMax, "s")).toEqual([Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY]);
+  });
+
+  it("answers a path of one point with its own value, or with the identity", async () => {
+    // Degenerate rather than unreachable: a polyline needs two vertices,
+    // but a CLOSED one whose two vertices are the same point walks
+    // exactly one. Point 1 is in no polyline and reads the identity.
+    const single = (): Geometry => {
+      const geo = createPointCloud(2);
+      const P = geo.attrs.point.require("P");
+      P.setTuple(0, [0, 0, 0]);
+      P.setTuple(1, [5, 0, 0]);
+      withAttr(geo, "w", [7, 3]);
+      setPolylineTopology(geo, [0, 0], [0], [2]);
+      return geo;
+    };
+    const M = { name: "w", outName: "s", totalAttr: "tot" };
+    const min = await scan({ ...M, reduce: "min" }, single());
+    expect(col(min, "s")).toEqual([7, Number.POSITIVE_INFINITY]);
+    expect(min.attrs.primitive.require("tot").get(0)).toBe(7);
+    const excl = await scan({ ...M, reduce: "min", mode: "exclusive" }, single());
+    expect(col(excl, "s")).toEqual([Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]);
+    expect(excl.attrs.primitive.require("tot").get(0)).toBe(7);
+    expect(col(await scan({ ...M, reduce: "sum" }, single()), "s")).toEqual([7, 0]);
+  });
+
+  it("does not fold a closed path's seam vertex twice, under any fold", async () => {
+    // The skip is not only about double-counting. An extreme would
+    // ABSORB the second contribution unchanged — the total is 2 either
+    // way — but the second VISIT re-writes point 0's own column entry,
+    // and 5 is what stands behind point 0, not 2. Drop the `- 1` from
+    // the walk length and this fixture reads [2, 2, 2, 2].
+    const square = (): Geometry =>
+      withAttr(
+        createPolyline([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], { closed: true }),
+        "w",
+        [5, 2, 8, 3],
+      );
+    const M = { name: "w", outName: "s", totalAttr: "tot" };
+    const min = await scan({ ...M, reduce: "min" }, square());
+    expect(min.pointCount).toBe(4);
+    expect(col(min, "s")).toEqual([5, 2, 2, 2]);
+    expect(min.attrs.primitive.require("tot").get(0)).toBe(2);
+    const max = await scan({ ...M, reduce: "max" }, square());
+    expect(col(max, "s")).toEqual([5, 5, 8, 8]);
+    expect(max.attrs.primitive.require("tot").get(0)).toBe(8);
+  });
+
+  it("leaves a point in no polyline holding the fold's identity", async () => {
+    // 'Left at zero' was always 'left at the reduction over no values',
+    // and for a min that is +Infinity. Zero would compare TIGHTER than
+    // every real measurement, which is the false positive a threshold
+    // rule cannot survive.
+    const make = (): Geometry => {
+      const geo = createPointCloud(4);
+      const P = geo.attrs.point.require("P");
+      P.setTuple(0, [0, 0, 0]);
+      P.setTuple(1, [1, 0, 0]);
+      P.setTuple(2, [2, 0, 0]);
+      P.setTuple(3, [9, 9, 9]); // in no polyline
+      setPolylineTopology(geo, [0, 1, 2], [0], [3]);
+      withAttr(geo, "w", [5, 5, 5, 5]);
+      return geo;
+    };
+    const M = { name: "w", outName: "s" };
+    expect(col(await scan({ ...M, reduce: "min" }, make()), "s")).toEqual([
+      5,
+      5,
+      5,
+      Number.POSITIVE_INFINITY,
+    ]);
+    expect(col(await scan({ ...M, reduce: "max" }, make()), "s")).toEqual([
+      5,
+      5,
+      5,
+      Number.NEGATIVE_INFINITY,
+    ]);
+    // And the sum still reads zero there, which is the same rule.
+    expect(col(await scan({ ...M, reduce: "sum" }, make()), "s")).toEqual([5, 10, 15, 0]);
+  });
+
+  it("is deterministic under min across fresh runs", async () => {
+    const src = pathWith("w", [5, 2, 8, 9, 1]);
+    const run = async () =>
+      snapshotGeometry(await scan({ name: "w", outName: "s", reduce: "min" }, src));
+    expect(await run()).toEqual(await run());
+  });
+
+  it("reduces PER GROUP, which nothing else in the library can do", async () => {
+    // THE GROUPED REDUCTION, end to end. attributeReduce has min and max
+    // but collapses a WHOLE domain onto the detail domain and cannot
+    // group, so 'the largest value in each group, on every member of
+    // that group' had no expression at all: one path per group, the
+    // group's fold on its primitive, promoted back onto its points.
+    const cloud = createPointCloud(6);
+    const P = cloud.attrs.point.require("P");
+    for (let i = 0; i < 6; i++) P.setTuple(i, [i, 0, 0]);
+    withAttr(withAttr(cloud, "w", [3, 9, 4, 8, 2, 5]), "g", [0, 0, 0, 1, 1, 1]);
+
+    const paths = firstGeo(
+      (await runNode(pointsToPath, { groupAttr: "g" }, { in: [makeGeometryItem(cloud)] })).out,
+    );
+    expect(paths.primitiveCount).toBe(2);
+    const scanned = await scan(
+      { name: "w", outName: "s", reduce: "max", totalAttr: "grpMax" },
+      paths,
+    );
+    // 'first' rather than 'average': with one path per point they agree
+    // on the value, and 'first' still gives a number where a point on
+    // two paths would average a +Infinity against a -Infinity into NaN.
+    const promoted = firstGeo(
+      (
+        await runNode(
+          promoteAttribute,
+          { name: "grpMax", from: "primitive", to: "point", mode: "first" },
+          { in: [makeGeometryItem(scanned)] },
+        )
+      ).out,
+    );
+    // Every point of a group reads ITS OWN group's maximum — not the
+    // cloud's 9, and not a running value.
+    expect(col(promoted, "grpMax")).toEqual([9, 9, 9, 8, 8, 8]);
+    // The running column is still the running column; the broadcast one
+    // is the fold. Both survive the promotion.
+    expect(col(promoted, "s")).toEqual([3, 9, 9, 8, 8, 8]);
+  });
 });
 describe("pathRuns", () => {
   async function runs(params: Record<string, unknown>, src: Geometry): Promise<Geometry> {
@@ -2856,6 +3756,210 @@ describe("pathRuns", () => {
   it("is deterministic across fresh runs", async () => {
     const src = flagged([1, 2, 3, 4, 5], [1, 0, 1, 0, 0]);
     const run = async () => snapshotGeometry(await runs(P, src));
+    expect(await run()).toEqual(await run());
+  });
+
+  it("leaves reduce 'sum' exactly where it was, named or defaulted", async () => {
+    // The byte-identity claim, pinned against a hand-computed column
+    // rather than against another cook: two runs of three, exclusive, so
+    // the marker is at zero from itself and 1+2 and 4+5 are what the
+    // last point of each run has behind it.
+    const src = () => flagged([1, 2, 3, 4, 5, 6], [1, 0, 0, 1, 0, 0]);
+    expect(col(await runs({ ...P, reduce: "sum" }, src()), "r")).toEqual([0, 1, 3, 0, 4, 9]);
+    // And the default is that same value, so no serialized graph written
+    // before this param existed changes meaning.
+    expect(snapshotGeometry(await runs({ ...P, reduce: "sum" }, src()))).toEqual(
+      snapshotGeometry(await runs(P, src())),
+    );
+  });
+
+  it("keeps a run's smallest or largest value under reduce min and max", async () => {
+    // Two runs of three: [5, 2, 8] and [9, 1, 7]. A sum here would say
+    // 15 and 17, which answers a different question entirely.
+    const src = () => flagged([5, 2, 8, 9, 1, 7], [1, 0, 0, 1, 0, 0]);
+    const M = { ...P, mode: "inclusive" };
+    expect(col(await runs({ ...M, reduce: "min" }, src()), "r")).toEqual([5, 2, 2, 9, 1, 1]);
+    expect(col(await runs({ ...M, reduce: "max" }, src()), "r")).toEqual([5, 5, 8, 9, 9, 9]);
+    // The running value only ever moves one way and then stays, which is
+    // the property that makes a min a staircase and a sum a ramp.
+    const mins = col(await runs({ ...M, reduce: "min" }, src()), "r");
+    for (let i = 1; i < mins.length; i++) {
+      if (i === 3) continue; // the run boundary, where it resets
+      expect(mins[i]).toBeLessThanOrEqual(mins[i - 1]);
+    }
+  });
+
+  it("opens each run at the fold's identity, which is what exclusive reads first", async () => {
+    // THE SHARP END. Exclusive means a point's own value is not in its
+    // own total, so a run's first point has folded in nothing — and the
+    // minimum of nothing is +Infinity, exactly as attributeReduce
+    // answers an empty domain. Not a sentinel: it is the only value x
+    // with min(x, v) = v, f32 carries it exactly, and unlike a sum's 0
+    // it can never be mistaken for a measurement.
+    const src = () => flagged([5, 2, 8, 9, 1, 7], [1, 0, 0, 1, 0, 0]);
+    expect(col(await runs({ ...P, reduce: "min" }, src()), "r")).toEqual([
+      Number.POSITIVE_INFINITY,
+      5,
+      2,
+      Number.POSITIVE_INFINITY,
+      9,
+      1,
+    ]);
+    expect(col(await runs({ ...P, reduce: "max" }, src()), "r")).toEqual([
+      Number.NEGATIVE_INFINITY,
+      5,
+      5,
+      Number.NEGATIVE_INFINITY,
+      9,
+      9,
+    ]);
+    // And it survives the f32 column, so a caller really can test the
+    // column with isFinite rather than remembering a magic number.
+    const first = col(await runs({ ...P, reduce: "min" }, src()), "r")[0];
+    expect(Number.isFinite(first)).toBe(false);
+    expect(first).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it("differs between the two modes only where a record is set", async () => {
+    // The mode/reduce interaction worth stating: a sum's inclusive and
+    // exclusive columns differ at EVERY point, by that point's own
+    // value; an extreme's differ only where the point beat the record,
+    // because min and max are idempotent.
+    const src = () => flagged([5, 2, 8, 3], [1, 0, 0, 0]);
+    const excl = col(await runs({ ...P, reduce: "min" }, src()), "r");
+    const incl = col(await runs({ ...P, reduce: "min", mode: "inclusive" }, src()), "r");
+    const values = [5, 2, 8, 3];
+    expect(excl).toEqual([Number.POSITIVE_INFINITY, 5, 2, 2]);
+    expect(incl).toEqual([5, 2, 2, 2]);
+    for (let i = 0; i < values.length; i++) expect(incl[i]).toBe(Math.min(excl[i], values[i]));
+  });
+
+  it("reduces a signed comparison rather than a magnitude", async () => {
+    // A max over negatives is the LEAST negative. Getting this wrong is
+    // invisible on any all-positive fixture, which most of them are.
+    const src = () => flagged([-5, -1, -9], [1, 0, 0]);
+    const M = { ...P, mode: "inclusive" };
+    expect(col(await runs({ ...M, reduce: "max" }, src()), "r")).toEqual([-5, -1, -1]);
+    expect(col(await runs({ ...M, reduce: "min" }, src()), "r")).toEqual([-5, -5, -9]);
+  });
+
+  it("orients an extreme the same way a sum is oriented", async () => {
+    // Forward, a flagged point OPENS its run: the runs are {0,1} and
+    // {2,3}. Backward it CLOSES one: the runs are {3} and {2,1,0}. So
+    // the two directions do not partition the path the same way, which
+    // is true of every fold and is not something reduce changes.
+    const src = () => flagged([7, 2, 9, 4], [0, 0, 1, 0]);
+    const M = { ...P, mode: "inclusive", reduce: "min" };
+    expect(col(await runs(M, src()), "r")).toEqual([7, 2, 9, 4]);
+    expect(col(await runs({ ...M, direction: "backward" }, src()), "r")).toEqual([2, 2, 9, 4]);
+  });
+
+  it("carries an extreme across a closed path's seam", async () => {
+    // One marker at point 2 on a closed square. Wrapped there is ONE run
+    // 2 -> 3 -> 0 -> 1, so the 2 at point 3 is the lap's tightest and
+    // every later point holds it. Unwrapped the seam cuts it and points
+    // 0 and 1 never see the 2 at all.
+    const square = () =>
+      withAttr(
+        withAttr(
+          createPolyline([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], { closed: true }),
+          "w",
+          [9, 8, 5, 2],
+        ),
+        "b",
+        [0, 0, 1, 0],
+      );
+    const M = { ...P, mode: "inclusive", reduce: "min" };
+    expect(col(await runs(M, square()), "r")).toEqual([2, 2, 5, 2]);
+    expect(col(await runs({ ...M, wrap: false }, square()), "r")).toEqual([9, 8, 5, 2]);
+  });
+
+  it("reduces each component of a tuple independently and resets them together", async () => {
+    const pos: number[] = [];
+    for (let i = 0; i < 4; i++) pos.push(i, 0, 0);
+    const geo = withAttr(createPolyline(pos), "b", [0, 0, 1, 0]);
+    const w = geo.attrs.point.add("w", "f32", 2, [0, 0]);
+    w.setTuple(0, [5, 50]);
+    w.setTuple(1, [2, 90]);
+    w.setTuple(2, [8, 10]);
+    w.setTuple(3, [1, 70]);
+    // Component 0's record falls at point 1 and component 1's does not;
+    // both nevertheless start over at the boundary on point 2.
+    const out = await runs({ ...P, mode: "inclusive", reduce: "min" }, geo);
+    expect(col(out, "r")).toEqual([5, 50, 2, 50, 8, 10, 1, 10]);
+  });
+
+  it("lets a NaN fail to be a record instead of poisoning its run", async () => {
+    const M = { ...P, mode: "inclusive", reduce: "min" };
+    expect(col(await runs(M, flagged([3, NaN, 1, 5], [1, 0, 0, 0])), "r")).toEqual([3, 3, 1, 1]);
+    // A run whose every value was unmeasurable folded in nothing, and
+    // says so with the identity rather than inventing a number.
+    expect(col(await runs(M, flagged([NaN, NaN], [1, 0])), "r")).toEqual([
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+    ]);
+    expect(col(await runs({ ...M, reduce: "max" }, flagged([NaN, NaN], [1, 0])), "r")).toEqual([
+      Number.NEGATIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    ]);
+  });
+
+  it("answers a run of one point the same way in every fold", async () => {
+    // Every point flagged, so every run is one point long: inclusive
+    // reads the point's own value in all three folds, and exclusive
+    // reads the identity in all three. A run of NO points is not
+    // observable — a run is opened by a point.
+    const src = () => flagged([4, 7], [1, 1]);
+    for (const reduce of ["sum", "min", "max"]) {
+      expect(col(await runs({ ...P, reduce, mode: "inclusive" }, src()), "r")).toEqual([4, 7]);
+    }
+    expect(col(await runs({ ...P, reduce: "sum" }, src()), "r")).toEqual([0, 0]);
+    expect(col(await runs({ ...P, reduce: "min" }, src()), "r")).toEqual([
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+    ]);
+    expect(col(await runs({ ...P, reduce: "max" }, src()), "r")).toEqual([
+      Number.NEGATIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    ]);
+  });
+
+  it("leaves a point in no polyline holding the fold's identity", async () => {
+    // 'Left at zero' was always 'left at the reduction over no values',
+    // and for a min that is +Infinity. Zero would compare TIGHTER than
+    // every real measurement, which is the false positive a threshold
+    // rule cannot survive.
+    const make = (): Geometry => {
+      const geo = createPointCloud(4);
+      const pos = geo.attrs.point.require("P");
+      pos.setTuple(0, [0, 0, 0]);
+      pos.setTuple(1, [1, 0, 0]);
+      pos.setTuple(2, [2, 0, 0]);
+      pos.setTuple(3, [9, 9, 9]); // in no polyline
+      setPolylineTopology(geo, [0, 1, 2], [0], [3]);
+      withAttr(withAttr(geo, "w", [5, 5, 5, 5]), "b", [0, 0, 0, 0]);
+      return geo;
+    };
+    const M = { ...P, mode: "inclusive" };
+    expect(col(await runs({ ...M, reduce: "min" }, make()), "r")).toEqual([
+      5,
+      5,
+      5,
+      Number.POSITIVE_INFINITY,
+    ]);
+    expect(col(await runs({ ...M, reduce: "max" }, make()), "r")).toEqual([
+      5,
+      5,
+      5,
+      Number.NEGATIVE_INFINITY,
+    ]);
+    // And the sum still reads zero there, which is the same rule.
+    expect(col(await runs({ ...M, reduce: "sum" }, make()), "r")).toEqual([5, 10, 15, 0]);
+  });
+
+  it("is deterministic under min across fresh runs", async () => {
+    const src = flagged([5, 2, 8, 9, 1], [1, 0, 1, 0, 0]);
+    const run = async () => snapshotGeometry(await runs({ ...P, reduce: "min" }, src));
     expect(await run()).toEqual(await run());
   });
 });

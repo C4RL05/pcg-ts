@@ -44,8 +44,12 @@ export interface BuildInstanceBatchesOptions {
  * violation of exactly the kind the invariant exists to prevent. A
  * streamed world may therefore hold far more than this in total.
  *
- * Exported only so `spawnInstances`' description can quote the live
- * number instead of repeating a literal that could drift from it.
+ * Exported from this module, not from the package: `spawnInstances`'
+ * description quotes the live number instead of repeating a literal that
+ * could drift from it, and the GPU run planner (`src/gpu/run.ts`)
+ * enforces the same budget so a rejected run raises the identical
+ * message. Both are internal readers. It is deliberately absent from the
+ * root surface — see `src/spawn/index.ts` and publicSurface.test.ts.
  */
 export const MAX_INSTANCES = 1_048_576;
 

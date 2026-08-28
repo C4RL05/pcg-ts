@@ -9,7 +9,7 @@
  *   2. assets        which asset, from its own measured behaviour
  *   3. corridor      Z-1, by size
  *   4. language      L-2's markers and L-3's rulers
- *   5. landmarks     L-4
+ *   5. landmarks     L-4        — REFERENCE ONLY, see the last paragraph
  *   6. sightline     L-1's cull — MOVES AND DROPS THINGS
  *   7. coverage      D-4 — closes the gaps the cull opened
  *   8. band mix      Z-3 — fixes the bands the cull moved
@@ -35,9 +35,48 @@
  * runs is indistinguishable from a compliant generator at the assertion
  * level, and a repair that overshoots satisfies every bound while being
  * wrong — so each stage says how much it had to do.
+ *
+ * STEP 5 IS NOT ON THE SHIPPED PAGE, AND THAT IS A DECISION RATHER THAN A
+ * DEFERRAL. This file is the reference pipeline and the comparison suites
+ * run it, but `demos/racetrack/main.ts` does not: the page omits
+ * `placements` and the lap level's graph decides the list, and
+ * `repairLandmarks` — L-4 — HAS NO GRAPH STAGE and is not going to get
+ * one. Every other rule in the list above does; L-4 alone is missing.
+ *
+ * IT IS MISSING BECAUSE PORTING IT WOULD MAKE THE PICTURE WORSE, measured
+ * before it was decided. L-4's actual guarantee is stretch coverage —
+ * every tenth of the lap holds an asset that appears nowhere else on it —
+ * and the only thing the graph path would need from it is `mixPinned`'s
+ * landmark half, protecting those assets from Z-3's redraw. Over six
+ * seeds, against a two-pass reconstruction of the reference's full 13-id
+ * pin set, the covered-stretch count was IDENTICAL on seeds 1-5 (10, 10,
+ * 9, 10, 10) and the reserved-only lap was strictly BETTER on seed 6, 10
+ * against 9.
+ *
+ * THOSE SIX NUMBERS ARE FROM BEFORE 2026-08-28 AND ONE HALF OF THE PAIR
+ * HAS BEEN RETAKEN. Z-3's donor order changed, so which asset stands at a
+ * station changed, and so did which of them are unique. The reserved-only
+ * graph lap now reads 10, 10, 10, 10, 10, 9 — the one bare tenth moved
+ * from seed 3 to seed 6 — and the reference path reads 10 on all six. The
+ * FULL-PIN arm was NOT re-run, so the comparison itself is currently
+ * unmeasured: what is written above is what it said when it was taken, and
+ * anyone leaning on the conclusion should retake both arms rather than
+ * assume the gap survived. The MECHANISM below is what the decision rests
+ * on and is unaffected by any of it.
+ *
+ * Pinning costs a donor and a draw — a pinned id leaves both
+ * the quota's eligible set and the redraw pool — so withholding ten more
+ * assets from a ~226-asset pool pushes the mix onto more-repeated
+ * replacements, and that destroys uniqueness elsewhere faster than the
+ * pin preserves it here. The reference's pin is also answering a
+ * situation the graph does not have: there, L-4 runs again next round and
+ * restores what the mix broke, so the pin is one half of a fight. In the
+ * graph there is no second half, and a purely defensive pin is not worth
+ * its cost. `main.ts` carries the same argument at the call site; this is
+ * the copy a reader of the RULE LIST will reach first.
  */
 import {
-  type CurvatureBucket,
+  type AssetPlacement,
   type PlaceableAsset,
   bucketOf,
   placeAsset,
@@ -45,11 +84,14 @@ import {
   Z3,
   repairBandMix,
 } from "./assets.js";
+import type { AssetChoice } from "./assetGraph.js";
 import { type Corner, cornersOf, radiusAtW } from "./corners.js";
 import type { Kit, PlacedBox } from "./kit.js";
 import type { Lap } from "./lap.js";
 import { placeAt } from "./lap.js";
 import {
+  type CornerBookkeepingResult,
+  type DrawnCornerLanguage,
   type MarkerKit,
   type StationedPlacement,
   brakingRulersSatisfied,
@@ -60,10 +102,12 @@ import {
   reserveMarkers,
 } from "./legibility.js";
 import { repairFalseEdges } from "./falseEdges.js";
-import { type Frame, cullSightlines, defaultEyeStations } from "./sightline.js";
+import { type Frame, blocksCone, cullSightlines, defaultEyeStations } from "./sightline.js";
 import { LONG_QUANTILE, longCoverBudgetW, placeEnclosure, reduceEnclosure } from "./tunnels.js";
 import { measureEnclosure } from "./enclosure.js";
-import { FITTED, makeStationsDetailed, repairPlacementCoverage } from "./stations.js";
+import { FITTED, makeStationsDetailed,
+  type StationStats, repairPlacementCoverage } from "./stations.js";
+import { SAME_PLACE_W } from "./tolerance.js";
 import { resolveCorridor } from "./zones.js";
 
 /**
@@ -101,6 +145,208 @@ export interface DressOptions {
    * more cover and more repairs without anything being retuned.
    */
   readonly density?: number;
+
+  /**
+   * Where the stations come from, when the caller has already decided.
+   *
+   * PLUGGABLE BECAUSE THE PROCESS IS BEING MOVED INTO A GRAPH, one seam
+   * at a time. `stationGraph.cookStations` produces exactly this shape by
+   * running the process and D-4's repair as nodes, and the page passes
+   * its result in — which is what lets the lap level stop needing a
+   * TypeScript prelude without every caller of `dressLap` changing at
+   * once.
+   *
+   * IT IS AN OPTION RATHER THAN A SWITCH INSIDE because cooking is async
+   * and `dressLap` is not. Reaching a cook from here would make this
+   * function async and ripple through every synchronous caller and test
+   * for no benefit; taking the answer instead leaves the source the
+   * caller's to choose, which is the arrangement this campaign is
+   * heading for anyway.
+   *
+   * Omitted, the fitted TypeScript process runs as it always has. The two
+   * do NOT agree station for station and cannot — see
+   * `stationGraph`'s header for why — so passing this re-bases every
+   * figure downstream of it.
+   */
+  readonly stations?: StationStats;
+
+  /**
+   * Which asset stands at each station, when the caller has decided.
+   *
+   * THE SECOND SEAM, and it rides on the first: entry `i` is the asset
+   * for `stations.stations[i]`, so this is only meaningful alongside a
+   * `stations` from the same cook. `assetGraph.cookLapPlacements` runs
+   * both stages in ONE graph and returns them together for exactly that
+   * reason — two cooks would give the same numbers today and would have
+   * to be undone to reach a lap LEVEL, which is one graph.
+   *
+   * AN INDEX, NOT AN ASSET, and the index is into the pool `reserveFor`
+   * answers for this kit and seed. Passing the object would let a caller
+   * hand over an asset the lap reserved for its corner markers, which L-2
+   * establishes by construction and would then quietly lose; passing an
+   * index into the pool the reservation already produced cannot express
+   * that. Call {@link reserveFor} once and give its `pool` to the cook.
+   *
+   * `undefined` at an entry is `placeAsset` answering `undefined` — every
+   * asset weighed zero at that station — and the station is skipped, as
+   * it always was.
+   *
+   * Omitted, the TypeScript draw runs as it always has. Like `stations`,
+   * passing this re-bases every figure downstream of it.
+   */
+  readonly choices?: readonly (AssetChoice | undefined)[];
+
+  /**
+   * Where L-2's markers and L-3's ruler marks go, when a graph drew them.
+   *
+   * THE THIRD SEAM, and the narrowest of the three. It carries only the
+   * four quantities the corner language DRAWS -- a marker's distance back
+   * from the entry, its lateral quantile and its height, and a ruler's
+   * shared lateral -- because everything else L-2 and L-3 do is either
+   * exact arithmetic (`rulerStations`) or a greedy walk over the whole
+   * placement list that recomputes a lap-wide histogram after every
+   * change. `assetGraph.cookCornerLanguage` produces this shape.
+   *
+   * IT PAIRS BY POSITION, and against two different lists: `markers` is
+   * parallel to `cornersOf(lap)` and `rulers` is three per corner tighter
+   * than `SEVERITY.tightW`, both in racing order. Cook it against the same
+   * lap that is being dressed.
+   *
+   * Omitted, the TypeScript draws run as they always have. Like the other
+   * two, passing this re-bases every figure downstream of it.
+   */
+  readonly language?: DrawnCornerLanguage;
+
+  /**
+   * The three reserved marker assets and the pool that is left, when the
+   * caller has already reserved them.
+   *
+   * THE SEAM THE OTHER THREE ASSUMED, and it was missing. `choices` is an
+   * index INTO the pool, so a caller cooking against a graph-reserved
+   * pool while this function re-derived a TypeScript-reserved one was
+   * handing over indices into a list that does not exist here -- which is
+   * exactly what {@link AssetChoice}'s carried asset id catches, and did.
+   * Before that guard existed the two pools happened to agree at one seed
+   * and the whole arrangement looked correct.
+   *
+   * BOTH HALVES TOGETHER, NOT THE MARKERS ALONE. A reservation is a
+   * partition: three assets held back, and everything else left to dress
+   * from. Taking only the markers and re-deriving the pool would let the
+   * two disagree, which is the failure this option exists to make
+   * unwriteable.
+   *
+   * `markers` absent is `reserveMarkers` reporting a kit with fewer than
+   * three verticals, and `dressLap` answers that by placing no corner
+   * language -- the same as it always has.
+   */
+  readonly reservation?: {
+    readonly markers?: MarkerKit;
+    readonly pool: PlaceableAsset[];
+  };
+
+  /**
+   * Which placement each corner converts, and which ones each ruler
+   * displaces, when a graph has decided.
+   *
+   * THE FIFTH SEAM, and the only one that is checkable EXACTLY. Nothing
+   * here is drawn -- a victim is chosen by counting and comparing -- so
+   * `cornerGraph.cookCornerBookkeeping` and the TypeScript search must
+   * agree placement for placement, and the suite asserts that rather than
+   * a distribution.
+   *
+   * ITS INDICES NAME THE LIST AS IT REACHES STEP 4, which is after the
+   * stations, the asset choice and Z-1 and before anything is converted.
+   * Cook it against exactly that list.
+   *
+   * Omitted, the TypeScript search runs as it always has.
+   */
+  readonly bookkeeping?: CornerBookkeepingResult;
+  /**
+   * Who builds L-6's enclosure.
+   *
+   * "rules" (the default) is this function, as it always has. "deferred"
+   * means DO NOT RUN L-6 AT ALL -- neither the top-up nor the trim,
+   * because something downstream owns the whole rule -- and it exists
+   * because the racetrack's enclosure now runs as a graph stage inside
+   * `buildDressGraph`, which cooks AFTER this returns.
+   *
+   * IT COVERS BOTH HALVES AND IT USED TO COVER ONE. When only the top-up
+   * was ported, deferring it and still trimming here was the honest
+   * arrangement: the trim was the only implementation there was. Now the
+   * graph's second repair pass runs the trim every round, so leaving this
+   * one in would trim a lap and then hand it to a stage that trims it
+   * again, against a ceiling the first pass had already brought it under.
+   * The two would not disagree about the ANSWER -- both stop at the
+   * ceiling -- but the moves would be counted twice and reported twice.
+   *
+   * IT IS A SKIP AND NOT A HAND-IN, which is where it parts company with
+   * every other option here. `stations`, `choices`, `language` and
+   * `bookkeeping` all take a graph's ANSWER and let this function stay the
+   * authority on the list; enclosure cannot work that way round, because
+   * the budget it spends is measured from boxes built out of the settled
+   * list -- which does not exist until this function has finished. So the
+   * graph runs later and this one stands aside.
+   *
+   * A lap dressed with it deferred and never handed to the graph is a lap
+   * with no tunnels on it. That is a legitimate thing to ask for and it is
+   * why the option is named for WHO does the work rather than for whether
+   * it happens.
+   */
+  readonly enclosure?: "rules" | "deferred";
+}
+
+/**
+ * The corner-marker reservation, and the pool everything else draws from.
+ *
+ * ONE DEFINITION OF "THE POOL", because an {@link AssetChoice} is an
+ * INDEX into it and two derivations that drifted apart would silently
+ * place the wrong assets rather than fail. `dressLap` calls this, and a
+ * caller cooking the choices calls it too and passes the same array to
+ * both.
+ *
+ * L-2 AND L-3 RESERVE BEFORE ANYTHING IS DRESSED. An object that also
+ * appears sixty times as scenery cannot announce a corner, so exclusivity
+ * is established by construction here rather than hoped for afterwards.
+ */
+export function reserveFor(
+  kit: Kit,
+  seed: number,
+): { readonly markers?: MarkerKit; readonly pool: PlaceableAsset[] } {
+  return reserveMarkers((kit.assets as unknown as PlaceableAsset[]).filter((a) => a.where), seed);
+}
+
+/**
+ * One cooked choice, resolved against the pool it indexes.
+ *
+ * THE ID CHECK IS THE POINT, AND THE RANGE CHECK IS NOT ENOUGH. A choice
+ * is an index, so a pool that is not the one the cook was given yields a
+ * different asset rather than an error. `reserveFor` answers a pool of
+ * the SAME LENGTH for every seed and varies only which three assets it
+ * held back, so every index stays in range and nothing looks wrong:
+ * cooking against seed 1's pool and dressing at seed 2 was measured to
+ * name a different asset at 23 of 329 placements, with a normal-looking
+ * lap coming out the other side. Comparing the id the cook carried
+ * against the id at that index is what turns the whole class into a
+ * throw, and it costs one integer per placement.
+ */
+function fromChoice(
+  choice: AssetChoice | undefined,
+  pool: readonly PlaceableAsset[],
+  station: number,
+): AssetPlacement | undefined {
+  if (!choice) return undefined;
+  const asset = pool[choice.assetIndex];
+  if (!asset) {
+    throw new Error(
+      `dressLap: opts.choices[${station}] names pool index ${choice.assetIndex}, but the pool has ${pool.length}. A choice is an INDEX into the pool reserveFor answers for this kit and seed — cook the choices against that same pool.`,
+    );
+  }
+  if (asset.id !== choice.assetId) {
+    throw new Error(
+      `dressLap: opts.choices[${station}] was cooked for asset id ${choice.assetId} but pool index ${choice.assetIndex} holds id ${asset.id}. These choices came from a different pool — reserveFor answers a DIFFERENT pool per seed at the same length, so pass the same kit and seed to both, and give the cook the pool reserveFor returned.`,
+    );
+  }
+  return { asset, t: choice.t, h: choice.h };
 }
 
 /** What each stage had to do, so a page can show it. */
@@ -121,6 +367,18 @@ export interface DressStats {
   readonly markersAdded: number;
   readonly brakeMarks: number;
   readonly brakeDisplaced: number;
+  /**
+   * L-3 rulers whose lateral had to step out to clear L-1's cone, and the
+   * ones no rung could clear.
+   *
+   * READ TOGETHER WITH `dropped`. `rulersStepped` is how much of the lap
+   * the group clearance search moved — zero is the lap that had no search
+   * in it — and `rulersFellBack` is the only place a braking mark can
+   * still be lost, because a corner that fell back is a corner the cull is
+   * left to thin out exactly as it did before.
+   */
+  readonly rulersStepped: number;
+  readonly rulersFellBack: number;
   readonly blocked: number;
   readonly pushedOut: number;
   readonly dropped: number;
@@ -174,6 +432,34 @@ export interface Dressing {
   readonly placements: StationedPlacement[];
   readonly corners: Corner[];
   readonly markers?: MarkerKit;
+  /**
+   * The asset ids Z-3 was forbidden to move, on the lap as it finished.
+   *
+   * RETURNED SO THE GRAPH IS TOLD RATHER THAN ASKED TO RE-DERIVE. The set
+   * is L-2 and L-3's reserved corner vocabulary plus L-4's landmarks, and
+   * re-deriving the second half is re-deriving L-4 — a rule the graph does
+   * not run, over a list it would have to walk to find out which asset is
+   * unique in which tenth of the lap. Handing the answer over is the two
+   * paths agreeing by construction, which is the same argument
+   * `immovable` already makes for L-3's braking mark.
+   *
+   * ON THE FINAL PLACEMENTS, not on the ones any particular round saw:
+   * this describes the lap being handed on, and that is the lap the graph
+   * is given.
+   */
+  readonly mixPinned: Set<number>;
+  /**
+   * The pool every draw on this lap came out of — the kit's placeable
+   * assets with L-2 and L-3's reserved vocabulary already removed.
+   *
+   * HANDED ON FOR `reservation`'s REASON. `reserveFor` answers a pool of
+   * the same LENGTH for every seed and varies only its membership, so a
+   * second derivation cannot be caught by a length check: cooking against
+   * one seed's pool and dressing at another was measured to name a
+   * different asset at 23 of 329 placements with every index in range.
+   * Z-3's redraw picks out of this pool, so it has to be THIS pool.
+   */
+  readonly pool: PlaceableAsset[];
 }
 
 /** The lap's own frame lookup, shared by every stage that needs one. */
@@ -253,7 +539,17 @@ function kitIndex(kit: Kit): KitIndex {
   return index;
 }
 
-function buildBoxes(
+/**
+ * EXPORTED FOR THE GRAPH COMPARISON, and for nothing else in the demo.
+ *
+ * `tests/racetrackDressGraph.test.ts` checks `dressGraph.ts`'s box build
+ * against this one, and since L-1's cull now runs inside that graph the
+ * reference has to be built from the list the cull LEFT rather than from
+ * the one `dressLap` happened to finish with. Taking `dressing.boxes`
+ * instead would compare boxes built from two different placement lists
+ * and read the difference as a box-building defect.
+ */
+export function buildBoxes(
   kit: Kit,
   lap: Lap,
   placements: readonly StationedPlacement[],
@@ -332,9 +628,26 @@ function buildBoxes(
  * conflict between Z-1 and Z-3 — I spent two changes treating it as one.
  * There was no conflict. There was a value that could not survive a
  * round trip through its own datum.
+ *
+ * AND THE 1e-9 THAT FIXED IT WAS AN f64 ANSWER TO AN f64 PROBLEM. The
+ * residue it was sized against is the ~1e-16 an f64 round trip through
+ * `h = base + tall/2` leaves behind. In f32 the same round trip leaves
+ * about 1e-7 — a hundred times that epsilon — so every one of those
+ * phantom fixes comes back the moment these rules are computed in
+ * attribute columns, and this loop stops converging for exactly the
+ * reason it did before, with exactly the misleading stat line.
+ *
+ * `SAME_PLACE_W` IS SIZED FOR THAT, AND IT COSTS NOTHING, because a
+ * REAL Z-1 fix is never small. There are only two of them and both are
+ * jumps: small art rises to the ceiling from wherever under it it was,
+ * and large art goes from inside 1W out to `1 + across/2`, which is at
+ * least half its own width away. Nothing in this rule moves a placement
+ * by a ten-thousandth of a half-width, so nothing this threshold can
+ * swallow is a fix at all — it is the ceiling failing to recognise
+ * itself.
  */
 function moved(fixed: { t: number; baseH: number }, t: number, baseH: number): boolean {
-  return Math.abs(fixed.t - t) > 1e-9 || Math.abs(fixed.baseH - baseH) > 1e-9;
+  return Math.abs(fixed.t - t) > SAME_PLACE_W || Math.abs(fixed.baseH - baseH) > SAME_PLACE_W;
 }
 
 /** How many corners are still correctly marked, and how many rulers hold. */
@@ -349,6 +662,68 @@ function legibilityHealth(
     unmarked: cornerMarkersSatisfied(placements, corners, markers, lapW).missing.length,
     brokenRulers: brakingRulersSatisfied(placements, corners, markers, lapW).failures.length,
   };
+}
+
+/**
+ * The lap as it reaches the corner language: stations, assets, Z-1.
+ *
+ * EXPORTED BECAUSE THE BOOKKEEPING'S INDICES NAME THIS LIST. A caller
+ * cooking `DressOptions.bookkeeping` has to hand the graph exactly the
+ * placements step 4 will see, and reproducing steps 1 to 3 on its own
+ * would be a second spelling of Z-1 -- the kind of duplication that
+ * agrees until the day it does not. `dressLap` calls this too, so there
+ * is one definition and a caller re-running it gets the same list rather
+ * than a similar one.
+ *
+ * CHEAP TO RE-RUN, which is what makes that arrangement honest rather
+ * than merely tidy: it is a draw the caller already has plus one pure
+ * function per placement, so the caller cooking it and `dressLap`
+ * computing it again cost the same twice and cannot disagree.
+ */
+export function placementsBeforeLanguage(
+  lap: Lap,
+  seed: number,
+  pool: readonly PlaceableAsset[],
+  opts: DressOptions = {},
+): { placements: StationedPlacement[]; corridorFixes: number } {
+  const scale = opts.density ?? 1;
+  const st =
+    opts.stations ??
+    makeStationsDetailed(
+      lap.lengthW,
+      seed,
+      scale === 1 ? FITTED : { ...FITTED, density: FITTED.density * scale },
+    );
+  const chosen = opts.choices;
+  if (chosen && chosen.length !== st.stations.length) {
+    throw new Error(
+      `dressLap: opts.choices has ${chosen.length} entries but there are ${st.stations.length} stations. They are parallel lists — entry i is the asset for station i — so they must come from the same cook; see assetGraph.cookLapPlacements, which returns both.`,
+    );
+  }
+  let placements: StationedPlacement[] = [];
+  for (let i = 0; i < st.stations.length; i++) {
+    const s = st.stations[i];
+    const p = chosen
+      ? fromChoice(chosen[i], pool, i)
+      : placeAsset(pool, bucketOf(radiusAtW(lap, s)), seed, i);
+    if (p) placements.push({ ...p, station: s });
+  }
+
+  // Z-1, by size. The asset's own lateral distribution reaches inside the
+  // corridor for some assets, which is what makes this reachable.
+  let corridorFixes = 0;
+  placements = placements.map((p) => {
+    // Cover is placed clear of the corridor by construction — see
+    // `coverPlacements`. Standing a tunnel rib off to the corridor edge
+    // puts a hole in the roof over the racing line.
+    if (p.cover) return p;
+    const baseH = p.h - p.asset.size.tall / 2;
+    const fixed = resolveCorridor(p.t, baseH, p.asset.size.across, p.asset.size.tall);
+    if (!moved(fixed, p.t, baseH)) return p;
+    corridorFixes++;
+    return { ...p, t: fixed.t, h: fixed.baseH + p.asset.size.tall / 2 };
+  });
+  return { placements, corridorFixes };
 }
 
 /**
@@ -369,51 +744,80 @@ export function dressLap(
   const frameAt = frameLookup(lap);
   const corners = cornersOf(lap);
 
-  // 0. Reserve L-2 and L-3's vocabulary BEFORE anything is dressed. An
-  //    object that also appears sixty times as scenery cannot announce a
-  //    corner, so exclusivity is established by construction rather than
-  //    hoped for afterwards.
-  const { markers, pool } = reserveMarkers(all, seed);
+  // 0. Reserve L-2 and L-3's vocabulary BEFORE anything is dressed --
+  //    from the caller when it has already reserved, and from
+  //    `reserveFor` when it has not. See `DressOptions.reservation`.
+  const { markers, pool } = opts.reservation ?? reserveFor(kit, seed);
   const reserved = new Set(
     markers ? [markers.sharp.id, markers.open.id, markers.brake.id] : [],
   );
 
-  // 1. Stations.
-  const scale = opts.density ?? 1;
-  const st = makeStationsDetailed(
-    lap.lengthW,
-    seed,
-    scale === 1 ? FITTED : { ...FITTED, density: FITTED.density * scale },
-  );
+  // 1, 2 and 3: stations, assets and Z-1, all in one place because a
+  //    caller cooking `opts.bookkeeping` needs exactly this list and must
+  //    not have to build it a second way. See `placementsBeforeLanguage`.
+  const staged = placementsBeforeLanguage(lap, seed, pool, opts);
+  const st =
+    opts.stations ??
+    makeStationsDetailed(
+      lap.lengthW,
+      seed,
+      (opts.density ?? 1) === 1
+        ? FITTED
+        : { ...FITTED, density: FITTED.density * (opts.density ?? 1) },
+    );
+  let placements: StationedPlacement[] = staged.placements;
+  let corridorFixes = staged.corridorFixes;
 
-  // 2. An asset per station, from its own measured behaviour, weighted by
-  //    the curvature THERE. This is the only place curvature enters.
-  let placements: StationedPlacement[] = [];
-  for (let i = 0; i < st.stations.length; i++) {
-    const s = st.stations[i];
-    const bucket: CurvatureBucket = bucketOf(radiusAtW(lap, s));
-    const p = placeAsset(pool, bucket, seed, i);
-    if (p) placements.push({ ...p, station: s });
-  }
-
-  // 3. Z-1, by size. The asset's own lateral distribution reaches inside
-  //    the corridor for some assets, which is what makes this reachable.
-  let corridorFixes = 0;
-  placements = placements.map((p) => {
-    // Cover is placed clear of the corridor by construction — see
-    // `coverPlacements`. Standing a tunnel rib off to the corridor edge
-    // puts a hole in the roof over the racing line.
-    if (p.cover) return p;
-    const baseH = p.h - p.asset.size.tall / 2;
-    const fixed = resolveCorridor(p.t, baseH, p.asset.size.across, p.asset.size.tall);
-    if (!moved(fixed, p.t, baseH)) return p;
-    corridorFixes++;
-    return { ...p, t: fixed.t, h: fixed.baseH + p.asset.size.tall / 2 };
-  });
+  // WHERE THE EYES ARE, HOISTED ABOVE THE PLACEMENT AND NOT ONLY ABOVE THE
+  // LOOP. L-3 now asks L-1's question at draw time — "would all three of
+  // this ruler's marks clear the cone here" — and it has to ask it of the
+  // SAME eye set the cull will use twenty lines below, or the two rules
+  // disagree about what blocked means and the search buys nothing. One
+  // list, built once, read by both.
+  const eyes = defaultEyeStations(lap.lengthW);
 
   // 4. L-2 and L-3. Markers land outside the corridor by construction, so
-  //    they do not need step 3 run again over them.
-  const lang = placeCornerLanguage(placements, corners, markers, lap.lengthW, seed);
+  //    they do not need step 3 run again over them. Where each marker and
+  //    each ruler mark GOES comes from the caller when a graph drew it;
+  //    see `DressOptions.language`.
+  //
+  //    AND L-3 IS TOLD WHERE THE CONE IS. The brake mark is `immovable`,
+  //    which is this pipeline's `dropRatherThanMove` and the page's
+  //    `pushMax: 0` — a blocked mark is DELETED, not shoved out of line,
+  //    because a braking reference in the wrong place is worse than none.
+  //    The consequence is that L-1 can only ever take marks off a ruler,
+  //    so the repair has to happen before the ruler is placed: this
+  //    predicate is what lets `placeCornerLanguage` choose a lateral all
+  //    three marks survive rather than one the cull will thin out. It is a
+  //    box test on the reserved brake asset alone, since every mark on the
+  //    lap is that asset at that size.
+  const brakeClear = markers
+    ? (mark: { station: number; t: number; h: number }): boolean =>
+        !blocksCone(
+          {
+            station: mark.station,
+            t: mark.t,
+            h: mark.h,
+            across: markers.brake.size.across,
+            along: markers.brake.size.along,
+            tall: markers.brake.size.tall,
+          },
+          lap.lengthW,
+          frameAt,
+          lap.halfWidth,
+          eyes,
+        )
+    : undefined;
+  const lang = placeCornerLanguage(
+    placements,
+    corners,
+    markers,
+    lap.lengthW,
+    seed,
+    opts.language,
+    opts.bookkeeping,
+    brakeClear,
+  );
   placements = lang.placements;
 
   // 5. L-4, which may not touch the reserved vocabulary.
@@ -438,7 +842,6 @@ export function dressLap(
   //      assumed: a repair loop that silently ran out of rounds would
   //      leave a lap breaking a threshold with a stat line full of
   //      plausible numbers.
-  const eyes = defaultEyeStations(lap.lengthW);
   let rounds = 0;
   let blocked = 0;
   let pushedOut = 0;
@@ -522,12 +925,22 @@ export function dressLap(
     // something, from nothing but the per-asset placement of a vocabulary
     // that happens to be half overhead pieces.
     //
-    // AND IT HAS TO BE MEASURED HERE RATHER THAN BEFORE THE CULL. Before
-    // it the same lap reads 34.2%; after it, 24.8% — L-1 pushes overhead
-    // pieces outward and takes nine points of enclosure with them.
-    // Topping up against the pre-cull figure adds nothing and then
-    // watches the cull open the roof, which is the same mistake as
+    // AND IT HAS TO BE MEASURED HERE RATHER THAN BEFORE THE CULL. On the
+    // enclosed kit — the only one of the three with enough overhead to
+    // show it — the first round reads 26.1% to 28.4% before the cull and
+    // 22.1% to 23.3% after it, over seeds 1-3: L-1 pushes overhead pieces
+    // outward and takes four to six points of enclosure with them, on
+    // every seed. Topping up against the pre-cull figure adds nothing and
+    // then watches the cull open the roof, which is the same mistake as
     // repairing coverage against a lap the cull has not run on yet.
+    //
+    // THE FIGURES USED TO READ 34.2% AND 24.8%, "nine points", and were
+    // retaken on 2026-08-28 when Z-3's donor order changed which asset
+    // stands at each station — enclosure is a ray cast over the boxes
+    // those assets decompose into, so it moved with them. The gap narrowed
+    // and the argument did not: the cull still opens several points of
+    // roof on every seed, which is the whole of why the measurement is
+    // taken on this side of it.
     //
     // WHAT IT SUPPLIES IS THE TAIL, NOT THE TOTAL. That incidental cover
     // is fifty-odd SHORT stretches with a heavy-tail share of ZERO, where
@@ -540,7 +953,7 @@ export function dressLap(
     const budgetW = longCoverBudgetW(coveredW, already.heavyTailShare * coveredW, lap.lengthW);
     let addedCover = 0;
     let coverChangedPlacements = false;
-    if (budgetW > 0) {
+    if (budgetW > 0 && opts.enclosure !== "deferred") {
       const add = placeEnclosure(
         all,
         lap.lengthW,
@@ -562,21 +975,32 @@ export function dressLap(
     // whose vocabulary is half overhead pieces the dressing sails past
     // L-6's ceiling with no enclosure pass having run at all, and no
     // amount of adding fixes a lap that already has too much roof.
-    const reduce = reduceEnclosure(
-      placements,
-      (ps) => measureEnclosure(lap, buildBoxes(kit, lap, ps, seed)),
-      Math.ceil(Z3.over.rule[0] * placements.length),
-      // `already` IS this measurement whenever the top-up added nothing,
-      // which is most rounds. Handing it over skips a rebuild of every
-      // box on the lap plus a ray cast per frame — the single most
-      // expensive thing this pipeline does.
-      coverChangedPlacements ? undefined : already,
-    );
-    placements = reduce.placements;
-    enclosureTrims += reduce.moves;
-    enclosureRunsTrimmed += reduce.runsTrimmed;
-    if (reduce.blockedByBandMix) enclosureBlocked = true;
-    if (reduce.nothingToTrim) enclosureNothingToTrim = true;
+    //
+    // DEFERRED SKIPS THIS TOO, which is the whole of L-6 standing aside
+    // rather than half of it -- see {@link DressOptions.enclosure}.
+    //
+    // ZERO MOVES WHEN IT DID NOT RUN, which is what the settle test below
+    // reads: a round is settled when nothing moved, and a rule that stood
+    // aside moved nothing.
+    let trimMoves = 0;
+    if (opts.enclosure !== "deferred") {
+      const reduce = reduceEnclosure(
+        placements,
+        (ps) => measureEnclosure(lap, buildBoxes(kit, lap, ps, seed)),
+        Math.ceil(Z3.over.rule[0] * placements.length),
+        // `already` IS this measurement whenever the top-up added nothing,
+        // which is most rounds. Handing it over skips a rebuild of every
+        // box on the lap plus a ray cast per frame — the single most
+        // expensive thing this pipeline does.
+        coverChangedPlacements ? undefined : already,
+      );
+      placements = reduce.placements;
+      trimMoves = reduce.moves;
+      enclosureTrims += reduce.moves;
+      enclosureRunsTrimmed += reduce.runsTrimmed;
+      if (reduce.blockedByBandMix) enclosureBlocked = true;
+      if (reduce.nothingToTrim) enclosureNothingToTrim = true;
+    }
 
     // D-4, on the lap the cull actually left. The station process
     // enforces coverage too, but at step 1 — before a single one of the
@@ -622,8 +1046,11 @@ export function dressLap(
     // cannot be donated away, and no second copy of one can be drawn in.
     //
     // ONE PER TENTH, not every unique asset: see `landmarkAssets`.
-    // Protecting all of them withholds 94 of 229 from the mix and leaves
-    // Z-3 unable to reach its bands at all.
+    // Protecting all of them withholds 71 to 79 assets of a 226-asset pool
+    // from the mix -- re-measured over seeds 1-6 on 2026-08-28, where it
+    // read 94 of 229 before Z-3's donor order changed which assets a lap
+    // ends up carrying once. Roughly a third of the pool either way, which
+    // leaves Z-3 unable to reach its bands at all.
     const protectIds = new Set(reserved);
     for (const id of landmarkAssets(placements, lap.lengthW)) protectIds.add(id);
 
@@ -638,10 +1065,21 @@ export function dressLap(
     placements = mix.placements.filter((p): p is StationedPlacement => p !== undefined);
     mixMoves += mix.moves;
 
-    if (process.env.ROAD_TRACE) {
+    // GUARDED BECAUSE THIS FILE RUNS IN A BROWSER TOO, and `process` is
+    // not defined there. The trace is a Node-side aid -- it is read when a
+    // test or a script wants the per-round repair counts -- but `dressLap`
+    // is on the page's critical path, so a bare `process.env` here is a
+    // ReferenceError that takes the demo down before it draws anything.
+    //
+    // It survived a long time because nothing that is CHECKED ever hit it:
+    // the production build rewrites `process.env` to `{}`, so the captured
+    // screenshots, the published pages and the tests all take a dead
+    // branch, and only `npm run examples` -- the dev server, which does no
+    // such rewrite -- actually evaluates the identifier.
+    if (typeof process !== "undefined" && process.env.ROAD_TRACE) {
       console.log(
         `  round ${rounds}: corridor=${fixedThisRound} cull=${cull.blocking} cover+=${addedCover} ` +
-          `trim=${reduce.moves} cov=${cov.moves} L4=${marks.moves} L5=${edges.moves} mix=${mix.moves}`,
+          `trim=${trimMoves} cov=${cov.moves} L4=${marks.moves} L5=${edges.moves} mix=${mix.moves}`,
       );
     }
     if (
@@ -652,7 +1090,7 @@ export function dressLap(
       edges.moves === 0 &&
       fixedThisRound === 0 &&
       addedCover === 0 &&
-      reduce.moves === 0
+      trimMoves === 0
     ) {
       converged = true;
       break;
@@ -663,11 +1101,18 @@ export function dressLap(
 
   const boxes = buildBoxes(kit, lap, placements, seed);
 
+  // The same two halves the loop's own `protectIds` is built from, over
+  // the list as it finished. See `Dressing.mixPinned`.
+  const mixPinned = new Set(reserved);
+  for (const id of landmarkAssets(placements, lap.lengthW)) mixPinned.add(id);
+
   return {
     boxes,
     placements,
     corners,
     markers,
+    mixPinned,
+    pool,
     stats: {
       placed: placements.length,
       perW: placements.length / lap.lengthW,
@@ -680,6 +1125,8 @@ export function dressLap(
       markersConverted: lang.converted,
       markersAdded: lang.added,
       brakeMarks: lang.brakeAdded,
+      rulersStepped: lang.rulersStepped,
+      rulersFellBack: lang.rulersFellBack,
       brakeDisplaced: lang.brakeDisplaced,
       blocked,
       pushedOut,

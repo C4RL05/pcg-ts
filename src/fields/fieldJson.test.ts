@@ -9,17 +9,23 @@ import {
   constant,
   cos,
   cross,
+  abs,
   evaluateField,
+  exp2,
   fraction,
+  log2,
   makeField,
+  mod,
   mul,
   nodeSeed,
   position,
   pow,
+  rem,
   remap,
   sin,
   sqrt,
   step,
+  trunc,
   vec,
   type EvalContext,
   type Field,
@@ -269,6 +275,62 @@ describe("fieldFromJson", () => {
     // constructor, so it survives the trip through JSON unchanged.
     const negativeBase = fieldFromJson({ fn: "pow", args: [-2, 2] });
     expect(Array.from(evaluateField(negativeBase, ctx).data)).toEqual(new Array(16).fill(NaN));
+  });
+
+  it("builds trunc/rem/exp2/log2 matching the hand-built combinators, with round-trip", () => {
+    // One spec that nests all four, over the y coordinate, which is the one
+    // that spans both signs — the half of the domain where `trunc` differs
+    // from `floor` and `rem` from `mod`. `log2`'s argument is guarded
+    // strictly positive the way `log`'s is.
+    const py: FieldSpec = { fn: "component", args: [{ fn: "position" }], index: 1 };
+    const spec: FieldSpec = {
+      fn: "add",
+      args: [
+        { fn: "trunc", args: [py] },
+        {
+          fn: "mul",
+          args: [
+            { fn: "rem", args: [py, 3] },
+            {
+              fn: "exp2",
+              args: [{ fn: "log2", args: [{ fn: "add", args: [{ fn: "abs", args: [py] }, 0.5] }] }],
+            },
+          ],
+        },
+      ],
+    };
+    const fromJson = fieldFromJson(spec);
+    const handBuilt = add(
+      trunc(component(position(), 1)),
+      mul(
+        rem(component(position(), 1), 3),
+        exp2(log2(add(abs(component(position(), 1)), 0.5))),
+      ),
+    );
+    expect(fromJson.key).toBe(handBuilt.key);
+    const ctx = testCloud();
+    const col = evaluateField(fromJson, ctx);
+    expect(col.tupleSize).toBe(1);
+    expect(Array.from(col.data)).toEqual(Array.from(evaluateField(handBuilt, ctx).data));
+    // Round-trips losslessly and rebuilds to identical values.
+    expect(fieldToJson(fromJson)).toEqual(spec);
+    const rebuilt = fieldFromJson(fieldToJson(fromJson));
+    expect(Array.from(evaluateField(rebuilt, ctx).data)).toEqual(Array.from(col.data));
+    // Each parses at its own arity, and a wrong count is named.
+    for (const name of ["trunc", "exp2", "log2"]) {
+      expect(fieldFromJson({ fn: name, args: [0.25] }).tupleSize).toBe(1);
+      expect(() => fieldFromJson({ fn: name, args: [] })).toThrow(
+        new RegExp(`"${name}" expects exactly 1 arg`),
+      );
+    }
+    expect(() => fieldFromJson({ fn: "rem", args: [1] })).toThrow(/"rem" expects exactly 2 args/);
+    // The sign convention is a property of the FN, so it survives the trip
+    // through JSON: a floored and a truncated remainder over the same
+    // negative dividend, parsed rather than constructed, still disagree.
+    const remJson = fieldFromJson({ fn: "rem", args: [-1, 8] });
+    const modJson = fieldFromJson({ fn: "mod", args: [-1, 8] });
+    expect(Array.from(evaluateField(remJson, ctx).data)).toEqual(new Array(16).fill(-1));
+    expect(Array.from(evaluateField(modJson, ctx).data)).toEqual(new Array(16).fill(7));
   });
 
   it("builds cross, and enforces its width rule on the JSON path too", () => {

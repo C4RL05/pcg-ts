@@ -72,7 +72,7 @@ Run it: `pcg run compose/merge-tagged`
 
 Copies the entire `source` cloud onto every point of `target`, composing the transforms per copy, then jitters the result so the repeated copies do not read as stamped. COUNT: the output is source x target points — 20 onto 500 is 10,000, and it multiplies fast. The transforms compose rather than overwrite: each copy is placed by the target's position, turned by the target's rotation and sized by the target's scale, so a target cloud carrying `rot` and `scale` lays its copies out already varied. VARIATION: yes — the jitter is context-seeded, so two instances differ, and `seed` re-rolls one explicitly. Reads and writes `P`; carries every source attribute through.
 
-**Content hash:** `be5f7f50eb607c11`
+**Content hash:** `36e2be1ee83bf9a3`
 
 **Tags:** `compose`, `copy`, `clusters`
 
@@ -122,7 +122,7 @@ Run it: `pcg run fill/scatter-by-density`
 
 Scatters a few cluster centres through a box, then copies a small local cloud onto each one, so points arrive in groups — villages, groves, boulder fields. COUNT: the output is clusters x perCluster exactly, which multiplies fast. SHAPE: a group is a BOX running -spread to +spread around its centre and all three components of `spread` are live. It ships flat — the default is [4, 0, 4], a ground-plane patch, because that is what a village or a grove is — so raise `spread.y` to make the group volumetric (a swarm, an asteroid field, a cave's boulders) rather than reaching for a box scatter. The groups OVERHANG the bounds by up to `spread`, deliberately and unclamped: `boundsMin`/`boundsMax` place the CENTRES, and a group straddling the edge is a whole group rather than a clipped one — inset the bounds by `spread` if the points themselves have to stay inside a region. VARIATION: yes — both scatters are context-seeded, so two instances differ, and `seed` re-rolls both explicitly. The local cloud's own `scale` is reset before copying, so `spread` sizes the cluster and not the assets in it.
 
-**Content hash:** `84e6d02c5fa48592`
+**Content hash:** `8a7aa04aff2dd933`
 
 **Tags:** `fill`, `scatter`, `clusters`
 
@@ -227,7 +227,7 @@ Run it: `pcg run filter/by-distance-to`
 
 Measures each point's distance to the supplied `curve` and keeps or drops it by that distance — a clearance either side of a road, a band of reeds along a river, a strip of lamps beside a path. The densification is the content: a polyline's own points can be tens of metres apart, and measuring to THEM instead of to the curve reports huge distances mid-segment and cuts scalloped bites out of the result. The curve is therefore sampled every `resolution` units first, and the measurement is against those samples, so `resolution` is the accuracy of the answer. PRECONDITION: `curve` must carry polyline topology (`shape/path-loop`, `shape/path-meander`, or a `pointsToPath` node) — a point cloud is rejected as having no polylines. Several separate paths are all measured against; the nearest one wins. Fully deterministic. Reads `P` on both inputs; writes nothing.
 
-**Content hash:** `ea60d3a55b196c50`
+**Content hash:** `92be96b54392f08e`
 
 **Tags:** `filter`, `path`, `spatial`, `proximity`
 
@@ -372,7 +372,7 @@ Run it: `pcg run place/align-to-surface`
 
 Places points at even arc-length steps along every path of the supplied `curve` and turns each one to face the way the curve is going — fence posts, streetlights, bollards, sleepers. Each path is measured and resampled on its OWN length, so several paths in one input stay separate and each gets its own run of points; `splineSample` would treat them as one concatenated curve instead. PRECONDITION: `curve` must carry polyline topology — `shape/path-loop`, `shape/path-meander` or a `pointsToPath` node, never a bare point cloud, and never anything that has been through a step that can REMOVE points: the `filter/*` family, `partitionByAttribute` and `mergePoints` all destroy topology, and `filterByAttribute` does so even when its predicate keeps every point. Category is not the rule — `projectToPlane` is a `filter` that preserves it, because it clones. The points are NEW: they carry `P`, the unit `tangent`, `curveU` (0..1 along their own path) and `rot`, plus the standard attributes at their defaults. Nothing written on the curve's own POINTS survives, which is what `write/orient-along-path` is for — but every PRIMITIVE attribute does: a post placed along a road carries that road's `roadWidth` and `roadKind`, because a sample inherits the primitive it was taken from. The output is still a path, so it can be resampled again. Fully deterministic.
 
-**Content hash:** `7ac69e839d461b15`
+**Content hash:** `b01f8e060b72a7b8`
 
 **Tags:** `place`, `curve`, `path`, `instancing`
 
@@ -471,7 +471,7 @@ Run it: `pcg run place/plantable`
 
 Places points at even arc-length steps along every path of the supplied `curve`, then rolls each one to a random angle AROUND the curve — spikes on a mace, bristles on a brush, brackets round a mast, leaves up a stem, buds on a branch. It is deliberately distinct from `place/along-curve`, which spaces points the same way but aims them ALONG the tangent with a CONSTANT world `up`: that fixes every asset in the same world orientation, and it flips them a half turn wherever the curve turns over. Here the up hint is per point — cos(a) * `curveNormal` + sin(a) * `curveBinormal`, the unit vector at a random angle a in the plane perpendicular to the tangent, taken from the rotation-minimizing frame `write/curve-frame` describes — so the assets fan out around the path and the fan follows the path however it bends. A constant up simply cannot express that, which is the whole reason to reach for this one. GEOMETRY: the asset's local +z runs along the curve and its local +y is the radial direction, so a prop that must stick OUT of the path wants its length on +y. The points are NEW: they carry `P`, the unit `tangent`, `curveU`, `curveNormal`, `curveBinormal` and `rot`, plus the standard attributes at their defaults, and nothing written on the curve's own POINTS survives — use `write/curve-frame` and an `orientAlongVector` of your own if it must. Every PRIMITIVE attribute does survive, since a sample inherits the polyline it was taken from. PRECONDITION: `curve` must carry polyline topology and must not have been through anything that can REMOVE points — the `filter/*` family, `partitionByAttribute` and `mergePoints` all destroy it, and `filterByAttribute` does so even when its predicate keeps every point. VARIATION: yes — the angle is drawn from the evaluation context, so two instances in one graph fan differently on their own; there is no seed knob, so an explicit re-roll means a different `spread`. A CLOSED path does not come back seamless: the frame is transported around the loop and returns rotated by that curve's residual angle, so the fan does not line up across the seam. The output is still a path and can be resampled again.
 
-**Content hash:** `bb38cc76121ddbad`
+**Content hash:** `dcce6b8f9edfe4b2`
 
 **Tags:** `place`, `curve`, `path`, `instancing`
 
@@ -520,7 +520,7 @@ Run it: `pcg run shape/disc`
 
 Builds a CLOSED PATH — polyline topology, not a loose point cloud — around a circle in the XZ plane, then sizes, rotates and moves it. This is the curve source a saved graph reaches for: feed it to `place/along-curve`, `filter/by-distance-to-curve`, `write/orient-along-path` or the `splineSample` / `pathResample` nodes, which all report finding no polylines when handed a point cloud. COUNT: `count` is the number of corner points and exactly the number of points emitted; closure is structural (a trailing vertex back to the first point), so there is no duplicated seam point to trip over. Built on `shape/ring`, so the points also carry `scale` at 1. Fully deterministic. TOPOLOGY IS FRAGILE: anything that can REMOVE points destroys it — the `filter/*` family, `partitionByAttribute` (categorised `attribute`, not `filter`) and `mergePoints` — so whatever must see a path has to come before them. The category is not the rule: `projectToPlane` is a `filter` that PRESERVES topology because it clones rather than gathers, and `filterByAttribute` drops it even when its predicate keeps every point.
 
-**Content hash:** `2603767744729512`
+**Content hash:** `967bd5d54b41820c`
 
 **Tags:** `shape`, `curve`, `path`, `radial`
 
@@ -545,7 +545,7 @@ Run it: `pcg run shape/path-loop`
 
 Builds an open PATH — polyline topology — that runs along X and wanders off the straight line by a noise field, then evens the spacing out again by arc length. The resampling is the content: displacing a polyline sideways stretches the segments where the wander is steep, so points placed along it afterwards would bunch on the straight parts, and the fix cannot be seen in a picture until something is spawned on it. Use it for a road, a river, a fence line or a trail. COUNT: `count` is both the number of corners the wander is built from and the number of points emitted, evenly spaced along the finished curve. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances wander IDENTICALLY unless their `variant` differs. Writes `P`, the unit `tangent` and `curveU` (0..1 along the path) on points the resample creates, so the recipe writes no working column at all and the per-point `scale` is 1. TOPOLOGY IS FRAGILE: anything that can REMOVE points destroys it — the `filter/*` family, `partitionByAttribute` and `mergePoints` — so a path has to reach its consumer before them. Being a `filter` is not the rule: `projectToPlane` PRESERVES topology (it clones), while `filterByAttribute` drops it even when its predicate keeps every point.
 
-**Content hash:** `bad7066a523e99ff`
+**Content hash:** `6cfa4de1747e1a8b`
 
 **Tags:** `shape`, `curve`, `path`, `noise`
 

@@ -199,6 +199,8 @@ const COPY_STANDARD: ReadonlyArray<{
 export interface CopyToPointsParams {
   targetNames: readonly string[];
   targetIndexAttr: string;
+  sourceGroupAttr: string;
+  targetGroupAttr: string;
   topology: string;
 }
 
@@ -206,13 +208,18 @@ export interface CopyToPointsParams {
  * Returns whether the source's topology is KEPT.
  *
  * The twin of `requireTopologyRule` in `filtering.ts`, and deliberately a
- * second function rather than a shared one: that guard is private to its
- * file, and its message states a SURVIVAL rule ("keep preserves the
- * primitives all of whose points survive") that has no meaning here —
- * nothing is filtered, every source primitive is re-emitted once per
- * target. Unifying the two would mean a message that says neither thing
- * precisely, and error messages are part of the agent API. What IS shared
- * is the vocabulary: same param name, same two values, same default.
+ * second function rather than a shared one, though the reason narrowed
+ * when per-target selection arrived. That guard's message states a
+ * SURVIVAL rule ("keep preserves the primitives all of whose points
+ * survive"), and this node used to have no use for it at all — nothing
+ * was filtered and every source primitive was re-emitted once per target.
+ * Under selection it applies the SAME rule to a different question: a
+ * point survives into a target's block when that target's key asked for
+ * it. So the survival rule is now shared vocabulary alongside the param
+ * name, the two values and the default — and the two messages still have
+ * to differ, because "the predicate kept it" and "this target asked for
+ * it" are not the same sentence and error messages are part of the agent
+ * API.
  *
  * Checked at runtime for the reason {@link requireCopyTopologyRule}'s twin
  * gives: a param's `enum` is metadata for an editor, not a runtime guard,
@@ -224,7 +231,9 @@ function requireCopyTopologyRule(value: string): boolean {
     throw new Error(
       `copyToPoints: topology must be "drop" or "keep", got ${JSON.stringify(value)}; ` +
         '"drop" copies the source\'s POINTS only and its vertices and primitives are gone, ' +
-        '"keep" re-emits every source primitive once per target, renumbered onto that target\'s block of copies',
+        '"keep" re-emits the source\'s primitives onto each target\'s block of copies — every ' +
+        'primitive once per target by default, and under "sourceGroupAttr"/"targetGroupAttr" only ' +
+        "the primitives all of whose points that target asked for",
     );
   }
   return value === "keep";
@@ -261,22 +270,32 @@ function requireTopologySized(geo: Geometry, who: string, where: string): void {
 }
 
 /**
- * Append ONE geometry's topology into output arrays at the given bases:
+ * Append ONE BLOCK's topology into output arrays at the given bases:
  * every vertex reference shifted onto that block's points, every
  * primitive's vertex range shifted onto that block's vertices, counts
- * verbatim. Each input's vertex layout arrives as it was — nothing is
- * compacted, which is what separates this from `gatherPrimitives`
+ * verbatim. The block's vertex layout arrives as it was — nothing is
+ * compacted HERE, which is what separates this from `gatherPrimitives`
  * (util.ts) and is spelled out at {@link mergePrimitives}'s call.
  *
  * Shared by the file's two block-wise assemblers, which build the same
  * arrays from different block SOURCES: {@link mergePrimitives} walks a
- * list of inputs, {@link copyToPoints} under `topology "keep"` walks the
- * SAME input once per target. A copy array is a union with all the terms
- * equal, so the index arithmetic must be one function or the two will
- * drift on what "renumber" means.
+ * list of inputs, {@link copyToPoints} under `topology "keep"` walks one
+ * {@link KeepPlan} per target — the same input's whole topology when
+ * nothing is selected, and the subset that target asked for when
+ * something is. A copy array is a union with all the terms equal, so the
+ * index arithmetic must be one function or the two will drift on what
+ * "renumber" means.
+ *
+ * Takes the three ARRAYS rather than a `Geometry` because
+ * {@link copyToPoints} under per-target selection has no geometry to hand
+ * it: the block is a subset of the source's primitives, renumbered onto a
+ * subset of its points, and only {@link buildKeepPlan} has ever held it.
+ * Handed a geometry's own three arrays this is the function it always was.
  */
 function appendTopologyBlock(
-  geo: Geometry,
+  srcV2P: Uint32Array,
+  srcStart: Uint32Array,
+  srcCount: Uint32Array,
   vertexToPoint: Uint32Array,
   primVertexStart: Uint32Array,
   primVertexCount: Uint32Array,
@@ -284,14 +303,386 @@ function appendTopologyBlock(
   vertexBase: number,
   primBase: number,
 ): void {
-  const srcV2P = geo.vertexToPoint;
   for (let v = 0; v < srcV2P.length; v++) vertexToPoint[vertexBase + v] = srcV2P[v] + pointBase;
-  const srcStart = geo.primVertexStart;
-  const srcCount = geo.primVertexCount;
   for (let p = 0; p < srcStart.length; p++) {
     primVertexStart[primBase + p] = srcStart[p] + vertexBase;
     primVertexCount[primBase + p] = srcCount[p];
   }
+}
+
+/**
+ * Copy `indices.length` elements of `src` into `dst`, element k landing at
+ * slot k, coalescing CONSECUTIVE source indices into one ranged
+ * `copyFrom`.
+ *
+ * The gather every domain of {@link copyToPoints} goes through, and the
+ * reason its default path is byte-identical to the ranged copies it
+ * replaced rather than merely equivalent to them: with no selection the
+ * gather is the source's own order repeated once per target, so the run
+ * detection emits exactly one `copyFrom(src, 0, t * per, per)` per block —
+ * the same calls, in the same order, with the same arguments. Selection
+ * only ever SPLITS those runs.
+ *
+ * WHAT ONE CODE PATH COSTS THE BROADCAST, MEASURED, because the scan is
+ * pure overhead when nothing is selected and a cost nobody prints is a
+ * cost nobody notices. On 778,800 copies (2,200 sources x 354 targets),
+ * one f32x3 column, median of twelve rounds: 0.41ms for the ranged copies
+ * alone against 0.87ms through the gather, plus 0.64ms once for the index
+ * array the gather reads. That is roughly half a nanosecond per copy per
+ * COLUMN — the scan is over the copy count and does not care about tuple
+ * size — so a cloud carrying the four standard columns pays about 3ms
+ * inside a 73ms cook, four percent, to keep selection and broadcast one
+ * function. A `selecting` fast path would erase it and would be a second
+ * spelling of the assembly this node's byte-identity argument rests on.
+ *
+ * `copyFrom` and not a raw `data.set` because a string column's values are
+ * indices into ITS OWN table: `copyFrom` re-interns, so the output says the
+ * words the source did rather than whatever those indices happen to name
+ * here.
+ */
+function gatherInto(dst: Attribute, src: Attribute, indices: Uint32Array): void {
+  const n = indices.length;
+  let i = 0;
+  while (i < n) {
+    const start = indices[i];
+    // The expected next index is CARRIED rather than re-read as
+    // `indices[j - 1] + 1`: the scan runs once per copy per column on the
+    // broadcast path, where it is pure overhead against the ranged copies
+    // it replaced, and one bounds-checked load per step instead of two is
+    // most of what that overhead was.
+    let next = start + 1;
+    let j = i + 1;
+    while (j < n && indices[j] === next) {
+      j++;
+      next++;
+    }
+    dst.copyFrom(src, start, i, j - i);
+    i = j;
+  }
+}
+
+/**
+ * One distinct group key's share of the source: which source points every
+ * target naming that key receives, ascending.
+ *
+ * Ascending SOURCE INDEX, never key order or first-seen order, because the
+ * node's published layout is "the copies of a target, in source order" and
+ * selection removes copies from that order rather than reordering what is
+ * left.
+ */
+interface SourceGroup {
+  readonly indices: Uint32Array;
+}
+
+/**
+ * Which source points land on each target.
+ *
+ * ONE SHAPE FOR BOTH MODES, so the assemblers below have no second
+ * spelling to drift from. With selection off there is exactly one group
+ * holding every source point and every target names it, which is the
+ * broadcast written as a selection — same blocks, same order, same
+ * arithmetic (`starts[t]` is `t * nSource` term for term). With selection
+ * on there is one group per distinct source key, and `groupOf[t]` is -1
+ * for a target whose key no source point carries.
+ */
+interface CopySelection {
+  readonly groups: readonly SourceGroup[];
+  /** Group index per target, or -1 for a target that matched none. */
+  readonly groupOf: Int32Array;
+  /**
+   * Whether the pair of params was set — NOT whether the blocks happen to
+   * be whole. `topology "keep"` reads this rather than comparing a block's
+   * length to the source's, because a selection in which every key matches
+   * every point would otherwise take the unselected vertex layout: what
+   * the output IS has to depend on the graph and never on the data.
+   */
+  readonly selecting: boolean;
+}
+
+/** The empty block a target that matched no source group receives. */
+const NO_SOURCE_GROUP: SourceGroup = { indices: new Uint32Array(0) };
+
+/**
+ * Resolve a param naming the point attribute holding a SELECTION KEY.
+ *
+ * The same scalar-or-string rule `pointsToPath`'s `groupAttr` applies, and
+ * deliberately a second function rather than that file's private one: its
+ * message ends "leave the param empty to skip it", and here leaving ONE of
+ * the pair empty is refused — the fix has to name both params or it sends
+ * the author into the error below.
+ */
+function requireSelectionKeyAttr(
+  geo: Geometry,
+  name: string,
+  param: string,
+  side: string,
+): Attribute {
+  const set = geo.attrs.point;
+  const attr = set.get(name);
+  if (!attr) {
+    throw new Error(
+      `copyToPoints: param "${param}" names point attribute "${name}", which the ${side} has no point ` +
+        `attribute for; available on the ${side}: ${set.names().join(", ") || "(none)"}. Write the key ` +
+        `upstream with setAttribute, or clear BOTH "sourceGroupAttr" and "targetGroupAttr" to stamp the ` +
+        "whole source on every target.",
+    );
+  }
+  if (attr.tupleSize !== 1) {
+    throw new Error(
+      `copyToPoints: param "${param}" names ${side} attribute "${name}" with tupleSize ${attr.tupleSize}; ` +
+        "a selection key must be scalar (tupleSize 1) — take one component into a scalar column with " +
+        "setAttribute and name that instead.",
+    );
+  }
+  return attr;
+}
+
+/**
+ * Read one element of a key column as a comparable key.
+ *
+ * WHOLE NUMBERS OR STRINGS, the rule `pointsToPath`'s `groupAttr` sets and
+ * for its reason, quoted rather than paraphrased: a key is an IDENTITY, two
+ * values a ULP apart would be two groups, and CPU/GPU parity is a tolerance
+ * rather than an equality. A fractional key is refused on either side.
+ */
+function readSelectionKey(
+  attr: Attribute,
+  index: number,
+  param: string,
+  side: string,
+): number | string {
+  if (attr.type === "string") return attr.getString(index);
+  const value = attr.data[index];
+  if (!Number.isInteger(value)) {
+    throw new Error(
+      `copyToPoints: ${side} point ${index} has ${attr.name} = ${value}, which is not a whole number; a ` +
+        "selection key is an IDENTITY, and a fractional one cannot be trusted to be equal to itself — two " +
+        "values a single ULP apart are two groups, and the GPU is only promised to agree with the CPU " +
+        `within a tolerance. Write a whole-number id with setAttribute (type 'i32', which truncates), or ` +
+        `name the group with a string attribute, which "${param}" also accepts`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Settle which source points each target takes — the whole of the
+ * `sourceGroupAttr` / `targetGroupAttr` pair.
+ *
+ * Both empty is the broadcast, expressed as the one group every target
+ * names. Exactly one set is refused: half a selection has no meaning, and
+ * the two readings a lenient node could pick (ignore it, or match against
+ * nothing) differ by the entire output.
+ */
+function buildCopySelection(
+  src: Geometry,
+  tgt: Geometry,
+  params: CopyToPointsParams,
+): CopySelection {
+  const sName = params.sourceGroupAttr;
+  const tName = params.targetGroupAttr;
+  const nS = src.attrs.point.count;
+  const nT = tgt.attrs.point.count;
+  if (sName === "" && tName === "") {
+    const all = new Uint32Array(nS);
+    for (let s = 0; s < nS; s++) all[s] = s;
+    return { groups: [{ indices: all }], groupOf: new Int32Array(nT), selecting: false };
+  }
+  if (sName === "" || tName === "") {
+    const [set, unset] =
+      sName === ""
+        ? ["targetGroupAttr", "sourceGroupAttr"]
+        : ["sourceGroupAttr", "targetGroupAttr"];
+    throw new Error(
+      `copyToPoints: params "sourceGroupAttr" and "targetGroupAttr" work only as a PAIR — "${set}" is ` +
+        `set and "${unset}" is empty. Per-target source selection needs both: "sourceGroupAttr" is the ` +
+        "key each SOURCE point carries and \"targetGroupAttr\" is the key each TARGET point asks for, and " +
+        `a target takes the source points whose keys match. Name a scalar point attribute for "${unset}" ` +
+        "too, or clear both to stamp the whole source on every target.",
+    );
+  }
+
+  const sAttr = requireSelectionKeyAttr(src, sName, "sourceGroupAttr", 'source on pin "source"');
+  const tAttr = requireSelectionKeyAttr(tgt, tName, "targetGroupAttr", 'target on pin "target"');
+  // A string column and a numeric one can never produce a match, so every
+  // target would come out empty and the cook would finish, cleanly, with
+  // no points. That is an authoring mistake and not data: refuse it here
+  // rather than let an empty output stand in for it.
+  if ((sAttr.type === "string") !== (tAttr.type === "string")) {
+    const stringSide = sAttr.type === "string" ? "sourceGroupAttr" : "targetGroupAttr";
+    const numberSide = sAttr.type === "string" ? "targetGroupAttr" : "sourceGroupAttr";
+    throw new Error(
+      `copyToPoints: param "${stringSide}" names a string attribute and "${numberSide}" names a numeric ` +
+        `one (${(sAttr.type === "string" ? tAttr : sAttr).type}); a string key can never equal a number, ` +
+        "so every target would take nothing. Name columns of the same kind on both sides — two string " +
+        "names, or two whole-number ids.",
+    );
+  }
+
+  // Source keys first, in ASCENDING SOURCE INDEX, so each group's block is
+  // the source's own order with the non-members removed.
+  const byKey = new Map<number | string, number[]>();
+  for (let s = 0; s < nS; s++) {
+    const key = readSelectionKey(sAttr, s, "sourceGroupAttr", "source");
+    let bucket = byKey.get(key);
+    if (!bucket) byKey.set(key, (bucket = []));
+    bucket.push(s);
+  }
+  const keyToGroup = new Map<number | string, number>();
+  const groups: SourceGroup[] = [];
+  for (const [key, bucket] of byKey) {
+    keyToGroup.set(key, groups.length);
+    groups.push({ indices: Uint32Array.from(bucket) });
+  }
+
+  const groupOf = new Int32Array(nT);
+  for (let t = 0; t < nT; t++) {
+    const key = readSelectionKey(tAttr, t, "targetGroupAttr", "target");
+    const group = keyToGroup.get(key);
+    // A TARGET THAT MATCHES NOTHING IS A LEGAL EMPTY BLOCK, not an error,
+    // and for the reason `pointsToPath`'s `shortGroups "skip"` gives for
+    // the same shape of question: a selection key is normally DATA — an
+    // asset id resolved from a catalogue, a species drawn from a noise, a
+    // pose chosen per placement — so which keys a given cell's targets ask
+    // for is not knowable at graph-build time, and a cell that happens to
+    // ask for a pose this source cloud does not carry must not fail the
+    // whole cook. Nothing else moves: the targets that DO match take the
+    // same copies, in the same order, that they would have taken had the
+    // unmatched target never been in the input.
+    groupOf[t] = group === undefined ? -1 : group;
+  }
+  return { groups, groupOf, selecting: true };
+}
+
+/**
+ * One block's re-emitted topology under `topology "keep"`, block-local:
+ * which source primitives survive, which source vertices they own, and
+ * where those vertices land among the block's own points.
+ *
+ * `primSrc` and `vertexSrc` exist so the vertex and primitive ATTRIBUTES
+ * can be gathered by the same {@link gatherInto} the point domain uses —
+ * a re-emitted primitive carries the original's values whether or not its
+ * neighbours were re-emitted.
+ */
+interface KeepPlan {
+  readonly primSrc: Uint32Array;
+  readonly vertexSrc: Uint32Array;
+  readonly vertexToPoint: Uint32Array;
+  readonly primVertexStart: Uint32Array;
+  readonly primVertexCount: Uint32Array;
+}
+
+/**
+ * The plan for a block holding EVERY source point: the source's topology
+ * verbatim, which is what `topology "keep"` has always emitted.
+ *
+ * Verbatim down to the vertex LAYOUT — same vertex count, same order,
+ * gaps and out-of-order primitive ranges included — because that is the
+ * observable the shipped node has: {@link appendTopologyBlock} shifts and
+ * copies, it never compacts. {@link buildKeepPlan} cannot promise the same
+ * and says why.
+ */
+function wholeSourceKeepPlan(src: Geometry): KeepPlan {
+  const nV = src.vertexToPoint.length;
+  const nPrim = src.primVertexStart.length;
+  const primSrc = new Uint32Array(nPrim);
+  for (let p = 0; p < nPrim; p++) primSrc[p] = p;
+  const vertexSrc = new Uint32Array(nV);
+  for (let v = 0; v < nV; v++) vertexSrc[v] = v;
+  return {
+    primSrc,
+    vertexSrc,
+    vertexToPoint: src.vertexToPoint,
+    primVertexStart: src.primVertexStart,
+    primVertexCount: src.primVertexCount,
+  };
+}
+
+/**
+ * The plan for a SELECTED block: the source primitives ALL of whose points
+ * the block holds, in ascending source order, renumbered onto the block.
+ *
+ * THE SURVIVAL RULE IS THE POINT FILTERS', quoted rather than invented:
+ * "keep preserves the primitives all of whose points survive"
+ * (`filtering.ts`), which `gatherPrimitives`' explicit point rule states
+ * again as a precondition. A selection is a point filter applied per
+ * target, so a primitive straddling two keys belongs to neither block and
+ * is re-emitted for neither — the alternative is a primitive with a vertex
+ * pointing at a point that is not in this block, which `setTopology`'s
+ * bounds check would happily accept as some OTHER target's point.
+ *
+ * THE VERTEX LAYOUT IS COMPACTED HERE, and it has to be: the block holds a
+ * subset of the source's points, so a vertex referencing a point the block
+ * dropped has nothing to renumber onto and cannot be carried. What comes
+ * out is the surviving primitives' own vertices, in primitive order — the
+ * same thing `gatherPrimitives` produces. On a source whose primitive
+ * ranges already tile its vertex array in order (everything `setTopology`
+ * and `setPolylineTopology` build) that is the identity, so this differs
+ * from the unselected block only for a source carrying vertices no
+ * primitive references, or ranges out of order.
+ */
+function buildKeepPlan(src: Geometry, indices: Uint32Array, nS: number): KeepPlan {
+  const srcV2P = src.vertexToPoint;
+  const srcStart = src.primVertexStart;
+  const srcCount = src.primVertexCount;
+  const nPrim = srcStart.length;
+  // Where each source point sits in this block, or -1 for one it dropped.
+  const local = new Int32Array(nS).fill(-1);
+  for (let k = 0; k < indices.length; k++) local[indices[k]] = k;
+
+  const primSrc: number[] = [];
+  let nv = 0;
+  for (let p = 0; p < nPrim; p++) {
+    const start = srcStart[p];
+    const end = start + srcCount[p];
+    let survives = true;
+    for (let v = start; v < end; v++) {
+      const point = srcV2P[v];
+      // A vertex referencing a point the SOURCE does not have. Only a
+      // geometry whose point domain shrank after `setTopology` can carry
+      // one, and `requireTopologySized` cannot see it: that guard compares
+      // the vertex and primitive attribute counts to the topology, not the
+      // topology to the points. Refused rather than read, because
+      // `local[out of range]` is `undefined`, `undefined < 0` is false,
+      // and the primitive would go on to be re-emitted with a vertex
+      // pointing at whatever slot 0 of the block happens to be.
+      if (point >= nS) {
+        throw new Error(
+          `copyToPoints: the source on pin "source" has vertex ${v} referencing point ${point}, but ` +
+            `the source has only ${nS} point${nS === 1 ? "" : "s"}; rebuild its topology with ` +
+            "setTopology (or setPolylineTopology) after whatever changed the point count, rather than " +
+            "leaving vertex references pointing past the cloud.",
+        );
+      }
+      if (local[point] < 0) {
+        survives = false;
+        break;
+      }
+    }
+    if (survives) {
+      primSrc.push(p);
+      nv += srcCount[p];
+    }
+  }
+
+  const prims = Uint32Array.from(primSrc);
+  const vertexSrc = new Uint32Array(nv);
+  const vertexToPoint = new Uint32Array(nv);
+  const primVertexStart = new Uint32Array(prims.length);
+  const primVertexCount = new Uint32Array(prims.length);
+  let w = 0;
+  for (let k = 0; k < prims.length; k++) {
+    const p = prims[k];
+    primVertexStart[k] = w;
+    primVertexCount[k] = srcCount[p];
+    const start = srcStart[p];
+    for (let v = start; v < start + srcCount[p]; v++) {
+      vertexSrc[w] = v;
+      vertexToPoint[w] = local[srcV2P[v]];
+      w++;
+    }
+  }
+  return { primSrc: prims, vertexSrc, vertexToPoint, primVertexStart, primVertexCount };
 }
 
 /** Copy a source cloud onto every target point, composing transforms. */
@@ -299,7 +690,7 @@ export const copyToPoints = standardNode<CopyToPointsParams>({
   type: "copyToPoints",
   category: "point op",
   description:
-    "Copies the source point cloud onto every target point (output count = source points * target points, grouped by target). Transforms compose per copy: P = targetP + targetRot * (targetScale * sourceP), rot = targetRot * sourceRot (quaternion product), scale = targetScale * sourceScale (componentwise), and each copied seed is hashCombine(sourceSeed, targetSeed). All other source point attributes are carried through unchanged; missing transform attributes are treated as identity. `targetNames` additionally carries named TARGET point attributes onto the copies: every copy in a target's block receives that target's value, in a column keeping the target's type, tuple size and default. That is what lets copies vary by what the author computed on the target cloud — a species tag, an age, a noise sampled per target — since the copies are otherwise identical in everything but placement. The composed transform attributes cannot be carried, a name the source already carries is refused rather than silently overwritten, a name repeated in the list is refused, and a name absent from the target is an error. `targetIndexAttr` writes the target's INDEX rather than one of its attributes, which is what makes \"one thing per target\" — one path per anchor, one group per instance — expressible without an upstream setAttribute whose only job was to give this node something to carry. The source's TOPOLOGY is dropped by default — an array of a path comes out a bare cloud — and `topology \"keep\"` re-emits every source primitive once per target instead, which is what makes the array of paths a set of paths without rebuilding them downstream.",
+    "Copies the source point cloud onto every target point (output count = source points * target points, grouped by target). Set `sourceGroupAttr` and `targetGroupAttr` and each target instead takes only the source points whose group key it asks for, which is the same node stamping a DIFFERENT subset per target rather than the whole cloud. Transforms compose per copy: P = targetP + targetRot * (targetScale * sourceP), rot = targetRot * sourceRot (quaternion product), scale = targetScale * sourceScale (componentwise), and each copied seed is hashCombine(sourceSeed, targetSeed). All other source point attributes are carried through unchanged; missing transform attributes are treated as identity. `targetNames` additionally carries named TARGET point attributes onto the copies: every copy in a target's block receives that target's value, in a column keeping the target's type, tuple size and default. That is what lets copies vary by what the author computed on the target cloud — a species tag, an age, a noise sampled per target — since the copies are otherwise identical in everything but placement. The composed transform attributes cannot be carried, a name the source already carries is refused rather than silently overwritten, a name repeated in the list is refused, and a name absent from the target is an error. `targetIndexAttr` writes the target's INDEX rather than one of its attributes, which is what makes \"one thing per target\" — one path per anchor, one group per instance — expressible without an upstream setAttribute whose only job was to give this node something to carry. `sourceGroupAttr` and `targetGroupAttr` are PER-TARGET SOURCE SELECTION, the pair that turns \"every target takes every source point\" into \"every target takes the source points it names\": without them a vocabulary in which each target wants a different subset has to stamp the whole cloud and filter the wrong copies away, which is quadratic in a library nobody uses all of. The source's TOPOLOGY is dropped by default — an array of a path comes out a bare cloud — and `topology \"keep\"` re-emits every source primitive once per target instead, which is what makes the array of paths a set of paths without rebuilding them downstream.",
   inputs: [
     { name: "source", kind: "geometry" },
     { name: "target", kind: "geometry" },
@@ -316,14 +707,26 @@ export const copyToPoints = standardNode<CopyToPointsParams>({
       type: "string",
       default: "",
       description:
-        'Name of an i32 point attribute to write the TARGET INDEX into — 0 for every copy that landed on the first target point, 1 for the second, and so on. Empty (the default) writes nothing. This is the key downstream nodes group by: pointsToPath\'s `groupAttr` turns "the copies of one target" into one path per target, and partitionByAttribute turns them into one item each. The node already computes this index to place the copies, so naming it here replaces the setAttribute writing `{"fn":"index"}` on the target purely so `targetNames` had something to carry. The column is i32, tuple size 1, default -1 (which no copy ever gets, so an element appended later reads as belonging to no target). Refused for the same three reasons `targetNames` refuses a name: "P", "rot", "scale" and "seed" are composed per copy, a name the source already carries would have two writers, and so would a name `targetNames` is carrying.',
+        'Name of an i32 point attribute to write the TARGET INDEX into — 0 for every copy that landed on the first target point, 1 for the second, and so on. Empty (the default) writes nothing. This is the key downstream nodes group by: pointsToPath\'s `groupAttr` turns "the copies of one target" into one path per target, and partitionByAttribute turns them into one item each. The node already computes this index to place the copies, so naming it here replaces the setAttribute writing `{"fn":"index"}` on the target purely so `targetNames` had something to carry. The column is i32, tuple size 1, default -1 (which no copy ever gets, so an element appended later reads as belonging to no target). That stays true under `sourceGroupAttr`/`targetGroupAttr` selection, and it is worth saying why, because selection is exactly what could have broken it: a target that matches no source group contributes ZERO copies rather than a copy carrying some placeholder, so its index is simply a value this column never holds — -1 still means "no target" and not "the target that took nothing". What selection does change is that a target index can be MISSING from the output entirely, so a downstream grouping on this column sees fewer groups than the target cloud has points (pointsToPath\'s `shortGroups "skip"` is the setting that expects exactly that). Refused for the same three reasons `targetNames` refuses a name: "P", "rot", "scale" and "seed" are composed per copy, a name the source already carries would have two writers, and so would a name `targetNames` is carrying.',
+    },
+    sourceGroupAttr: {
+      type: "string",
+      default: "",
+      description:
+        'Name of a scalar SOURCE point attribute holding each source point\'s group key — the half of per-target source selection that says what each source point IS. Set it together with `targetGroupAttr` (the key each target ASKS FOR) and a target receives only the source points whose key equals its own; leave BOTH empty, the default, and every target receives every source point exactly as before. Setting one without the other is refused rather than half-applied, because the two lenient readings — ignore it, or match everything against nothing — differ by the entire output. A NUMERIC key must be a whole number, the rule `pointsToPath`\'s `groupAttr` sets and for its reason: a key is an IDENTITY, two values a ULP apart would be two groups, and CPU/GPU parity is a tolerance rather than an equality — so write ids with setAttribute type \'i32\' (which truncates), and a fractional value is an error naming the point. A STRING key names the group instead, which is the usual thing a group is (an asset id, a pose name, a species), and it compares BY VALUE and never by string-table index, so the same word selects the same points in every geometry and every cell. Both sides must be the same kind: a string column against a numeric one can never match and is refused rather than cooking to nothing. This column is an ordinary source attribute and rides onto the copies like any other; the key does not disappear because it was used.',
+    },
+    targetGroupAttr: {
+      type: "string",
+      default: "",
+      description:
+        'Name of a scalar TARGET point attribute naming which source group that target takes — the half of per-target source selection that does the asking. Used only together with `sourceGroupAttr`, under the key rules stated there. What it buys is the case this node could not express: when each target wants a DIFFERENT subset of the source, the alternative is to stamp the whole source on every target and filter the wrong copies away, which costs sourcePoints * targetPoints intermediate points to keep a few thousand — the measured racetrack case stamped 776,000 copies to keep 1,900. With this set the node emits only the copies that survive, so the stage becomes linear in the answer. Everything else is unchanged: the copies still come out in contiguous per-target blocks, in ascending SOURCE INDEX within a block, and `targetNames`, `targetIndexAttr` and the composed transforms all behave as they do without selection — selection REMOVES copies from that layout, it never reorders what is left, and it never perturbs the seed of a copy that would have existed anyway (a copy\'s seed is hashCombine(sourceSeed, targetSeed), which names the pair and not the slot). A target whose key matches NO source group takes zero copies and that is legal, not an error, for the reason `pointsToPath`\'s `shortGroups "skip"` gives: a selection key is normally DATA — resolved from a catalogue, drawn from a noise, chosen per placement — so which keys a cell\'s targets ask for is unknowable at graph-build time, and a cell asking for a pose this source does not carry must not fail the whole cook. If a missing key IS an authoring error in your graph, catch it upstream where the population is known rather than here where it is data.',
     },
     topology: {
       type: "enum",
       default: "drop",
       enum: ["drop", "keep"],
       description:
-        "What happens to the SOURCE's topology — the vertices and primitives built over the source's points. 'drop' (the default) copies POINTS only: an array of a path comes out a bare cloud with the paths gone, which is why the copies have to be rebuilt downstream (targetIndexAttr, then a pointsToPath grouping on it). 'keep' re-emits every source primitive once per TARGET: the copies are laid out in contiguous blocks of nSource (copy s of target t is point t * nSource + s), so primitive p of block t walks exactly the points its original walked, t * nSource further on. That is what mergePrimitives produces from nTarget copies of the source, and it is the whole difference between an array of points and an array of paths. Nothing is filtered and no primitive is reshaped: a source with N primitives always yields nTarget * N, in target-block order. The source's VERTEX and PRIMITIVE attributes come along, each copy carrying the original's values (a per-primitive width, a per-vertex uv, and `primtype`, so the copies stay samplable as what they are). The TARGET's own topology is never read under either setting — the target contributes point transforms and, through targetNames/targetIndexAttr, point attributes, while its primitives describe points that are not in this output at all. The POINT domain is IDENTICAL under both settings — same points, same order, same attributes, same identities — so this param only ever ADDS information, and neither targetNames nor targetIndexAttr (which write point columns) can be disturbed by it. The DETAIL domain is carried under NEITHER setting, for the reason mergePrimitives gives for dropping it: there are two inputs, each has a detail domain, and choosing between them would be a guess. On IDENTITY, because it decides what per-copy randomness does: a primitive is named by the fold of its own points' identities, and a point's identity is its position bits plus its `seed` — both of which this node composes per copy (P from the target's transform, seed from hashCombine(sourceSeed, targetSeed)). So the nTarget copies of one source primitive are nTarget DISTINCT primitives, and a randomField on the primitive domain draws a different value for each, which is what 'one variation per copy' needs. The exception is the one mergePrimitives documents: two targets sharing a position AND a seed produce copies that are the same points, hence ONE primitive to every identity-keyed decision — give coincident targets distinct seeds.",
+        "What happens to the SOURCE's topology — the vertices and primitives built over the source's points. 'drop' (the default) copies POINTS only: an array of a path comes out a bare cloud with the paths gone, which is why the copies have to be rebuilt downstream (targetIndexAttr, then a pointsToPath grouping on it). 'keep' re-emits source primitives onto the target blocks instead, which is the whole difference between an array of points and an array of paths. WITHOUT SELECTION (`sourceGroupAttr` and `targetGroupAttr` both empty) that is every source primitive once per TARGET, and the arithmetic is closed: the copies are laid out in contiguous blocks of nSource (copy s of target t is point t * nSource + s), so primitive p of block t walks exactly the points its original walked, t * nSource further on, and a source with N primitives always yields nTarget * N, in target-block order, nothing filtered and no primitive reshaped. That is what mergePrimitives produces from nTarget copies of the source. WITH SELECTION both of those identities are gone, and they have to be: a target holds only the source points its key asked for, so there is no fixed block stride, and a vertex referencing a point the block did not take has no point to renumber onto — it cannot be carried, and carrying it anyway would produce an index setTopology's bounds check accepts as some OTHER target's point. What replaces them is the POINT FILTERS' survival rule, quoted rather than invented: a primitive is re-emitted for a target only when ALL of its points are in that target's block. So a source primitive whose points carry two different keys belongs to no block and is re-emitted for none of them (put the key on whole primitives, not across them), and the primitive count is the sum over targets of what each target's key kept — not a product of anything. What does NOT change is the order: within a block the surviving primitives keep ascending source order and each keeps its own vertices in their own order, and the blocks still follow target order. One further difference is visible only on a source whose vertex array does not tile: an unselected block copies that array verbatim, gaps and out-of-order primitive ranges included, while a selected block is compacted to the surviving primitives' own vertices in primitive order — what gatherPrimitives produces. Everything setTopology and setPolylineTopology build already tiles in order, so for those the two are the same array. The source's VERTEX and PRIMITIVE attributes come along, each copy carrying the original's values (a per-primitive width, a per-vertex uv, and `primtype`, so the copies stay samplable as what they are). The TARGET's own topology is never read under either setting — the target contributes point transforms and, through targetNames/targetIndexAttr, point attributes, while its primitives describe points that are not in this output at all. The POINT domain is IDENTICAL under both settings — same points, same order, same attributes, same identities — so this param only ever ADDS information, and neither targetNames nor targetIndexAttr (which write point columns) can be disturbed by it, with or without selection. The DETAIL domain is carried under NEITHER setting, for the reason mergePrimitives gives for dropping it: there are two inputs, each has a detail domain, and choosing between them would be a guess. On IDENTITY, because it decides what per-copy randomness does: a primitive is named by the fold of its own points' identities, and a point's identity is its position bits plus its `seed` — both of which this node composes per copy (P from the target's transform, seed from hashCombine(sourceSeed, targetSeed)). So the copies of one source primitive are DISTINCT primitives, one per target that re-emitted it, and a randomField on the primitive domain draws a different value for each, which is what 'one variation per copy' needs. The exception is the one mergePrimitives documents: two targets sharing a position AND a seed produce copies that are the same points, hence ONE primitive to every identity-keyed decision — give coincident targets distinct seeds.",
     },
   },
   execute({ inputs, params }) {
@@ -334,7 +737,46 @@ export const copyToPoints = standardNode<CopyToPointsParams>({
     const tgtSet = tgt.attrs.point;
     const nS = srcSet.count;
     const nT = tgtSet.count;
-    const total = nS * nT;
+
+    // WHICH SOURCE POINTS EACH TARGET TAKES, settled before anything is
+    // sized, because with selection on the output count is no longer
+    // nS * nT — it is the sum of the blocks. With selection off there is
+    // one group holding every source point, `starts[t]` is `t * nS` term
+    // for term and `pointSrc` is the source's order repeated per target,
+    // so every loop below is the arithmetic that shipped.
+    const selection = buildCopySelection(src, tgt, params);
+    const blockAt = (t: number): SourceGroup => {
+      const g = selection.groupOf[t];
+      return g < 0 ? NO_SOURCE_GROUP : selection.groups[g];
+    };
+    const starts = new Uint32Array(nT + 1);
+    let total = 0;
+    for (let t = 0; t < nT; t++) {
+      total += blockAt(t).indices.length;
+      starts[t + 1] = total;
+    }
+    // `starts` is u32, like every index array in this file. The RUNNING
+    // total is not, deliberately: a copy count past 2^32 would wrap in the
+    // block offsets and come out as a small, entirely plausible output,
+    // where the count this node used to compute as a plain product failed
+    // loudly at the allocation instead. Checked against `total` and not
+    // against nSource * nTarget because selection makes the product an
+    // upper bound that a legal cook may be far under.
+    if (total > 0xffffffff) {
+      throw new Error(
+        `copyToPoints: ${nS} source points onto ${nT} target points comes to ${total} copies, past ` +
+          "the 2^32 this node can index (with selection on, that is the sum of the blocks rather than " +
+          "the product). Cut one of the two clouds down, or give each target only the source points " +
+          'it needs with "sourceGroupAttr" and "targetGroupAttr".',
+      );
+    }
+    // The source point behind each copy, flat. One array rather than a
+    // per-block indirection so every domain gathers the same way.
+    const pointSrc = new Uint32Array(total);
+    for (let t = 0; t < nT; t++) {
+      const indices = blockAt(t).indices;
+      pointSrc.set(indices, starts[t]);
+    }
 
     const out = new Geometry();
     const outSet = out.attrs.point;
@@ -431,30 +873,34 @@ export const copyToPoints = standardNode<CopyToPointsParams>({
 
     outSet.resize(total);
 
-    // Written per TARGET, not per copy: one fill over the block of nS
-    // copies that landed on it, which is the same index the transform loop
-    // below derives as `i = t * nS + s`.
+    // Written per TARGET, not per copy: one fill over the block of copies
+    // that landed on it, at the same offsets the transform loop below
+    // writes them at. A target that took nothing gets an empty fill, so
+    // its index never appears in the column — which is what keeps -1
+    // meaning "belongs to no target" rather than "took no copies".
     if (indexName !== "") {
       const dst = outSet.require(indexName).data;
-      for (let t = 0; t < nT; t++) dst.fill(t, t * nS, (t + 1) * nS);
+      for (let t = 0; t < nT; t++) dst.fill(t, starts[t], starts[t + 1]);
     }
 
     // Bulk-carry every source attribute into each target block, then
-    // overwrite the composed transform attributes.
+    // overwrite the composed transform attributes. `gatherInto` coalesces
+    // the runs, which with no selection is exactly one ranged copy per
+    // block — the same calls this loop made when it was written by hand.
     for (const attr of srcSet) {
-      const dst = outSet.require(attr.name);
-      for (let t = 0; t < nT; t++) dst.copyFrom(attr, 0, t * nS, nS);
+      gatherInto(outSet.require(attr.name), attr, pointSrc);
     }
 
     // The target carry is a BROADCAST, not a range copy: one target
-    // element spread over the nS copies that landed on it. So it reads
-    // the element once per TARGET and writes it nS times, rather than
-    // calling copyFrom per copy — that one allocates a subarray view on
-    // every call, which is nS * nT of them in an inner loop. Strings go
-    // through internString because a string column's data holds indices
-    // into ITS OWN table, and an index means nothing in another
-    // geometry's; interning per target (nT times, not nS * nT) is what
-    // makes the output column say the same words the target did.
+    // element spread over the copies that landed on it. So it reads the
+    // element once per TARGET and writes it once per copy in that
+    // target's block, rather than calling copyFrom per copy — that one
+    // allocates a subarray view on every call, which is one per copy in
+    // an inner loop. Strings go through internString because a string
+    // column's data holds indices into ITS OWN table, and an index means
+    // nothing in another geometry's; interning per target rather than per
+    // copy is what makes the output column say the same words the target
+    // did.
     const vals: number[] = [];
     for (const attr of carried) {
       const dst = outSet.require(attr.name);
@@ -467,9 +913,16 @@ export const copyToPoints = standardNode<CopyToPointsParams>({
         for (let k = 0; k < ts; k++) {
           vals[k] = isString ? dst.internString(attr.getString(t, k)) : sd[t * ts + k];
         }
-        const base = t * nS * ts;
-        for (let s = 0; s < nS; s++) {
-          const o = base + s * ts;
+        // EVERY TARGET IS READ, including one whose block is empty, and
+        // that is deliberate rather than an oversight: skipping the read
+        // would leave a string column's TABLE holding different words
+        // depending on how many targets matched, and the table is
+        // serialized and hashed even when the column has no elements. A
+        // word the output interned and no copy says is harmless; a
+        // default path whose bytes depend on a param being present is not.
+        // The write loop below simply runs zero times.
+        for (let i = starts[t], end = starts[t + 1]; i < end; i++) {
+          const o = i * ts;
           for (let k = 0; k < ts; k++) dd[o + k] = vals[k];
         }
       }
@@ -507,8 +960,14 @@ export const copyToPoints = standardNode<CopyToPointsParams>({
       const tsy = tScale ? tScale[t * 3 + 1] : 1;
       const tsz = tScale ? tScale[t * 3 + 2] : 1;
       const tSeedVal = tSeed ? tSeed[t] : t;
-      for (let s = 0; s < nS; s++) {
-        const i = t * nS + s;
+      const end = starts[t + 1];
+      // `s` comes off the block rather than from the loop counter, which
+      // is the ONE line selection changes here: the seed a copy gets is
+      // hashCombine(sourceSeed, targetSeed) — the source point's own seed
+      // and the target's, never the slot — so a copy that would have
+      // existed without selection gets the same seed with it.
+      for (let i = starts[t]; i < end; i++) {
+        const s = pointSrc[i];
         rotateVec(v, qx, qy, qz, qw, sP[s * 3] * tsx, sP[s * 3 + 1] * tsy, sP[s * 3 + 2] * tsz);
         oP[i * 3] = tP[t * 3] + v[0];
         oP[i * 3 + 1] = tP[t * 3 + 1] + v[1];
@@ -547,45 +1006,90 @@ export const copyToPoints = standardNode<CopyToPointsParams>({
     // and primitive sets and leaves the point domain untouched.
     if (keepTopology) {
       requireTopologySized(src, "copyToPoints", 'the source on pin "source"');
-      const nV = src.vertexToPoint.length;
-      const nPrim = src.primVertexStart.length;
-      const vertexToPoint = new Uint32Array(nV * nT);
-      const primVertexStart = new Uint32Array(nPrim * nT);
-      const primVertexCount = new Uint32Array(nPrim * nT);
-      // One block per target, with the same `t * nS` stride the transform
-      // loop above used — which is exactly why this is a re-emission and
-      // not a rebuild: the copies are already contiguous per target, so
-      // the shift is the only thing a primitive needs.
+      // ONE PLAN PER GROUP, NOT PER TARGET. Which primitives survive
+      // depends only on which source points the block holds, and every
+      // target asking the same key holds the same ones — so the survival
+      // sweep runs once per distinct key however many targets name it.
+      // With no selection there is one group, its plan is the source's
+      // topology verbatim, and this is the loop that shipped.
+      const plans: (KeepPlan | undefined)[] = new Array(selection.groups.length).fill(undefined);
+      const planAt = (t: number): KeepPlan | undefined => {
+        const g = selection.groupOf[t];
+        if (g < 0) return undefined;
+        let plan = plans[g];
+        if (!plan) {
+          const indices = selection.groups[g].indices;
+          plan = selection.selecting
+            ? buildKeepPlan(src, indices, nS)
+            : wholeSourceKeepPlan(src);
+          plans[g] = plan;
+        }
+        return plan;
+      };
+
+      let totalVerts = 0;
+      let totalPrims = 0;
       for (let t = 0; t < nT; t++) {
+        const plan = planAt(t);
+        if (!plan) continue;
+        totalVerts += plan.vertexSrc.length;
+        totalPrims += plan.primSrc.length;
+      }
+      const vertexToPoint = new Uint32Array(totalVerts);
+      const primVertexStart = new Uint32Array(totalPrims);
+      const primVertexCount = new Uint32Array(totalPrims);
+      // Source vertex/primitive behind each re-emitted element, so the
+      // vertex and primitive columns gather exactly as the point columns
+      // did — one flat array per domain, one `gatherInto` per attribute.
+      const vertexSrc = new Uint32Array(totalVerts);
+      const primSrc = new Uint32Array(totalPrims);
+      // One block per target. `starts[t]` is the point base — the same
+      // number the transform loop above wrote its copies at, which is
+      // exactly why this is a re-emission and not a rebuild: the copies
+      // are already contiguous per target, so the shift is the only thing
+      // a primitive needs.
+      let vertexBase = 0;
+      let primBase = 0;
+      for (let t = 0; t < nT; t++) {
+        const plan = planAt(t);
+        if (!plan) continue;
         appendTopologyBlock(
-          src,
+          plan.vertexToPoint,
+          plan.primVertexStart,
+          plan.primVertexCount,
           vertexToPoint,
           primVertexStart,
           primVertexCount,
-          t * nS,
-          t * nV,
-          t * nPrim,
+          starts[t],
+          vertexBase,
+          primBase,
         );
+        vertexSrc.set(plan.vertexSrc, vertexBase);
+        primSrc.set(plan.primSrc, primBase);
+        vertexBase += plan.vertexSrc.length;
+        primBase += plan.primSrc.length;
       }
       // Runs even when the source has NO primitives (the common case, and
       // an empty topology either way): what the output IS must depend on
       // the graph and never on the data — the rule the point filters'
       // `topology "keep"` states at selfPrune's off switch.
       out.setTopology(vertexToPoint, primVertexStart, primVertexCount);
-      // Vertex and primitive columns are bulk-copied per block, exactly as
+      // Vertex and primitive columns are gathered per block, exactly as
       // the source POINT columns are above: every copy of a primitive
       // carries the original's values. `add` cannot collide here — both
       // sets are fresh, and only the point domain has other writers — and
-      // `setTopology` has already sized them, so the copy is a plain
-      // ranged write. String columns (`primtype`) re-intern through
-      // `copyFrom`, since a table index means nothing in another geometry.
+      // `setTopology` has already sized them. With no selection the
+      // gather coalesces to one ranged write per block, which is the copy
+      // this loop used to make by hand. String columns (`primtype`)
+      // re-intern through `copyFrom`, since a table index means nothing in
+      // another geometry.
       for (const domain of ["vertex", "primitive"] as const) {
         const from = src.attrs[domain];
         const to = out.attrs[domain];
-        const per = from.count;
+        const gathered = domain === "vertex" ? vertexSrc : primSrc;
         for (const attr of from) {
           const dst = to.add(attr.name, attr.type, attr.tupleSize, attr.defaultValue as AttrDefault);
-          for (let t = 0; t < nT; t++) dst.copyFrom(attr, 0, t * per, per);
+          gatherInto(dst, attr, gathered);
         }
       }
     }
@@ -755,7 +1259,9 @@ export const mergePrimitives = standardNode<MergePrimitivesParams>({
     for (const item of items) {
       const geo = item.geo;
       appendTopologyBlock(
-        geo,
+        geo.vertexToPoint,
+        geo.primVertexStart,
+        geo.primVertexCount,
         vertexToPoint,
         primVertexStart,
         primVertexCount,

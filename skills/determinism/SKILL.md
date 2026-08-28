@@ -102,7 +102,12 @@ noise period at frequency 14. And inside a `forEach` body both
 `{ "from": "node" }` and `{ "fn": "nodeSeed" }` vary PER ITEM, since the body
 cooks at `hashCombine(nodeSeed, hashString("forEach"), itemKey)` — per-group
 variation where that is wanted, and a noise no two groups can agree about
-where it is not.
+where it is not. A `repeatUntil` body is the deliberate opposite: its seed
+is NOT rotated per round, because a fixed point exists only if the body is
+the same function every round. A seed you vary per round yourself is how a
+converging body stops converging — it re-rolls whatever the last round
+settled, runs the budget out and reports `converged` false forever, with no
+error to say why.
 
 The hand-folded seed-shift idiom — a bounded per-axis
 `A * (fract(nodeSeed * 2^-32 * K) - W0)` in `opts.position` — is background

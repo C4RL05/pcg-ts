@@ -105,14 +105,16 @@ export interface PortalParams {
 }
 
 /**
- * The two node types built on the inner-graph machinery below.
+ * The three node types built on the inner-graph machinery below.
  *
  * `subgraph` cooks its body once, forwarding each pin's whole collection.
  * `forEach` cooks it once per element of one designated pin, broadcasting
- * the rest. They share everything except that loop, which is why they share
- * a spec, a payload shape and a construction path.
+ * the rest. `repeatUntil` cooks it repeatedly, feeding one designated pin's
+ * OUTPUT back into its own input until a detail-domain scalar says the body
+ * has stopped changing things. All three share everything except that loop,
+ * which is why they share a spec, a payload shape and a construction path.
  */
-export type WrapperKind = "subgraph" | "forEach";
+export type WrapperKind = "subgraph" | "forEach" | "repeatUntil";
 
 /**
  * Exposed-input names reserved for the iterated pin of a `forEach`.
@@ -128,6 +130,79 @@ export type WrapperKind = "subgraph" | "forEach";
 export const ITERATED_PIN_NAMES: ReadonlySet<string> = new Set(["each", "eachPoint"]);
 
 /**
+ * Exposed-pin names reserved for the fed-back pin of a `repeatUntil`.
+ *
+ * The sibling of {@link ITERATED_PIN_NAMES}, reserved globally for exactly
+ * the same reason and against exactly the same accident: a recipe records a
+ * body and its exposed pins and says nothing about which wrapper cooks
+ * them, so a body written to be relaxed to a fixed point could otherwise be
+ * referenced from a `subgraph` node and cook ONCE — one relaxation pass
+ * where the author meant "until it settles", which validates, saves and
+ * cooks, and is wrong.
+ *
+ * Reserved on BOTH sides, unlike the iterated names, because the feedback
+ * needs the name at both ends: `repeatUntil` matches its carried output to
+ * its carried input by name, so an output called `carry` on any other
+ * wrapper is a body that was written for this loop.
+ */
+export const CARRIED_PIN_NAMES: ReadonlySet<string> = new Set(["carry"]);
+
+/**
+ * The exposed interface {@link inferWrapperKind} reads: pin NAMES only,
+ * in the two directions the reserved names distinguish.
+ *
+ * Structural rather than one of the named pin types, because the callers
+ * hold three different spellings of the same fact — `SerializedExposedPin`
+ * from a registry recipe, `DescribedSubgraphPin` from a live def, and the
+ * bare name lists the CLI carries — and none of those types may be
+ * imported here: `src/graph` is below `src/nodes`, where the serialized
+ * shapes live.
+ */
+export interface ExposedPinNames {
+  readonly inputs: readonly { readonly name: string }[];
+  readonly outputs: readonly { readonly name: string }[];
+}
+
+/**
+ * Which wrapper a recipe was written for, read off its exposed pin names.
+ *
+ * A REGISTERED RECIPE RECORDS A BODY AND ITS EXPOSED PINS AND NOTHING
+ * ABOUT WHICH WRAPPER COOKS THEM — see {@link ITERATED_PIN_NAMES} for why
+ * that is the design and not an oversight. So every consumer that has to
+ * MATERIALIZE a recipe has to supply the node type itself, and the reserved
+ * names are the only evidence there is. Three do: `registerSubgraph`, which
+ * canonicalizes by materializing; `pcg run`, which synthesizes a one-node
+ * wrapper; and the primitive catalog, which probes each entry to read its
+ * derived param schemas. All three answer the question with this function
+ * so that they cannot answer it differently.
+ *
+ * They used to. Two of them wrote `type: "subgraph"` as a literal, which
+ * made every loop body unrunnable and undocumentable — refused by the
+ * reserved-name guard, with a message about a node the caller never wrote.
+ * It stayed latent only because no shipped primitive is a loop body, so
+ * neither call site ever saw a recipe that could expose the mistake.
+ *
+ * THE CARRIED NAME WINS when a body carries both, and that is deliberate
+ * rather than an ordering accident: `carry` is reserved on both sides while
+ * the iterated names are reserved on the input side only, so a body
+ * exposing `carry` AND `each` is neither loop, and the `repeatUntil` probe
+ * is the one whose refusal names the collision. Reversing the two would
+ * report the same body as a bad `forEach` and send the author to the wrong
+ * pin.
+ *
+ * Pure and total: every recipe gets an answer, and "no reserved name
+ * anywhere" is a plain `subgraph`. It decides what the recipe was WRITTEN
+ * for, never whether it is well-formed — materializing is what checks that,
+ * and it reports with the offending inner node named.
+ */
+export function inferWrapperKind(exposed: ExposedPinNames): WrapperKind {
+  for (const pin of exposed.inputs) if (CARRIED_PIN_NAMES.has(pin.name)) return "repeatUntil";
+  for (const pin of exposed.outputs) if (CARRIED_PIN_NAMES.has(pin.name)) return "repeatUntil";
+  for (const pin of exposed.inputs) if (ITERATED_PIN_NAMES.has(pin.name)) return "forEach";
+  return "subgraph";
+}
+
+/**
  * The recorded composition of a def created by {@link subgraphNode}: the
  * wrapped inner graph and the exposed pin mappings, exactly as passed in
  * (detached copies). Serialization reads this to emit the nested payload;
@@ -139,7 +214,7 @@ export interface SubgraphSpec {
   /**
    * Which factory built the def, and therefore what the node MEANS.
    *
-   * Load-bearing for serialization, not decoration. Both wrappers record a
+   * Load-bearing for serialization, not decoration. Every wrapper records a
    * spec here and the writer dispatches on the spec's presence, so without
    * this a `forEach` would be written out as a plain `subgraph` node: it
    * would round-trip, validate and cook — one pass over the concatenated
@@ -213,6 +288,28 @@ export interface DescribedSubgraphPin {
   readonly name: string;
   /** Kind of the exposed inner pin, resolved through nested subgraphs. */
   readonly kind: PinKind;
+  /**
+   * Present, and always `true`, on a pin the WRAPPER declared rather than
+   * the body — `repeatUntil`'s `rounds` and `converged`, today the only
+   * two in the library.
+   *
+   * Reported rather than hidden, and reported as an ordinary pin rather
+   * than a separate list, because both halves of the fact matter to a
+   * caller and they pull opposite ways. It is a real output: it is on the
+   * def, it can be wired, and a description that omitted it would tell an
+   * agent the node has fewer outputs than it has — the failure mode being
+   * "there is no way to find out whether the loop converged", which is the
+   * whole point of those two pins. But it is NOT the body's, so it cannot
+   * be traced to an exposed inner pin, it does not move when the recipe's
+   * exposed outputs are renamed, and it survives editing the body. An
+   * ordinary entry carrying a flag says both; a second list would make
+   * every consumer that only wants "what can I read off this node" join
+   * two arrays to ask an easy question.
+   *
+   * Absent (not `false`) on an exposed pin, so an equality check against
+   * `{ name, kind }` still describes the ordinary case exactly.
+   */
+  readonly synthesized?: true;
 }
 
 /**
@@ -281,6 +378,12 @@ function resolveExposedKind(
  * instance's spec until a concrete pin is reached, so nested subgraphs
  * report exact kinds.
  *
+ * A pin the WRAPPER adds on top of the body's — `repeatUntil`'s `rounds`
+ * and `converged` — is included, flagged `synthesized`; see
+ * {@link DescribedSubgraphPin.synthesized} for why it is here and why it is
+ * marked. Wrapper pins follow the exposed ones, in the order the def
+ * declares them.
+ *
  * Returns a frozen snapshot; returns `undefined` for any def not created
  * by `subgraphNode` (consistent with {@link getSubgraphSpec}). Throws a
  * `GraphValidationError` naming the pin and inner node when a wrapper was
@@ -291,19 +394,42 @@ export function describeSubgraphPins<P>(def: NodeDef<P>): SubgraphPins | undefin
   if (spec === undefined) return undefined;
   const resolveSide = (
     exposed: readonly ExposedPin[],
+    declared: readonly PinDef[],
     side: "input" | "output",
-  ): readonly DescribedSubgraphPin[] =>
-    Object.freeze(
-      exposed.map((exp) =>
-        Object.freeze({
-          name: exp.name,
-          kind: resolveExposedKind(spec, exp, side, new Set([spec])),
-        }),
-      ),
+  ): readonly DescribedSubgraphPin[] => {
+    const fromBody = exposed.map((exp) =>
+      Object.freeze({
+        name: exp.name,
+        kind: resolveExposedKind(spec, exp, side, new Set([spec])),
+      }),
     );
+    // Whatever the def declares beyond the exposed names is the wrapper's
+    // own. Read as a DIFFERENCE against the spec rather than from a list of
+    // known wrapper pins, because `src/graph` is below `src/nodes`: the
+    // wrappers that synthesize pins live up there and cannot be named from
+    // here. That is the better direction anyway — the def is the authority
+    // on what the node's pins ARE (for name and kind; `multi` it does not
+    // carry, here or for an exposed pin), so a wrapper that grows one is
+    // described without this function learning about it. Their kinds come
+    // straight off the def: there is no inner pin to resolve, which is
+    // exactly the fact the flag records.
+    //
+    // WHAT MAKES THE NAME DIFFERENCE SAFE lives in the wrapper, not here: a
+    // body may not expose an output named `rounds` or `converged`, and
+    // `repeatUntilNode` refuses one outright (REPORT_PIN_NAMES in
+    // repeatUntil.ts) rather than shadowing it. Without that guard this
+    // filter would silently DROP the wrapper's pin and report the body's —
+    // re-introducing the exact under-report the flag exists to end — so a
+    // future wrapper that synthesizes a pin owes the same refusal.
+    const bodyNames = new Set(fromBody.map((p) => p.name));
+    const fromWrapper = declared
+      .filter((p) => !bodyNames.has(p.name))
+      .map((p) => Object.freeze({ name: p.name, kind: p.kind, synthesized: true as const }));
+    return Object.freeze([...fromBody, ...fromWrapper]);
+  };
   return Object.freeze({
-    inputs: resolveSide(spec.inputs, "input"),
-    outputs: resolveSide(spec.outputs, "output"),
+    inputs: resolveSide(spec.inputs, def.inputs, "input"),
+    outputs: resolveSide(spec.outputs, def.outputs, "output"),
   });
 }
 
@@ -888,7 +1014,7 @@ export function prepareWrapper(
 /**
  * @internal Record what a wrapper def is made of, so it serializes.
  *
- * Both wrappers land here, and `wrapper` is the field that keeps them
+ * All three wrappers land here, and `wrapper` is the field that keeps them
  * apart at the emit site — see {@link SubgraphSpec.wrapper}. Registering
  * here is also what puts a def in front of `checkNoWrapCycle`: a wrapper
  * missing from this map is a wrapper whose self-nesting is not refused at

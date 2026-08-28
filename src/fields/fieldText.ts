@@ -180,6 +180,7 @@ const SPECIAL_SHAPES: Readonly<Record<string, readonly Slot[]>> = {
   component: [{ kind: "args", arity: 1 }, req("index")],
   ramp: [{ kind: "args", arity: 1 }, req("stops")],
   randomField: [opt("key")],
+  randomFrom: [{ kind: "args", arity: 1 }, opt("key")],
   // `base` names a noise fn and prints BARE (`fbm(perlinNoise, …)`), the
   // one position where an identifier is a value rather than a call.
   fbm: [req("base"), opt("opts")],

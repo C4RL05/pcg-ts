@@ -333,18 +333,37 @@ const DEMOS = [
     id: "racetrack",
     // The lap travels forever, so the shot is fixed by naming a STATION
     // rather than by pausing, which would stop it wherever this machine
-    // happened to have got to. Station 250 W is the same one `road` below
-    // uses, so the pair frames the same part of a lap and the difference
-    // between the two pictures is the difference between the DEMOS rather
-    // than between two viewpoints. That is the whole reason both are
-    // shot: `road` is this page with the placement rules taken out.
+    // happened to have got to. 250 is in WORLD UNITS, which is what
+    // `seek` writes -- about 27.8 W on a 9-unit half-width, and the
+    // readout shows it in W. `road` below seeks to the same number, so
+    // the pair frames the same part of a lap and the difference between
+    // the two pictures is the difference between the DEMOS rather than
+    // between two viewpoints. That is the whole reason both are shot:
+    // `road` is this page with the placement rules taken out.
+    //
+    // `seek` now returns a promise (it pumps the World until no sector is
+    // pending, so a shot is never half-dressed). It is deliberately not
+    // awaited here: the frame loop keeps streaming while paused and
+    // `settleAt` waits for pixel stability regardless, so awaiting would
+    // add a second readiness rule saying the same thing.
     path: "demos/racetrack/",
     settleWait: () => !!window.pcgRacetrack,
     settle: () => {
       window.pcgRacetrack.seek(250);
       window.pcgRacetrack.pause(true);
     },
-    ready: (s, has) => has(s["dressing"]) && has(s["enclosure"]) && has(s["corner language"]),
+    // AND "cooking the lap" IS NOT READY, which needs saying because it is
+    // a non-empty string and `has` would take it. The dressing and
+    // enclosure lines are filled by the lap LEVEL, which cooks
+    // asynchronously; between the prelude returning and that cell landing
+    // they carry that phrase, and a shot taken then is of a lap with no
+    // tunnels on it.
+    ready: (s, has) =>
+      has(s["dressing"]) &&
+      has(s["enclosure"]) &&
+      has(s["corner language"]) &&
+      !/cooking the lap/.test(s["dressing"]) &&
+      !/cooking the lap/.test(s["enclosure"]),
   },
   {
     id: "road",

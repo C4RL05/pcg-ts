@@ -1,0 +1,1 @@
+function e(e){if(e.cellMode!==`xz`)throw Error(`xzCell: expected an "xz" cell context (one with a world rectangle), got cellMode "${e.cellMode}". A "path" cell is an arc range [sMin, sMax) along a centreline and has no min/max box; read ctx.sMin and ctx.sMax instead, or declare this level cellMode: "xz"`);return e}export{e as t};

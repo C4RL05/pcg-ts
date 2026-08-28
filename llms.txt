@@ -11,12 +11,31 @@ driven programmatically: node capabilities are enumerable at runtime
 (`listNodeTypes()`), graphs round-trip through versioned JSON
 (`serializeGraph`/`deserializeGraph`), and all errors are actionable.
 
+Two version numbers, and they are not the same number. `VERSION` is the
+released package version as a string — the only one a consumer can read
+at runtime, and what `pcg --version` prints. `formatVersion` is the
+serialized-graph schema version, carried in every graph document, and it
+is `1`; see "Authoring a graph as JSON" for what would move it. A release
+bump never touches `formatVersion`, and a graph written today states `1`
+whatever `VERSION` says.
+
 ## Core mental model
 
 - Data flows through graphs as collections of items: geometry items,
   value items (plain numbers/strings/bools), instances items (transform
   batches for renderers, each optionally carrying per-instance RGB).
   Items carry tags and a revision id (`rev`).
+- You BUILD those three with `makeGeometryItem(geo, tags?)`,
+  `makeValueItem(value, tags?)` and `makeInstancesItem(batches, tags?)` —
+  the constructor set `dataInput` names by hand when it refuses something
+  ("expected a geometry, value or instances item; see
+  makeGeometryItem/makeValueItem/makeInstancesItem"). Use them rather
+  than an object literal of the same shape: each stamps a fresh `rev`,
+  and `rev` is what the memo cache keys on instead of hashing the data,
+  so a hand-rolled item reusing a number is a cache HIT on changed
+  content — a stale cook with nothing to report. Binding live data into a
+  graph (`graph.setParam(node, "items", [...])`) and returning outputs
+  from a node implementation are the same call.
 - A pin carries a COLLECTION, and one connection can put many geometries
   on it (`partitionByAttribute` emits one per distinct value; a subgraph
   or `dataInput` forwards however many it holds). A node that processes
@@ -47,13 +66,65 @@ driven programmatically: node capabilities are enumerable at runtime
   From TypeScript a collection is still an ordinary array:
   `collection.filter((i) => i.kind === "geometry")` gives you all of them
   and `filterByTag(collection, "<attr>=<value>")` picks one by tag.
+- `repeatUntil` cooks an inner graph REPEATEDLY, feeding round k's output
+  back into round k+1's input until the body stops changing anything — the
+  bounded fixed point, in a graph where a cycle cannot be wired. It is the
+  loop `forEach` cannot express, because the number of rounds is not known
+  before the first one runs: push overlapping props apart and a new pair
+  now overlaps; snap a dangling edge and the snap creates another dangler.
+  Built like `subgraph`, with one rule on BOTH sides: exactly one exposed
+  input and exactly one exposed output must be named `carry`. Every other
+  exposed input is broadcast whole to every round. Termination is a scalar
+  the body publishes on the DETAIL domain of the carried geometry, named
+  by `settleAttr` (default `moves`, normally written by
+  `attributeReduce`): all zero means settled, and that round counts. An
+  ABSENT signal is refused by name rather than read as zero, because
+  reading it as zero turns a typo into "converged on round one". Reaching
+  the `maxRounds` ceiling is not an error and is not silent either — the
+  two synthetic outputs `rounds` and `converged` (value items the body
+  never declared) are how a host tells a settled result from a truncated
+  one. The seed is NOT rotated per round, deliberately: a fixed point
+  exists only if the body is the same function every round, so a body
+  whose seed varies with the round re-rolls whatever the last round
+  settled and reports `converged` false forever, with no error to say why.
+  That constancy is also the payoff — a broadcast branch whose inputs did
+  not change serves its cache instead of cooking again.
 - A `Geometry` holds four attribute domains: point, vertex, primitive,
   detail (always 1 element), plus topology (vertex->point map, primitive
-  vertex ranges). Point-only clouds are the common fast path.
+  vertex ranges). Point-only clouds are the common fast path. `DOMAINS`
+  is those four names as a runtime array in canonical order — read it
+  rather than hardcoding the list, so a "for every domain" walk cannot
+  disagree with the library about what the domains are or what order
+  they come in.
+- Each domain is an `AttributeSet`: an ordered collection of attributes
+  sharing one element count, which is what `geo.attrs.point` (and
+  `.vertex` / `.primitive` / `.detail`) IS. Iteration is insertion
+  order — stable and deterministic, and `rename` keeps an attribute's
+  position rather than moving it to the end, so nothing that walks a
+  domain depends on when a column was added.
 - Attributes are named typed-array columns (f32/i32/u32/bool/string)
   with a tuple size. Standard point attributes: P (f32x3), rot (quat
   f32x4, xyzw), scale (f32x3), density (f32), boundsMin/boundsMax
-  (f32x3), color (f32x4), seed (u32).
+  (f32x3), color (f32x4), seed (u32). `STANDARD_POINT_ATTRS` is that
+  table at runtime — `{ name, type, tupleSize, defaultValue }` each, in
+  the order `createPointCloud` adds them — and it is the only statement
+  of the DEFAULTS, which the prose list above does not carry: rot
+  `[0,0,0,1]` (identity quat), scale `[1,1,1]`, density `1`, color
+  `[1,1,1,1]`, and `[0,0,0]` / `0` for the rest. A fresh cloud is not
+  zeroed, and code that assumes it is will read a scale of 0 where the
+  library put 1.
+- What a geometry IS, before you decide what to do with it, is a
+  question about its PRIMITIVES, not its point count:
+  `primitiveTypeCounts(geo)` returns how many primitives carry each
+  `primtype` value — `poly` for a mesh (surface sampler, triangle
+  renderer), `polyline` for a path or edge network (arc-length sampler,
+  line renderer). Two different things return `{}`: a geometry with no
+  primitives at all, and one whose topology was set through
+  `Geometry.setTopology` directly, which stamps no tag — so an empty
+  record is "nothing tagged", never "no primitives". `PRIMTYPE_ATTR` is
+  the attribute name (`"primtype"`, a string column on the primitive
+  domain) for the cases that must read or write the tag directly;
+  `primitiveTypeCounts` is the door that saves you knowing that.
 - A `Field` is a deferred computation resolved per element of a domain.
   Field-capable node params accept a constant OR a field expression;
   scalars broadcast against tuples.
@@ -71,14 +142,35 @@ Format (`SerializedGraph`, formatVersion 1 — field names exactly):
 - `seed`: number (graph seed; node seeds derive from it)
 - `meta`: optional `{ title, description, tags }` — the only place
   descriptive text belongs; excluded from the content hash
-- `params`: optional [{ `name`, `value`, `min`?, `max`?, `description`? }] —
+- `params`: optional [{ `name`, `value`, `targets`?, `min`?, `max`?,
+  `description`? }] —
   GRAPH-SCOPED params, in declaration order, written only when non-empty.
-  One value declared once at the top level; any node's field expression
-  reads it by name as `{ fn: "param", name }` with NO inline `value`
-  (below). Binding happens at DESERIALIZE, by substitution into the spec,
-  so the graph cooks byte-identically to one with that number written out
-  in every reading slot. `value` is a finite number or a non-empty array
-  of them — never a spec, never a reference to another param. `name` may
+  One value declared once at the top level, reaching a node by one of TWO
+  routes. READ: any node's field expression names it as
+  `{ fn: "param", name }` with NO inline `value` (below); binding happens
+  at DESERIALIZE, by substitution into the spec, so the graph cooks
+  byte-identically to one with that number written out in every reading
+  slot. WRITE: `targets` is [{ `node`, `param` }], param slots the value
+  is written into at load, in write order — which is the only way a
+  declaration reaches an `i32`, `bool`, `string`, `enum` or non-field
+  vector, since every field-capable param in the registry is `f32`,
+  `vec3` or `vec4` and so no expression could carry one. A targeted
+  param's schema is DERIVED from the slots it drives (types and enums must
+  agree, `acceptsField`/`acceptsInfinite` ANDed, bounds intersected and
+  narrowable only), and a driven slot is NOT independently editable — the
+  declaration wins on every load and serialization writes it back over the
+  node's literal, so that literal is dead text. Refused: two declarations
+  on one slot, a target that already holds a field expression, a target
+  naming a missing node or param, and a node literal THE FILE ACTUALLY
+  CARRIED that disagrees with its driver — a slot merely holding a
+  schema default is overwritten silently, since nothing there was
+  authored to object to. A declaration with neither a reader nor a target
+  is legal and reported (`read by nothing`), not refused. Untargeted,
+  `value` is a finite number or an array of exactly 3 or 4 of them (a
+  vec3 or a vec4 — any other width is refused by name, the param
+  vocabulary having nothing to call it), never a spec and never a
+  reference to another param; targeted, it is whatever the merged schema
+  admits. `name` may
   not contain a `.` or start with `$` (the address is `"$<name>"`). A
   declared `min`/`max` is enforced on the value, componentwise, by the
   graph itself, since a hoisted value has no spec of its own to be
@@ -187,6 +279,26 @@ g.output(b, "out", "points");
 const { outputs, stats } = await cook(g); // stats: { cooked, cached, elapsedMs }
 ```
 
+Two ways to get a node DEF, and they are not interchangeable.
+`standardNode(spec)` REGISTERS a type under a name: that is what puts it
+in `listNodeTypes()`, gives its params a schema to be validated against,
+and makes a graph that uses it serializable — a duplicate name throws and
+there is no unregister. `defineNode(def)` registers nothing and returns
+its argument unchanged; its whole job is type inference, pinning the
+def's param type `P` so that `execute`'s `params` is typed rather than
+widened, which a bare object literal does not give you.
+`serializeGraph` is stricter than "a registered type": it wants THE
+registered def object for that type, so redeclaring a name is not a
+loophole. A def you only `defineNode`d therefore builds and cooks but
+cannot be saved. The wrappers are the exception and the reason the helper
+exists: `subgraphNode`, `forEachNode` and `repeatUntilNode` build their
+PER-INSTANCE defs with `defineNode`, because a wrapper's pins and params
+come from the body it wraps and cannot be written down once in a
+registered schema — and those DO serialize, because their defs carry a
+recorded subgraph spec that serialization looks for before it asks the
+registry anything. Build one by hand instead of through its factory and
+serialization refuses it by name, pointing at the factory to use.
+
 ## Graph mutation and introspection (editor/tooling surface)
 
 Every mutation bumps the graph version; the introspection reads are
@@ -223,11 +335,25 @@ frozen snapshots with no mutation path that bypasses version bumps.
   values are live references under the library-wide aliasing rule: treat
   them as frozen, change params only through `setParam`.
 - `describeSubgraphPins(def)` — per-instance pins of a `subgraphNode`
-  def: frozen `{ inputs, outputs }` of `{ name, kind }` in exposure
-  order, kinds resolved live from the recorded spec through nested
-  subgraphs. Returns `undefined` for non-subgraph defs; throws
-  (GraphValidationError, naming pin and inner node) when later edits
-  broke the wrapper.
+  def: frozen `{ inputs, outputs }`, the body's exposed pins first in
+  exposure order with kinds resolved live from the recorded spec through
+  nested subgraphs, then any pin the WRAPPER adds on top, in the order
+  the def declares them. A wrapper pin is an ordinary entry carrying
+  `synthesized: true` — today only `repeatUntil`'s `rounds` and
+  `converged`, since `forEach` synthesizes none. Read the flag as BOTH
+  halves of the fact, because they pull opposite ways: the pin is REAL —
+  it is on the def, it can be wired, and leaving it out would tell you a
+  loop node has fewer outputs than it has, when those two are the only
+  way to tell a settled result from one that hit `maxRounds` — but it is
+  NOT the body's, so it traces to no exposed inner pin, does not move
+  when the recipe's exposed outputs are renamed, and survives editing the
+  body. The key is ABSENT rather than `false` on an ordinary pin, so a
+  consumer comparing against `{ name, kind }` still matches the ordinary
+  case exactly. A body may not expose an output named `rounds` or
+  `converged` — `repeatUntilNode` refuses it outright rather than
+  shadowing, which is what keeps the two sets disjoint. Returns
+  `undefined` for non-subgraph defs; throws (GraphValidationError, naming
+  pin and inner node) when later edits broke the wrapper.
 - `describeSubgraphParams(def)` — per-instance params of a `subgraphNode`
   def: frozen list of `{ name, schema, targets }` in exposure order,
   where `schema` is the ParamSchema merged from the inner targets and
@@ -284,6 +410,35 @@ frozen snapshots with no mutation path that bypasses version bumps.
   line: `pcg validate <graph.json> --params` (add `--json` for the same
   list machine-readable), which prints the graph-scoped rows first and
   annotates each with `read by <n> slots: …`, or `read by nothing`.
+- `describeGraphAssets(graph)` — the same shape of answer for the OTHER
+  free-text surface: every `spawnInstances` in the graph and in every
+  subgraph body, in node order, as
+  `{ node, assetId, assetAttr?, ids, open }`. `node` is the node id, or
+  `"wrapper > inner"` for one inside a body. `ids` is every asset id that
+  node can emit, deduplicated in first-occurrence order, each tagged with
+  where it came from — `{ from: "assetId" }` for the param, or
+  `{ from: "attribute", writtenBy }`, which ALWAYS names the
+  `setAttribute` that wrote it, because there is no table entry nobody
+  wrote. The point is that an asset id is a promise to a renderer the
+  library has never met, so it cannot validate one — but it can tell you
+  which promises a graph makes, before it cooks, and without a seed
+  having to happen to reach a branch. `open` is the completeness flag and
+  the ONLY one: empty means the id set is closed, and a non-empty entry
+  (`{ node, type, reason }`) says why the list is a LOWER BOUND. Reported
+  OPEN rather than guessed at: an id arriving through promotion,
+  transfer, `attributeRemap`, `copyToPoints`, a partition or a wrapper
+  boundary; a `setAttribute` whose value is a field, or whose `values`
+  the walk cannot read as a string list; and — the case a typo'd
+  `assetAttr` actually hits — nothing upstream writing the attribute at
+  all, where the entry names the SPAWNER itself rather than some node
+  above it. `reason` is written to be printed verbatim. From the command
+  line: `pcg assets <graph.json>`.
+- `graphParamBindings(params)` / `applyGraphParamTargets(graph, params,
+  authored)` / `strandedGraphParamValues(graph)` — the graph-scoped-param
+  surface for anything that rebuilds a graph itself rather than going
+  through `deserializeGraph`, plus the lint for values that stopped
+  tracking their declaration. See docs/authoring.md, "One value, many
+  nodes: graph-scoped params".
 - `resolveExposedParam(inner, decl)` — build one exposed param for
   `subgraphNode`'s fourth argument. `decl` is
   `{ name, targets, description, default?, min?, max? }`; the schema is
@@ -456,7 +611,7 @@ asked for, at the seams only.
 
 A field spec is `{ "fn": <name>, ...args }`. Entries in `args` arrays
 may be nested specs, finite numbers, or number arrays (plain values wrap
-into `constant`). All 57 fns (`listFieldFns()`):
+into `constant`). All 62 fns (`listFieldFns()`):
 
 - Inputs:
   - `{ fn: "constant", value: 1 | [1, 2, 3] }`
@@ -583,7 +738,7 @@ into `constant`). All 57 fns (`listFieldFns()`):
     answer, so they must not move a memo key. There is no `step` —
     `ParamSchema` has none
 - Elementwise, `args` with exact arity (scalars broadcast; f64 math, f32 storage):
-  - 2 args: `add sub mul div min max lt le gt ge eq ne dot cross distance mod pow step atan2`
+  - 2 args: `add sub mul div min max lt le gt ge eq ne dot cross distance mod rem pow step atan2`
     (comparisons emit 1/0, and `ne` is the exact complement of `eq`;
     `dot` and `distance` reduce tuples to a scalar; `cross` is WIDTH 3
     ONLY on both args and does NOT broadcast scalars; `pow` needs a base
@@ -592,17 +747,54 @@ into `constant`). All 57 fns (`listFieldFns()`):
     identity the GPU implements; `step` is (edge, x) and equals
     `ge(x, edge)`; `mod` is FLOORED — `x - y*floor(x/y)`, so the sign
     follows the DIVISOR and `mod(-1, 8)` is 7, NOT the -1 that JS `%`
-    and WGSL `%` give. That is a permanent choice made for coordinate
+    and WGSL `%` give — that -1 is `rem`, below. That is a permanent
+    choice made for coordinate
     wrapping/tiling: a truncated remainder mirrors the tile across the
     origin, so a pattern breaks along x=0 and z=0 — the two lines a
     world is most likely to be built around. A zero divisor is NaN on
     both paths;
+    `rem` is the TRUNCATED remainder `x - y*trunc(x/y)` and the other
+    half of that pair: its sign follows the DIVIDEND, so `rem(-1, 8)`
+    is -1 where `mod(-1, 8)` is 7. They AGREE above zero — `rem(9, 8)`
+    and `mod(9, 8)` are both 1 — which is what makes picking the wrong
+    one silent; a negative divisor swaps them again (`rem(9, -8)` is 1,
+    `mod(9, -8)` is -7). `rem` follows the CONVENTION of JS `%`, C's
+    `fmod` and WGSL's `%` — sign of the dividend — so use it when
+    porting an expression out of a host language, `mod` when tiling.
+    It is NOT the same FUNCTION as a true fmod: fmod is exact for any
+    operands and gives a zero result the DIVIDEND's sign, where this
+    expansion gives +0 (`-8 % 8` is -0 in JS, `rem(-8, 8)` is +0 here).
+    Zero divisor NaN on both paths. Both are bit-exact on the GPU by
+    the same construction (the CPU rounds the divide, the multiply and
+    the subtraction to f32 one at a time, matching the kernel's
+    expansion step for step) and both stop being a remainder past
+    |x/y| > 2^24, where the quotient can no longer hold an exact
+    integer — `rem(1e9, 3)` is 0 here where JS `%` says 1, and `mod`
+    does the same with the same divisor, so it is the PAIR's limit and
+    not a defect of `rem`. WGSL's `%` is NOT emitted though it means
+    the right thing: the spec defines `%` on floats as
+    that expansion but the backends it lowers through need not agree —
+    a true fmod (MSL, SPIR-V `OpFRem`) stays exact where the expansion
+    has already lost the quotient's low bits — so the expansion is
+    written out to pin which one the device runs. PORTABILITY only, and
+    measured: emitting `%` leaves the reference adapter's parity table
+    green, so the form is pinned as emitted WGSL text instead. The NAMES are the
+    floored/truncated pair of Ada, Common Lisp, Haskell and Julia;
+    `fmod` was rejected as a name for CONTAINING the other one, which
+    is how the wrong fn gets reached for;
     `distance` is exactly `length(sub(a, b))` — the CPU rounds the
     difference to f32 BEFORE squaring precisely so the fused and the
     composed spelling cannot drift — and the absolute difference on
     scalars; `atan2` args are [y, x], radians)
-  - 1 arg: `abs floor fract sign sqrt exp log length normalize sin cos tan asin acos atan`
-    (trig in radians, elementwise; `fract` is `x - floor(x)` and so is
+  - 1 arg: `abs floor trunc fract sign sqrt exp exp2 log log2 length normalize sin cos tan asin acos atan`
+    (trig in radians, elementwise; `trunc` rounds TOWARD ZERO where
+    `floor` rounds toward -Infinity — `trunc(-1.5)` is -1, `floor(-1.5)`
+    is -2; an exact integer comes back unchanged and `trunc(-0.5)` is
+    -0, not +0. `floor` to BIN a coordinate, `trunc` to COUNT whole
+    units outward from an origin: only `floor` gives bins of equal
+    width across zero, since `trunc` maps both (-1, 0) and (0, 1) onto
+    0 and the bin at the origin comes out twice as wide. Emits the WGSL
+    `trunc()` builtin, bit-exact; `fract` is `x - floor(x)` and so is
     NON-NEGATIVE for finite input — `fract(-0.25)` is 0.75, exactly
     `mod(x, 1)` — and NaN for a non-finite one; `sign` is
     `(x > 0) - (x < 0)`, which differs from `Math.sign` on two inputs on
@@ -610,10 +802,30 @@ into `constant`). All 57 fns (`listFieldFns()`):
     -0. It is what `normalize` already does to a scalar and exists to
     buy the NAME, the precedent `step` set; `exp` is e^x, overflowing to
     Infinity above ~88.7 and underflowing to 0 below ~-103.9, which is
-    f32's range and not this implementation's — there is no `exp2`,
-    `pow(2, x)` is that; `log` is the NATURAL log, `log(0)` is
-    -Infinity and a negative input is NaN, and another base is
-    `div(log(x), log(b))`)
+    f32's range and not this implementation's; `exp2` is 2^x and is NOT
+    a spelling of `pow(2, x)` — measured hardware implements
+    `pow(a, b)` as exactly `exp2(b * log2(a))`, so `pow(2, x)` is
+    `exp2` with a logarithm and a multiply in front of it, at `pow`'s
+    parity budget of 8 against `exp2`'s 1. `exp2` spans f32's whole
+    exponent range: `exp2(128)` is Infinity, `exp2(-150)` is 0 (where
+    `exp` gives up at ~88.7 and ~-103.9, the same limits in the wrong
+    base), and a whole exponent inside it comes back exact — a
+    construction on the CPU side only, since WGSL gives `exp2` a ULP
+    tolerance and not an exactness rule, so the device agreeing there
+    is measured on the reference adapter, not guaranteed;
+    `log` is the NATURAL log, `log(0)` is -Infinity and a negative
+    input is NaN, and an arbitrary base is `div(log(x), log(b))` — but
+    base two is `log2`, one device instruction where
+    `div(log(x), log(2))` is two transcendentals and a division; reach
+    for it whenever the question is a count of doublings (which fbm
+    octave a frequency belongs to, how many bits a range needs, how
+    many halvings a LOD sits from the root). `log2(0)` is -Infinity and
+    a negative input is NaN, as `log`. Both
+    `exp2` and `log2` emit the WGSL builtin of the same name and
+    measure TIGHTER than the base-e pair — 0.50 against `exp`'s 4.12,
+    0.65 against `log`'s 0.93 — because the builtin is the instruction
+    the hardware has and `exp`/`log` are the scaled compositions built
+    on top of it)
   - 3 args: `clamp` (x, lo, hi), `lerp` (a, b, t), `select` (cond, a, b),
     `smoothstep` (edge0, edge1, x — 0 at or below edge0, 1 at or above
     edge1, `t*t*(3-2t)` on the clamped t between, so BOTH ends leave
@@ -685,7 +897,9 @@ fields serialize back via `fieldToJson` — a combinator derives its spec
 from its arguments, so since v0.9 a graph holding
 `mul(position(), 0.1)` serializes (before v0.9 `serializeGraph` threw
 and pointed at `fieldFromJson`). Four cases refuse: a `makeField`
-closure; any field composed over one (the absent spec propagates); a
+closure (the sanctioned extension point, not a mistake — see
+"Hand-authoring a field" below for the trade it makes); any field
+composed over one (the absent spec propagates); a
 tree deeper than 256 levels — derivation refuses at exactly the depth
 `fieldFromJson` parses, so a spec that could not be re-parsed is never
 produced and no graph is written that cannot be read back; and an
@@ -701,6 +915,164 @@ leads with the offending option (e.g. `` `seed` must be an integer ``).
 Note this is about DESCRIBING a field, not about where it runs: device
 eligibility is narrower and additionally requires either an AUTHORED
 spec or `acceptDerivedSpecs` (see the GPU section).
+
+Reading the grammar back, for anything that has to SHOW a spec rather
+than only evaluate one — a palette, an error message, a diagram, an
+agent choosing a fn before it writes one:
+
+- `listFieldFnInfos()` is the grammar's counterpart of `listNodeTypes()`,
+  and it is the catalog to read BEFORE writing a field-valued param.
+  Same names in the same order as `listFieldFns()`, but each entry is
+  `{ fn, keys, usage, description, args?, outputRange? }` instead of a
+  bare string: `keys` are the spec keys allowed beside `fn`, `args` names
+  the positional arguments (a `…` name marks a repeated position),
+  `description` is never empty and covers the edges that bite, and
+  `outputRange` is the documented range where one exists. `listFieldFns()`
+  is the same list as names only, which is what error messages quote.
+  Prefer the Infos form whenever you need the argument NAMES — the specs
+  themselves carry positions, not names.
+- `specChildEntries(node)` walks one spec node's children WITH each
+  position named, which `specChildren` (values only) cannot do: `sub(a, b)`
+  is unreadable as two anonymous children, and `byAttribute`'s case keys
+  are the whole content of its branches. Order is part of the contract —
+  args in order, then `position`, then `variant`, then `cases` in
+  insertion order, then `default` — so a renderer can rely on it. The
+  names it gives are STRUCTURAL (`args[0]`, never `edge`), because the
+  walk sits below the registry; join to `listFieldFnInfos()` and index
+  its `args` when you want the registered name.
+- `paramNamesOf(spec)` lists every `{ fn: "param", name }` a spec
+  references, sorted and deduplicated — the catalog of what
+  `fieldFromJson` must be given before that spec can be built. It walks
+  the whole tree including `opts.position`, and it READS rather than
+  validates, so it is safe to hand raw JSON that has not been checked yet.
+
+### Hand-authoring a field (makeField)
+
+The grammar is ELEMENTWISE — every fn sees one element at a time — and
+it is the only field language a FILE can carry. When the computation is
+not elementwise (an order statistic, a whole-column reduction) or has no
+name in the grammar, `makeField` is the supported way to write the
+evaluator yourself. It is a real extension point, not a mistake; the
+price is exact and stated at the end of this section.
+
+A `Field` at runtime is three members plus a brand:
+
+```ts
+interface Field<N extends number = number> {
+  readonly key: string;                 // stable structural identity
+  readonly tupleSize: N | undefined;    // components, when statically known
+  evaluate(ctx: EvalContext): Column;   // compute the column
+}
+```
+
+- `EvalContext` = `{ geo, domain, seed }`.
+- `Column` = `{ data, tupleSize }`; `data` is a `Float32Array` /
+  `Int32Array` / `Uint32Array` of `count * tupleSize` scalars, SoA
+  (element `i`, component `k` at `i * tupleSize + k`). Columns may alias
+  live attribute storage (`attribute(name)` returns a `subarray`), so
+  treat them as read-only and re-evaluate after mutating the geometry.
+  Index the COLUMN, not the attribute behind it: an attribute's own
+  `data` is `capacity * tupleSize` long and capacity grows by doubling.
+- `makeField(key, tupleSize, evaluate)` is the ONLY constructor. It
+  stamps the brand `isField` reads. A plain `{ key, tupleSize, evaluate }`
+  literal type-checks as a `Field` (the interface does not declare the
+  brand) and `isField` still answers false. `isField` is the gate
+  everywhere, so such a literal is not quietly mis-cached — it is REFUSED
+  by param validation before the graph is built: `add: node
+  "setAttribute_0" (type "setAttribute") param "value": expected a finite
+  number, got {"key":"impostor()","tupleSize":1}`. The brand is
+  enumerable, so `{ ...field }` stays a field; there is nothing to import
+  and nothing to stamp by hand.
+
+THE CONTRACT: **equal keys mean interchangeable columns.** `key` is a
+structural identity (kind, params, child keys) and TWO caches key on it —
+the executor's node cache (hashing a field as `F(<key>)`) and
+`evaluateField`'s per-context memo. The library will compute one field
+and hand the column to another that shares its key. Every input that can
+change the column must be in the key; nothing that cannot should be.
+Three helpers exist for that job and are meaningful only here:
+
+- `elementCount(ctx)` — elements in the context's domain, so the output
+  column's `data` holds `elementCount(ctx) * tupleSize` scalars. The
+  first line of nearly every evaluator, and read per evaluation rather
+  than captured: one field instance is evaluated over domains of
+  different sizes.
+- `keyNum(v)` — a number as key text, `Object.is`-aware: `-0` becomes
+  `"-0"` so it never collides with `0` (their columns differ).
+- `keyRef(childKey)` — length-prefixed embedding of a child's key. A
+  child key is an arbitrary string, so raw concatenation is ambiguous:
+  `f("x,y","z")` and `f("x","y,z")` both concatenate to `f(x,y,z)` and
+  would share a cache entry; `keyRef` writes `f(3#x,y,1#z)` against
+  `f(1#x,3#y,z)`. Every shipped combinator uses it.
+
+Resolve inputs with `evaluateField(child, ctx)`, not
+`child.evaluate(ctx)`: it memoizes per context on `key`, so a
+sub-expression shared with a sibling is computed once.
+
+Worked example — standardize a field over the domain (mean 0, sd 1),
+which the grammar cannot express at any length because mean and
+deviation are properties of the whole column. Reads component 0:
+
+```ts
+import { elementCount, evaluateField, keyNum, keyRef, makeField } from "pcg-ts";
+import type { Column, EvalContext, Field } from "pcg-ts";
+
+function standardize(of: Field, epsilon = 1e-6): Field<1> {
+  const key = `standardize(${keyRef(of.key)},${keyNum(epsilon)})`;
+  return makeField<1>(key, 1, (ctx: EvalContext): Column => {
+    const n = elementCount(ctx);
+    const src = evaluateField(of, ctx);
+    const out = new Float32Array(n);
+    if (n === 0) return { data: out, tupleSize: 1 };
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += src.data[i * src.tupleSize];
+    const mean = sum / n;
+    let sq = 0;
+    for (let i = 0; i < n; i++) {
+      const d = src.data[i * src.tupleSize] - mean;
+      sq += d * d;
+    }
+    const sd = Math.sqrt(sq / n);
+    const scale = sd > epsilon ? 1 / sd : 0;
+    for (let i = 0; i < n; i++) out[i] = (src.data[i * src.tupleSize] - mean) * scale;
+    return { data: out, tupleSize: 1 };
+  });
+}
+
+// Drops into any field-capable param; composes with combinators both ways.
+const set = g.add(setAttribute, {
+  name: "rank", domain: "point", type: "f32", tupleSize: 1,
+  value: standardize(component(position(), 0)),
+});
+```
+
+THE TRADE, and it is the whole cost: a hand-authored field cannot be
+DESCRIBED, so it cannot leave the process. `getFieldSpec` returns
+`undefined` for one and the absence propagates outward through any
+combinator composed over it. Three consequences, one fact:
+
+- `serializeGraph` refuses — no saving, no editor, no corpus fixture.
+  The message names the node, the param and the cause: ``node "<id>"
+  param "<key>": fieldToJson: this field carries no JSON spec ... It was
+  built by makeField ... Rebuild it with grammar constructors``.
+- No off-thread cooking: the pool serializes before anything crosses the
+  thread — `cook` takes a `SerializedGraph`, and `cookCell` (the backend a
+  `World` drives) is handed a live `Graph` and calls `serializeGraph`
+  itself.
+- No GPU: WGSL is compiled from the spec, so the param evaluates on the
+  CPU and counts a `no-spec` fallback.
+
+What it does NOT cost is cooking. In-process a hand-authored field is a
+first-class node param — it cooks, caches on its `key`, and is
+deterministic on the same terms as everything else.
+
+CHOOSING: grammar (combinator or JSON — they serialize alike) whenever
+the graph must be saved, edited, sent to a worker or run on the GPU.
+`makeField` when the computation is not elementwise or has no name in
+the grammar AND the graph is built in code and cooked in the same
+process. If you need both, put the computation in a registered
+`standardNode` instead of in a field: a node's params are plain values,
+so nothing has to be describable and the graph serializes normally.
 
 ## Node types (full schemas: docs/nodes.md, machine-readable: docs/nodes.json)
 
@@ -743,7 +1115,7 @@ value, spawn, io, composite.
 - setBounds — stamp boundsMin/boundsMax on every point
 - spawnInstances — terminal: points to render-agnostic instance batches (4x4 column-major transforms, plus optional per-instance RGB); `assetAttr` names a string attribute for per-point asset ids (empty entries fall back to `assetId`). NEITHER IS CHECKED, and cannot be: an asset id is a free string whose real set belongs to the renderer, so a misspelled or invented one cooks, validates and reports its instance count, then draws as whatever that renderer does with a name it does not know (for a viewer of arbitrary graphs, a stand-in shape rather than an error). `pcg assets <graph.json>` lists every id a graph can emit — this param and the `assetAttr` tables together, across every branch rather than the one a seed reached, and reporting a set it cannot determine as OPEN instead of guessing. Check that list against your renderer; one batch per asset in ascending first-occurrence point order, instances within a batch in ascending point order. `colorAttr` (default `""`) names an f32 point attribute with tupleSize >= 3 whose components 0/1/2 become the instance's RGB — this is how instances of ONE asset id vary in appearance (age, health, season, hue drift) without splitting into more assets. ALPHA IS DROPPED: both three adapters take RGB, so the standard f32x4 `color`'s fourth component has nowhere to go. It is OPT-IN and nothing is sniffed: every cloud in this library already carries `color` at [1,1,1,1], so its presence states no intent, and writing an all-white instance-colour buffer would flip three's program variant (`instanceColor !== null` forces the `vColor` varying and a shader recompile) for zero pixels changed — a value-scan to auto-enable would be O(n) per cook AND make the shader variant data-dependent, which is worse. ACCEPTED COST, stated rather than hidden: an author who writes `setAttribute("color", ...)` and never names it here gets silence, not a warning. Any colour-shaped attribute works (`color`, or a `tint`/`speciesColor` you wrote). A missing attribute, or one that is not f32 with tupleSize >= 3, is an error listing the point attributes that WOULD fit and two fixes. BUDGET: at most 1048576 instances PER COOK (one per input point; 64 MiB of matrices), checked before allocation, so a runaway density is a diagnostic naming the count and the fix instead of an allocation failure. Per COOK, never per world — a global "instances alive" ceiling would depend on which cells happen to be resident and so be order-dependent, which the determinism invariant forbids; a streamed world may legitimately hold many times the budget across its resident cells
 - splineSample — arc-length sampling along polyline primitives, treating every polyline of the input as ONE concatenated curve (emits tangent, curveU); its in-graph source is pointsToPath or pathResample, and its own output is a plain point CLOUD, no longer a path. Each sample ALSO carries every attribute of the polyline PRIMITIVE it landed on, even though the polylines are measured as one concatenated curve — a sample exactly on a join between two polylines takes the LATER one's values. `primtype` is never carried and there is no opt-out; a collision with a name this node writes is REFUSED, naming the fix
-- subgraph — composite node wrapping an inner graph; create with `subgraphNode(inner, inputs, outputs, params)` (pins AND params are per-instance), inspect with `getSubgraphSpec` / `describeSubgraphPins` / `describeSubgraphParams`, serializes recursively as `subgraph` or by name as `ref`
+- subgraph — composite node wrapping an inner graph; create with `subgraphNode(inner, inputs, outputs, params)` (pins AND params are per-instance), inspect with `getSubgraphSpec` / `describeSubgraphPins` / `describeSubgraphParams`, serializes recursively as `subgraph` or by name as `ref`. Its two loop siblings `forEach` (`forEachNode`) and `repeatUntil` (`repeatUntilNode`), both described above, carry the SAME payload under their own `type` — the wrapper kind lives in `type` and nowhere else — and a `repeatUntil` node's `params` additionally hold the loop's own `maxRounds` and `settleAttr`, which no body exposes and every instance has
 - surfaceSample — area-weighted scatter on a triangle mesh with density acceptance (emits normal); each sample also carries every attribute of its own triangle's PRIMITIVE, so a per-face value written upstream survives the sampling instead of dying at it (`primtype` excepted, no opt-out, collisions refused)
 - sweepProfile — SURFACE from a curve: a cross-section (`circle` / `square` / `ribbon`) is placed on EVERY POINT of every polyline primitive and consecutive placements are stitched into 3-vertex `poly` triangles, so a path finally becomes a skin rather than a run of instanced cylinders (pathSegments is still the right node for a chain of DISCRETE links). THE PATH IS NOT RESAMPLED — one ring per input point, which is why the field-capable `radius`/`width`/`roll`/`up` resolve exactly at the ring instead of being averaged across a segment; run pathResample first for a finer surface. `frame` (`upHint` / `curveFrame` / `rot`) fixes only the ROLL — the ring's plane always comes from the path, so the node computes no frame of its own and adds no non-locality. `joint: "miter"` stretches the ring by 1/cos(half the turn) so the section keeps its radius through a bend, degrading to the unstretched section past `miterLimit`. Closed paths share their first and last ring (so `u` wraps across that one band); `caps` applies only to an OPEN path with a CLOSED profile. Input POINT attributes are copied (not interpolated) around each ring and input PRIMITIVE attributes are gathered onto the triangles; VERTEX attributes are dropped; `normal` and `uv` are reporting slots the node writes, with `u` as normalized arc length matching `curveU`
 - transferAttribute — transfer an attribute from a `source` geometry onto the input's points; `mapping`: "nearest" (closest source point in 3D, never misses), "uv" (destination point-domain UVs located in the source triangulation's UV space; source UVs read from the vertex domain when present — seam-correct — else point), "raycast" (forward-only ray per point: `direction` or per-point `directionAttr`, nearest hit, optional `maxDistance`). uv/raycast need a triangle source; f32 interpolates barycentrically, i32/u32/bool/string take the dominant corner (largest weight, ties → first corner); shared-edge/equal-distance ties → lowest source primitive index; misses keep the prior value (attribute default if new), count reportable via `missCountAttr` (u32 detail) and reportable PER POINT via `hitAttr` (bool point, tuple 1, empty = don't write): 1 = this point found a source and received a value, 0 = it missed and kept its prior one. Polarity is the HIT, the inverse of what `missCountAttr` counts. Every point is written, so the column is never stale — `mapping: "nearest"` leaves it all 1 (nothing can miss), a source with nothing to search leaves it all 0. Must differ from `name`. Feed it to filterByAttribute (comparison "eq", value 1) to keep only the points that landed, then removeAttribute to clean up — one ray decides both the move and the discard, which is what `place/drop-to-surface` does in three nodes with no second raycast. `attrDomain` picks the SOURCE domain: "point" (the default, and the only one "nearest" accepts), "vertex" (per-corner, seam-accurate), or "primitive" — one value for the whole triangle, never interpolated whatever its type, so a per-face id, material tag or width arrives bit-exact (`w0·v + w1·v + w2·v != v` in floating point, so blending a constant would return a value nobody wrote). Two refusals worth knowing before you plan around them: "nearest" + "primitive" is REFUSED because that mapping searches source POINTS and a per-primitive value sits on none — promoteAttribute it primitive→point on the source ("max"/"first") and transfer with attrDomain "point", which the error states — and NEITHER uv nor raycast can ever reach a polyline network however you set attrDomain, since both need 3-vertex "poly" triangles and connectPoints/pointsToPath produce none. Points being SAMPLED off a network need none of this: the samplers already carry the value (see "Networks"). Grid acceleration is result-neutral; epsilon policy exported (TRANSFER_BARY_EPS, TRANSFER_AREA_EPS, TRANSFER_DET_EPS, TRANSFER_BOX_PAD_REL)
@@ -995,7 +1367,16 @@ Three rules an agent needs before choosing one:
   combining. Same graph + seed = byte-identical output across runs,
   platforms, cook orders, and streaming paths. Seed chain: graph seed ->
   node seed = hashCombine(graphSeed, hashString(nodeId)) -> per-point
-  hashCombine(seed, index, axis). No Math.random anywhere.
+  hashCombine(seed, index, axis). No Math.random anywhere. The chain's
+  last link — the one that turns a u32 into a number you can use — is
+  `hashFloat(h)`, and it is a public function precisely so a host does
+  not invent a second one: it takes the TOP 24 bits (`(h >>> 8) * 2**-24`),
+  which puts the result in [0, 1), makes it exactly representable as an
+  f32, and keeps it BELOW 1 once stored in a Float32Array, where the
+  obvious `h / 2**32` can round up to exactly 1 and put a "probability"
+  outside its own range. `randomField` resolves through it, so anything
+  reproducing a draw the graph made on the host side agrees with the
+  graph by construction rather than by luck.
 - The ONE exception to that chain: `pointScatterInWorld`'s lattice is a
   function of its own `seed` param alone — the graph seed is not an input
   at all, exactly as a noise field carries its seed inside its own spec.
@@ -1065,15 +1446,49 @@ coarse to fine (optionally one leading unbounded level); each is a
 - `cellSize`: number (cell edge, world units) or `"unbounded"` (one
   global cell, must be the first level).
 - `cellMode?`: `"xz"` (default — square XZ cells, unbounded in Y,
-  coords `[cx, cz]`) or `"xyz"` (cube cells, coords `[cx, cy, cz]`,
-  radii in full XYZ distance). Nesting: like under like; `"xyz"` under
-  `"xz"` uses the containing XZ column as parent; `"xz"` under a
-  bounded `"xyz"` parent is rejected at construction; an unbounded
-  parent accepts either mode.
+  coords `[cx, cz]`), `"xyz"` (cube cells, coords `[cx, cy, cz]`,
+  radii in full XYZ distance), or `"path"` (ARC LENGTH along a
+  centreline: a cell is the half-open range `[sMin, sMax)`, coord
+  `[cs]`, the table cut into `round(length / cellSize)` equal sectors so
+  the seam falls exactly at `s = 0`). Nesting: like under like (a
+  `"path"` child maps to the parent SECTOR containing its arc midpoint,
+  and nested `"path"` levels must declare the same `path` table);
+  `"xyz"` under `"xz"` uses the containing XZ column as parent; `"xz"`
+  under a bounded `"xyz"` parent is rejected at construction, and so is
+  `"path"` mixed with either world-space mode in either direction — an
+  arc sector is a tube along a curve, so no square cell contains it and
+  it contains none, which also means a bounded square level and a
+  `"path"` level cannot coexist in one World. An unbounded parent
+  accepts any mode. Coarse-to-fine `cellSize` is checked WITHIN a mode
+  family (arc lengths against arc lengths).
+- `path?`: `{ length, closed }` — required for `"path"`, refused
+  otherwise. A RULER, not a curve: the World never sees the centreline,
+  and there is no second copy of it to disagree with the graph's. It is
+  STATIC and cannot come from a parent's outputs — the wanted set is
+  built before any cell cooks, so a parent-sourced table would make
+  wanted-set membership a function of cook state.
 - `generationRadius?`: cells cook when their center enters this radius.
   Required (positive) for bounded levels; omit for an unbounded level
-  (a value is accepted and ignored there).
+  (a value is accepted and ignored there). On a `"path"` level it is an
+  ARC distance from the anchor to the sector's nearest bound, and IS the
+  symmetric window: exactly `aheadArc = behindArc = generationRadius`.
 - `retainRadius?`: eviction hysteresis, default generationRadius * 1.25.
+  Refused on a `"path"` level that states a directional window.
+- `aheadArc?` / `behindArc?` (`"path"` only): the directional window, in
+  arc units forward and back of the anchor. Both must be stated, both
+  finite and >= 0 (0 is legal — it still wants the sector the anchor is
+  standing in, and nothing further on that side), and they REPLACE
+  `generationRadius`, which is refused alongside them. "Ahead" is
+  increasing arc, so a level travelled the other way mirrors its window
+  rather than passing a reverse flag. Cook order ranks by gap / that
+  half's depth, not by raw arc, so a starved budget is not spent on road
+  already driven. A window longer than a closed table clamps to it
+  (every sector wanted once); on an open table it runs off the ends.
+- `retainAheadArc?` / `retainBehindArc?`: per-half hysteresis, each
+  defaulting to its own half * 1.25 and required to be >= its own half.
+  One scalar across two unequal halves either inflates the short half or
+  strips the long half's band, which is why `retainRadius` is refused
+  with a directional window rather than applied to both.
 - `cookOutputs?`: cook only these declared outputs of the graph per
   cell (per-output cooking; names validated at construction). Omit to
   cook all.
@@ -1082,12 +1497,21 @@ Before each cell cook, `bind(graph, ctx)` wires the `CellContext` into
 the graph — the only channel for cell data. `ctx` is a discriminated
 union on `cellMode`: `{ cellMode, coord, min, max, levelIndex,
 levelName, worldSeed, levelSeed, seed, parent? }` with 2D coord/min/max
-for `"xz"` (and unbounded) levels, 3D for `"xyz"`. Three seeds, and
-picking the wrong one is the classic streaming bug:
+for `"xz"` (and unbounded) levels, 3D for `"xyz"`. A `"path"` cell
+carries `{ coord: [cs], sMin, sMax, pathLength, closed }` and NO
+`min`/`max`, deliberately: an arc sector is a curved tube with no
+world-space box, and a third `min` under the same name would let the
+usual `cellMode === "xyz" ? … : (xz)` else-branch read a 1-tuple's
+`min[1]` as a z that was never there. Omitting it breaks that at COMPILE
+time; `xzCell(ctx)` (exported) is the narrowing for the square case, and
+a `"path"` bind narrows on `ctx.cellMode` and reads `sMin`/`sMax`.
+Three seeds, and picking the wrong one is the classic streaming bug:
 
 - `seed` — PER CELL, = hashCombine(worldSeed, levelIndex, ...coord)
-  (every cell coordinate is hashed). Wire it into every stochastic node
-  whose content is MEANT to differ per cell.
+  (every cell coordinate is hashed — `[cs]` alone on a `"path"` level;
+  the chain's length prefix keeps the 1-, 2- and 3-tuple arities from
+  colliding). Wire it into every stochastic node whose content is MEANT
+  to differ per cell.
 - `worldSeed` — the `World`'s own `seed`, identical in every cell of
   every level. The coarsest cell-INVARIANT anchor.
 - `levelSeed` — = hashCombine(worldSeed, levelIndex), identical within a
@@ -1102,10 +1526,27 @@ reseed the whole graph via `graph.setSeed(...)` inside bind — memo keys
 include seeds and bind-time writes never count as user edits, so neither
 causes phantom recooks. Parent-cell outputs arrive as
 `ctx.parent.outputs`; inject them via a dataInput node. `await
-world.update([x, y, z], { budgetMs?, signal?, maxCooksPerUpdate? })`
-cooks nearest-first, evicts by retainRadius + LRU, and reports {
-cooked, evicted, pending }. `world.invalidate(level?, coord?)` forces
-recooks; parent recooks cascade staleness to children automatically.
+world.update([x, y, z], { budgetMs?, signal?, maxCooksPerUpdate?,
+anchors? })` cooks nearest-first, evicts by retainRadius + LRU, and
+reports { cooked, evicted, pending }. `world.invalidate(level?, coord?)`
+forces recooks; parent recooks cascade staleness to children
+automatically.
+
+`anchors` is `{ [levelName]: s }`, the arc position of each `"path"`
+level, and every `"path"` level REQUIRES a finite entry: such a level
+ignores the viewpoint entirely, so the anchor is the only way it gets a
+position. A missing entry, a non-finite value, an unknown level name, or
+a name that is not a `"path"` level throws `WorldValidationError`, all
+checked before any cell of the update cooks. On a closed table the
+anchor wraps (any real number is in range and the `s = 0` seam is not a
+boundary, matching `pathRuns`/`arcTile`); on an open one it is used as
+given and the seam IS a boundary. A mixed World streams in one call: the
+world point drives the `"xz"`/`"xyz"` levels, each anchor its own path
+level. An anchor is a COORDINATE (like the viewpoint); the window is
+POLICY and stays on `LevelDef` — a per-frame window would make the
+wanted set a function of the frame that asked. Nothing projects a world
+point onto the centreline: the caller already knows its station, and a
+projection would need a stated tie-break at every crossover.
 
 ### Cross-cell content: halos and ownership
 
@@ -1617,13 +2058,14 @@ goldens never move:
 - Bit-exact (byte equality): u32 hash/random streams (`randomField`
   with default and string keys, noise lattice hashing), `index`,
   u32/i32 attribute roots, bool→f32 reads, pure hash+compare+select
-  trees, and f32 add/sub/mul, clamp/min/max, floor, select/compares,
+  trees, and f32 add/sub/mul, clamp/min/max, floor, `trunc` (the
+  builtin, over a result already representable in f32), select/compares,
   `step` and `sign` (both emitted as comparisons, so exactness is by
   construction rather than by measurement), `fract` (`x - floor(x)`,
-  two operations that are each exact in f32), and `cross`, `mod` and
-  `smoothstep` (whose CPU interiors are rounded to f32 op by op to
-  match the device's expansion, rather than accumulated in f64 and
-  rounded once as every other elementwise fn is).
+  two operations that are each exact in f32), and `cross`, `mod`,
+  `rem` and `smoothstep` (whose CPU interiors are rounded to f32 op by
+  op to match the device's expansion, rather than accumulated in f64
+  and rounded once as every other elementwise fn is).
   `randomField`'s port is POINT-DOMAIN ONLY — the kernel requires `P`,
   so a primitive-domain `randomField` never reaches the device; it
   resolves on the CPU keyed on primitive identity.
@@ -1655,8 +2097,8 @@ goldens never move:
   | family | rangeUlp, 10k → 1M | budget | mean abs budget |
   |---|---|---|---|
   | arith add/sub/mul | 0 | bit-exact | — |
-  | clamp/min/max, floor, select/compare, step | 0 | bit-exact | — |
-  | fract, mod, sign, smoothstep | 0 | bit-exact | — |
+  | clamp/min/max, floor, trunc, select/compare, step | 0 | bit-exact | — |
+  | fract, mod, rem, sign, smoothstep | 0 | bit-exact | — |
   | div | 0.76 → 0.75 | 1 | 2.0e-8 |
   | lerp | 0.50 → 0.50 | 1 | 7.3e-8 |
   | remap | 0.00 → 0.00 | 1 | 6.0e-8 |
@@ -1669,7 +2111,9 @@ goldens never move:
   | sqrt | 0.71 → 0.71 | 1 | 3.6e-8 |
   | pow, base >= 0.5, exponent over [-3, 3] | 4.31 → 5.05 | 8 | 2.9e-6 |
   | exp over [−8, 8] | 3.44 → 4.12 | 8 | 3.8e-5 |
+  | exp2 over [−8, 8] | 0.50 → 0.50 | 1 | 9.8e-7 |
   | log over [0.5, 8.5] | 0.93 → 0.93 | 2 | 5.5e-8 |
+  | log2 over [0.5, 8.5] | 0.65 → 0.65 | 1 | 6.3e-8 |
   | sin/cos over [−8, 8] | 6.50 → 7.13 | 12 | 3.2e-7 |
   | tan over [−1.45, 1.45] | 19.48 → 22.34 | 40 | 6.5e-7 |
   | asin over [0, 0.9] | 503.99 → 506.98 | 640 | 3.9e-5 |
@@ -1684,15 +2128,27 @@ goldens never move:
   | fbm value / perlin / simplex / worley | 4.32 → 6.12 / 4.84 → 5.90 / 19.02 → 31.67 / 4.81 → 5.10 | 10 / 10 / 64 / 8 | 7.8e-8 / 5.1e-8 / 4.6e-7 / 4.7e-8 |
   | composite (ramp∘perlin × (random+attr)) | 8.78 → 17.05 | 32 | 7.4e-8 |
 
-  `exp`, `log` and `distance` read their arrows as 10k → 131k: that is
-  the in-suite sweep's ceiling, re-measured every run. All three were
-  also anchored at 1 000 000 on a widened run and none moved — exp
-  4.12, log 0.93, distance 0.50 — so exp climbs 1.20x over the first
-  two decades (4.13 at 65k) and then saturates, and its budget of 8 is
-  headroom over a bound rather than over a largest-so-far. Measured
-  means: exp 3.06e-5, log 4.38e-8, distance 1.53e-7. The four-figure
-  rows above are historical anchors from a 10k/65k/262k/1M sweep the
-  harness no longer runs (PARITY_SWEEP_COUNTS is [10_000, 131_072]).
+  `exp`, `log`, `distance`, `exp2` and `log2` read their arrows as
+  10k → 131k: that is the in-suite sweep's ceiling, re-measured every
+  run. The first three were also anchored at 1 000 000 on a widened
+  run and none moved — exp 4.12, log 0.93, distance 0.50 — so exp
+  climbs 1.20x over the first two decades (4.13 at 65k) and then
+  saturates, and its budget of 8 is headroom over a bound rather than
+  over a largest-so-far. Measured means: exp 3.06e-5, log 4.38e-8,
+  distance 1.53e-7. exp2 and log2 carry NO 1M anchor and must not be
+  read as if they did: their arrows are dead flat across the sweep, so
+  0.50 and 0.65 are simply the largest values measured for them
+  anywhere in it. Measured means: exp2 7.83e-7, log2 5.05e-8. Both
+  measure TIGHTER than their base-e counterparts (0.50 vs exp's 4.12,
+  0.65 vs log's
+  0.93) because the base-2 pair is the instruction the hardware has;
+  lowering them the base-e way instead measures worse and busts the
+  budget of 1 — exp2 as `exp(x * LN2)` gives 3.00 (6.0x worse), log2
+  as `log(x) * LOG2E` gives 1.30 (2.0x worse). What holds the tolerance
+  is the form emitted, not the algebra. (log2's raw maxUlp is 6986, a
+  zero crossing at x = 1 like log's.) The four-figure rows above are
+  historical anchors from a 10k/65k/262k/1M sweep the harness no longer
+  runs (PARITY_SWEEP_COUNTS is [10_000, 131_072]).
 
   `log` IS THE TABLE'S CLEAREST ARGUMENT FOR rangeUlp. Its raw maxUlp
   is 4843 while its rangeUlp stays under 1, because `log` crosses zero
@@ -1780,6 +2236,30 @@ registered types; unknown field fn errors list all fns; pin errors list
 valid pins). Typed classes: GraphValidationError, GraphCycleError,
 NodeExecutionError (has .nodeId), CookCancelledError,
 GraphSerializationError, FieldJsonError, WorldValidationError.
+
+`GraphError` is the base class, and it covers FOUR of those seven, not
+all of them: GraphValidationError, GraphCycleError, NodeExecutionError
+and CookCancelledError extend it; GraphSerializationError, FieldJsonError
+and WorldValidationError extend `Error` directly. So
+`catch (e) { if (e instanceof GraphError) ... }` is the right net for
+"building or cooking this graph went wrong" and the WRONG one for a load,
+a field-spec parse or a World misconfiguration — those three are caught by
+their own classes or not at all, and a handler written on the assumption
+that one base covers the list will drop them. `GraphError` adds no fields
+of its own: `.nodeId` on NodeExecutionError is the only one anywhere in
+the set, and everything else — the offending node, pin or param, and the
+valid alternatives — is carried by the message TEXT, which is why the
+messages are part of the API rather than decoration.
+
+Across a worker thread the message always survives and the CLASS
+sometimes does. `pcg-ts/worker` rebuilds six names — GraphError, its four
+subclasses, and GraphSerializationError — so `instanceof` on those keeps
+working off-thread. Any other name, FieldJsonError and
+WorldValidationError included, arrives as a plain `Error` carrying the
+right `.name` and the message verbatim, so match on `err.name` rather
+than `instanceof` for those two. A rehydrated NodeExecutionError also
+loses its `cause`, and reports `nodeId` as `"(unknown)"` if the wire form
+carried none.
 
 A field-capable param that RESOLVES to NaN or ±Infinity is refused where
 it lands on a domain, naming the node and the param, with how many
@@ -1918,7 +2398,7 @@ not raised.
   switch, and export/import. It is the human half of the
   agent-and-human ergonomics claim — start here to see what a graph
   does before writing one.
-- demos/ — THREE vite demos, sitting beside the editor and the graph
+- demos/ — FIVE vite demos, sitting beside the editor and the graph
   corpus in `graphs/`. A demo exists only where a HOST is required to
   show the thing; anything that is one cook of one graph is a corpus
   file instead, because a graph an agent can run teaches more than a
@@ -1929,6 +2409,19 @@ not raised.
   - gpu-world streams a World rendering from device-resident instance
     transforms, with the binding's live handle count and the evaluator
     pool's detached-buffer accounting shown side by side.
+  - racetrack sweeps a road along a centreline the page was HANDED
+    rather than made, then dresses its verges. It is the one the
+    placement rules run on, and the only consumer of `cellMode: "path"`:
+    an unbounded `lap` level settles the whole placement list, and a
+    `dressing` level of 20W arc sectors turns settled placements into
+    instances as the car reaches them. A sector reads no neighbour, so
+    there is no halo and the union of the sectors is the whole lap bit
+    for bit.
+  - road began as a copy of racetrack and is kept as the version with no
+    placement rules in it. READ THEM AS TWO DEMOS, not as a diff: main.ts
+    shares not one line (505 against 1287), graph.ts and lap.ts have
+    diverged in BOTH directions, and only spline.ts is still identical.
+    Do not change one expecting the other to follow.
   Retired into the corpus, and named here because older docs still cite
   them: the graph editor, the GPU-fields comparison, the headless demo,
   the forest, and the rig playground. The forest and the rig are

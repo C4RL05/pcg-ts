@@ -22,7 +22,6 @@
  * 10.5%. Building to 43% would be fitting the outlier, which this demo
  * has already done once and paid a week for.
  */
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
 import { cornersOf, radiusAtW } from "../demos/racetrack/corners.js";
@@ -30,12 +29,13 @@ import { dressLap } from "../demos/racetrack/dress.js";
 import { ENCLOSURE, measureEnclosure } from "../demos/racetrack/enclosure.js";
 import { OUTPUTS, buildRoadGraph } from "../demos/racetrack/graph.js";
 import type { Kit } from "../demos/racetrack/kit.js";
-import { ENCLOSURE_KIT, KITS, kitPath } from "./support/kits.js";
+import { ENCLOSURE_KIT, KITS, kitOrAbsent, kitPath } from "./support/kits.js";
 import { type Lap, readLap } from "../demos/racetrack/lap.js";
 import { makeTrackSpline } from "../demos/racetrack/spline.js";
 import type { PlaceableAsset } from "../demos/racetrack/assets.js";
 import type { StationedPlacement } from "../demos/racetrack/legibility.js";
 import { CORRIDOR } from "../demos/racetrack/zones.js";
+import { SAME_PLACE_W } from "../demos/racetrack/tolerance.js";
 import {
   ENCLOSE,
   coverCandidates,
@@ -45,7 +45,8 @@ import {
   reduceEnclosure,
 } from "../demos/racetrack/tunnels.js";
 
-const KIT = kitPath(ENCLOSURE_KIT);
+const KIT_KEY = ENCLOSURE_KIT;
+const KIT = kitPath(KIT_KEY);
 
 /**
  * The length draw, checked against the quantiles it was built from.
@@ -108,7 +109,7 @@ describe("the stretch-length draw", () => {
 });
 
 describe.skipIf(!KIT)("enclosure, placed and then measured", () => {
-  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as Kit;
+  const kit = kitOrAbsent<Kit>(KIT_KEY);
 
   let lap: Lap | undefined;
   async function theLap(): Promise<Lap> {
@@ -152,10 +153,19 @@ describe.skipIf(!KIT)("enclosure, placed and then measured", () => {
     const cover = coverCandidates(kit.assets as never);
     for (const a of cover) {
       const base = a.where!.height.median - a.size.tall / 2;
+      // THE BAR IS THE RULE'S BAR, TOLERANCE INCLUDED. `coverCandidates`
+      // admits a piece whose base is within `SAME_PLACE_W` of the ceiling,
+      // because the case it exists for is a piece sitting EXACTLY on it —
+      // the 1.20W one this test's own header describes — and a value that
+      // has been through a round trip is not reliably still exactly there.
+      // Asserting the untolerated bound would state a stricter rule than
+      // the code implements and would pass today only because no asset in
+      // any of the three kits lands in that sliver (nearest is 2.1e-2W).
+      // A test that holds by luck about the data is not holding the rule.
       expect(
         base,
         `${a.shape} ${a.size.across.toFixed(1)}x${a.size.along.toFixed(1)}x${a.size.tall.toFixed(1)} sat with its base at ${base.toFixed(2)}W`,
-      ).toBeGreaterThanOrEqual(CORRIDOR.ceilingW);
+      ).toBeGreaterThanOrEqual(CORRIDOR.ceilingW - SAME_PLACE_W);
     }
     // AND THE TEST MUST BITE. A rule that rejects nothing is not a rule,
     // and this kit is full of wide roadside landforms that the old

@@ -42,6 +42,7 @@
  * these nodes uses.
  */
 import {
+  PRIMTYPE_ATTR,
   createPointCloud,
   setPolylineTopology,
   type Attribute,
@@ -133,6 +134,31 @@ export interface PointsToPathParams {
   closed: boolean;
   groupAttr: string;
   orderAttr: string;
+  shortGroups: string;
+}
+
+/**
+ * Returns whether a group with too few points for the requested path is
+ * SKIPPED rather than refused.
+ *
+ * Checked at runtime for the reason `copyToPoints`' topology guard gives:
+ * a param's `enum` is metadata for an editor, not a runtime guard, and a
+ * serialized graph can carry any string into `execute`. An unrecognized
+ * value must not fall through to either behaviour — silently meaning
+ * "error" would leave the author with a cook that failed on a group they
+ * thought they had excused, and silently meaning "skip" would leave them
+ * with paths quietly missing from the output, which is the failure this
+ * param exists to make explicit rather than to invent a new way of.
+ */
+function requireShortGroupsRule(value: string): boolean {
+  if (value !== "error" && value !== "skip") {
+    throw new Error(
+      `pointsToPath: shortGroups must be "error" or "skip", got ${JSON.stringify(value)}; ` +
+        '"error" refuses the cook and names the group that had too few points for the requested path, ' +
+        '"skip" emits no primitive for that group and leaves its points in the cloud, belonging to no path',
+    );
+  }
+  return value === "skip";
 }
 
 /** Build polyline primitives over an existing point cloud. */
@@ -140,7 +166,7 @@ export const pointsToPath = standardNode<PointsToPathParams>({
   type: "pointsToPath",
   category: "point op",
   description:
-    "Turns a point cloud into one or more paths by building `polyline` primitives over the SAME points, so every point attribute survives — this is the only way to produce a path from a serialized graph. Ordering is fixed and deterministic: within a path the points are visited in ascending point index (the order they arrive on this node's input) unless orderAttr names a sort key, and ties in that key always break to the lower point index. With groupAttr set, the cloud splits into one path per distinct group key — a whole-number id or a string name — emitted in ascending key order. `closed` appends a trailing vertex referencing the path's first point — closure is structural, exactly what createPolyline produces and what splineSample detects; no `closed` attribute is written. Any existing topology on the input is replaced, and its vertex and primitive attributes are dropped with it. Downstream: any node that can REMOVE points drops topology — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a path that passes through one stops being a path; put this node after them, not before. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
+    "Turns a point cloud into one or more paths by building `polyline` primitives over the SAME points, so every point attribute survives — this is the only way to produce a path from a serialized graph. Ordering is fixed and deterministic: within a path the points are visited in ascending point index (the order they arrive on this node's input) unless orderAttr names a sort key, and ties in that key always break to the lower point index. With groupAttr set, the cloud splits into one path per distinct group key — a whole-number id or a string name — emitted in ascending key order. A group with too few points for the path being asked for — fewer than 2, or fewer than 3 when `closed` — is an error by default; `shortGroups \"skip\"` emits no primitive for it instead and leaves its points in the cloud belonging to no path, which is what makes a DATA-DEPENDENT grouping (a key computed from a scatter, a cell, a copyToPoints target index) cookable at all, since nobody can know at graph-build time how many points land in each group. It governs the WHOLE INPUT by the same rule: a cloud of fewer than 2 points is an error by default and passes straight through under \"skip\", because one point in one cloud is the same nothing-to-draw as one point in one group and a caller that has excused the second has already excused the first. `closed` appends a trailing vertex referencing the path's first point — closure is structural, exactly what createPolyline produces and what splineSample detects; no `closed` attribute is written. Any existing topology on the input is replaced, and its vertex and primitive attributes are dropped with it. Downstream: any node that can REMOVE points drops topology — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a path that passes through one stops being a path; put this node after them, not before. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -148,7 +174,7 @@ export const pointsToPath = standardNode<PointsToPathParams>({
       type: "bool",
       default: false,
       description:
-        "Close each path by appending a trailing vertex back to its first point (structural closure — no attribute is written). A closed path needs at least 3 points; 2 would fold the path back onto itself and is an error.",
+        "Close each path by appending a trailing vertex back to its first point (structural closure — no attribute is written). A closed path needs at least 3 points; 2 would fold the path back onto itself and is an error by default (`shortGroups \"skip\"` drops such a path instead). This param is therefore what decides which groups count as SHORT: the same 2-point group is a perfectly good open path and an impossible closed one.",
     },
     groupAttr: {
       type: "string",
@@ -162,18 +188,41 @@ export const pointsToPath = standardNode<PointsToPathParams>({
       description:
         "Name of a scalar numeric point attribute to order each path by, ascending; ties break to the lower point index, so the result never depends on sort implementation. Values must be finite. Leave empty to use point index order.",
     },
+    shortGroups: {
+      type: "enum",
+      default: "error",
+      enum: ["error", "skip"],
+      description:
+        "What happens to a group that has too few points for the path being asked for — fewer than 2, or fewer than 3 when `closed` is true, so the SAME 2-point group is short only when it is being closed. 'error' (the default) refuses the cook and names the group, which is the right answer when the groups are AUTHORED: an id you wrote by hand belongs to a population you can predict, so a group of one is a mistake in the graph and a cook that quietly emitted one path fewer would hide it. 'skip' emits NO primitive for that group and leaves its points exactly where they are — same indices, every attribute intact, simply belonging to no path — which is the only workable answer when the groups are DATA: a key computed from a scatter, a grid cell, or a copyToPoints target index has a population nobody can know at graph-build time, so a sparse cell that drops a single point into one lane is not an authoring error and must not fail the whole cook. Nothing else moves under 'skip': the surviving groups are the same paths, over the same point indices, emitted in the same ascending-key order they would have had if the short group had never been in the input, so turning this on can only remove a path that could not be built — it can never change one that could. With `groupAttr` EMPTY the whole cloud is a single implicit group and this param still applies to it, because a group is a group however it was formed and a second rule for the unnamed one would be a trap: the only way to be short there is exactly 2 points with `closed` true, and under 'skip' such a cloud comes back with its points and no polyline instead of failing. What that case does NOT cover is a cloud of fewer than 2 points, which is refused under both settings by a different check — a node handed one point has nothing to do at all, and no grouping question was ever asked. Downstream, points belonging to no path are invisible to every path node (pathResample, splineSample, writeTangents, pathScan and pathSegments all walk primitives, not points), so a skipped group's points still filter, transfer and merge like any other points but never become a path on their own; if that is not what you want, fix the population upstream — scatter more points, widen the cell, or merge the sparse groups — rather than leaving them stranded.",
+    },
   },
   execute({ inputs, params }) {
+    // Params before geometry: a typo in this one reported later as a short
+    // group would send the author to debug their data instead of their
+    // spelling.
+    const skipShort = requireShortGroupsRule(params.shortGroups);
     // cloneGeometry is the only helper that preserves topology, and it is
     // also what keeps this node honest about purity: the input geometry
     // is a cached upstream object and must never be mutated.
     const geo = cloneGeometry(requireGeometry(inputs, "in", "pointsToPath"));
     const np = geo.pointCount;
-    if (np < 2) {
+    // THE WHOLE-INPUT FLOOR OBEYS `shortGroups` TOO, and it took an
+    // argument to see why. A cloud of one point is the same fact as a
+    // group of one point — there is nothing to draw a path through — and
+    // the reason `skip` exists is that a data-dependent grouping cannot be
+    // sized at graph-build time. A cell that drops ONE placement is
+    // strictly sparser than a cell that drops one into a lane, so refusing
+    // the first while excusing the second would fail exactly the case the
+    // param was added for, and fail it further from the author. Under
+    // `skip` an input too small to draw anything through emits the cloud
+    // unchanged with no primitives, which is what a caller asking to skip
+    // short groups has already said it wants.
+    if (np < 2 && !skipShort) {
       throw new Error(
-        `pointsToPath: input has ${np} point${np === 1 ? "" : "s"}; a path needs at least 2 (scatter more points, or loosen the filter feeding this node)`,
+        `pointsToPath: input has ${np} point${np === 1 ? "" : "s"}; a path needs at least 2 (scatter more points, loosen the filter feeding this node, or set shortGroups "skip" to pass the cloud through with no path over it)`,
       );
     }
+    if (np < 2) return { out: [makeGeometryItem(geo)] };
 
     // Group ids, then the paths in ascending id order. Sorting the ids
     // rather than taking them in first-seen order keeps the output
@@ -249,18 +298,26 @@ export const pointsToPath = standardNode<PointsToPathParams>({
     for (const id of ids) {
       const indices = grouped.get(id) as number[];
       const named = typeof id === "string" ? JSON.stringify(id) : String(id);
-      if (indices.length < 2) {
-        // Only a group can be this short: with no groupAttr the single
-        // bucket holds every point, and `np < 2` above already rejected
-        // that case — so there is no "the input" wording to reach here.
+      // The threshold is the one the path being asked for actually needs,
+      // which is why `closed` is read here and not only below: a 2-point
+      // group is a path when open and impossible when closed. Under
+      // `shortGroups "skip"` a group under it emits nothing and its points
+      // are simply left in the cloud — `continue` before anything is pushed,
+      // so the groups that DO build see the same vertex offsets they would
+      // have seen had the short one never arrived.
+      if (indices.length < (closed ? 3 : 2)) {
+        if (skipShort) continue;
+        if (indices.length < 2) {
+          // Only a group can be this short: with no groupAttr the single
+          // bucket holds every point, and `np < 2` above already rejected
+          // that case — so there is no "the input" wording to reach here.
+          throw new Error(
+            `pointsToPath: group ${named} (attribute "${groupName}") has ${indices.length} point; every path needs at least 2 — drop that group upstream, give it another point, or set shortGroups "skip" to leave its points in the cloud with no path over them`,
+          );
+        }
+        const where = groupName === "" ? "the input" : `group ${named} (attribute "${groupName}")`;
         throw new Error(
-          `pointsToPath: group ${named} (attribute "${groupName}") has ${indices.length} point; every path needs at least 2 — drop that group upstream or give it another point`,
-        );
-      }
-      const where = groupName === "" ? "the input" : `group ${named} (attribute "${groupName}")`;
-      if (closed && indices.length < 3) {
-        throw new Error(
-          `pointsToPath: ${where} has 2 points and closed is true, which would fold the path back over itself; set closed false, or give the path at least 3 points`,
+          `pointsToPath: ${where} has 2 points and closed is true, which would fold the path back over itself; set closed false, give the path at least 3 points, or set shortGroups "skip" to leave those points in the cloud with no path over them`,
         );
       }
       primVertexStart.push(pointIndices.length);
@@ -280,25 +337,144 @@ export interface PathResampleParams {
   spacing: FieldParam;
   lengthAttr: string;
   stepAttr: string;
+  resampledLengthAttr: string;
+  sampleArcAttr: string;
 }
 
 /**
- * The two opt-in reports {@link pathResample} writes, checked against one
- * attribute set.
+ * The PER-PATH reports {@link pathResample} writes, in the order the
+ * refusals name them: the param, the name it resolved to, the name offered
+ * as the fix, and the words the duplicate-name refusal uses for what it
+ * holds. Built per call rather than kept as a module constant because the
+ * resolved name belongs in the row — the alternative is a lookup from param
+ * name back to param value, which is one `if` per slot that a fourth slot
+ * can silently fall through.
  *
- * BOTH LAND ON THE PRIMITIVE DOMAIN, and that is the whole design
- * decision. A path has ONE arc length, and in 'count' mode it has ONE
- * step — `count` samples divide that path's own length, so two paths of
- * different lengths get different steps and neither number varies from
- * sample to sample. A per-path value on the point domain would be the
- * same number repeated `count` times, which is not a cheaper spelling of
- * the fact but a weaker one: it says nothing about the path, it is free
- * to disagree with itself, and it costs a column the length of the cloud.
- * `connectPoints.lengthAttr` already writes a per-edge length on the
- * primitive domain for exactly this reason, and a resampled path's length
- * is the same kind of fact about the same kind of element. A field that
- * needs it per sample promotes it (promoteAttribute, primitive to point),
- * which is the route `pathSegments.radius` already documents.
+ * ALL THREE LAND ON THE PRIMITIVE DOMAIN, and that is the whole design
+ * decision. A path has ONE input arc length, ONE emitted length, and in
+ * 'count' mode ONE step — `count` samples divide that path's own length,
+ * so two paths of different lengths get different steps and no one of
+ * these numbers varies from sample to sample. A per-path value on the
+ * point domain would be the same number repeated `count` times, which is
+ * not a cheaper spelling of the fact but a weaker one: it says nothing
+ * about the path, it is free to disagree with itself, and it costs a
+ * column the length of the cloud. `connectPoints.lengthAttr` already
+ * writes a per-edge length on the primitive domain for exactly this
+ * reason, and a resampled path's length is the same kind of fact about
+ * the same kind of element. A field that needs it per sample promotes it
+ * (promoteAttribute, primitive to point), which is the route
+ * `pathSegments.radius` already documents.
+ *
+ * `sampleArcAttr` is deliberately NOT in this list. It is a fact about a
+ * SAMPLE — a different number for every point — so the argument above
+ * does not apply to it and neither does the domain: it is checked on its
+ * own, against the output's POINT domain, where the columns it could
+ * destroy actually live.
+ */
+function resamplePathReports(params: PathResampleParams) {
+  return [
+    {
+      param: "lengthAttr",
+      name: params.lengthAttr,
+      suggestion: "pathLength",
+      holds: "the input curve's length",
+    },
+    {
+      param: "stepAttr",
+      name: params.stepAttr,
+      suggestion: "sampleStep",
+      holds: "the step between samples",
+    },
+    {
+      param: "resampledLengthAttr",
+      name: params.resampledLengthAttr,
+      suggestion: "sampleLength",
+      holds: "the emitted polyline's length",
+    },
+  ] as const;
+}
+
+/**
+ * Refuse two per-path reports pointed at the same attribute.
+ *
+ * Every one of them is f32 tuple 1, so a shared name passes the shape
+ * check and the later write silently replaces the earlier — the same
+ * reason writeCurveFrame refuses two of its three names being equal.
+ * Pairwise over {@link resamplePathReports} rather than one hand-written
+ * comparison per pair: a fourth per-path report would otherwise ship with
+ * one of its three new pairs unchecked, and the pair that got missed would
+ * be the one nobody thought to test.
+ *
+ * `sampleArcAttr` is not in the sweep and cannot be: it is on the POINT
+ * domain, so it names a different column even under an identical name,
+ * and refusing that would refuse a graph in which nothing collides.
+ */
+function requireDistinctResampleReports(params: PathResampleParams): void {
+  const slots = resamplePathReports(params);
+  for (let i = 0; i < slots.length; i++) {
+    const a = slots[i];
+    if (a.name === "") continue;
+    for (let j = i + 1; j < slots.length; j++) {
+      const b = slots[j];
+      if (b.name !== a.name) continue;
+      throw new Error(
+        `pathResample: params "${a.param}" and "${b.param}" are both "${a.name}"; ${a.holds} and ${b.holds} are two values and need two attributes, or the second would overwrite the first with no complaint — every per-path report this node writes is f32 tuple 1, so the shape check cannot tell them apart`,
+      );
+    }
+  }
+}
+
+/**
+ * The two refusals `sampleArcAttr` owes that {@link requireReportSlot}
+ * cannot give it, both about columns that are not on the output's point
+ * domain YET when the slot is checked.
+ *
+ * `primtype` FIRST, from the param alone, because it is wrong whatever the
+ * input holds. It is a TYPE TAG rather than a value: `setPolylineTopology`
+ * stamps it on every path this node emits, `carryPrimitiveAttributes`
+ * refuses to carry it for that reason, and `polylineWalks` reads it to
+ * decide what is a polyline at all. An f32 POINT column under that name is
+ * inert today — every reader looks at the primitive domain — but it is a
+ * second meaning for a name the library resolves as a type, and one
+ * `promoteAttribute` point → primitive on it later replaces the string tag
+ * with a float and every path node downstream stops seeing a path. A slot
+ * whose only defence is that nothing currently reads the domain it lands
+ * on is a slot that fails the day something does.
+ *
+ * Then the INPUT'S PRIMITIVE columns, which is the asymmetry with
+ * `lengthAttr` worth stating out loud: those columns are all CARRIED onto
+ * this node's samples, so they end up on the output's POINT domain, where
+ * this report lands. The point-domain `requireReportSlot` below runs before
+ * the carry — it has to, since the carry must find the column already
+ * there to refuse it — so without this pre-check the collision is caught
+ * inside `carryPrimitiveAttributes`, whose message is about the CARRIED
+ * attribute: it never names `sampleArcAttr`, it sends the reader to the
+ * setAttribute or promoteAttribute that produced the input's column, and
+ * it says the name "is already the attribute this node writes itself" when
+ * that is only true because this param asked for it. Right refusal, wrong
+ * fix, and error messages are part of this library's agent API.
+ */
+function requireSampleArcSlot(attrs: AttributeSet, params: PathResampleParams): void {
+  const name = params.sampleArcAttr;
+  if (name === "") return;
+  const carried = attrs.get(name);
+  if (carried === undefined) return;
+  const shape = carried.tupleSize === 1 ? carried.type : `${carried.type}x${carried.tupleSize}`;
+  throw new Error(
+    `pathResample: sampleArcAttr "${name}" is also a PRIMITIVE attribute of the input (${shape}), and every primitive attribute is carried onto this node's samples — both would land on the same POINT column, and the one written second would take it. Primitive attributes come along automatically and there is no opt-out, so the fix here is to RENAME THE PARAM: give sampleArcAttr a name of its own (e.g. "sampleArc"). Renaming the input's column instead, or dropping it upstream with removeAttribute (domain "primitive", names ["${name}"]) if it is genuinely dead, works too — but it moves the author's own value to make room for a report, which is the wrong way round.`,
+  );
+}
+
+/** The `primtype` half of {@link requireSampleArcSlot}, param-only. */
+function requireSampleArcNotPrimtype(params: PathResampleParams): void {
+  if (params.sampleArcAttr !== PRIMTYPE_ATTR) return;
+  throw new Error(
+    `pathResample: sampleArcAttr may not be "${PRIMTYPE_ATTR}" — that name is the primitive TYPE TAG, not a report slot. This node stamps it on every path it emits, carryPrimitiveAttributes refuses to carry it for the same reason, and the path nodes read it to decide what is a polyline; an f32 POINT column under that name would be a second meaning for a name the library resolves as a type, and one promoteAttribute point → primitive on it would replace the tag with a float and leave every path node downstream unable to find a path. Give sampleArcAttr a name of its own (e.g. "sampleArc").`,
+  );
+}
+
+/**
+ * The per-path reports, checked against one attribute set.
  *
  * Run TWICE: once against the INPUT's primitive domain, where a refusal
  * costs nothing and where every column that is about to be carried onto
@@ -311,11 +487,7 @@ function requireResampleReports(
   params: PathResampleParams,
   on: "input" | "output",
 ): void {
-  const slots = [
-    ["lengthAttr", params.lengthAttr, "pathLength"],
-    ["stepAttr", params.stepAttr, "sampleStep"],
-  ] as const;
-  for (const [param, name, suggestion] of slots) {
+  for (const { param, name, suggestion } of resamplePathReports(params)) {
     if (name === "") continue;
     requireReportSlot({
       attrs,
@@ -405,7 +577,7 @@ export const pathResample = standardNode<PathResampleParams>({
   type: "pathResample",
   category: "sampler",
   description:
-    "Resamples every polyline primitive at even arc-length steps and emits a PATH, not a cloud: the new points carry polyline topology, and a path that was closed comes back closed. Unlike splineSample, each polyline is resampled on its own arc length rather than as one concatenated curve, so a graph with several paths keeps them separate. mode 'count' places exactly `count` samples per path (endpoints included on an open path; a closed path divides its length without duplicating the start). mode 'spacing' steps every `spacing` world units, keeping that step exact rather than stretching it to fit: an open path always ends on its true endpoint, so it never comes back shorter than it went in, and a closed path closes with a REMAINDER segment at the seam that is shorter than `spacing` (use 'count' to divide a loop evenly — see the `spacing` param). Output points are new: they carry the standard point-cloud attributes plus the unit segment `tangent` (f32 tuple 3) and `curveU` (f32, normalized position within that path), and the input's point attributes are NOT carried across. Its PRIMITIVE attributes ARE, in both directions: every attribute of the polyline a sample came from lands on that sample, and each output polyline keeps the attributes of the input polyline it replaces (output primitive i resamples input polyline i and nothing else), so a road resampled here comes back still a road rather than a nameless polyline. `primtype` is the one exception, being a type tag rather than a value, and there is no opt-out: a carried name that collides with one this node writes (P, tangent, curveU, seed, ...) is refused with an error naming the attribute and the fix. TWO OPT-IN REPORTS publish what the resampling already computed, so anything sized in units of the sampling can be stated as a multiple of it instead of retyped as a literal that the count knob then invalidates: `lengthAttr` writes each path's TRUE ARC LENGTH and `stepAttr` the distance between its samples, both on the PRIMITIVE domain because both are facts about a PATH. Both are empty by default and the output is byte-identical to a cook without them. Downstream, any node that can REMOVE points drops topology — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a resampled path that passes through one stops being a path. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
+    "Resamples every polyline primitive at even arc-length steps and emits a PATH, not a cloud: the new points carry polyline topology, and a path that was closed comes back closed. Unlike splineSample, each polyline is resampled on its own arc length rather than as one concatenated curve, so a graph with several paths keeps them separate. mode 'count' places exactly `count` samples per path (endpoints included on an open path; a closed path divides its length without duplicating the start). mode 'spacing' steps every `spacing` world units, keeping that step exact rather than stretching it to fit: an open path always ends on its true endpoint, so it never comes back shorter than it went in, and a closed path closes with a REMAINDER segment at the seam that is shorter than `spacing` (use 'count' to divide a loop evenly — see the `spacing` param). Output points are new: they carry the standard point-cloud attributes plus the unit segment `tangent` (f32 tuple 3) and `curveU` (f32, normalized position within that path), and the input's point attributes are NOT carried across. Its PRIMITIVE attributes ARE, in both directions: every attribute of the polyline a sample came from lands on that sample, and each output polyline keeps the attributes of the input polyline it replaces (output primitive i resamples input polyline i and nothing else), so a road resampled here comes back still a road rather than a nameless polyline. `primtype` is the one exception, being a type tag rather than a value, and there is no opt-out: a carried name that collides with one this node writes (P, tangent, curveU, seed, ...) is refused with an error naming the attribute and the fix. FOUR OPT-IN REPORTS publish what the resampling already computed, so anything sized in units of the sampling can be stated as a multiple of it instead of retyped as a literal that the count knob then invalidates. Three are facts about a PATH and land on the PRIMITIVE domain: `lengthAttr` writes each path's TRUE ARC LENGTH — the INPUT curve's — `stepAttr` the distance between its samples, and `resampledLengthAttr` the length of the polyline this node actually EMITS. THE TWO LENGTHS ARE DIFFERENT NUMBERS and the difference is why the second exists: a resample CUTS CORNERS, so the polyline through the samples is always shorter than the curve it approximates, and it is the shorter one that anything stepping, tiling or scattering over THIS output is walking. The fourth, `sampleArcAttr`, is a fact about a SAMPLE and lands on the POINT domain: each sample's own arc position along its path, in world units on that emitted polyline, so it composes directly with pathPointAt's 'distance' mode, transferAlongPath and arcTile. All four are empty by default and the output is byte-identical to a cook without them. Downstream, any node that can REMOVE points drops topology — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a resampled path that passes through one stops being a path. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -441,7 +613,19 @@ export const pathResample = standardNode<PathResampleParams>({
       type: "string",
       default: "",
       description:
-        "Name of an f32 PRIMITIVE attribute receiving the ARC-LENGTH STEP between consecutive samples on that path. Empty (the default) writes none. Per path and so on the PRIMITIVE domain for the same reason as `lengthAttr`: in 'count' mode the step is that path's OWN length divided by its divisions (length / (count - 1) on an open path, length / count on a closed one, the divisor that leaves no duplicate at the seam), so two paths of different lengths get different steps and neither varies from sample to sample. In 'spacing' mode it reports `spacing` itself, unchanged — or, when `spacing` is a field, that path's OWN resolved value, which is the same statement once the param is read per path — not a tautology but the point of reporting it at all: a downstream size written as a multiple of this attribute follows the sampling when the mode or the knob changes under it, instead of silently meaning something else. Note that in 'spacing' mode the LAST step is the remainder described under `spacing` and is SHORTER than the value reported here; this is the step the node takes, not what the path had left over. Same reporting-slot rule as `lengthAttr`, and the two params may not name the same attribute — the second write would overwrite the first with no complaint, since the shapes agree.",
+        "Name of an f32 PRIMITIVE attribute receiving the ARC-LENGTH STEP between consecutive samples on that path. Empty (the default) writes none. Per path and so on the PRIMITIVE domain for the same reason as `lengthAttr`: in 'count' mode the step is that path's OWN length divided by its divisions (length / (count - 1) on an open path, length / count on a closed one, the divisor that leaves no duplicate at the seam), so two paths of different lengths get different steps and neither varies from sample to sample. In 'spacing' mode it reports `spacing` itself, unchanged — or, when `spacing` is a field, that path's OWN resolved value, which is the same statement once the param is read per path — not a tautology but the point of reporting it at all: a downstream size written as a multiple of this attribute follows the sampling when the mode or the knob changes under it, instead of silently meaning something else. Note that in 'spacing' mode the LAST step is the remainder described under `spacing` and is SHORTER than the value reported here; this is the step the node takes, not what the path had left over. Same reporting-slot rule as `lengthAttr`, and no two of the per-path reports may name the same attribute — the second write would overwrite the first with no complaint, since the shapes agree.",
+    },
+    resampledLengthAttr: {
+      type: "string",
+      default: "",
+      description:
+        "Name of an f32 PRIMITIVE attribute receiving the length of the polyline this node EMITS for that path: the sum of the straight-line chords between consecutive samples, plus the closing chord from the last sample back to the first when the path is closed. Empty (the default) writes none. IT IS NOT `lengthAttr` AND THAT IS THE POINT. `lengthAttr` reports the INPUT curve, which is the right number to ask about the road and the wrong one to ask about this output: a resample CUTS CORNERS, so the polyline through the samples is always SHORTER than the curve it was cut from. On a real circuit lap the two read 3121.533 and 3121.366 — 0.0054% — which sounds ignorable until you notice it is NOT UNIFORM: every unit of it accrues over the bends and none of it over the straights, so no scale factor turns one into the other and a consumer that steps `lengthAttr` over these samples drifts, running off the end of the path or wrapping short of its own seam. Use `lengthAttr` when the question is about the CURVE (how long is this road, how many props does it deserve) and this one when the question is about THIS OUTPUT (how far can I walk on the polyline I am about to hand downstream). Measured from the f32 positions actually written, in the same order and with the same arithmetic `polylineArcTables` uses to re-measure them downstream, so the number a later pathResample, pathPointAt, arcTile or transferAlongPath computes for this path IS this number rather than a near miss — the column itself is f32 like every report here, so what a graph reads is that sum rounded to f32. Same reporting-slot rule as `lengthAttr` — a name on the output's primitive domain under a different shape is REFUSED rather than deleted and re-added, a same-shape one is RESET — and no two of the per-path reports may name the same attribute.",
+    },
+    sampleArcAttr: {
+      type: "string",
+      default: "",
+      description:
+        "Name of an f32 POINT attribute (tuple 1) receiving each sample's ARC POSITION from the start of ITS OWN path, measured along the EMITTED polyline: sample 0 of every path is 0, and each later sample adds the straight-line chord from the sample before it. Empty (the default) writes none. THE UNITS ARE WORLD UNITS, NOT A 0..1 FRACTION, and that is what makes it more than `curveU` under another name: `pathPointAt`'s 'distance' mode, `pointScatterOnPath.arcAttr`, `transferAlongPath.arcAttr` and `arcTile.startAttr` are all world-unit chord coordinates, so this column plugs into any of them with no multiply and nothing for the graph to get wrong. The fraction is one divide away (by `resampledLengthAttr`) while going back the other way needs the length anyway, so the coordinate that composes is the one written. `curveU` is still written beside it and still measures the INPUT curve's fraction; the two disagree by exactly the corner-cutting `resampledLengthAttr` reports. It lands on the POINT domain because it is a fact about a SAMPLE — a different number for every point — which is what makes it unlike the three per-path reports and why it is checked against the output's point domain rather than its primitive one. THE CLOSING CHORD OF A CLOSED PATH IS NOT IN THIS COLUMN: it runs from the last sample back to the first, so no sample holds it — it is in `resampledLengthAttr`, and the last sample's value plus that chord is the emitted length. On an open path the last sample's value IS the emitted length. The shape is this node's to pick (f32, tuple 1), so a name already on the OUTPUT's point domain under a different shape is REFUSED rather than deleted and re-added — P, scale, boundsMin, boundsMax and `tangent` (f32x3), rot and color (f32x4) and seed (u32) all reach that refusal — while `density` and `curveU` ARE f32 tuple 1, so naming either passes the shape check and RESETS it, silently overwriting a standard column with an arc length — and `curveU` is then gone rather than merely shadowed, since the two columns become one buffer and the arc is what stays in it. Give it a name of its own. TWO MORE NAMES ARE REFUSED OUTRIGHT. A name that is also a PRIMITIVE attribute of the INPUT is refused before the cook starts, whatever its shape: every primitive attribute is carried onto these samples, so it would land on this very column, and the refusal names this param rather than the carried attribute because renaming the report is the fix and moving the author's own value is not. And \"primtype\" is refused because it is a type tag rather than a value — this node stamps it on every path it emits, and an f32 point column under that name is a second meaning for a name the library resolves as a type, one promoteAttribute away from replacing the tag and hiding every path from the nodes that read it.",
     },
   },
   execute({ inputs, params, seed, checkCancelled }) {
@@ -460,19 +644,21 @@ export const pathResample = standardNode<PathResampleParams>({
     if (params.mode === "spacing" && scalarSpacing !== undefined && !(scalarSpacing > 0)) {
       throw new Error(`pathResample: spacing must be > 0 in 'spacing' mode, got ${scalarSpacing}`);
     }
-    // Both reports are f32 tuple 1, so a shared name passes the shape
-    // check and the second write silently replaces the first — the same
-    // reason writeCurveFrame refuses two of its three names being equal.
-    if (params.lengthAttr !== "" && params.lengthAttr === params.stepAttr) {
-      throw new Error(
-        `pathResample: params "lengthAttr" and "stepAttr" are both "${params.lengthAttr}"; a length and a step are two values and need two attributes, or the step would overwrite the length`,
-      );
-    }
+    requireDistinctResampleReports(params);
+    // Param-only, so it lands with the other checks that need no geometry.
+    requireSampleArcNotPrimtype(params);
     const geo = requireGeometry(inputs, "in", "pathResample");
     // Against the INPUT first, where a refusal costs nothing: its
     // primitive columns are the ones carried onto the output, so this
     // catches every collision except a `primtype` the input lacks.
     requireResampleReports(geo.attrs.primitive, params, "input");
+    // The same set, for the report that lands on the POINT domain: the
+    // carry puts every one of these columns there, so the input's
+    // primitive names are as much `sampleArcAttr`'s neighbours as the
+    // output's point names are. Without this the collision is real but the
+    // message is the carry's, which names the wrong param and offers the
+    // wrong fix — see requireSampleArcSlot.
+    requireSampleArcSlot(geo.attrs.primitive, params);
     const tables = polylineArcTables(geo, "pathResample");
     // Only needed to name a spacing that would fit the budget below.
     const totalLength = tables.reduce((sum, table) => sum + table.length, 0);
@@ -576,6 +762,51 @@ export const pathResample = standardNode<PathResampleParams>({
     const tangent = out.attrs.point.add("tangent", "f32", 3, [0, 0, 0]).data;
     const curveU = out.attrs.point.add("curveU", "f32", 1, 0).data;
     const seeds = out.attrs.point.require("seed").data;
+    // `sampleArcAttr` gets its OWN report-slot check rather than a fourth
+    // entry in requireResampleReports, and the domain is the reason:
+    // that helper's argument is that its slots are PER-PATH facts and
+    // therefore belong on the primitive domain, and this is a per-SAMPLE
+    // one — checking it against the primitive domain would guard the
+    // wrong columns entirely, waving through a name that is about to
+    // delete `tangent` while refusing one that collides with nothing.
+    // Checked HERE, the moment the columns it must not destroy exist and
+    // before the carry that can add more: this node builds a FRESH cloud
+    // rather than cloning, so the input's point attributes — which never
+    // reach the output — are the wrong set to check against, exactly as
+    // pointScatterOnPath.arcAttr documents for its own fresh cloud.
+    let sampleArc: Float32Array | undefined;
+    if (params.sampleArcAttr !== "") {
+      requireReportSlot({
+        attrs: out.attrs.point,
+        nodeType: "pathResample",
+        param: "sampleArcAttr",
+        name: params.sampleArcAttr,
+        type: "f32",
+        tupleSize: 1,
+        domain: "point",
+        suggestion: "sampleArc",
+        // The cloud is this node's own, so a refusal must name it: the
+        // input's point columns never reach here, and "remove it from the
+        // input" would send an author after a geometry it is not on.
+        on: "output",
+      });
+      sampleArc = out.attrs.point.replace(params.sampleArcAttr, "f32", 1, 0).data;
+    }
+    // The chord length of the EMITTED polyline, per path, and the only
+    // number in this node measured back OFF the samples rather than from
+    // the expression that placed them — because that is exactly what it
+    // is about: `lengthAttr` reports the curve, this reports what came
+    // out. Skipped when neither report asks for it, since it costs a
+    // square root per sample on top of the one the tangent already takes,
+    // and a report nobody named must not slow down the cook that does not
+    // use it.
+    // Allocated only for the report that publishes it, while the running
+    // sum itself is kept for either: `sampleArcAttr` alone needs the walk
+    // and not the total, and computing a closing chord nothing reads would
+    // be one square root per path spent on a number thrown away.
+    const resampledLengths =
+      params.resampledLengthAttr === "" ? undefined : new Float64Array(tables.length);
+    const wantChords = resampledLengths !== undefined || sampleArc !== undefined;
     // Which input polyline each sample came from, and which input polyline
     // each OUTPUT polyline replaces. The second is a structural 1:1 —
     // output primitive `ti` is a resampling of `tables[ti].prim` and of
@@ -589,6 +820,25 @@ export const pathResample = standardNode<PathResampleParams>({
       const positions = perPath[ti];
       const L = table.length;
       outPrimSrc[ti] = table.prim;
+      // The output index of this path's FIRST sample, kept for the closing
+      // chord below: a closed path's last segment runs back to it, and by
+      // the time the walk ends `w` is past the whole path.
+      const first = w;
+      // Chord distance from that first sample, in f64 over the f32
+      // positions the loop has just written. BOTH halves of that are
+      // load-bearing. Reading the values back out of `op` rather than
+      // accumulating the f64 expressions above them is what makes this
+      // number the one `polylineArcTables` recomputes for the same cloud
+      // downstream — it measures an f32 P column and nothing else, so an
+      // f64 sum here would be a slightly different length that no later
+      // node ever agrees with. Summing in f64 rather than in the f32
+      // column is the same rule from the other side: `cum` accumulates in
+      // f64 there, so rounding every partial sum to f32 here would drift
+      // away from it over a few thousand samples.
+      let arc = 0;
+      let px = 0;
+      let py = 0;
+      let pz = 0;
       for (let i = 0; i < positions.length; i++) {
         if ((w & 1023) === 0) checkCancelled();
         const s = positions[i];
@@ -601,6 +851,20 @@ export const pathResample = standardNode<PathResampleParams>({
         op[w * 3] = table.segStart[lo * 3] + dx * t;
         op[w * 3 + 1] = table.segStart[lo * 3 + 1] + dy * t;
         op[w * 3 + 2] = table.segStart[lo * 3 + 2] + dz * t;
+        if (wantChords) {
+          const x = op[w * 3];
+          const y = op[w * 3 + 1];
+          const z = op[w * 3 + 2];
+          if (i > 0) {
+            const cx = x - px;
+            const cy = y - py;
+            const cz = z - pz;
+            arc += Math.sqrt(cx * cx + cy * cy + cz * cz);
+          }
+          px = x;
+          py = y;
+          pz = z;
+        }
         const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (len > 0) {
           tangent[w * 3] = dx / len;
@@ -608,9 +872,38 @@ export const pathResample = standardNode<PathResampleParams>({
           tangent[w * 3 + 2] = dz / len;
         }
         curveU[w] = s / L;
+        // AFTER `curveU`, and that order is the one case where it matters:
+        // `curveU` is f32 tuple 1, so `sampleArcAttr: "curveU"` passes the
+        // shape check and `replace` hands back the SAME buffer. Written
+        // first, the arc would be overwritten by the fraction one line
+        // later and the column an author explicitly asked for the arc in
+        // would hold the other number — the exact plausible-looking cook
+        // the reporting-slot rule exists to avoid. Written last, the named
+        // param means what it says and the standard column is the one
+        // lost, which is the trade every same-shape reset in the library
+        // already makes (pointScatterOnPath.arcAttr over `density`).
+        // Sample 0 of every path is 0: the coordinate restarts per path,
+        // the way every other per-path measurement in this node does.
+        if (sampleArc !== undefined) sampleArc[w] = arc;
         seeds[w] = hashCombine(seed, w);
         samplePrim[w] = table.prim;
         w++;
+      }
+      if (resampledLengths !== undefined) {
+        // The closing chord belongs to the LENGTH and to no sample: the
+        // topology below repeats point `first` as the closed path's last
+        // vertex, so that segment is real and a length that left it out
+        // would be short by one side of the seam — but it starts at the
+        // last sample and ends where the arc coordinate already reads 0,
+        // so there is no sample it could be written on.
+        let closing = 0;
+        if (table.closed) {
+          const cx = op[first * 3] - px;
+          const cy = op[first * 3 + 1] - py;
+          const cz = op[first * 3 + 2] - pz;
+          closing = Math.sqrt(cx * cx + cy * cy + cz * cz);
+        }
+        resampledLengths[ti] = arc + closing;
       }
     }
     carryPrimitiveAttributes(
@@ -668,6 +961,15 @@ export const pathResample = standardNode<PathResampleParams>({
       // Output primitive `ti` resamples `tables[ti]` and nothing else, the
       // same 1:1 the primitive carry above relies on.
       for (let ti = 0; ti < tables.length; ti++) data[ti] = tables[ti].length;
+    }
+    if (resampledLengths !== undefined && params.resampledLengthAttr !== "") {
+      // Beside `lengthAttr` and on the same 1:1, so the two lengths of one
+      // path sit on the same primitive and can be compared in a field
+      // without a transfer. `resampledLengths` was measured in output
+      // order, which IS `ti` order — `tables[ti]` is what path `ti` came
+      // from — so no remap is needed here either.
+      const data = out.attrs.primitive.replace(params.resampledLengthAttr, "f32", 1, 0).data;
+      for (let ti = 0; ti < tables.length; ti++) data[ti] = resampledLengths[ti];
     }
     if (params.stepAttr !== "") {
       const data = out.attrs.primitive.replace(params.stepAttr, "f32", 1, 0).data;
@@ -1015,16 +1317,17 @@ export const pathPointAt = standardNode<PathPointAtParams>({
 export interface PathScanParams {
   name: string;
   outName: string;
+  reduce: string;
   mode: string;
   totalAttr: string;
 }
 
-/** A running total along a path, in walk order. */
+/** A running fold along a path, in walk order. */
 export const pathScan = standardNode<PathScanParams>({
   type: "pathScan",
   category: "attribute",
   description:
-    "Writes the RUNNING TOTAL of a numeric point attribute along every polyline, in the path's own walk order — a prefix sum, the accumulating counterpart to attributeReduce's collapse. This is the operation a field cannot express at any length: a field resolves each element from that element alone, so 'how much of this attribute lies BEHIND me along the curve' has no formulation in the grammar, and the quantities that need it are ordinary — distance travelled, accumulated cost, an inventory that fills as the path runs, and above all a CUMULATIVE DISTRIBUTION, which is what turns a per-sample density into placements. Order is the path's, which is why this is a path node rather than a domain-wide one: a scan without an order is not defined, and a polyline is where this library keeps one. A CLOSED path scans from its seam and does not count the repeated last vertex twice. Points in no polyline are left at zero, and a point visited by several polylines takes the last one in primitive order, both matching writeTangents. NaN CONTRIBUTES ZERO rather than poisoning everything downstream of it, which matters more here than in attributeReduce: there one bad element spoils one statistic, here it would spoil the whole tail of a column. INVERSE-TRANSFORM SAMPLING, the reason this exists, is then three nodes — scan a per-sample density with `totalAttr` set, divide by that total for a CDF in 0..1, and transferAttribute 'nearest' from a cloud of N evenly spaced targets in CDF space back onto the frames. Each target lands on the sample whose CDF is nearest its own, which places exactly N points in proportion to the density, with no rejection and no approximate count.",
+    "Writes a RUNNING FOLD of a numeric point attribute along every polyline, in the path's own walk order — by default a prefix SUM, the accumulating counterpart to attributeReduce's collapse, and under `reduce` a running minimum or maximum over that same walk instead. This is the operation a field cannot express at any length: a field resolves each element from that element alone, so 'how much of this attribute lies BEHIND me along the curve' has no formulation in the grammar, and the quantities that need it are ordinary — distance travelled, accumulated cost, an inventory that fills as the path runs, and above all a CUMULATIVE DISTRIBUTION, which is what turns a per-sample density into placements. Order is the path's, which is why this is a path node rather than a domain-wide one: a scan without an order is not defined, and a polyline is where this library keeps one. A CLOSED path scans from its seam and does not count the repeated last vertex twice, under every fold — and the skip is not merely tidiness for the folds that could absorb it. A min or a max is idempotent, so folding the seam vertex's value in a second time could not move the path's answer; but the second VISIT would also re-WRITE the seam point's own column entry, with the fold over nearly the whole path rather than with what stands behind that point, and that is wrong under all three. One rule, one set of visited points, three folds. Points in no polyline are left at the fold's IDENTITY — zero for a sum, which is what they have always read, and ±Infinity for a min or a max — and a point visited by several polylines takes the last one in primitive order, both matching writeTangents and pathRuns. NaN CONTRIBUTES NOTHING rather than poisoning everything downstream of it — zero to a sum, and no candidate to a min or a max — which matters more here than in attributeReduce: there one bad element spoils one statistic, here it would spoil the whole tail of a column. INVERSE-TRANSFORM SAMPLING, the reason the SUM exists, is then three nodes — scan a per-sample density with `totalAttr` set, divide by that total for a CDF in 0..1, and transferAttribute 'nearest' from a cloud of N evenly spaced targets in CDF space back onto the frames. Each target lands on the sample whose CDF is nearest its own, which places exactly N points in proportion to the density, with no rejection and no approximate count. THAT IDIOM IS `reduce` 'sum' AND NOTHING ELSE, and the nearest-in-CDF lookup is the part that gives it away: a distribution is accumulated MASS, and a running extreme accumulates none — it opens at the first value rather than at zero and moves only where a record is set, so the buckets it lays out have width only at the samples that beat the record and ZERO width everywhere else. Evenly spaced targets in that space land on the records and nowhere else, which is not sampling in proportion to anything. WHAT THE OTHER FOLDS ARE FOR is the GROUPED REDUCTION the library otherwise cannot spell: pointsToPath with a `groupAttr` cuts a cloud into one path per group, `reduce` 'max' with `totalAttr` set writes each group's maximum onto the primitive domain, and promoteAttribute (primitive to point) hands it back to every point of its own group. attributeReduce has min and max but collapses a WHOLE domain onto the detail domain and cannot group, so 'the largest value in each group, on every member of that group' had no expression at all before this param and came out as a hand-written loop in whatever host needed it.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -1032,26 +1335,33 @@ export const pathScan = standardNode<PathScanParams>({
       type: "string",
       default: "density",
       description:
-        "Numeric POINT attribute to accumulate (f32/i32/u32/bool, tuple 1..4). Must exist. Tuples accumulate componentwise, each component its own independent running total.",
+        "Numeric POINT attribute to fold (f32/i32/u32/bool, tuple 1..4). Must exist. Tuples fold COMPONENTWISE, each component its own independent running value — which under `reduce` 'min' or 'max' means a per-component extreme and not the tuple that happened to hold the smallest component: comparing tuples would need an order on tuples, and there is none that is not an arbitrary choice made on the caller's behalf.",
     },
     outName: {
       type: "string",
       default: "scan",
       description:
-        "POINT attribute receiving the running total (f32, at the source's tuple size). Must differ from `name`: scanning in place would read back values this node had already overwritten, so every element after the first would accumulate partial sums instead of its input. 'P' is refused outright. Same reporting-slot rule as the rest of the library — a column of a different shape under this name is refused rather than deleted and re-added, and a same-shape one is reset.",
+        "POINT attribute receiving the running value (f32, at the source's tuple size). Must differ from `name`: scanning in place would read back values this node had already overwritten, so every element after the first would fold in this node's own output instead of its input. 'P' is refused outright. Same reporting-slot rule as the rest of the library — a column of a different shape under this name is refused rather than deleted and re-added, and a same-shape one is reset. f32 whatever `reduce` is, and that is not a limitation for a min or a max: an extreme is one of the values that were handed in, never a combination of two, so it survives the trip at the same precision a sum's inputs did — and f32 carries the ±Infinity a path that has folded in nothing yet reads.",
+    },
+    reduce: {
+      type: "enum",
+      default: "sum",
+      enum: ["sum", "min", "max"],
+      description:
+        "WHAT THE ACCUMULATOR IS. 'sum' (the default, and everything this node did before this param existed) adds the values along a path; 'min' and 'max' keep the smallest or largest seen so far instead. Nothing else moves — `mode`, `totalAttr`, the walk order, the seam rule and componentwise tuple handling are the same scan, because a running minimum differs from a prefix sum only in the fold, and the fold was never the hard part: the ORDER is, and a polyline is where this library keeps one. EACH PATH OPENS ON ITS FOLD'S IDENTITY: 0 for a sum, +Infinity for a min, -Infinity for a max — attributeReduce's answer over an empty domain, and the same answer for the same reason. In 'exclusive' mode a path's FIRST point reads exactly that, since by definition its own value is not in its own total, so a min there reads +Infinity and a max -Infinity. That is the honest answer rather than a sentinel to remember: the minimum of no values IS +Infinity — it is the only x for which min(x, v) = v — the output column is f32 and represents both infinities exactly, and unlike a sum's 0 it can never be mistaken for a measurement, so `isFinite` on the column is a usable test for 'nothing has been folded in here' — which covers a path's first point in 'exclusive' AND a point on no polyline at all, the two elements that have nothing behind them — that a sum can never offer. Answering 0 instead would make an empty min compare TIGHTER than every real value, which is precisely the false positive a threshold rule cannot survive. NaN IS SKIPPED, not propagated — the rule the sum already had, kept: both `<` and `>` are false against a NaN, so an unmeasurable value simply never becomes the record, and one bad sample costs its own point instead of the whole tail of the column. A PATH OF ONE POINT is degenerate rather than unreachable — a polyline needs two vertices, but a CLOSED one whose two vertices are the same point walks exactly one — and it reads the identity in 'exclusive' and its own value in 'inclusive', which is the sum's 0-and-v said in the other monoid, since min(+Infinity, v) is v. THE COMPARISON IS SIGNED, never a magnitude: a max over -5 and -1 is -1. WHAT `mode` COSTS DIFFERS BY FOLD: for a sum the two modes differ at a point BY THAT POINT'S OWN VALUE, so they part company almost everywhere and agree only where the value is zero (or a NaN, which contributes zero); for a min or a max they differ only at the points that SET A NEW RECORD, because an extreme is idempotent and the running value therefore moves one way and then stays. IT IS A PARAM AND NOT A SECOND NODE for the reason pathRuns' `reduce` is one: 'the largest width so far along this lap' and 'the width so far along this lap' are one query asked twice, and this is that same param over a whole path where pathRuns spells it over segmented runs — one vocabulary, one identity, one NaN rule, so a graph that folds a minimum between markers and one that folds it along the whole path do not have to be read two different ways.",
     },
     mode: {
       type: "enum",
       default: "inclusive",
       enum: ["inclusive", "exclusive"],
       description:
-        "Whether a point's own value is part of its own total. 'inclusive' ends the last point of a path on the path's whole total; 'exclusive' starts the first point at zero, which is the one that makes a CDF whose first bucket is reachable. Neither is more correct — pick by which end you need exact.",
+        "Whether a point's own value is part of its own running value. 'inclusive' ends the last point of a path on the path's whole fold; 'exclusive' starts the first point at the `reduce` fold's identity — zero for a sum, which is the one that makes a CDF whose first bucket is reachable, and ±Infinity for a min or a max, which is what 'the smallest thing strictly behind me' means when there is nothing behind me yet. Neither is more correct — pick by which end you need exact.",
     },
     totalAttr: {
       type: "string",
       default: "",
       description:
-        "OPT-IN REPORT: name of an f32 PRIMITIVE attribute receiving each path's WHOLE total, the number both modes are heading for. Empty (the default) writes none and the output is byte-identical to a cook without it. On the PRIMITIVE domain because a total is a fact about a PATH, exactly as pathResample's `lengthAttr` is; promote it (promoteAttribute, primitive to point) for a field to read it per sample, which is what normalizing a scan into a 0..1 CDF needs. Reported in 'exclusive' mode too, where it is otherwise unrecoverable from the column because no point holds it. May not name the same attribute as `outName` — a different domain, but one name, which is a coincidence worth refusing rather than explaining downstream.",
+        "OPT-IN REPORT: name of an f32 PRIMITIVE attribute receiving each path's WHOLE FOLD — its total under `reduce` 'sum', its minimum under 'min', its maximum under 'max' — the number both modes are heading for. Empty (the default) writes none and the output is byte-identical to a cook without it. On the PRIMITIVE domain because a fold is a fact about a PATH, exactly as pathResample's `lengthAttr` is; promote it (promoteAttribute, primitive to point) for a field to read it per sample, which is what normalizing a scan into a 0..1 CDF needs — and, with a `groupAttr` on the pointsToPath upstream, what makes this node the library's GROUPED REDUCTION: one path per group, that group's fold on its primitive, promoted back onto every point of it. Promote with 'first' rather than 'average' when the fold can be an infinity: with one path per point the two agree on the value, and where a point really does sit on two paths, averaging a +Infinity against a -Infinity gives NaN where 'first' still gives a number. REPORTED IN 'exclusive' MODE TOO, where a sum's total is otherwise unrecoverable from the column because no point holds it. Under a min or a max that sentence is nearly true, and the exception is the dangerous half: the last point's exclusive value IS the whole fold unless the last point is the one that set the record, and nothing in the column says which case you are in — so the report is the answer that is right every time rather than usually, which is a stronger reason to ask for it than the sum ever had. Primitives that are not polylines are left at the identity like any unwritten element, so a mesh in the same geometry reads the fold over no points rather than a zero that would beat every real minimum. May not name the same attribute as `outName` — a different domain, but one name, which is a coincidence worth refusing rather than explaining downstream.",
     },
   },
   execute({ inputs, params }) {
@@ -1075,7 +1385,7 @@ export const pathScan = standardNode<PathScanParams>({
     }
     if (outName === name) {
       throw new Error(
-        `pathScan: params "name" and "outName" are both "${name}"; a scan cannot be written over its own source, because every element after the first would accumulate the totals this node had already written rather than the values it was given`,
+        `pathScan: params "name" and "outName" are both "${name}"; a scan cannot be written over its own source, because every element after the first would fold in the running values this node had already written rather than the values it was given`,
       );
     }
     if (totalAttr !== "" && totalAttr === outName) {
@@ -1130,30 +1440,64 @@ export const pathScan = standardNode<PathScanParams>({
     // square root per segment to produce numbers this node never touches.
     const walks = polylineWalks(geo, "pathScan");
     const sd = geo.attrs.point.require(name).data;
-    const zero = new Array<number>(ts).fill(0);
-    const out = geo.attrs.point.replace(outName, "f32", ts, zero).data;
-    const totals = totalAttr === "" ? null : geo.attrs.primitive.replace(totalAttr, "f32", ts, zero);
     const exclusive = params.mode === "exclusive";
+    const takeMin = params.reduce === "min";
+    const takeMax = params.reduce === "max";
+    // Hoisted so the fold below is one loop-invariant test on the sum
+    // path rather than two: sum is the default and must stay exactly the
+    // arithmetic this node has always done.
+    const extreme = takeMin || takeMax;
+    // Every path opens on its fold's IDENTITY, and so do both output
+    // columns, so an element nothing wrote — a point in no polyline, a
+    // primitive that is not one — reads the reduction over no values at
+    // all: 0 for a sum (what it has always read), +Infinity for a min,
+    // -Infinity for a max, which is attributeReduce's answer over an
+    // empty domain. f32 carries both infinities exactly, so this is a
+    // real value rather than a sentinel the caller has to remember, and
+    // it is the one answer that cannot be confused with a measurement.
+    const identity = takeMin
+      ? Number.POSITIVE_INFINITY
+      : takeMax
+        ? Number.NEGATIVE_INFINITY
+        : 0;
+    const start = new Array<number>(ts).fill(identity);
+    const out = geo.attrs.point.replace(outName, "f32", ts, start).data;
+    const totals =
+      totalAttr === "" ? null : geo.attrs.primitive.replace(totalAttr, "f32", ts, start);
     // Accumulate in f64 whatever the source type, so a long f32 sum does
-    // not lose its tail — the same reason attributeReduce does.
+    // not lose its tail — the same reason attributeReduce does. A min or
+    // a max needs none of that (it COPIES one of the values it was handed
+    // rather than combining two, so it is exact in any width that holds
+    // the source) and loses nothing by sharing the same slab.
     const acc = new Float64Array(4);
     // The mode is decided once for the node, so it picks the loop rather
     // than being re-tested per component of per point.
     for (const walk of walks) {
       const pts = walk.points;
       // A closed path repeats its first point as its last vertex; that
-      // repeat is the closure, not a value to add a second time.
+      // repeat is the closure, not a value to fold a second time. The
+      // skip stays under every `reduce` even though an extreme would
+      // absorb the second contribution unchanged: the second VISIT also
+      // re-writes the seam point's own column entry, with the fold over
+      // nearly the whole path instead of with what stands behind it.
       const m = walk.closed ? pts.length - 1 : pts.length;
-      acc.fill(0);
+      acc.fill(identity);
       if (exclusive) {
         for (let k = 0; k < m; k++) {
           const o = pts[k] * ts;
           for (let c = 0; c < ts; c++) {
             const v = sd[o + c];
             out[o + c] = acc[c];
-            // NaN contributes nothing rather than propagating. `v !== v`
-            // is the NaN test that does not depend on argument coercion.
-            if (v === v) acc[c] += v;
+            // The fold. NaN contributes nothing rather than propagating,
+            // in both forms: `v === v` is the NaN test that does not
+            // depend on argument coercion, and for an extreme the
+            // comparison IS that test, since `<` and `>` are both false
+            // against a NaN and it therefore never becomes the record.
+            if (!extreme) {
+              if (v === v) acc[c] += v;
+            } else if (takeMin) {
+              if (v < acc[c]) acc[c] = v;
+            } else if (v > acc[c]) acc[c] = v;
           }
         }
       } else {
@@ -1161,7 +1505,11 @@ export const pathScan = standardNode<PathScanParams>({
           const o = pts[k] * ts;
           for (let c = 0; c < ts; c++) {
             const v = sd[o + c];
-            if (v === v) acc[c] += v;
+            if (!extreme) {
+              if (v === v) acc[c] += v;
+            } else if (takeMin) {
+              if (v < acc[c]) acc[c] = v;
+            } else if (v > acc[c]) acc[c] = v;
             out[o + c] = acc[c];
           }
         }
@@ -1180,6 +1528,7 @@ export interface PathRunsParams {
   name: string;
   boundary: string;
   outName: string;
+  reduce: string;
   mode: string;
   direction: string;
   wrap: boolean;
@@ -1190,7 +1539,7 @@ export const pathRuns = standardNode<PathRunsParams>({
   type: "pathRuns",
   category: "attribute",
   description:
-    "Writes a SEGMENTED running total of a numeric point attribute along every polyline: like pathScan, except the accumulator RESETS at points a boolean attribute flags, and on a closed path a run may cross the seam. This is what answers 'how far since the last marker' and 'how far to the next one' — the two queries a prefix sum cannot express. pathScan accumulates monotonically from the seam and never resets, so emulating a segmented scan from it means subtracting the scan value at the most recent flagged point BEHIND you, and obtaining that value is itself a backward look-up along the path, which no field can perform: a field resolves each element from that element alone. This is the missing primitive, and wrapping is a property it needs rather than the whole of what was missing. IT ACCUMULATES A VALUE, NOT A COUNT, which is the whole ergonomic difference: scan a per-segment length for distance, a per-sample cost for cost, or a constant 1 for the vertex count, and one node covers all three. RUNS ARE HALF-OPEN AND ORIENTED. Forward, a run begins at a flagged point (inclusive) and continues until the next flagged point (exclusive), accumulating in the path's walk order; backward, a run ENDS at a flagged point (inclusive) and extends back to just after the previous one, accumulating against the walk order. Both exist because they answer different questions — 'distance since the corner behind me' is the forward run and 'distance to the corner ahead' is the backward one — and neither is recoverable from the other without knowing each run's total. THE SEAM IS NOT A BOUNDARY unless something flags it. On a CLOSED path with `wrap` on, the walk starts at the first flagged point rather than at vertex zero, so the run that straddles the start/finish line is one run and not two; that is the case a lap actually has, and a backward segmented scan built on an unwrapped prefix sum gets it wrong every time. A closed path with wrap on and NO flagged point anywhere has no place for a cyclic run to begin, so the seam stands in and the result is what `wrap` off would give. On an OPEN path `wrap` does nothing. Points in no polyline are left at zero, and a point visited by several polylines takes the last one in primitive order, both matching pathScan and writeTangents. NaN CONTRIBUTES ZERO rather than poisoning the rest of its run, and a NaN in the BOUNDARY column is not a boundary — a column that could not be measured must not silently cut every run in the path.",
+    "Writes a SEGMENTED running total of a numeric point attribute along every polyline: like pathScan, except the accumulator RESETS at points a boolean attribute flags, and on a closed path a run may cross the seam. `reduce` picks WHAT the accumulator is — a sum (the default), a running minimum or a running maximum over the same runs — because a segmented minimum is this same walk with a different fold, and the walk is the part that was hard. This is what answers 'how far since the last marker' and 'how far to the next one' — the two queries a prefix sum cannot express. pathScan accumulates monotonically from the seam and never resets, so emulating a segmented scan from it means subtracting the scan value at the most recent flagged point BEHIND you, and obtaining that value is itself a backward look-up along the path, which no field can perform: a field resolves each element from that element alone. This is the missing primitive, and wrapping is a property it needs rather than the whole of what was missing. IT ACCUMULATES A VALUE, NOT A COUNT, which is the whole ergonomic difference: scan a per-segment length for distance, a per-sample cost for cost, or a constant 1 for the vertex count, and one node covers all three. RUNS ARE HALF-OPEN AND ORIENTED. Forward, a run begins at a flagged point (inclusive) and continues until the next flagged point (exclusive), accumulating in the path's walk order; backward, a run ENDS at a flagged point (inclusive) and extends back to just after the previous one, accumulating against the walk order. Both exist because they answer different questions — 'distance since the corner behind me' is the forward run and 'distance to the corner ahead' is the backward one — and neither is recoverable from the other without knowing each run's total. THE SEAM IS NOT A BOUNDARY unless something flags it. On a CLOSED path with `wrap` on, the walk starts at the first flagged point rather than at vertex zero, so the run that straddles the start/finish line is one run and not two; that is the case a lap actually has, and a backward segmented scan built on an unwrapped prefix sum gets it wrong every time. A closed path with wrap on and NO flagged point anywhere has no place for a cyclic run to begin, so the seam stands in and the result is what `wrap` off would give. On an OPEN path `wrap` does nothing. Points in no polyline are left at the fold's IDENTITY — zero for a sum, which is what they have always read, and ±Infinity for a min or a max — and a point visited by several polylines takes the last one in primitive order, both matching pathScan and writeTangents. NaN CONTRIBUTES NOTHING rather than poisoning the rest of its run: zero to a sum, and no candidate to a min or a max. A NaN in the BOUNDARY column is not a boundary either — a column that could not be measured must not silently cut every run in the path.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -1210,21 +1559,28 @@ export const pathRuns = standardNode<PathRunsParams>({
       type: "string",
       default: "run",
       description:
-        "POINT attribute receiving the running total (f32, at the source's tuple size). Must differ from `name`: scanning in place would read back values this node had already overwritten. 'P' is refused outright. Same reporting-slot rule as the rest of the library — a column of a different shape under this name is refused rather than deleted and re-added, and a same-shape one is reset.",
+        "POINT attribute receiving the running total (f32, at the source's tuple size). Must differ from `name`: scanning in place would read back values this node had already overwritten. 'P' is refused outright. Same reporting-slot rule as the rest of the library — a column of a different shape under this name is refused rather than deleted and re-added, and a same-shape one is reset. f32 whatever `reduce` is, and that is not a limitation for a min or a max: an extreme is one of the values that were handed in, never a combination of two, so it survives the trip at the same precision a sum's inputs did — and f32 carries the ±Infinity a run that has folded in nothing yet reads.",
+    },
+    reduce: {
+      type: "enum",
+      default: "sum",
+      enum: ["sum", "min", "max"],
+      description:
+        "WHAT THE ACCUMULATOR IS. 'sum' (the default, and everything this node did before this param existed) adds the values of a run; 'min' and 'max' keep the run's smallest or largest instead. Nothing else moves — `boundary`, `mode`, `direction`, `wrap` and componentwise tuple handling are the same walk, because a segmented minimum differs from a segmented sum only in the fold, and the fold was never the hard part: the rotation onto the first flagged point, the seam, and the reset are. IT IS A PARAM AND NOT A SECOND NODE because 'the tightest radius since this corner began' and 'the distance since this corner began' are ONE query asked twice, and the library could previously spell only the second — attributeReduce has min and max but collapses a WHOLE domain onto the detail domain and cannot group, so a grouped extreme had no expression at all and came out as a hand-written loop in whatever host needed it. EACH RUN OPENS ON ITS FOLD'S IDENTITY: 0 for a sum, +Infinity for a min, -Infinity for a max — attributeReduce's answer over an empty domain, and the same answer for the same reason. In 'exclusive' mode a run's FIRST point reads exactly that, since by definition its own value is not in its own total, so a min there reads +Infinity and a max -Infinity. That is the honest answer rather than a sentinel to remember: the minimum of no values IS +Infinity — it is the only x for which min(x, v) = v — the output column is f32 and represents both infinities exactly, and unlike a sum's 0 it can never be mistaken for a measurement, so `isFinite` on the column is a usable test for 'this run has folded in nothing yet' that a sum can never offer. Answering 0 instead would make an empty min compare TIGHTER than every real radius, which is precisely the false positive a threshold rule cannot survive. NaN IS SKIPPED, not propagated — the rule the sum already had, kept: both `<` and `>` are false against a NaN, so an unmeasurable value simply never becomes the record, and one bad sample costs its own point instead of the rest of its run. A RUN OF ONE POINT reads the identity in 'exclusive' and its own value in 'inclusive', which is the sum's 0-and-v said in the other monoid, since min(+Infinity, v) is v; a run of NO points is not observable, because a run is opened by a point. THE COMPARISON IS SIGNED, never a magnitude: a max over -5 and -1 is -1. WHAT `mode` COSTS DIFFERS BY FOLD: for a sum, 'inclusive' differs from 'exclusive' at EVERY point, by that point's own value; for a min or a max they differ only at the points that set a new record, because an extreme is idempotent and the running value therefore moves one way and then stays. `direction` IS UNAFFECTED — all three folds are commutative and associative, so over a FIXED set of points the order of traversal cannot change the answer, and what direction changes is which points form a run (half-open the other way) and where the run's answer lands, exactly as it always did.",
     },
     mode: {
       type: "enum",
       default: "exclusive",
       enum: ["inclusive", "exclusive"],
       description:
-        "Whether a point's own value is part of its own running total. 'exclusive' (the default here, where pathScan defaults to 'inclusive') starts every run at zero on its boundary point, which is what 'distance since the marker' means — the marker itself is at distance zero. 'inclusive' ends each run's last point on the run's whole total instead. Neither is more correct; pick by which end of the run you need exact.",
+        "Whether a point's own value is part of its own running total. 'exclusive' (the default here, where pathScan defaults to 'inclusive') starts every run on its boundary point at the `reduce` fold's identity — zero for a sum, which is what 'distance since the marker' means, the marker itself being at distance zero, and ±Infinity for a min or a max, which is what 'the tightest thing strictly behind me' means when there is nothing behind me yet. 'inclusive' ends each run's last point on the run's whole total instead. Neither is more correct; pick by which end of the run you need exact.",
     },
     direction: {
       type: "enum",
       default: "forward",
       enum: ["forward", "backward"],
       description:
-        "Which way the runs are oriented. 'forward' accumulates in the path's walk order, so a point reads what lies BEHIND it since the last boundary — the query a 'distance since the last corner' rule wants. 'backward' accumulates against the walk order, so a point reads what lies AHEAD of it up to the next boundary — the query a marker rule wants ('place an entry marker 3 to 6W before the corner'). The two are not each other's complement without the run's total, which is why both are built rather than one plus an instruction to reverse the path; on a CLOSED path reversing also moves which side of the seam a run starts on, so 'reverse it yourself' is a trap exactly where wrapping matters.",
+        "Which way the runs are oriented. 'forward' accumulates in the path's walk order, so a point reads what lies BEHIND it since the last boundary — the query a 'distance since the last corner' rule wants. 'backward' accumulates against the walk order, so a point reads what lies AHEAD of it up to the next boundary — the query a marker rule wants ('place an entry marker 3 to 6W before the corner'). The two are not each other's complement without the run's total, which is why both are built rather than one plus an instruction to reverse the path — and under `reduce` 'min' or 'max' not even WITH it, because an extreme discards everything that was not the record and no arithmetic recovers it. On a CLOSED path reversing also moves which side of the seam a run starts on, so 'reverse it yourself' is a trap exactly where wrapping matters. Note also that the two directions do not cut the path into the SAME runs: forward a flagged point opens its run and backward it closes one, so the partitions sit one point apart. That is true of every fold and is not something `reduce` changes.",
     },
     wrap: {
       type: "bool",
@@ -1320,12 +1676,33 @@ export const pathRuns = standardNode<PathRunsParams>({
     const walks = polylineWalks(geo, "pathRuns");
     const sd = geo.attrs.point.require(name).data;
     const bd = geo.attrs.point.require(boundary).data;
-    const zero = new Array<number>(ts).fill(0);
-    const out = geo.attrs.point.replace(outName, "f32", ts, zero).data;
     const exclusive = params.mode === "exclusive";
     const backward = params.direction === "backward";
+    const takeMin = params.reduce === "min";
+    const takeMax = params.reduce === "max";
+    // Hoisted so the fold below is one loop-invariant test on the sum
+    // path rather than two: sum is the default and must stay exactly the
+    // arithmetic this node has always done.
+    const extreme = takeMin || takeMax;
+    // Every run opens on its fold's IDENTITY, and so does the column, so
+    // a point in no polyline reads the reduction over no values at all —
+    // 0 for a sum (what it has always read), +Infinity for a min,
+    // -Infinity for a max, which is attributeReduce's answer over an
+    // empty domain. f32 carries both infinities exactly, so this is a
+    // real value rather than a sentinel the caller has to remember, and
+    // it is the one answer that cannot be confused with a measurement.
+    const identity = takeMin
+      ? Number.POSITIVE_INFINITY
+      : takeMax
+        ? Number.NEGATIVE_INFINITY
+        : 0;
+    const start = new Array<number>(ts).fill(identity);
+    const out = geo.attrs.point.replace(outName, "f32", ts, start).data;
     // Accumulate in f64 whatever the source type, so a long f32 sum does
     // not lose its tail — the same reason attributeReduce and pathScan do.
+    // A min or a max needs none of that (it COPIES one of the values it
+    // was handed rather than combining two, so it is exact in any width
+    // that holds the source) and loses nothing by sharing the same slab.
     const acc = new Float64Array(4);
     for (const walk of walks) {
       const pts = walk.points;
@@ -1355,27 +1732,38 @@ export const pathRuns = standardNode<PathRunsParams>({
         // so the seam stands in and this is exactly the unwrapped result.
         rotate = found < 0 ? 0 : found;
       }
-      acc.fill(0);
+      acc.fill(identity);
       for (let j = 0; j < m; j++) {
         const p = at(cyclic ? (rotate + j) % m : j);
         // The reset happens BEFORE the point is read in either mode, so a
         // boundary point opens its own run rather than closing the one
         // before it. Backward, that is the same rule read the other way:
         // the flagged point is the last of its run in walk order.
-        if (flagged(p)) acc.fill(0);
+        if (flagged(p)) acc.fill(identity);
         const o = p * ts;
         if (exclusive) {
           for (let c = 0; c < ts; c++) {
             const v = sd[o + c];
             out[o + c] = acc[c];
-            // NaN contributes nothing rather than propagating. `v !== v`
-            // is the NaN test that does not depend on argument coercion.
-            if (v === v) acc[c] += v;
+            // The fold. NaN contributes nothing rather than propagating,
+            // in both forms: `v === v` is the NaN test that does not
+            // depend on argument coercion, and for an extreme the
+            // comparison IS that test, since `<` and `>` are both false
+            // against a NaN and it therefore never becomes the record.
+            if (!extreme) {
+              if (v === v) acc[c] += v;
+            } else if (takeMin) {
+              if (v < acc[c]) acc[c] = v;
+            } else if (v > acc[c]) acc[c] = v;
           }
         } else {
           for (let c = 0; c < ts; c++) {
             const v = sd[o + c];
-            if (v === v) acc[c] += v;
+            if (!extreme) {
+              if (v === v) acc[c] += v;
+            } else if (takeMin) {
+              if (v < acc[c]) acc[c] = v;
+            } else if (v > acc[c]) acc[c] = v;
             out[o + c] = acc[c];
           }
         }

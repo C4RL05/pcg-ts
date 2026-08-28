@@ -770,9 +770,9 @@
 
     <div class="stats">
       <div class="stat"><b>4,323</b><span>tests, all green</span></div>
-      <div class="stat"><b>48</b><span>registered node types</span></div>
+      <div class="stat"><b>58</b><span>registered node types</span></div>
       <div class="stat"><b>37</b><span>named primitives</span></div>
-      <div class="stat"><b>57</b><span>field-grammar functions</span></div>
+      <div class="stat"><b>62</b><span>field-grammar functions</span></div>
       <div class="stat"><b>0</b><span>required dependencies</span></div>
       <div class="stat"><b><!--pcg:version-minor-->v0.16<!--/pcg:version-minor--></b><span>MIT · ESM · strict TS</span></div>
     </div>
@@ -796,7 +796,7 @@
       </div>
       <div class="card">
         <h3>Streaming world</h3>
-        <p>Hierarchical grid levels — 2D or 3D cells, plus an unbounded level — cook cells around a viewpoint with hysteresis and LRU eviction. Cell content is provably independent of cook order, path, and evictions.</p>
+        <p>Hierarchical levels — 2D or 3D cells, arc sectors along a curve, plus an unbounded level — cook around a viewpoint with hysteresis and LRU eviction. Cell content is provably independent of cook order, path, and evictions.</p>
       </div>
     </div>
   </section>
@@ -836,7 +836,7 @@
     <p class="eyebrow">Examples</p>
     <h2>Four demos and an editor, live in your browser</h2>
     <p>Each one needs a host to exist: streaming worlds, a device-resident renderer, a closed loop that measures its own output and corrects, and the editor the single-cook recipes moved into. Click to run.</p>
-    <p>Behind them sits a corpus of 68 graphs that are data rather than pages: <code>pcg cook graphs/&lt;name&gt;.json</code>. None of them uses <code>dataInput</code>, because its items do not survive serialization and an example an agent cannot run teaches nothing. Most are single-concept; eight are one settlement pipeline — ground and wall, district centres, lots, buildings, roads, plus three edit variants — where each stage is the previous file plus nodes and nothing removed, and the earlier stages cook bit-identically inside the later ones. Every one of them is in the <a href="./gallery.html">corpus gallery</a>, cooked in the editor and shot from the frame it draws into.</p>
+    <p>Behind them sits a corpus of 78 graphs that are data rather than pages: <code>pcg cook graphs/&lt;name&gt;.json</code>. None of them uses <code>dataInput</code>, because its items do not survive serialization and an example an agent cannot run teaches nothing. Most are single-concept; eight are one settlement pipeline — ground and wall, district centres, lots, buildings, roads, plus three edit variants — where each stage is the previous file plus nodes and nothing removed, and the earlier stages cook bit-identically inside the later ones. Every one of them is in the <a href="./gallery.html">corpus gallery</a>, cooked in the editor and shot from the frame it draws into.</p>
     <div class="examples">
       <!-- THE WHOLE ROW, and the capture rather than the thumbnail. It
            is the one thing here you can open every other one inside, and

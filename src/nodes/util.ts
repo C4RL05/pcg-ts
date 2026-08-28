@@ -749,6 +749,121 @@ export function carryPrimitiveAttributes(
  * `src`, carrying every point attribute (types, tuple sizes, defaults,
  * string tables). Topology is not carried — the result is a point cloud.
  */
+/**
+ * How little of a segment may lie along a slab axis before the slab counts
+ * as parallel to it, as a FRACTION of the segment's own length.
+ *
+ * Relative, never absolute, because "little" has nothing else to be
+ * measured against here. {@link segmentHitsBox} asks whether the segment
+ * has any extent along an axis before dividing by that extent, and the
+ * same 1e-9 of projection is a dead-parallel ray on a chord tens of units
+ * long and an ordinary crossing on a chord that short. An absolute epsilon
+ * small enough for the short chord is below what f32 can hold at world
+ * scale, so the branch would never be taken and a grazing chord would
+ * divide by something indistinguishable from zero.
+ *
+ * 1e-6 is about eight f32 spacings and changes nothing in f64: for a
+ * near-parallel chord the two branches already AGREE in the limit —
+ * outside the slab the two enormous roots share a sign and fail
+ * `tMin > tMax`, which is the parallel branch's `return false`; inside it
+ * they straddle and leave the interval alone, which is its `continue`.
+ * This computes that answer instead of arriving at it through 1e12.
+ */
+export const PARALLEL_FRACTION = 1e-6;
+
+/**
+ * Does the segment from (fx, fy, fz) to (tx, ty, tz) pass through the box
+ * whose centre, axes and half extents sit at the given offsets?
+ *
+ * The slab method IN THE BOX'S OWN FRAME, not the world frame. A box in
+ * this library is oriented by a quaternion and is axis-aligned in nobody's
+ * frame but its own, so the segment is projected onto the box's three axes
+ * and the interval test runs there. A world-space AABB test would be a
+ * different — and always larger — box, which on a banked or rolled
+ * placement reports a hit that is not there. On a straight the two agree
+ * and through a bend they do not, which is precisely where it matters.
+ *
+ * OFFSETS FOR THE TABLES, SCALARS FOR THE CENTRE, because this runs once
+ * per (point, box, ray) triple and a per-call `[x, y, z]` is exactly the
+ * per-element allocation the hot-path rule forbids. A caller holding one
+ * box in scratch passes offset 0; a caller walking an SoA table passes
+ * `b * 9` and `b * 3`. The centre is three scalars rather than a third
+ * table because one caller MOVES it — `occlusionCull` re-tests the same
+ * box at each rung of its push ladder — and a table would have to be
+ * rewritten per attempt to say the same thing.
+ *
+ * `<=` in the parallel test rather than `<` so that a degenerate
+ * zero-length segment — a point, which `near === far` with `spread === 0`
+ * produces, and which an eye with nowhere to look produces — takes the
+ * parallel branch on all three axes and is tested for CONTAINMENT instead
+ * of dividing by zero. That is the only reading a degenerate segment has.
+ *
+ * TWO NODES SHARE THIS AND THEY DID NOT ALWAYS. `occlusionCull` and
+ * `pathCoverage` each carried a copy, and the copies had already drifted
+ * apart inside one change: one measured the segment with `Math.hypot` and
+ * the other with `Math.sqrt` of the sum of squares, which are not the same
+ * f64 and so gave the two nodes different parallel thresholds. A slab test
+ * is delicate enough that one copy is the only maintainable number.
+ */
+export function segmentHitsBox(
+  fx: number,
+  fy: number,
+  fz: number,
+  tx: number,
+  ty: number,
+  tz: number,
+  cx: number,
+  cy: number,
+  cz: number,
+  axes: ArrayLike<number>,
+  axesOffset: number,
+  half: ArrayLike<number>,
+  halfOffset: number,
+): boolean {
+  const ox = fx - cx;
+  const oy = fy - cy;
+  const oz = fz - cz;
+  const dx = tx - fx;
+  const dy = ty - fy;
+  const dz = tz - fz;
+  // `Math.sqrt` of the sum rather than `Math.hypot`: hypot carries an
+  // overflow guard this does not need — these are world coordinates, not
+  // values within a factor of two of the f64 ceiling — and it costs about
+  // ten times as much in the innermost loop of two nodes. The two copies
+  // this replaced disagreed on exactly this line.
+  const parallel = PARALLEL_FRACTION * Math.sqrt(dx * dx + dy * dy + dz * dz);
+  let tMin = 0;
+  let tMax = 1;
+  for (let a = 0; a < 3; a++) {
+    const o = axesOffset + a * 3;
+    const ex = axes[o];
+    const ey = axes[o + 1];
+    const ez = axes[o + 2];
+    const lo = ox * ex + oy * ey + oz * ez;
+    const ld = dx * ex + dy * ey + dz * ez;
+    const h = half[halfOffset + a];
+    if (Math.abs(ld) <= parallel) {
+      // Parallel to this slab: outside it here is outside it everywhere.
+      if (lo < -h || lo > h) return false;
+      continue;
+    }
+    let t1 = (-h - lo) / ld;
+    let t2 = (h - lo) / ld;
+    if (t1 > t2) {
+      const swap = t1;
+      t1 = t2;
+      t2 = swap;
+    }
+    if (t1 > tMin) tMin = t1;
+    if (t2 < tMax) tMax = t2;
+    if (tMin > tMax) return false;
+  }
+  return true;
+}
+
+/** How often a per-element scan checks for cancellation. */
+export const CANCEL_STRIDE = 256;
+
 export function gatherPoints(src: Geometry, indices: ArrayLike<number>): Geometry {
   const out = new Geometry();
   copyElements(src.attrs.point, out.attrs.point, indices, indices.length);
@@ -998,7 +1113,11 @@ export interface PolylineWalk {
  * live here, so the two entry points cannot disagree about what counts as
  * a polyline.
  */
-export function polylineWalks(geo: Geometry, nodeType: string): PolylineWalk[] {
+export function polylineWalks(
+  geo: Geometry,
+  nodeType: string,
+  onEmpty: "throw" | "none" = "throw",
+): PolylineWalk[] {
   const v2p = geo.vertexToPoint;
   const starts = geo.primVertexStart;
   const counts = geo.primVertexCount;
@@ -1013,7 +1132,19 @@ export function polylineWalks(geo: Geometry, nodeType: string): PolylineWalk[] {
     for (let k = 0; k < nv; k++) points[k] = v2p[v0 + k];
     walks.push({ prim: p, points, closed: v2p[v0] === v2p[v0 + nv - 1] });
   }
-  if (walks.length === 0) throw noPolylines(geo, nodeType);
+  // `onEmpty: "none"` IS FOR THE NODES THAT HAVE AN ANSWER WITHOUT A PATH,
+  // and there are few of them. Most path nodes have nothing to say to a
+  // cloud with no polyline in it -- `pathScan` has nothing to scan,
+  // `pathResample` nothing to resample -- so the throw is the right
+  // report and stays the default. `pathShift` is the exception: its
+  // per-point rule already says a point in no polyline MISSES, so a
+  // geometry with no polyline at all is that same rule applied to every
+  // point rather than a new situation. Letting it ask costs one argument
+  // and keeps the selection rule above -- two vertices, and `primtype`
+  // when the geometry declares one -- in one place. A caller that
+  // mirrored those two clauses locally would be a second copy free to
+  // drift from this one.
+  if (walks.length === 0 && onEmpty === "throw") throw noPolylines(geo, nodeType);
   return walks;
 }
 
@@ -1371,4 +1502,94 @@ export function rotateVec(
   out[1] = vy + qw * ty + qz * tx - qx * tz;
   out[2] = vz + qw * tz + qx * ty - qy * tx;
   return out;
+}
+
+
+/**
+ * The point attributes a TRANSFER's empty-`attributes` rule leaves out,
+ * and the reason such a node can state one rule rather than a list of
+ * special cases: these eight are the point domain's OWN bookkeeping — the
+ * transform, the bounds, the shading, the identity — written by
+ * `createPointCloud` on every cloud in the library before anybody has
+ * decided anything. They describe the source's POINTS. Everything else a
+ * source carries was put there on purpose by whoever built it, and
+ * describes the thing the source IS.
+ *
+ * Kept as a literal set rather than derived from `STANDARD_POINT_ATTRS`
+ * because the two lists answer different questions and must be free to
+ * differ: that one says what a fresh cloud starts with, this one says what
+ * writing onto a foreign cloud would damage. They happen to coincide
+ * today, and a ninth standard attribute would not automatically belong
+ * here — it would need the argument made again.
+ *
+ * SHARED BY THE TRANSFER NODES ON PURPOSE, which is why it lives here
+ * rather than in either of them. `transferAlongPath` and `transferByIndex`
+ * both offer "everything except the bookkeeping" as the meaning of an
+ * empty list, and that phrase has to mean the SAME eight columns in both
+ * or the two defaults quietly diverge the first time somebody edits one.
+ * What the two nodes are still free to differ about is the policy they
+ * apply ON TOP of this set — `transferAlongPath` also drops string columns,
+ * because it interpolates and there is no value between two strings, while
+ * `transferByIndex` keeps them, because it copies. That difference is
+ * stated in each node's own param description.
+ */
+export const TRANSFER_BOOKKEEPING: ReadonlySet<string> = new Set([
+  "P",
+  "rot",
+  "scale",
+  "density",
+  "boundsMin",
+  "boundsMax",
+  "color",
+  "seed",
+]);
+
+
+/**
+ * Refuse a PLAIN non-finite value on a field-capable scalar param, before
+ * the node looks at its geometry.
+ *
+ * WHY THIS IS NOT ALREADY COVERED BY `resolveOn`. That guard is gated on
+ * `isField` — it checks the COLUMN a field produced, and a plain number
+ * never becomes one. So a field-capable param has two doors and only one
+ * of them was watched: `constant(NaN)` is refused and a bare `NaN` walks
+ * through to be used as a count, an index or a spacing. What arrives
+ * downstream is not an error but a plausible-looking cook — a typed array
+ * read at `[NaN]`, which is `undefined` widened to NaN, or a `resize` that
+ * throws from inside the data layer naming neither the node nor the param
+ * the author actually set.
+ *
+ * BOTH SPELLINGS OF A PLAIN VALUE ARE CHECKED, which is the part that is
+ * easy to miss: `graph/params.ts` admits a `number[]` for a field-capable
+ * scalar, so `[NaN]` is a legal way to write the same broken constant and
+ * a `typeof === "number"` test sails straight past it. Every element is
+ * checked rather than the first, because a tuple spelling of a vec param
+ * can be broken in any lane.
+ *
+ * Fields are left alone on purpose: there is no number to check yet, and
+ * `resolveOn` names the param when their column arrives.
+ *
+ * @param fix - appended to the message; say what a correct value looks
+ *   like and how to bound an expression that might produce this one.
+ */
+export function requireFinitePlainParam(
+  value: FieldLike,
+  nodeType: string,
+  param: string,
+  fix: string,
+): void {
+  if (isField(value)) return;
+  const lanes = typeof value === "number" ? [value] : Array.isArray(value) ? value : null;
+  if (lanes === null) return;
+  for (let i = 0; i < lanes.length; i++) {
+    const v = lanes[i];
+    if (typeof v === "number" && !Number.isFinite(v)) {
+      // The lane is named only when there IS more than one, so the common
+      // scalar case reads as a sentence rather than as an array index.
+      const where = lanes.length > 1 ? ` (component ${i})` : "";
+      throw new Error(
+        `${nodeType}: param "${param}"${where} is ${v}, which is not a usable value. ${fix}`,
+      );
+    }
+  }
 }

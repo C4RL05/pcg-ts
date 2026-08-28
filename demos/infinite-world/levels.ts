@@ -60,6 +60,7 @@ import {
   setAttribute,
   spawnInstances,
   vec,
+  xzCell,
   type LevelDef,
   type NodeHandle,
 } from "pcg-ts";
@@ -258,10 +259,11 @@ export function makeRockLevel(opts: RockLevelOptions): LevelDef {
     generationRadius,
     graph,
     bind(g, ctx) {
+      const { min, max } = xzCell(ctx);
       // The query WINDOW is the only thing that varies per cell in
       // anchored mode: the cell, grown by the halo.
-      g.setParam(scatter, "boundsMin", [ctx.min[0] - halo, 0, ctx.min[1] - halo]);
-      g.setParam(scatter, "boundsMax", [ctx.max[0] + halo, 0, ctx.max[1] + halo]);
+      g.setParam(scatter, "boundsMin", [min[0] - halo, 0, min[1] - halo]);
+      g.setParam(scatter, "boundsMax", [max[0] + halo, 0, max[1] + halo]);
       // Cell-invariant salt for the anchored source (worldSeed), per-cell
       // for the unanchored one — which is all ctx.seed was ever good for
       // here, and exactly what makes its points move when the window does.
@@ -270,8 +272,8 @@ export function makeRockLevel(opts: RockLevelOptions): LevelDef {
       g.setParam(thin, "seed", hashCombine(salt, 1));
       g.setParam(size, "seed", hashCombine(salt, 2));
       // The clip is the cell itself. Y is generous: every point sits at 0.
-      g.setParam(clip, "boundsMin", [ctx.min[0], -1, ctx.min[1]]);
-      g.setParam(clip, "boundsMax", [ctx.max[0], 1, ctx.max[1]]);
+      g.setParam(clip, "boundsMin", [min[0], -1, min[1]]);
+      g.setParam(clip, "boundsMax", [max[0], 1, max[1]]);
     },
   };
 }

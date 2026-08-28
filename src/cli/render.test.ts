@@ -16,11 +16,11 @@ import {
   createPointCloud,
   createPolyline,
   createTriangleMesh,
-  makeDeviceInstancesItem,
   makeGeometryItem,
   makeInstancesItem,
   setPolylineTopology,
 } from "../index.js";
+import { makeDeviceInstancesItem } from "../graph/data.js";
 import { renderSvg } from "./render.js";
 
 /** A point cloud with the given xz positions (y = 0) and optional extra columns. */

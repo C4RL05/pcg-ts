@@ -25,7 +25,11 @@
  * when it meant "these are the ids I could find". So an open set says so,
  * and names the node that made it open.
  */
-import { getSubgraphPlumbing, getSubgraphSpec } from "../graph/index.js";
+import { getSubgraphSpec } from "../graph/index.js";
+// By module: `getSubgraphPlumbing` is @internal — it hands back the
+// injected portal ids serialization hides — so the barrel no longer
+// republishes it.
+import { getSubgraphPlumbing } from "../graph/subgraph.js";
 import type { ExposedParam, Graph } from "../graph/index.js";
 // By module, like `graphParams`' import of `paramScan`: the node record is
 // the graph layer's own shape and the barrel does not name it, but this walk
@@ -508,6 +512,7 @@ function opaqueReason(
         `walk cannot read a template's attributes, so it cannot say which${tail}`
       );
     case "forEach":
+    case "repeatUntil":
     case "subgraph":
       return (
         `"${path}" (${type}) stands between this spawner and any writer, and this walk does not follow ` +

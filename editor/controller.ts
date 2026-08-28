@@ -25,6 +25,7 @@ import {
   fieldFromJson,
   fieldToJson,
   forEachNode,
+  repeatUntilNode,
   getFieldSpec,
   getNodeType,
   getRegisteredSubgraph,
@@ -56,6 +57,7 @@ import type { Knob, KnobPatch, KnobTarget } from "../shared/graphUi.js";
 import { makeRecooker } from "../shared/recook.js";
 import { autoLayout } from "../shared/graph/autoLayout.js";
 import {
+  WRAPPER_TYPES,
   nodeCategory,
   nodePinsForType,
   paramPreviews,
@@ -95,16 +97,6 @@ export interface ParamView {
   /** Pretty JSON of the FieldSpec for field mode. */
   readonly specText: string | null;
 }
-
-/**
- * The two node types that wrap an inner graph. They serialize to the same
- * payload and reach the editor by the same route; only the cook differs
- * (`forEach` runs the body once per element), which is nothing this editor
- * has to know. Checking the pair rather than the word "subgraph" is what
- * keeps a forEach from being treated as an ordinary registered node —
- * whose registry entry declares no pins and cannot cook.
- */
-const WRAPPER_TYPES = new Set(["subgraph", "forEach"]);
 
 /** What one wrapper node exposes, resolved from its payload at import. */
 export interface SubgraphView {
@@ -411,12 +403,25 @@ export class EditorController {
    * become spec text.
    */
   paramViews(id: string, type: string): ParamView[] {
-    // A wrapper's schemas are not in the node-type registry — they were
-    // resolved from its payload at import and kept in `subgraphs`.
-    const schemas: Readonly<Record<string, ParamSchema>> =
-      WRAPPER_TYPES.has(type)
-        ? Object.fromEntries((this.subgraphs.get(id)?.params ?? []).map((p) => [p.name, p.schema]))
-        : getNodeType(type).info.params;
+    // A wrapper's EXPOSED schemas are not in the node-type registry — they
+    // were resolved from its payload at import and kept in `subgraphs`.
+    // What IS in the registry is the wrapper's own params, which no body
+    // exposes and which exist on every instance: `repeatUntil` carries
+    // `maxRounds` and `settleAttr` that way. Reading only the exposed half
+    // would hide the loop's budget and its settle signal from the
+    // inspector — two knobs a saved graph carries, that nothing in this
+    // tool could then see or turn. They also arrive without bounds — a
+    // factory-built def is not the registered def, so nothing else in this
+    // editor knows `maxRounds` has a floor of 1 — which is the second
+    // reason to read them from the registry rather than hardcode two rows.
+    const schemas: Readonly<Record<string, ParamSchema>> = WRAPPER_TYPES.has(type)
+      ? {
+          ...Object.fromEntries(
+            (this.subgraphs.get(id)?.params ?? []).map((p) => [p.name, p.schema]),
+          ),
+          ...getNodeType(type).info.params,
+        }
+      : getNodeType(type).info.params;
     let rec: Readonly<Record<string, unknown>>;
     try {
       rec = this.mirror.getParams({ id } as NodeHandle<Record<string, unknown>>);
@@ -855,15 +860,18 @@ export class EditorController {
           ...(p.max !== undefined ? { max: p.max } : {}),
         }),
       );
-      const def =
+      const wrap =
         sn.type === "forEach"
-          ? forEachNode(inner, payload.inputs.map(toExposed), payload.outputs.map(toExposed), exposed)
-          : subgraphNode(
-              inner,
-              payload.inputs.map(toExposed),
-              payload.outputs.map(toExposed),
-              exposed,
-            );
+          ? forEachNode
+          : sn.type === "repeatUntil"
+            ? repeatUntilNode
+            : subgraphNode;
+      const def = wrap(
+        inner,
+        payload.inputs.map(toExposed),
+        payload.outputs.map(toExposed),
+        exposed,
+      );
       const params: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(sn.params ?? {})) {
         const schema = exposed.find((e) => e.name === key)?.schema;

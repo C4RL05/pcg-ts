@@ -22,14 +22,13 @@
  * document deliberately ordered never conflict, which is not something
  * this pipeline promises or should.
  */
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
 import { mixInsideRule } from "../demos/racetrack/assets.js";
 import { dressLap, frameLookup } from "../demos/racetrack/dress.js";
 import { OUTPUTS, buildRoadGraph } from "../demos/racetrack/graph.js";
 import { type Kit, type PlacedBox, placeKit } from "../demos/racetrack/kit.js";
-import { DEFAULT_KIT, kitPath } from "./support/kits.js";
+import { DEFAULT_KIT, ENCLOSURE_KIT, kitOrAbsent, kitPath } from "./support/kits.js";
 import { type Lap, readLap } from "../demos/racetrack/lap.js";
 import {
   brakingRulersSatisfied,
@@ -41,10 +40,11 @@ import { defaultEyeStations, occludes } from "../demos/racetrack/sightline.js";
 import { makeTrackSpline } from "../demos/racetrack/spline.js";
 import { COVERAGE, coverage } from "../demos/racetrack/stations.js";
 
-const KIT = kitPath(DEFAULT_KIT);
+const KIT_KEY = DEFAULT_KIT;
+const KIT = kitPath(KIT_KEY);
 
 describe.skipIf(!KIT)("the assembled pipeline", () => {
-  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as Kit;
+  const kit = kitOrAbsent<Kit>(KIT_KEY);
 
   let lap: Lap | undefined;
   async function theLap(): Promise<Lap> {
@@ -213,6 +213,138 @@ describe.skipIf(!KIT)("the assembled pipeline", () => {
   }, 300_000);
 });
 
+const ENCLOSED = kitPath(ENCLOSURE_KIT);
+
+/**
+ * THE WHOLE LOOP, ON THE KIT THAT CAN STOP IT TURNING.
+ *
+ * `runs every stage rather than passing vacuously` already asserts that
+ * the tail settles — on the vegetation circuit, which settles in two or
+ * three rounds and settled in two or three rounds throughout the entire
+ * life of a bug that made the enclosed circuit run all twelve and finish
+ * `converged: false` on every seed. The stat line said so, in the demo's
+ * own reporting, and nothing failed.
+ *
+ * WHY THIS KIT AND NOT THAT ONE, stated once here because it is the
+ * general form of the mistake rather than a fact about tunnels: the mix
+ * repair re-draws a placement from an asset whose measured laterals reach
+ * into the band being filled, and whether that draw LANDS in the band is a
+ * property of how wide the kit's distributions are. The vegetation kit's
+ * are narrow, so the repair worked there under a rule that could not work
+ * anywhere else, and the suite that gated it was measuring the exemplar.
+ * The enclosed kit is 43% covered against a population median of 10.5%,
+ * its overhead pieces put a third of the raw lap in `over` against a
+ * ceiling of 21%, and its laterals are wide enough that a draw misses its
+ * own band more often than it hits — so the repair has to actually work.
+ *
+ * WHAT IS ASSERTED IS CONVERGENCE, not a round count. The number of rounds
+ * is reported because somebody needs it and because a regression that
+ * doubles it while still settling is worth seeing, but a threshold on it
+ * would be a number fitted to this kit, this spline and this machine.
+ * `converged` is the property: the loop reached a fixed point rather than
+ * running out of rounds with repairs still outstanding.
+ */
+describe.skipIf(!ENCLOSED)("the assembled pipeline, on the enclosed circuit", () => {
+  const kit = kitOrAbsent<Kit>(ENCLOSURE_KIT);
+
+  let lap: Lap | undefined;
+  async function theLap(): Promise<Lap> {
+    if (!lap) {
+      const frames = firstGeometry(
+        (await cook(buildRoadGraph({ spline: makeTrackSpline({ seed: 1 }), seed: 1 })))
+          .outputs[OUTPUTS.frames] ?? [],
+      );
+      if (!frames) throw new Error("no frames");
+      lap = readLap(frames);
+    }
+    return lap;
+  }
+
+  const SEEDS = [1, 2, 3, 4];
+
+  it(
+    "reaches a fixed point on the circuit whose band mix is overhead-heavy",
+    async () => {
+      const l = await theLap();
+      // Every seed is dressed and REPORTED before anything is asserted. A
+      // failure here is a claim about the loop's behaviour across seeds,
+      // and one that prints only the first bad seed's numbers is a bug
+      // report with its evidence deleted.
+      const runs = SEEDS.map((seed) => ({ seed, s: dressLap(kit, l, seed).stats }));
+      console.log(
+        [
+          `the tail on ${ENCLOSURE_KIT}:`,
+          ...runs.map(
+            ({ seed, s }) =>
+              `  seed ${seed}: ${s.rounds} round${s.rounds === 1 ? "" : "s"}` +
+              `${s.converged ? "" : " (NOT CONVERGED)"} | ` +
+              `Z-3 ${s.mixMoves} moves over ${s.placed} placements | ` +
+              `L-6 +${s.coverStretches} runs (${s.coverPieces} pieces), -${s.enclosureTrims} trimmed, ` +
+              `${(100 * s.enclosureBefore).toFixed(0)}%->${(100 * s.enclosureAfter).toFixed(0)}% covered`,
+          ),
+        ].join("\n"),
+      );
+
+      // THE CLAIM FIRST, THE GUARDS AFTER IT — an ordering that was
+      // chosen from what happened when this test was run against the
+      // broken repair. A loop that never settles produces a DIFFERENT
+      // LAP, not merely an unsettled one: with the spin in place seed 1
+      // finished with no cover placed and none trimmed, so a vacuity
+      // guard standing in front of the convergence check reported "L-6
+      // neither placed nor trimmed cover" and the twelve unconverged
+      // rounds — the actual defect, printed two lines above — never
+      // reached an assertion at all. The first failure a reader sees
+      // should name the thing the test is for.
+      for (const { seed, s } of runs) {
+        expect(
+          s.converged,
+          `seed ${seed}: tail did not settle in ${s.rounds} rounds ` +
+            `(Z-3 made ${s.mixMoves} moves over ${s.placed} placements)`,
+        ).toBe(true);
+      }
+
+      for (const { seed, s } of runs) {
+        // THE PAIRED HALF, and it is not decoration. A loop that settles
+        // because its mix repair never attempts anything settles just as
+        // convincingly as one that settles because the mix is right —
+        // and a fix for a repair that spun is exactly the kind of change
+        // that could produce it. So the settling claim is only made
+        // alongside the claim that the mix had work and did it.
+        expect(s.mixMoves, `seed ${seed}: Z-3 never moved anything`).toBeGreaterThan(0);
+        // AND THAT THIS IS GENUINELY THE ENCLOSED CASE. If L-6 did
+        // nothing at all, this is the vegetation test again with a
+        // different file behind it — the vegetation circuit is 2%
+        // covered and its longest covered stretch is nine tenths of a
+        // half-width, so L-6 is inert there.
+        //
+        // EITHER DIRECTION COUNTS, and asserting on runs PLACED was
+        // wrong: L-6 tops a lap up to its share and also trims a lap
+        // that is over it, and on this kit the ordinary dressing already
+        // arrives enclosed. Seed 2 came in at 28% — past the rule's own
+        // 25% ceiling before L-6 saw it — so L-6 correctly placed no
+        // cover and trimmed instead. A gate that demands a top-up is
+        // asserting the kit is under-enclosed, which this one is not.
+        expect(
+          s.coverStretches + s.enclosureTrims,
+          `seed ${seed}: L-6 neither placed nor trimmed cover, at ` +
+            `${(100 * s.enclosureBefore).toFixed(0)}% covered before it ran`,
+        ).toBeGreaterThan(0);
+      }
+    },
+    // Stated rather than left to the default, and derived from the
+    // neighbours rather than from a stopwatch. One graph cook and four
+    // full dressings, each running the seven-stage repair loop up to its
+    // twelve-round cap — the same shape of work the gate above allows
+    // 300s for, plus L-6, which only runs on this kit and tiles or trims
+    // cover on every round. Measured here at 1.5s against that gate's
+    // 0.5s, so the same ratio of headroom is twice the same allowance.
+    // The margin is deliberately absurd: what this test measures is
+    // whether the loop reaches a fixed point, and a slow machine must
+    // fail it for that reason or not at all.
+    600_000,
+  );
+});
+
 /**
  * THE SILHOUETTE, which is the only gate here a viewer could have
  * written.
@@ -303,7 +435,7 @@ function quantile(xs: readonly number[], f: number): number {
 }
 
 describe.skipIf(!KIT)("the silhouette", () => {
-  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as Kit;
+  const kit = kitOrAbsent<Kit>(KIT_KEY);
 
   let lap: Lap | undefined;
   async function theLap(): Promise<Lap> {

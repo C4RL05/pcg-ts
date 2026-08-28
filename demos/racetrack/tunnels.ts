@@ -34,6 +34,7 @@ import { rand } from "./assets.js";
 import { type Corner, SEVERITY, beforeEntryW } from "./corners.js";
 import type { StationedPlacement } from "./legibility.js";
 import type { EnclosureReport } from "./enclosure.js";
+import { SAME_PLACE_W } from "./tolerance.js";
 import { CORRIDOR, OVERHEAD } from "./zones.js";
 
 export const ENCLOSE = {
@@ -139,7 +140,19 @@ export function coverCandidates(assets: readonly PlaceableAsset[]): PlaceableAss
       // corridor. A gantry recorded at 2.03W and 0.42W thick has a base
       // at 1.82W and passes; the grass bank has a base at 0.00W and does
       // not.
-      if (w.height.median - a.size.tall / 2 < CORRIDOR.ceilingW) return false;
+      //
+      // TO WITHIN `SAME_PLACE_W`, because this cut decides a VOCABULARY.
+      // A piece sitting on the ceiling is roof under one rounding and
+      // scenery under another, and the two answers do not differ by a
+      // little — one of them tiles a tunnel out of it. `base` is a
+      // difference of two measured f64s here and would be a difference of
+      // two f32s once these rules run in attribute columns, where the
+      // spacing at 1.2W is 1.2e-7 and the subtraction can carry a few of
+      // them. On the three measured kits the nearest asset to this cut is
+      // 2.1e-2W above it, so the tolerance admits nothing new today; it
+      // is here so that the kit which does sit on the line gets one
+      // answer rather than two.
+      if (w.height.median - a.size.tall / 2 < CORRIDOR.ceilingW - SAME_PLACE_W) return false;
 
       // And it has to reach the span it is meant to cover.
       return Math.abs(w.lateral.median) - a.size.across / 2 < ENCLOSE.coverW;
@@ -261,9 +274,11 @@ export function planEnclosure(
         break;
       }
     }
-      // One more column than the span strictly needs, for the same reason:
-    // pieces laid edge to edge across the corridor leave seams that the
-    // rays find.
+    // ONE MORE COLUMN THAN THE SPAN STRICTLY NEEDS, and only for a piece
+    // narrower than the corridor. Pieces laid edge to edge across it leave
+    // seams the rays find — the same failure `coverPlacements` rounds its
+    // step count up to avoid, one axis over. A piece already at least as
+    // wide as the corridor spans it alone and gets no extra.
     const columns =
       Math.max(1, Math.ceil((2 * ENCLOSE.coverW) / Math.max(0.2, asset.size.across))) +
       (asset.size.across < 2 * ENCLOSE.coverW ? 1 : 0);

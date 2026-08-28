@@ -284,6 +284,10 @@ describe("domain-constant folding, differentially", () => {
   const UNIFORM_CASES: Record<string, FieldSpec> = {
     constant: { fn: "constant", value: 3 },
     nodeSeed: { fn: "nodeSeed" },
+    // A hash of a domain-constant key is domain-constant, which is the
+    // whole difference from `randomField`: that one varies with nothing
+    // but the element, this one varies with exactly what it is given.
+    randomFrom: { fn: "randomFrom", args: [{ fn: "nodeSeed" }], key: 0 },
     vec: { fn: "vec", args: [{ fn: "nodeSeed" }, 1, 2] },
     component: { fn: "component", args: [{ fn: "vec", args: [{ fn: "nodeSeed" }, 1, 2] }], index: 2 },
     ramp: { fn: "ramp", args: [{ fn: "nodeSeed" }], stops: [[0, 0.25], [1e9, -3]] },
@@ -307,13 +311,19 @@ describe("domain-constant folding, differentially", () => {
     // Infinity, which the fold declines, and both want a positive input.
     exp: { fn: "exp", args: [{ fn: "div", args: [{ fn: "nodeSeed" }, 1e9] }] },
     log: { fn: "log", args: [{ fn: "div", args: [{ fn: "nodeSeed" }, 1e9] }] },
+    // The base-2 pair takes the same scaling, for the same two reasons.
+    exp2: { fn: "exp2", args: [{ fn: "div", args: [{ fn: "nodeSeed" }, 1e9] }] },
+    log2: { fn: "log2", args: [{ fn: "div", args: [{ fn: "nodeSeed" }, 1e9] }] },
     // A zero divisor is NaN, so the seed divides a constant rather than the
     // other way round, and the dividend is negative to exercise the floor.
     mod: { fn: "mod", args: [-1, { fn: "div", args: [{ fn: "nodeSeed" }, 1e8] }] },
+    // Same shape, and the negative dividend matters here too: below zero is
+    // the only side on which a truncated remainder differs from a floored one.
+    rem: { fn: "rem", args: [-1, { fn: "div", args: [{ fn: "nodeSeed" }, 1e8] }] },
   };
   // `sqrt` rides the unary loop: the seed scaled by 2^-32 is positive, so
   // the case is a real root rather than the NaN a negative input gives.
-  for (const fn of ["abs", "floor", "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "normalize", "fract", "sign"]) {
+  for (const fn of ["abs", "floor", "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "normalize", "fract", "sign", "trunc"]) {
     UNIFORM_CASES[fn] ??= { fn, args: [{ fn: "mul", args: [{ fn: "nodeSeed" }, 2.3283064365386963e-10] }] };
   }
   for (const fn of ["add", "sub", "mul", "div", "min", "max", "atan2", "lt", "le", "gt", "ge", "eq", "ne"]) {
@@ -342,7 +352,16 @@ describe("domain-constant folding, differentially", () => {
     }
     // And the per-element leaves this is the complement of really do vary,
     // so the geometry above is not accidentally uniform.
-    for (const spec of [scalar, triple, { fn: "index" }, { fn: "fraction" }, { fn: "randomField" }]) {
+    for (const spec of [
+      scalar,
+      triple,
+      { fn: "index" },
+      { fn: "fraction" },
+      { fn: "randomField" },
+      // Keyed on a VALUE, so it varies exactly when its key does — and a
+      // per-element key is the case that belongs in this half.
+      { fn: "randomFrom", args: [{ fn: "index" }], key: 0 },
+    ]) {
       const col = evaluateField(fieldFromJson(spec as FieldSpec), variedCtx(5, "point", SEED));
       const ts = col.tupleSize;
       expect(Array.from(col.data.slice(0, ts))).not.toEqual(Array.from(col.data.slice(ts, ts * 2)));

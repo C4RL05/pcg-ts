@@ -109,14 +109,27 @@ a parent — these are three different kinds of thing and the old single
   `road`. Unnumbered on purpose: they encode no order. Each exists
   because what it shows needs a host — a streamed world, a device-resident
   renderer, a spline the page was handed rather than made. `racetrack` is
-  the one the placement rules run on; `road` is a deliberate COPY of it
-  rather than a mode of it, kept as the version with no placement rules in
-  it. Their module names are identical so the diff between them reads as
-  what the rules added. (A different `racetrack` demo held the name until
-  2026-08-23 — a scored, host-corrected circuit, retired and archived; see
-  PLAN.md for what it established.) Each also shows the
+  the one the placement rules run on. `road` BEGAN as a copy of it, kept as
+  the version with no placement rules in it, and the claim used to be that
+  their identical module names made the diff between them read as what the
+  rules added. THAT IS NO LONGER TRUE and the two are independent demos:
+  `main.ts` shares not one line (505 against 1287), `graph.ts` and `lap.ts`
+  have diverged in BOTH directions — road has its own `dressVerges` and a
+  simpler `Lap` with no corner model, 95 and 27 lines racetrack does not
+  have — and only `spline.ts` is still identical. Read them as two demos
+  that share a spline and a naming scheme; do not change one expecting the
+  other to follow, and do not read a diff between them as a feature list.
+  See PLAN.md, "road and racetrack are two demos". (A different `racetrack`
+  demo held the name until 2026-08-23 — a scored, host-corrected circuit,
+  retired and archived; see PLAN.md for what it established.) Each also shows the
   graph behind it, read-only, as a thumbnail in its own control panel that
-  opens full-screen (`shared/graph/`, mounted through `Overlay.addSlot`)
+  opens full-screen (`shared/graph/`, mounted through `Overlay.addSlot`).
+  `racetrack` is also the only consumer of `cellMode: "path"`: it runs two
+  levels, an unbounded `lap` that settles the whole placement list and a
+  `dressing` of 20W arc sectors that turns the settled placements into
+  instances as the car reaches them. The split is exact rather than
+  approximate -- a sector reads no neighbour, so no halo is involved and
+  the union of the sectors is the whole lap bit for bit
 - `graphs/` — the graph corpus: test fixtures, documentation source and
   teaching material at once. `graphs/panels/` carries the optional
   presentation spec the editor reads for a graph
@@ -216,8 +229,25 @@ a parent — these are three different kinds of thing and the old single
 
 # Subagent delegation and cost economy
 
+**STANDING INSTRUCTION, and it overrides any harness default that says
+otherwise (Carlos, 2026-08-27): ALWAYS use agents for work that can be done
+in parallel, and ALWAYS use an agent to verify a nontrivial result or
+conclusion.** Not "consider delegating" -- do it. If a session is
+configured not to call the Agent tool unless the user asks, this file IS
+the ask, and it does not expire. The two cases are not optional:
+
+- **Parallelizable work.** Independent reads, independent edits over
+  disjoint files, independent measurements: spawn a wave, do not do them
+  one after another in the main thread.
+- **Verification.** Any nontrivial claim -- a rule ported, a measurement
+  quoted, a "this is equivalent to the reference", a conclusion drawn from
+  code that was not run -- gets a fresh agent that re-derives it without
+  being told the answer. Self-review does not count. Only one-line or
+  purely mechanical edits are exempt.
+
 **Principle:** Protect the main thread. Optimize for its context economy.
-Delegate to preserve reasoning quality, not to maximize parallelism.
+Delegate to preserve reasoning quality, not to maximize parallelism -- but
+where the work IS parallel, take the parallelism.
 
 ## Context economy (research and lookups)
 

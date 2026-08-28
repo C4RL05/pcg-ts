@@ -15,10 +15,12 @@ import {
   type PinDef,
   type PinKind,
   type ResidentDesc,
-  paramSchemaError,
 } from "../graph/index.js";
 // Reached by MODULE rather than through the graph layer's index: the link
 // is internal plumbing between the two layers, not API. See its header.
+// `paramSchemaError` is the same case — an @internal message builder the
+// graph layer's index no longer republishes.
+import { paramSchemaError } from "../graph/params.js";
 import { defParamSchemas } from "../graph/paramSchemaLink.js";
 
 /**

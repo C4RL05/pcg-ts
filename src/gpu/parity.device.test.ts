@@ -648,6 +648,231 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
     expect(divergent, "CPU and GPU must agree at these edges").toEqual([]);
   }, DEVICE_MEASUREMENT_TIMEOUT_MS);
 
+  it("the four math additions agree at the edges their parity domains guard away", () => {
+    // The same argument as the probe above, for the four rows added beside
+    // it. Each measured row avoids its own pathological inputs — `rem`'s
+    // divisor is a non-zero constant and `log2`'s argument is guarded
+    // strictly positive — which is right, since a NaN lane makes
+    // |cpu - gpu| NaN and slips past any budget. But it leaves the
+    // catalog's "on both paths" claims for those inputs resting on
+    // reasoning. This measures them.
+    const geo = makeParityGeometry(64);
+    const P = geo.attrs.point.require("P");
+    // Rows 12-14 sit AFTER the subnormal row so the indices above it stay
+    // put: two negative non-integers (the only inputs on which `trunc` and
+    // `floor` differ at all, so without them the probe's own labels would
+    // be satisfied by the wrong lowering) and one dividend large enough to
+    // put the `rem` quotient past 2^24.
+    const ROWS: readonly number[] = [
+      0, -0, NaN, Infinity, -Infinity, -1, 9, -9, 1.5, 128, -150, 1e-40, -1.5, -0.5, 1e9,
+    ];
+    ROWS.forEach((x, i) => {
+      P.data[i * 3] = x;
+    });
+
+    const PXP = { fn: "component", args: [{ fn: "position" }], index: 0 } as const;
+    const probes: Record<string, FieldSpecArg> = {
+      // "The sign survives, so trunc(-0.5) is -0", and a non-finite input
+      // comes back as it came.
+      truncEdges: { fn: "trunc", args: [PXP] },
+      // "A zero divisor is NaN, because trunc(x / 0) is infinite and
+      // 0 * Infinity is NaN."
+      remZero: { fn: "rem", args: [PXP, 0] },
+      // "It ignores the divisor's sign, where mod is decided by it" — the
+      // two columns below must be identical lane for lane, on the device
+      // as well as on the CPU.
+      remPositiveDivisor: { fn: "rem", args: [PXP, 8] },
+      remNegativeDivisor: { fn: "rem", args: [PXP, -8] },
+      // The only place the device is measured PAST the 2^24 quotient where
+      // the expansion and a true fmod stop being the same function. The
+      // measured parity row divides by 8 over a coordinate in [-8, 8], so
+      // |x / y| never reaches 1 and that row cannot tell them apart at all.
+      // See the note below this loop for what this catches and what it
+      // does not — the answer was measured, and it is less than it looks.
+      remLargeQuotient: { fn: "rem", args: [PXP, 3] },
+      // "exp2(128) is Infinity and exp2(-150) is 0", plus the whole
+      // exponents the catalog calls exact on both paths.
+      exp2Edges: { fn: "exp2", args: [PXP] },
+      // "log2(0) is -Infinity and a negative input is NaN, on both paths."
+      log2Edges: { fn: "log2", args: [PXP] },
+      // The pair composed. Where the exponent is whole this must return it
+      // unchanged, which is the strongest form of the exactness claim: two
+      // budgeted fns in a row with no drift between them.
+      log2OfExp2: { fn: "log2", args: [{ fn: "exp2", args: [PXP] }] },
+    };
+
+    const kernels = Object.fromEntries(
+      Object.entries(probes).map(([name, spec]) => [name, compileFieldSpec(spec, PARITY_LAYOUT)]),
+    );
+    const results = runDeviceTasks(
+      Object.entries(kernels).map(([name, kernel]) => dispatchTask(name, kernel, geo, 64, 1)),
+    );
+    const gpuCols: Record<string, Column> = {};
+    for (const result of results) {
+      expect(result.errors, result.name).toEqual([]);
+      gpuCols[result.name] = decodeRun(kernels[result.name], result.runs![0]);
+    }
+    const cpuCols = Object.fromEntries(
+      Object.entries(probes).map(([name, spec]) => [
+        name,
+        evaluateField(fieldFromJson(spec as FieldSpec), { geo, domain: "point", seed: 1 }),
+      ]),
+    );
+
+    // `trunc` and `rem` are bit-exact rows, so they are held to every lane.
+    const EXACT_FNS = ["truncEdges", "remZero", "remPositiveDivisor", "remNegativeDivisor"];
+    // `exp2` and `log2` are budgeted, so the generic rule pins them only
+    // where the answer has no interior — a zero, an infinity or a NaN.
+    // These rows are pinned ON TOP of that: x is a whole number, so the
+    // answer is a power of two (or the exponent of one), an f32 with a zero
+    // mantissa that neither path has anything to round. It is the catalog's
+    // one exactness claim about a budgeted fn, and it is measured here
+    // rather than reasoned about.
+    const WHOLE_ROWS: Record<string, readonly number[]> = {
+      // x = 0, -0, -1, 9, -9 -> 1, 1, 0.5, 512, 1/512.
+      exp2Edges: [0, 1, 5, 6, 7],
+      // x = 128 -> 7.
+      log2Edges: [9],
+      // The round trip, back to the exponent it started from — on the rows
+      // where an intermediate stays finite. See the fold note below for why
+      // the other three are not here.
+      log2OfExp2: [0, 5, 6, 7],
+    };
+    // Rows a probe is NOT held to agreement on, each with its reason.
+    const KNOWN_DIVERGENT: Record<string, readonly number[]> = {
+      // MEASURED, and the most interesting thing this probe found: the
+      // shader compiler ALGEBRAICALLY FOLDS `log2(exp2(x))` down to `x`.
+      // Where both fns' honest answers are finite (rows 0, 5, 6, 7) the
+      // fold agrees with them, which is why those rows stay pinned. On
+      // three rows it cannot, and that is where it shows: the CPU runs
+      // exp2(128) to Infinity and log2 of that back to Infinity where the
+      // device answers 128; the same for -150 against -Infinity; and
+      // exp2(-0) -> 1 -> +0 on the CPU against a folded -0 on the device.
+      //
+      // Neither fn is at fault — each measures bit-exact on its own row —
+      // but it is a real fact about COMPOSING them, and it is the reason
+      // parity is a claim about a single fn's lowering rather than about
+      // any expression built from them: an intermediate that overflows f32
+      // may simply never be computed on the device, so a spec that leans on
+      // that overflow is leaning on the optimizer not firing.
+      // Row 14 is the third case the fold shows in: exp2(1e9) is Infinity
+      // and log2 of that is Infinity on the CPU, where the device answers
+      // 1e9 straight back.
+      log2OfExp2: [1, 9, 10, 14],
+    };
+    // The device reads a denormal input as zero; the CPU keeps it. Skipped
+    // in the loop and asserted below as the documented divergence it is.
+    const SUBNORMAL_ROW = 11;
+    const lines: string[] = [];
+    const divergent: string[] = [];
+    for (const name of Object.keys(probes)) {
+      for (let i = 0; i < ROWS.length; i++) {
+        if (i === SUBNORMAL_ROW) continue;
+        if ((KNOWN_DIVERGENT[name] ?? []).includes(i)) continue;
+        const c = cpuCols[name].data[i];
+        const g = gpuCols[name].data[i];
+        const pinned =
+          EXACT_FNS.includes(name) ||
+          !Number.isFinite(c) ||
+          c === 0 ||
+          (WHOLE_ROWS[name] ?? []).includes(i);
+        if (!pinned) continue;
+        const agree = Number.isNaN(c) ? Number.isNaN(g) : Object.is(c, g);
+        if (!agree) divergent.push(`${name} row ${i} (x=${ROWS[i]}): cpu=${c} gpu=${g}`);
+      }
+      lines.push(`${name}: cpu ${ROWS.map((_, i) => cpuCols[name].data[i]).join(", ")}`);
+      if (KNOWN_DIVERGENT[name] !== undefined) {
+        lines.push(`${name}: gpu ${ROWS.map((_, i) => gpuCols[name].data[i]).join(", ")}`);
+      }
+    }
+
+    // The specific catalog claims, asserted on the CPU column so a failure
+    // names the promise rather than only the disagreement.
+    const tr = cpuCols.truncEdges.data;
+    expect(Object.is(tr[1], -0), "trunc(-0) keeps the sign").toBe(true);
+    // Row 13 is -0.5, the input that separates this from `floor` AND from
+    // `abs`-then-`floor` at once: -0, not -1 and not +0.
+    expect(Object.is(tr[13], -0), "trunc(-0.5) is -0, not +0 and not -1").toBe(true);
+    // Rows 12 and 8 are the negative and positive non-integers — the only
+    // inputs on which rounding toward zero differs from rounding down, so
+    // without row 12 this label would be satisfied by `floor`.
+    expect([tr[5], tr[6], tr[7], tr[8], tr[12]], "trunc rounds toward zero").toEqual([
+      -1, 9, -9, 1, -1,
+    ]);
+    expect([tr[3], tr[4]], "trunc returns a non-finite input as it came").toEqual([
+      Infinity,
+      -Infinity,
+    ]);
+    for (let i = 0; i < ROWS.length; i++) {
+      expect(Number.isNaN(cpuCols.remZero.data[i]), `rem by zero, row ${i}`).toBe(true);
+    }
+    // THE CLAIM THE PAIR EXISTS FOR, and the one a reader is most likely to
+    // get wrong: a truncated remainder does not care about the divisor's
+    // sign, and a floored one is decided by it.
+    for (let i = 0; i < ROWS.length; i++) {
+      expect(
+        cpuCols.remPositiveDivisor.data[i],
+        `rem ignores the divisor's sign, row ${i}`,
+      ).toBe(cpuCols.remNegativeDivisor.data[i]);
+    }
+    const rp = cpuCols.remPositiveDivisor.data;
+    expect([rp[5], rp[6], rp[7]], "rem follows the DIVIDEND: -1, 9, -9 mod 8").toEqual([-1, 1, -1]);
+    // `rem` is the f32 EXPANSION, not a true fmod, and row 14 is where the
+    // two definitions stop agreeing: 1e9 over 3 puts the quotient at
+    // 333333344, which cannot hold 333333333. Both paths answer 0 where an
+    // fmod answers 1, and this row is the only place in the suite that
+    // measures the device on the far side of that boundary at all.
+    //
+    // WHAT IT DOES NOT DO IS CATCH THE BUILTIN, and that was measured
+    // rather than assumed: emitting `${a[0]} % ${a[1]}` from compile.ts
+    // leaves every row here green, because this adapter implements WGSL's
+    // `%` as exactly the expansion the spec defines it as. So the argument
+    // in compile.ts for writing it out is a PORTABILITY argument and cannot
+    // be anything else — on hardware whose backend reaches for a true fmod
+    // this row is what would turn red, and no test on this box can stand in
+    // for that one. Recorded here so the pin is not read as stronger than
+    // it is.
+    expect(cpuCols.remLargeQuotient.data[14], "rem past a 2^24 quotient, CPU").toBe(0);
+    expect(gpuCols.remLargeQuotient.data[14], "rem past a 2^24 quotient, device").toBe(0);
+    expect(1e9 % 3, "and a true fmod answers 1 there").toBe(1);
+    const e2 = cpuCols.exp2Edges.data;
+    expect([e2[0], e2[1], e2[5], e2[6], e2[7]], "exp2 on whole exponents").toEqual([
+      1, 1, 0.5, 512, 0.001953125,
+    ]);
+    expect(e2[9], "exp2(128) overflows to Infinity").toBe(Infinity);
+    expect(e2[10], "exp2(-150) underflows to zero").toBe(0);
+    expect([e2[3], e2[4]], "exp2 of the infinities").toEqual([Infinity, 0]);
+    const l2 = cpuCols.log2Edges.data;
+    expect(l2[0], "log2(0)").toBe(-Infinity);
+    expect(Number.isNaN(l2[5]), "log2 of a negative").toBe(true);
+    expect(l2[9], "log2(128) is exactly 7").toBe(7);
+
+    // The subnormal row, asserted as the contract it is rather than quietly
+    // dropped. Two of the four are unaffected — `trunc` and `exp2` answer
+    // the same thing for 1e-40 and for 0 — and the other two are not.
+    expect(
+      [
+        gpuCols.truncEdges.data[SUBNORMAL_ROW],
+        gpuCols.exp2Edges.data[SUBNORMAL_ROW],
+        gpuCols.remPositiveDivisor.data[SUBNORMAL_ROW],
+        gpuCols.log2Edges.data[SUBNORMAL_ROW],
+      ],
+      "denormal input flushes to zero on the device",
+    ).toEqual([0, 1, 0, -Infinity]);
+    expect(
+      [
+        cpuCols.remPositiveDivisor.data[SUBNORMAL_ROW] > 0,
+        Number.isFinite(cpuCols.log2Edges.data[SUBNORMAL_ROW]),
+      ],
+      "the CPU keeps the denormal, which is why those two disagree there",
+    ).toEqual([true, true]);
+
+    console.log(`[base-2 and truncation edge probes ${testDevice!.label}]\n${lines.join("\n")}`);
+    // The point of the probe: every one of those claims holds on the DEVICE
+    // too, at inputs no measured budget covers.
+    expect(divergent, "CPU and GPU must agree at these edges").toEqual([]);
+  }, DEVICE_MEASUREMENT_TIMEOUT_MS);
+
   it("audit residual probes: NaN min/max, normalize extremes, lattice overflow, subnormals", () => {
     // Deliberately-pathological inputs from the phase-19 audit's residual
     // list. Divergence here is documented GIGO contract, not a defect:

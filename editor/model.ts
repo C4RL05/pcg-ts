@@ -34,6 +34,38 @@ export type {
 } from "../shared/graph/view.js";
 export { nodeCategory, nodePinsForType } from "../shared/graph/view.js";
 
+/**
+ * The three node types that wrap an inner graph. They serialize to the
+ * same payload and reach the editor by the same route; only the cook
+ * differs (`forEach` runs the body once per element, `repeatUntil` runs it
+ * until a detail scalar says it settled), which is nothing this editor has
+ * to know. Checking the SET rather than the word "subgraph" is what keeps a
+ * wrapper from being treated as an ordinary registered node — whose
+ * registry entry declares no pins and cannot cook. A wrapper missing from
+ * here fails at import with "node <id> has no input pin <name>", because
+ * the pins it is asked to connect are per-instance and the registry entry
+ * has none, and it is OFFERED in the palette below, where dropping it
+ * builds the metadata-only def and errors on the next cook.
+ *
+ * DERIVED FROM THE REGISTRY RATHER THAN LISTED, and that is the whole
+ * point of it living here. The three wrappers each declare
+ * `category: "composite"`, which the registry defines as "nodes wrapping
+ * inner graphs" — so asking the registry what the wrappers are cannot fall
+ * out of date, where a hand-written set silently can. It already had: this
+ * set was `{subgraph, forEach}` until a third wrapper arrived, and the
+ * editor's symptom was not a compile error but a graph that would not open
+ * and a palette entry that errored on drop.
+ *
+ * It lives here rather than in `controller.ts` because both files need it
+ * and the import may only run one way: the controller imports this module
+ * at runtime, so a value import back would close a cycle.
+ */
+export const WRAPPER_TYPES: ReadonlySet<string> = new Set(
+  listNodeTypes()
+    .filter((info) => info.category === "composite")
+    .map((info) => info.type),
+);
+
 function fmtValue(view: ParamView): string {
   if (view.mode === "field") {
     /**
@@ -92,8 +124,9 @@ export interface PaletteGroup {
  * first registration. Uncategorized types (e.g. third-party
  * registrations, which may legally omit `category`) fall back to the old
  * pin-signature heuristic, clearly separated in trailing
- * `other · <bucket>` groups. The metadata-only `subgraph` composite is
- * excluded — instances exist only via import.
+ * `other · <bucket>` groups. The metadata-only wrapper composites are
+ * excluded — every one of them declares no pins and cannot cook, so
+ * instances exist only via import.
  */
 export function paletteGroups(): PaletteGroup[] {
   const categorized = new Map<string, PaletteEntry[]>();
@@ -110,7 +143,7 @@ export function paletteGroups(): PaletteGroup[] {
     list.push(entry);
   };
   for (const info of listNodeTypes()) {
-    if (info.type === "subgraph") continue;
+    if (WRAPPER_TYPES.has(info.type)) continue;
     const entry = { type: info.type, description: info.description };
     if (info.category !== undefined) push(categorized, info.category, entry);
     else push(fallback, `other · ${bucket(info)}`, entry);

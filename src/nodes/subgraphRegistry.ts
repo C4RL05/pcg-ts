@@ -24,7 +24,7 @@
  * `import "pcg-ts"` costing nothing.
  */
 import { Graph, type GraphMeta, type NodeHandle } from "../graph/index.js";
-import { ITERATED_PIN_NAMES } from "../graph/subgraph.js";
+import { inferWrapperKind, type WrapperKind } from "../graph/subgraph.js";
 import { hashCombine, hashString } from "../random/index.js";
 import {
   deserializeGraph,
@@ -127,7 +127,39 @@ interface StoredSubgraph {
 const registry = new Map<string, StoredSubgraph>();
 
 const PROBE_ID = "recipe";
-const PROBE_PREFIX = new RegExp(`^node "${PROBE_ID}"(?: inner graph)?: `);
+
+/**
+ * @internal Strip the node breadcrumb `deserializeGraph` puts on an error
+ * raised under a MATERIALIZING PROBE.
+ *
+ * Every loader failure leads with the offending node's id, which is exactly
+ * right when the caller wrote that node — and exactly wrong when the node is
+ * scaffolding. Two callers wrap a recipe in a throwaway one-node graph to
+ * materialize it and never show that graph to anyone: this file's
+ * canonicalizing probe (`"recipe"`) and the primitive catalog's
+ * (`"probe"`). The id such a message leads with is then a node the author
+ * never wrote and cannot find in anything they hold, so each caller strips
+ * it and re-frames the rest under a name the author DOES hold — the
+ * primitive's. `pcg run`'s wrapper is deliberately not a third: its graph is
+ * "the JSON a caller could have written by hand" and the CLI can print it,
+ * so `"main"` there is a node the reader can actually go and look at.
+ *
+ * Shared rather than repeated because the stripping is not obvious: it drops
+ * `inner graph` along with the id (the message behind it already names the
+ * inner node, so keeping the qualifier would only add a second hop), but
+ * KEEPS every other qualifier — `subgraph inputs[0] ("pts")`, `subgraph
+ * params[0] ("count") targets[0]`, `subgraph payload` — because those say
+ * WHICH exposed declaration is at fault and are the caller's own content.
+ * Two hand-written copies of that rule would drift, and they had: the
+ * registry's own copy matched the two unqualified shapes only, so it leaked
+ * on every qualified one until this replaced it.
+ */
+export function stripProbeBreadcrumb(probeId: string, message: string): string {
+  // `: ` for the bare form and for `inner graph`; a lone space for a
+  // qualifier that is kept, so only the `node "<id>"` token is removed.
+  const escaped = probeId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return message.replace(new RegExp(`^node "${escaped}"(?: inner graph)?(?:: | )`), "");
+}
 
 function fail(name: string, message: string): never {
   throw new Error(`registerSubgraph "${name}": ${message}`);
@@ -315,11 +347,19 @@ function canonicalize(name: string, raw: SerializedSubgraph): SerializedSubgraph
   // PAYLOAD, so this never reaches the recipe or its content hash. It has
   // to be right anyway: a recipe is wrapper-agnostic, but the wrapper it
   // will be used with is the one whose rules it must satisfy, and a body
-  // exposing the reserved iterated-pin name is written to be looped over.
-  // Probing it as a "subgraph" would refuse it at registration (the loader
-  // rejects that combination as the one way to reach a silent one-pass
-  // cook), making a forEach body unregisterable.
-  const wrapper = raw.inputs.some((p) => ITERATED_PIN_NAMES.has(p.name)) ? "forEach" : "subgraph";
+  // exposing one of the reserved pin names is written to be cooked by the
+  // wrapper that owns the name. Probing such a body as a "subgraph" would
+  // refuse it at registration (the loader rejects those combinations as the
+  // one way to reach a silent one-pass cook), making a forEach or
+  // repeatUntil body unregisterable — which is why the type is INFERRED
+  // from the pins instead of being fixed at "subgraph".
+  //
+  // `inferWrapperKind` is shared with the two OTHER places that materialize
+  // a recipe (`pcg run`'s wrapper and the primitive catalog's probe), which
+  // both hardcoded "subgraph" until this was factored out of here. The
+  // registry was the only one that got it right, and it got it right in
+  // private.
+  const wrapper: WrapperKind = inferWrapperKind(raw);
   const probe: SerializedGraph = {
     formatVersion: 1,
     seed: 0,
@@ -333,7 +373,7 @@ function canonicalize(name: string, raw: SerializedSubgraph): SerializedSubgraph
   } catch (err) {
     // The probe node is scaffolding; strip its breadcrumb so the message
     // names the offending inner node and nothing else.
-    fail(name, (err instanceof Error ? err.message : String(err)).replace(PROBE_PREFIX, ""));
+    fail(name, stripProbeBreadcrumb(PROBE_ID, err instanceof Error ? err.message : String(err)));
   }
   const node = serializeGraph(graph).nodes[0];
   // Unreachable: the probe node IS a subgraph node, so serializeGraph

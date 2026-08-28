@@ -24,6 +24,7 @@
  * edge and no further, keeping the band it was drawn into.
  */
 import { rand } from "./rand.js";
+import { SAME_PLACE_W } from "./tolerance.js";
 
 /** The bands, in |t| and h. Z1 is the corridor and holds nothing. */
 export const ZONES = {
@@ -81,14 +82,58 @@ export const CORRIDOR = { halfWidthW: 1.0, floorW: 0, ceilingW: 1.2 } as const;
  */
 export const OVERHEAD = { ceilingW: 6 } as const;
 
-/** Can this piece hang over the road as furniture, rather than enclose it? */
+/**
+ * Can this piece hang over the road as furniture, rather than enclose it?
+ *
+ * THE CUT DECIDES A VOCABULARY, NOT A POSITION, so a piece within an f32
+ * spacing of it must not change families between cooks. A `tall` of
+ * exactly 4.8W reaches exactly the ceiling and is furniture; computed in
+ * f32 the same sum lands a few parts in ten million above 6 and the piece
+ * becomes a shell, which takes it out of the `over` pool the mix draws
+ * from and changes what the band is filled with. The tolerance keeps the
+ * f64 answer for a piece sitting on the cut. On the three measured kits
+ * the nearest asset to it is 1.5e-2W away, so nothing real is near enough
+ * to be moved by it.
+ */
 export function fitsOverhead(tallW: number): boolean {
-  return CORRIDOR.ceilingW + tallW <= OVERHEAD.ceilingW;
+  return CORRIDOR.ceilingW + tallW <= OVERHEAD.ceilingW + SAME_PLACE_W;
 }
 
-/** Is this position inside the protected volume? */
+/**
+ * Is this position inside the protected volume?
+ *
+ * THE ONE BOUNDARY TEST IN THIS FILE THAT LACKED A TOLERANCE, and it cost
+ * something. `fitsOverhead` above and `bandOf` below both carry
+ * `SAME_PLACE_W`; this did not, and its ceiling is landed on EXACTLY by
+ * construction — Z-3's `over` fill raises a replacement to `1.2 + tall/2`
+ * so that its base is the ceiling. Recovering that base as `h - tall/2`
+ * does not return 1.2: over the vegetation kit's 229 assets the round
+ * trip lands BELOW it for 55 of them and above for 41, on nothing but
+ * which way the last bit rounded. A base below the ceiling reads as
+ * inside the corridor, so `resolveCorridor` stands the piece off — a
+ * gantry that was already clear of the road pushed out to the verge, a
+ * 9.6W span moved 5.8W on seed 1.
+ *
+ * AND `moved()` CANNOT SEE IT. That guard exists to reject a repair that
+ * did nothing, and this repair does a great deal; it is a phantom in
+ * having been unnecessary, not in having been small. The only thing that
+ * catches it is the boundary agreeing with the placer that put a value
+ * on it.
+ *
+ * The tolerance goes in the direction that keeps the f64 answer for a
+ * value sitting exactly on a face: exactly at the ceiling is OUTSIDE
+ * (the corridor is open at the top, which is what lets art stand on it),
+ * exactly at |t| = 1W is OUTSIDE (Z2's verge starts there), and exactly
+ * at the floor is INSIDE. In f32 columns the same round trip is ~1e-7
+ * wide rather than ~2e-16, so without this the answer would also differ
+ * between two cooks of the same lap.
+ */
 export function inCorridor(t: number, h: number): boolean {
-  return Math.abs(t) < CORRIDOR.halfWidthW && h >= CORRIDOR.floorW && h < CORRIDOR.ceilingW;
+  return (
+    Math.abs(t) < CORRIDOR.halfWidthW - SAME_PLACE_W &&
+    h >= CORRIDOR.floorW - SAME_PLACE_W &&
+    h < CORRIDOR.ceilingW - SAME_PLACE_W
+  );
 }
 
 /**
@@ -385,12 +430,20 @@ export function lateralFor(
  * seven points this cost before it was caught.
  */
 export function bandOf(t: number, h: number): "over" | "verge" | "near" | "mid" | "far" | "distant" {
+  // THE SAME LADDER AS `bandOfPlacement`, AND THAT IS A LIABILITY WORTH
+  // NAMING. This one takes a base height directly where that one derives
+  // it from a centre and a size, which is the only difference between
+  // them — so the two are one rule written twice, and the boundary
+  // tolerances have to move together or they become one rule with two
+  // answers. `racetrackZones` pins that they agree across a sweep; read
+  // `bandOfPlacement` for why each edge is nudged the way it is.
   const a = Math.abs(t);
-  if (a < CORRIDOR.halfWidthW) return "over";
-  if (a < 1.5 && (h > CORRIDOR.ceilingW || h < 0)) return "over";
-  if (a < 1.5) return "verge";
-  if (a < 2.5) return "near";
-  if (a < 5) return "mid";
-  if (a < 13) return "far";
+  const inside = (limit: number): boolean => a < limit - SAME_PLACE_W;
+  if (inside(CORRIDOR.halfWidthW)) return "over";
+  if (inside(1.5) && (h > CORRIDOR.ceilingW + SAME_PLACE_W || h < -SAME_PLACE_W)) return "over";
+  if (inside(1.5)) return "verge";
+  if (inside(2.5)) return "near";
+  if (inside(5)) return "mid";
+  if (inside(13)) return "far";
   return "distant";
 }

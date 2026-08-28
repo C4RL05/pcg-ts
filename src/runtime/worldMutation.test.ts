@@ -10,7 +10,7 @@ import type { Geometry } from "../data/index.js";
 import { Graph, firstGeometry, type DataCollection, type NodeHandle } from "../graph/index.js";
 import { jitterPoints, type JitterPointsParams } from "../nodes/pointOps.js";
 import { pointScatterInBounds, type PointScatterInBoundsParams } from "../nodes/sources.js";
-import { geometryDiff, scatterLevel } from "./runtime.testsupport.js";
+import { geometryDiff, scatterLevel, xzCell } from "./runtime.testsupport.js";
 import type { LevelDef } from "./types.js";
 import { World } from "./world.js";
 
@@ -41,8 +41,9 @@ function jitterChunk(): {
     // Bind touches only the scatter, so it stays valid after the jitter
     // node is removed mid-test.
     bind(g, ctx) {
-      g.setParam(scatter, "boundsMin", [ctx.min[0], 0, ctx.min[1]]);
-      g.setParam(scatter, "boundsMax", [ctx.max[0], 0, ctx.max[1]]);
+      const cell = xzCell(ctx);
+      g.setParam(scatter, "boundsMin", [cell.min[0], 0, cell.min[1]]);
+      g.setParam(scatter, "boundsMax", [cell.max[0], 0, cell.max[1]]);
       g.setParam(scatter, "seed", ctx.seed);
     },
   };

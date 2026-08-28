@@ -31,7 +31,6 @@
  * null — so it produces false edges at the null rate unless something
  * stops it.
  */
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
 import { dressLap } from "../demos/racetrack/dress.js";
@@ -48,12 +47,13 @@ import {
 } from "../demos/racetrack/falseEdges.js";
 import { OUTPUTS, buildRoadGraph } from "../demos/racetrack/graph.js";
 import type { Kit } from "../demos/racetrack/kit.js";
-import { DEFAULT_KIT, kitPath } from "./support/kits.js";
+import { DEFAULT_KIT, kitOrAbsent, kitPath } from "./support/kits.js";
 import type { StationedPlacement } from "../demos/racetrack/legibility.js";
 import { type Lap, readLap } from "../demos/racetrack/lap.js";
 import { makeTrackSpline } from "../demos/racetrack/spline.js";
 
-const KIT = kitPath(DEFAULT_KIT);
+const KIT_KEY = DEFAULT_KIT;
+const KIT = kitPath(KIT_KEY);
 
 /** A placement stub: the detector reads only station, t, h and size. */
 function at(station: number, t: number, h: number): StationedPlacement {
@@ -290,7 +290,7 @@ describe("breaking a false edge", () => {
 });
 
 describe.skipIf(!KIT)("false edges on a generated lap", () => {
-  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as Kit;
+  const kit = kitOrAbsent<Kit>(KIT_KEY);
   let lap: Lap | undefined;
   async function theLap(): Promise<Lap> {
     if (!lap) {

@@ -25,8 +25,9 @@ import {
   type ParamType,
   type ParamValue,
   getSubgraphSpec,
-  paramSchemaError,
 } from "../graph/index.js";
+// Reached by MODULE: an @internal message builder, not package API.
+import { paramSchemaError } from "../graph/params.js";
 import { getNodeType, hasNodeType } from "./registry.js";
 
 /** One inner `(node, param)` slot an exposed param declaration binds. */

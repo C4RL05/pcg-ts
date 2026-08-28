@@ -1,0 +1,23 @@
+{
+  "_comment": "Panel spec — presentation only; the graph cooks identically without it. See shared/graphUi.ts.",
+  "sections": [
+    {
+      "title": "what counts as one run",
+      "controls": [
+        {
+          "param": "fit.gap",
+          "label": "gap",
+          "description": "The along-arc distance that separates runs, and the only number that decides which posts belong together. Past 46.23 — the empty stretch between the rows — all five merge into ONE run whose residual is the worst post anywhere on the lap. It stops at 1 because the props are 0.87 apart: below that every post becomes its own run, and the re-threading at the end fails on a group of one.",
+          "min": 1,
+          "max": 60,
+          "step": 0.5
+        },
+        {
+          "param": "fit.wrap",
+          "label": "a run may cross the seam",
+          "description": "One row is laid across the start/finish line. On, it stays one run of twenty. Off, it becomes two runs of ten whose slopes agree to five digits at 0.34397 and whose residuals are 0.00016 and 0.00015 — four decimal places under any threshold a rule would use, so nothing in the columns says the row was cut."
+        }
+      ]
+    }
+  ]
+}
