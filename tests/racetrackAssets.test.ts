@@ -15,6 +15,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  type AssetPlacement,
   type Band,
   type CurvatureBucket,
   type PlaceableAsset,
@@ -31,6 +32,31 @@ import {
 import { DEFAULT_KIT, ENCLOSURE_KIT, kitOrAbsent, kitPath } from "./support/kits.js";
 import { SAME_SHARE } from "../demos/racetrack/tolerance.js";
 import { inCorridor, resolveCorridor } from "../demos/racetrack/zones.js";
+
+/**
+ * A placement WITH A STATION, which is what `repairBandMix` takes now.
+ *
+ * IT USED TO TAKE A BARE `AssetPlacement` and choose its donor by array
+ * position; it chooses by a hash of the station, so a station is no longer
+ * optional and the type says so. Nothing in this file measures where along
+ * a lap anything sits — these fixtures are a bag of placements at a stated
+ * curvature mix, not a circuit — so the number only has to be DISTINCT and
+ * a function of the row, which is what makes the repair's answer
+ * reproducible from run to run. The stations of a real lap come from D-1
+ * and are compared against this reference in `tests/racetrackBandMix.test.ts`.
+ */
+type FixturePlacement = AssetPlacement & { readonly station: number };
+
+/** A whole fixture lap: one entry per row, empty where no asset weighed. */
+type FixtureLap = (FixturePlacement | undefined)[];
+
+/** Attach one, passing an empty draw through untouched. */
+function stationed(
+  p: ReturnType<typeof placeAsset>,
+  i: number,
+): FixturePlacement | undefined {
+  return p === undefined ? undefined : { ...p, station: i };
+}
 
 /**
  * WHICH CIRCUIT, and why it is not the first one.
@@ -94,7 +120,7 @@ describe.skipIf(!KIT)("placing from the kit's own `where`", () => {
   const assets = kit.assets.filter((a) => a.where);
 
   /** One lap's worth of placements at a given curvature mix. */
-  function lap(seed: number, n = 330): ReturnType<typeof placeAsset>[] {
+  function lap(seed: number, n = 330): FixtureLap {
     // Buckets drawn in the proportions the demo's own spline carries, so
     // the affinities are exercised across all four rather than at one.
     const mix: [CurvatureBucket, number][] = [
@@ -103,7 +129,7 @@ describe.skipIf(!KIT)("placing from the kit's own `where`", () => {
       ["medium", 0.256],
       ["tight", 0.077],
     ];
-    const out: ReturnType<typeof placeAsset>[] = [];
+    const out: FixtureLap = [];
     for (let i = 0; i < n; i++) {
       let u = ((i * 2654435761) % 1000) / 1000;
       let bucket: CurvatureBucket = "straight";
@@ -114,7 +140,7 @@ describe.skipIf(!KIT)("placing from the kit's own `where`", () => {
         }
         u -= w;
       }
-      out.push(placeAsset(assets, bucket, seed, i));
+      out.push(stationed(placeAsset(assets, bucket, seed, i), i));
     }
     return out;
   }
@@ -443,7 +469,10 @@ describe.skipIf(!KIT)("placing from the kit's own `where`", () => {
       const swap = placeAsset(pool, "straight", seed, 9000 + i);
       if (!swap) continue;
       over.log.push({ index: i, before: p });
-      over.placements[i] = swap;
+      // SPREAD OVER THE DONOR, which is what the repair itself does and
+      // for its reason: `placeAsset` knows nothing about a station, so
+      // assigning its result whole would drop the one the row came in on.
+      over.placements[i] = { ...p, ...swap };
       added++;
     }
     expect(added).toBeGreaterThan(0);
@@ -561,14 +590,14 @@ function lapOf(
   assets: readonly PlaceableAsset[],
   seed: number,
   n = 330,
-): ReturnType<typeof placeAsset>[] {
+): FixtureLap {
   const mix: [CurvatureBucket, number][] = [
     ["straight", 0.51],
     ["easy", 0.157],
     ["medium", 0.256],
     ["tight", 0.077],
   ];
-  const out: ReturnType<typeof placeAsset>[] = [];
+  const out: FixtureLap = [];
   for (let i = 0; i < n; i++) {
     let u = ((i * 2654435761) % 1000) / 1000;
     let bucket: CurvatureBucket = "straight";
@@ -579,13 +608,13 @@ function lapOf(
       }
       u -= w;
     }
-    out.push(placeAsset(assets, bucket, seed, i));
+    out.push(stationed(placeAsset(assets, bucket, seed, i), i));
   }
   return out;
 }
 
 /** Each band's share of the live placements, on the centre datum. */
-function bandShares(placements: readonly (ReturnType<typeof placeAsset>)[]): Record<Band, number> {
+function bandShares(placements: readonly (AssetPlacement | undefined)[]): Record<Band, number> {
   const live = placements.filter((p): p is NonNullable<typeof p> => p != null);
   const c = Object.fromEntries((Object.keys(Z3) as Band[]).map((b) => [b, 0])) as Record<
     Band,

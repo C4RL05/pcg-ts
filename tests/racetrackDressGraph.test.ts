@@ -897,6 +897,14 @@ describe("racetrack dressing, as a graph", () => {
       // the line below prints the copies actually emitted against the
       // boxes kept: it should read 100%, and a ratio that drifts off it
       // means something started stamping again.
+      //
+      // THE 1,985 IS THE FIGURE AS IT WAS MEASURED and is left as it was
+      // said, because it is a quotation of a finding rather than a claim
+      // about this lap. The same cook reads 1,980 boxes since Z-3's donor
+      // order changed on 2026-08-28 — the lap keeps the same number of
+      // PLACEMENTS and they carry different assets, so the box count moves
+      // with the vocabulary each one decomposes into. Nothing below reads
+      // either number; the ratio is what is asserted.
       copies += got.stamped;
 
       // THE REFERENCE IS BUILT FROM THE LIST L-1 LEFT, NOT FROM THE ONE

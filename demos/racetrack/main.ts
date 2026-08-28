@@ -309,12 +309,31 @@ function dressingKit(): Kit {
   // and it cost most of the demo's quality wherever a kit was available.
   //
   // Measured on the same lap under the same rules: dressing from the
-  // measured kit gives 2033 boxes at 5.8 per placement from 153 distinct
-  // assets, against 580 boxes at 1.7 per placement from 90. The real
-  // vocabulary's own box decompositions are what make a placement read as
-  // a grandstand rather than as a crate — and 5.8 against the reference
-  // layer's 6.1 is why the generated dressing used to sit beside the
-  // measured art without looking out of place.
+  // measured kit gives 1980 boxes at 5.59 per placement from 150 distinct
+  // assets. The real vocabulary's own box decompositions are what make a
+  // placement read as a grandstand rather than as a crate — and 5.59
+  // against the reference layer's 6.08 is why the generated dressing sits
+  // beside the measured art without looking out of place.
+  //
+  // TWO THINGS ABOUT THOSE NUMBERS, both found on 2026-08-28 and both
+  // worth having here rather than in a commit message.
+  //
+  // THE FIRST IS THAT THEY MOVED, from 2033 / 5.8 / 153. Z-3's donor order
+  // changed which placements the mix redraws, so a lap keeps the same
+  // stations and the same COUNT and carries different assets at some of
+  // them — and a box count is a sum over what each asset decomposes into.
+  // The seed and the lap are unchanged.
+  //
+  // THE SECOND IS THAT THE COMPARISON THIS SENTENCE USED TO MAKE NO LONGER
+  // EXISTS. It read "against 580 boxes at 1.7 per placement from 90", and
+  // re-measuring that arm gives 1980 / 5.59 / 150 — the SAME lap, to the
+  // box. `vocabulary.json` is now the anonymised dump of this same
+  // catalogue: 229 assets either way, the same ids, the same 362 recorded
+  // placements and 2200 library boxes, differing only in the names. So the
+  // branch below is still the right one to take — a checkout with no local
+  // manifest must dress from something — but it is no longer a fallback of
+  // lower quality, and any argument that rests on it being one needs
+  // rebuilding before it is quoted again.
   if (measuredKit) return measuredKit;
 
   // Otherwise the committed vocabulary: the same measured dimensions and
@@ -766,10 +785,21 @@ function buildStreamedDressing(
     // holds an asset that appears nowhere else on it -- and pinning is
     // what is supposed to stop Z-3's redraw breaking it. Measured over six
     // seeds against a two-pass reconstruction of the full 13-id set: the
-    // covered-stretch count is IDENTICAL on seeds 1-5 (10, 10, 9, 10, 10)
-    // and on seed 6 the reserved-only lap is strictly BETTER, 10 against
-    // 9. Seed 3's one bare stretch is bare with nothing pinned at all, so
-    // it is not the mix's doing. Placement counts are identical either way.
+    // covered-stretch count was IDENTICAL on seeds 1-5 (10, 10, 9, 10, 10)
+    // and on seed 6 the reserved-only lap was strictly BETTER, 10 against
+    // 9. Seed 3's one bare stretch was bare with nothing pinned at all, so
+    // it was not the mix's doing. Placement counts are identical either way.
+    //
+    // RETAKEN IN PART ON 2026-08-28, AND THE SENTENCE ABOUT SEED 3 IS NOW
+    // FALSE. Z-3's donor order changed which assets a lap carries once, so
+    // which tenths hold a landmark changed with it: the reserved-only lap
+    // this page cooks reads 10, 10, 10, 10, 10, 9 -- seed 3 is now full and
+    // seed 6 has the bare tenth -- and the reference `dressLap` path reads
+    // 10 on all six. The FULL-PIN arm was not re-run, so the COMPARISON is
+    // currently unmeasured rather than confirmed. It is left in place
+    // because the decision does not rest on it: the mechanism in the next
+    // paragraph is what it rests on, and the placement count is still
+    // identical either way.
     //
     // THE MECHANISM IS THAT PINNING COSTS A DONOR AND A DRAW. A pinned id
     // is excluded from the quota's eligible set AND from the redraw pool,
@@ -1128,11 +1158,20 @@ function showLapStats(): void {
   // enclosure run is placed — so the interesting numbers are the before
   // and after, not the intent.
   //
-  // THE TRIM READS ZERO ON EVERY LAP THIS PAGE CAN DRAW, and that is a
-  // measurement rather than an omission: the shipped vocabulary tops out
-  // near 20% of lap against L-6's 25% ceiling, so there is nothing to
-  // bring back down. It is printed because a rule only ever seen not
-  // firing is one nobody can tell from a rule that is missing.
+  // THE TRIM READS ZERO AT THE DENSITY THIS PAGE OPENS AT, and that is a
+  // measurement rather than an omission: re-measured over seeds 1-8, the
+  // shipped vocabulary finishes between 9.89% and 14.45% of lap at density
+  // 1, against L-6's 25% ceiling, so there is nothing to bring back down.
+  // It is printed because a rule only ever seen not firing is one nobody
+  // can tell from a rule that is missing.
+  //
+  // AND THE SLIDER CAN TAKE IT SOMEWHERE THE TRIM DOES FIRE, which this
+  // used to deny -- it read "zero on every lap this page can draw". The
+  // density control goes to x3, and the same sweep at densities 2 and 3
+  // reaches 24.89% and 26.78%, with the reference rule taking between 4
+  // and 35 placements on six of those twenty-four laps. So the readout
+  // below is not decoration at the top of the slider's range: drag the
+  // density up and it is the one number on this panel that starts moving.
   const e = level.enclosure;
   statCover(
     `${(100 * e.shareBefore).toFixed(1)}% -> ${(100 * e.share).toFixed(1)}% of lap · ` +

@@ -25,7 +25,7 @@
 
 import { CORRIDOR, fitsOverhead, resolveCorridor } from "./zones.js";
 import { SAME_PLACE_W, SAME_SHARE } from "./tolerance.js";
-import { rand } from "./rand.js";
+import { mixDonorPriority, rand } from "./rand.js";
 
 /** The per-asset measurements this module places from. */
 export interface AssetWhere {
@@ -432,7 +432,18 @@ export function mixInsideRule<T extends AssetPlacement>(
  */
 const MIX_DRAW_ATTEMPTS = 8;
 
-export function repairBandMix<T extends AssetPlacement>(
+/**
+ * THE STATION IS NOW PART OF THE INPUT TYPE, AND IT USED TO BE OPTIONAL.
+ * This repair took a bare `AssetPlacement` while it chose its donor by
+ * array position; it chooses by `mixDonorPriority(station)` now, so a
+ * placement with no station has no priority and there is no honest default
+ * for one — falling back to the index would silently restore the
+ * contiguous-stretch behaviour this change exists to remove, in exactly
+ * the callers that forgot. The constraint is written as an intersection
+ * rather than by importing `StationedPlacement`, which lives in
+ * `legibility.ts` and imports this module.
+ */
+export function repairBandMix<T extends AssetPlacement & { readonly station: number }>(
   placements: readonly (T | undefined)[],
   assets: readonly PlaceableAsset[],
   seed: number,
@@ -454,6 +465,25 @@ export function repairBandMix<T extends AssetPlacement>(
    * and the share Z-3 states was measured on dressing.
    */
   exclude: (p: T) => boolean = () => false,
+  /**
+   * WHICH ELIGIBLE MEMBER OF AN OVER-FULL BAND LEAVES FIRST, lowest key
+   * first. The default is the rule; the parameter exists so the gate that
+   * checks the rule can be shown to FAIL.
+   *
+   * `donor spread` in `tests/racetrackBandMix.test.ts` asserts that a lap's
+   * conversions touch most tenths of the circuit. An assertion no input
+   * breaks is not an instrument, and the input that breaks this one is the
+   * order this repair used until 2026-08-28 — the station RAW, ascending,
+   * which is what the array scan it replaced amounted to. So the control
+   * passes `(p) => p.station` here and the gate reports both numbers side
+   * by side.
+   *
+   * IT IS NOT A KNOB. Every production caller takes the default, and the
+   * default is the one order `writeBandMix` can also spell — changing it
+   * here alone would put the reference and the graph on different rules,
+   * which is the divergence the decision suite exists to catch.
+   */
+  priorityOf: (p: T) => number = (p) => mixDonorPriority(p.station),
 ): MixRepair<T> {
   const out = [...placements];
   const live = (): { i: number; band: Band }[] =>
@@ -560,9 +590,13 @@ export function repairBandMix<T extends AssetPlacement>(
   // DONORS THIS REPAIR HAS ALREADY FAILED TO REFILL, keyed by donor and
   // destination band. It is what turns "this placement cannot become an
   // `over` piece" into progress rather than into another identical pass:
-  // the scan for a donor is a linear `find`, so without it the same
-  // first-in-band placement is chosen every time and the loop spends the
-  // whole population budget re-deciding the same thing.
+  // the scan for a donor is a minimum over a FIXED per-placement key, so
+  // without it the same lowest-priority member of the band is chosen every
+  // time and the loop spends the whole population budget re-deciding the
+  // same thing. (It used to be a linear `find` and the sentence read
+  // "first-in-band"; the order changed, the trap did not — a deterministic
+  // scan over an unchanged list returns the same answer however it is
+  // ordered.)
   const failed = new Set<string>();
   // Bounded by the population: each pass either moves one placement or
   // strikes one (donor, band) pair off, and both are finite.
@@ -612,14 +646,50 @@ export function repairBandMix<T extends AssetPlacement>(
     // A DONOR THIS REPAIR HAS NOT ALREADY FAILED TO REPLACE. Keyed by the
     // band it was being drawn INTO, because a donor that cannot be turned
     // into an `over` piece may still make a perfectly good `verge` one.
-    // Without this the scan below returns the same first-in-band placement
-    // every pass, which is half of why this repair used to spin.
-    const donor = live().find(
-      (x) =>
-        x.band === src &&
-        !protect.has(out[x.i]?.asset.id ?? -1) &&
-        !failed.has(`${x.i}|${dst}`),
-    );
+    // Without this the scan below returns the same placement every pass,
+    // which is half of why this repair used to spin.
+    //
+    // LOWEST `mixDonorPriority` FIRST, AND IT USED TO BE A LINEAR `find`.
+    // That took the first eligible member in ARRAY order, and this list is
+    // held in station order, so "the first k" was a contiguous stretch of
+    // track: measured over seeds 1-6, on the lap as the mix first sees it,
+    // every conversion landed in the first two tenths on every seed,
+    // and the frames showed it as a continuous canopy of overhead
+    // furniture over the start of the circuit. A hashed order puts the
+    // conversions in seven to ten tenths and changes nothing else — the
+    // pass structure above decides how MANY placements move and which
+    // bands they move between, and this line only decides which of the
+    // eligible members that number is drawn from. Band shares, placement
+    // count and station set all came out identical on all six seeds.
+    //
+    // THE SAME ORDER THE GRAPH USES, WHICH IS THE POINT OF THE HASH BEING
+    // THE LIBRARY'S. `writeBandMix` hands `quotaRebalance` a `priority` of
+    // `randomFrom(attribute(PLACEMENT.station), MIX_DONOR_KEY)`, and
+    // `quotaRebalance` takes its donors lowest-priority-first. Same key,
+    // same input, same order — so the decision suite still compares the
+    // two donor for donor rather than shrugging at a divergence.
+    //
+    // AND IT IS STILL THE STATION, hashed rather than raw. Keying on the
+    // ARRAY INDEX would spread the donors equally well and would make this
+    // repair's answer depend on the order of the list it was handed, which
+    // is a property the graph is measured on and this reference is the
+    // statement of. See {@link mixDonorPriority}.
+    let donor: { i: number; band: Band } | undefined;
+    let donorKey = Infinity;
+    for (const x of live()) {
+      if (x.band !== src) continue;
+      if (protect.has(out[x.i]?.asset.id ?? -1)) continue;
+      if (failed.has(`${x.i}|${dst}`)) continue;
+      const key = priorityOf(out[x.i] as T);
+      // STRICTLY LESS THAN, so a tie keeps the lower index. Two placements
+      // at one station is the only way to tie and this demo's laps do not
+      // carry a pair; `mixDonorPriority` says so at more length, including
+      // what the graph would do instead.
+      if (key < donorKey) {
+        donorKey = key;
+        donor = x;
+      }
+    }
     if (!donor) break;
 
     // Re-place the station with an asset whose OWN measurements put it in

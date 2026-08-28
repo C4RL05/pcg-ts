@@ -30,12 +30,24 @@
  *
  * THE FIXTURE IS CONSTRUCTED, AND IT HAS TO BE. No lap the shipped
  * vocabulary can dress reaches L-6's ceiling — `buildRoundGraph`'s own note
- * measures seeds 1-8 topping out at 20.0% against 25% — so a suite that only
- * cooked real laps would be green for a trim that had been deleted. Seed 1's
- * real dressing plus ten wide overhead pieces reaches 31.3%, which is where
- * the rule can be held to anything at all. The last case in this file is the
- * other half of that argument: the same stage over the same lap WITHOUT the
- * band must do nothing, or the trim is not a repair, it is a rule.
+ * measures every seed and density it can draw topping out well under 25% —
+ * so a suite that only cooked real laps would be green for a trim that had
+ * been deleted. Seed 1's real dressing plus ten wide overhead pieces reaches
+ * 34.6%, which is where the rule can be held to anything at all. The last
+ * case in this file is the other half of that argument: the same stage over
+ * the same lap WITHOUT the band must do nothing, or the trim is not a
+ * repair, it is a rule.
+ *
+ * THE 34.6% USED TO READ 31.3%, and the difference is the dressing rather
+ * than the band: Z-3's donor order changed on 2026-08-28, the dressing's
+ * overhead landed on different assets, and the incidental enclosure under it
+ * moved with them. The band is the same ten pieces it always was. The
+ * argument is untouched — the fixture is over the ceiling either way, and by
+ * more than before — but the number is a measurement and had to be retaken
+ * rather than carried over.
+ *
+ * AND THERE IS ONE MORE PIECE IN IT THAN THERE WAS: see {@link overEnclosed}
+ * for the twin, and for what stopped being true when the dressing moved.
  *
  * THE BAND BREAKS L-4 AND THAT IS FINE. `block-87` has `instances: 1`, so
  * ten copies of it are ten violations of landmark uniqueness. Nothing here
@@ -97,8 +109,17 @@ const SEED = 1;
  * WIDE ON PURPOSE. The ray cast wants three of six rays blocked before it
  * calls a frame covered, and the corridor is 2W across; a piece narrower
  * than that roofs a frame only in company. One wide piece per station is
- * what makes ten of them worth 11 points of enclosure share, which is the
- * margin the whole fixture rests on.
+ * what makes ten of them worth 23.6 points of enclosure share — seed 1's
+ * own dressing measures 11.0% and the fixture 34.6% — which is the margin
+ * the whole fixture rests on.
+ *
+ * THE FIGURE USED TO READ 11 POINTS AND THAT WAS ALREADY STALE when it was
+ * re-measured on 2026-08-28: the two shares either side of it were 9.1% and
+ * 31.3%, a gap of 22.2, so the band has been worth twice what this sentence
+ * claimed for some time. Both ends moved again with Z-3's donor order and
+ * both were retaken together. What the number is FOR has not changed — it is
+ * the headroom that keeps the fixture over L-6's ceiling — and the headroom
+ * is larger than the sentence ever promised.
  */
 const BAND_PIECE_ID = 161;
 
@@ -110,10 +131,16 @@ const BAND_PIECE_ID = 161;
  * so a centre at 3.24W puts its BASE at 1.17W, three hundredths under
  * `CORRIDOR.ceilingW`. Z-1 calls that a corridor conflict, and `block-87` is
  * large art, so the rule stands it off to `1 + across/2` = 3.55W — off the
- * road entirely, before the trim has been reached. Measured: the round then
- * hands the trim a lap at 10.6% enclosure with the band parked on the verge,
- * and the stage correctly does nothing. A fixture that dissolves in the
- * stage ahead of the one being tested is not a fixture.
+ * road entirely, before the trim has been reached. Re-measured 2026-08-28:
+ * the round then hands the trim a lap at 12.3% enclosure with the band
+ * parked on the verge, and the stage correctly does nothing. A fixture that
+ * dissolves in the stage ahead of the one being tested is not a fixture.
+ *
+ * IT READ 10.6% BEFORE Z-3'S DONOR ORDER CHANGED, and the point is that
+ * the figure is the DRESSING's own enclosure with the band contributing
+ * nothing — so it moved for the same reason the ordinary lap's 11.0% did,
+ * and it is still less than half of L-6's ceiling, which is the only thing
+ * the sentence asks of it.
  *
  * 3.3W PUTS THE BASE AT 1.2302W, clear of the ceiling by a hundredth, so
  * Z-1 returns it untouched and it arrives at the trim where it was put: over
@@ -123,7 +150,7 @@ const BAND_PIECE_ID = 161;
  */
 const BAND_H = 3.3;
 
-/** Ten pieces, evenly spaced — enough roof to clear the ceiling by 6 points. */
+/** Ten pieces, evenly spaced — enough roof to clear the ceiling by 9.6 points. */
 const BAND_COUNT = 10;
 
 /**
@@ -327,7 +354,54 @@ function reporterFor(lap: Lap): (ps: readonly StationedPlacement[]) => Report {
   return (ps) => measureEnclosure(lap, buildBoxes(kit, lap, ps, SEED));
 }
 
-/** The over-enclosed lap: seed 1's real dressing plus ten wide roofs. */
+/**
+ * How far ABOVE the piece it doubles the twin sits, in W.
+ *
+ * THE HEIGHT AND NOT THE STATION, which is the whole reason this constant
+ * needs a comment. The twin has to be a second POINT — nothing in the
+ * library is defined for two points at one position, because the identity
+ * tiebreak every order-free node takes is the bits of the stored position,
+ * and two placements sharing them would make an arbitrary order arbitrary in
+ * a second way. Moving it along the lap would do that and would also move
+ * the END of the covered run by the same amount, which is enough to reorder
+ * a set of runs whose shortest members differ by hundredths of a W: measured,
+ * a 0.02W step along the station pushed the twinned run behind two others
+ * and the round that took two pieces was not the first one. A lift changes
+ * the position and not the shadow, so the run keeps its exact extent and
+ * simply holds one more piece.
+ *
+ * 0.01W IS ABOUT A TENTH OF A WORLD UNIT ON THIS LAP, four orders above the
+ * f32 spacing at the lap's world scale, so the two points are distinct by a
+ * wide margin. It is also small enough that the twin stays inside
+ * `isTrimmable`'s height window wherever the original was — checked rather
+ * than assumed, in the loop below.
+ */
+const TWIN_LIFT_W = 0.01;
+
+/**
+ * The over-enclosed lap: seed 1's real dressing, one doubled overhead piece,
+ * and ten wide roofs.
+ *
+ * THE TWIN IS WHAT MAKES THE WHOLE-RUN CLAIM TESTABLE, and it is here
+ * because relying on the dressing for it turned out to be relying on luck.
+ * L-6's trim takes covered runs SHORTEST FIRST and Z-3's floor allows only a
+ * handful of them per lap, so what it actually reaches are the shortest runs
+ * on the lap — which on this circuit are single-frame shadows cast by one
+ * incidental piece each. Whether any run holding TWO pieces is short enough
+ * to be reached is a property of where the dressing happened to put its
+ * overhead, and on 2026-08-28 it stopped being true: Z-3's donor order
+ * changed, the dressing's overhead moved, and "takes a shortest run, WHOLE"
+ * was being asserted over four rounds that each took exactly one piece. The
+ * rule was not wrong and the fixture had quietly stopped exercising it.
+ *
+ * SO THE SECOND MEMBER IS PUT THERE ON PURPOSE. The shortest run that holds
+ * exactly one trimmable piece gets a copy of that piece, {@link TWIN_LIFT_W}
+ * higher — same asset, same lateral, same STATION, so the same shadow and
+ * the same run, now with two members in it and still the shortest thing the
+ * trim will look at. That is the file's own standing lesson applied to
+ * itself: an exemplar chosen for one property will silently fail to exercise
+ * the rules that depend on the others.
+ */
 async function overEnclosed(): Promise<{
   lap: Lap;
   frames: Geometry;
@@ -346,11 +420,38 @@ async function overEnclosed(): Promise<{
     station: (k * lap.lengthW) / BAND_COUNT,
     pose: 0,
   }));
+
+  // THE RUNS ARE MEASURED OVER THE WHOLE FIXTURE, band included, because
+  // the band changes which stretches are covered and the trim will be
+  // choosing among these same runs.
+  const withBand = [...dressing.placements, ...band];
+  const runs = [...reporterFor(lap)(withBand).stretches].sort((a, b) => a.lengthW - b.lengthW);
+  let twin: StationedPlacement | undefined;
+  for (const run of runs) {
+    const members = withBand.filter((p) => isTrimmable(p) && inRun(p.station, run));
+    if (members.length !== 1) continue;
+    const only = members[0] as StationedPlacement;
+    const lifted = { ...only, h: only.h + TWIN_LIFT_W };
+    // STILL A CANDIDATE OR IT IS NOT A TWIN. A piece sitting within
+    // `TWIN_LIFT_W` of the top of the overhead window would leave it, and
+    // the fixture would then carry an extra piece the trim never looks at
+    // — the silent failure this whole block exists to end.
+    if (!isTrimmable(lifted)) continue;
+    twin = lifted;
+    break;
+  }
+  if (!twin) {
+    throw new Error(
+      "overEnclosed: no covered run on this fixture holds exactly one trimmable piece, so there " +
+        "is nothing to double; the lap changed shape and the whole-run case needs re-deriving",
+    );
+  }
+
   return {
     lap,
     frames,
-    placements: [...dressing.placements, ...band],
-    bandFrom: dressing.placements.length,
+    placements: [...dressing.placements, twin, ...band],
+    bandFrom: dressing.placements.length + 1,
   };
 }
 
@@ -531,8 +632,9 @@ describe("racetrack L-6 trim, as a graph stage", () => {
     // is the assertion that says so. It is not a formality: at a band height
     // of 3.24W — which puts the piece's base a hundredth under the corridor
     // ceiling — Z-1 stands all ten pieces off to 3.55W before the trim is
-    // reached, the lap arrives at 10.6% enclosure, and every claim below is
-    // vacuously satisfied by a stage that does nothing. See {@link BAND_H}.
+    // reached, the lap arrives at 12.3% enclosure, and every claim below is
+    // vacuously satisfied by a stage that does nothing. See {@link BAND_H},
+    // which carries the same figure and what it used to read.
     const seen = reporterFor(lap)(list);
     expect(
       seen.share,

@@ -49,9 +49,22 @@
  * and the only thing the graph path would need from it is `mixPinned`'s
  * landmark half, protecting those assets from Z-3's redraw. Over six
  * seeds, against a two-pass reconstruction of the reference's full 13-id
- * pin set, the covered-stretch count is IDENTICAL on seeds 1-5 (10, 10,
- * 9, 10, 10) and the reserved-only lap is strictly BETTER on seed 6, 10
- * against 9. Pinning costs a donor and a draw — a pinned id leaves both
+ * pin set, the covered-stretch count was IDENTICAL on seeds 1-5 (10, 10,
+ * 9, 10, 10) and the reserved-only lap was strictly BETTER on seed 6, 10
+ * against 9.
+ *
+ * THOSE SIX NUMBERS ARE FROM BEFORE 2026-08-28 AND ONE HALF OF THE PAIR
+ * HAS BEEN RETAKEN. Z-3's donor order changed, so which asset stands at a
+ * station changed, and so did which of them are unique. The reserved-only
+ * graph lap now reads 10, 10, 10, 10, 10, 9 — the one bare tenth moved
+ * from seed 3 to seed 6 — and the reference path reads 10 on all six. The
+ * FULL-PIN arm was NOT re-run, so the comparison itself is currently
+ * unmeasured: what is written above is what it said when it was taken, and
+ * anyone leaning on the conclusion should retake both arms rather than
+ * assume the gap survived. The MECHANISM below is what the decision rests
+ * on and is unaffected by any of it.
+ *
+ * Pinning costs a donor and a draw — a pinned id leaves both
  * the quota's eligible set and the redraw pool — so withholding ten more
  * assets from a ~226-asset pool pushes the mix onto more-repeated
  * replacements, and that destroys uniqueness elsewhere faster than the
@@ -912,12 +925,22 @@ export function dressLap(
     // something, from nothing but the per-asset placement of a vocabulary
     // that happens to be half overhead pieces.
     //
-    // AND IT HAS TO BE MEASURED HERE RATHER THAN BEFORE THE CULL. Before
-    // it the same lap reads 34.2%; after it, 24.8% — L-1 pushes overhead
-    // pieces outward and takes nine points of enclosure with them.
-    // Topping up against the pre-cull figure adds nothing and then
-    // watches the cull open the roof, which is the same mistake as
+    // AND IT HAS TO BE MEASURED HERE RATHER THAN BEFORE THE CULL. On the
+    // enclosed kit — the only one of the three with enough overhead to
+    // show it — the first round reads 26.1% to 28.4% before the cull and
+    // 22.1% to 23.3% after it, over seeds 1-3: L-1 pushes overhead pieces
+    // outward and takes four to six points of enclosure with them, on
+    // every seed. Topping up against the pre-cull figure adds nothing and
+    // then watches the cull open the roof, which is the same mistake as
     // repairing coverage against a lap the cull has not run on yet.
+    //
+    // THE FIGURES USED TO READ 34.2% AND 24.8%, "nine points", and were
+    // retaken on 2026-08-28 when Z-3's donor order changed which asset
+    // stands at each station — enclosure is a ray cast over the boxes
+    // those assets decompose into, so it moved with them. The gap narrowed
+    // and the argument did not: the cull still opens several points of
+    // roof on every seed, which is the whole of why the measurement is
+    // taken on this side of it.
     //
     // WHAT IT SUPPLIES IS THE TAIL, NOT THE TOTAL. That incidental cover
     // is fifty-odd SHORT stretches with a heavy-tail share of ZERO, where
@@ -1023,8 +1046,11 @@ export function dressLap(
     // cannot be donated away, and no second copy of one can be drawn in.
     //
     // ONE PER TENTH, not every unique asset: see `landmarkAssets`.
-    // Protecting all of them withholds 94 of 229 from the mix and leaves
-    // Z-3 unable to reach its bands at all.
+    // Protecting all of them withholds 71 to 79 assets of a 226-asset pool
+    // from the mix -- re-measured over seeds 1-6 on 2026-08-28, where it
+    // read 94 of 229 before Z-3's donor order changed which assets a lap
+    // ends up carrying once. Roughly a third of the pool either way, which
+    // leaves Z-3 unable to reach its bands at all.
     const protectIds = new Set(reserved);
     for (const id of landmarkAssets(placements, lap.lengthW)) protectIds.add(id);
 

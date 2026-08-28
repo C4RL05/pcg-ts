@@ -2897,11 +2897,14 @@ still `dressLap`'s.
 for the first time: the graph marks the same placements for the same
 destination bands as the reference chooses -- 17, 28, 14 and 22 moves,
 nothing missing and nothing extra -- and the band ladder agrees with
-`bandOfPlacement` on all 329, 312, 328 and 331 placements. That holds
-because `quotaRebalance` takes the visit order as a param and this passes
-it the station: the reference finds its donor with a linear `find` over a
-station-ordered list, so "the first k eligible members of this band" is
-the same k either way.
+`bandOfPlacement` on all 329, 312, 328 and 331 placements. That held
+because `quotaRebalance` takes the visit order as a param and this passed
+it the station: the reference found its donor with a linear `find` over a
+station-ordered list, so "the first k eligible members of this band" was
+the same k either way. THE ORDER IS HASHED SINCE 2026-08-28 and the
+agreement is unchanged for the same structural reason -- both paths now
+rank by `mixDonorPriority(station)`, so they still agree member for
+member. See the struck entry below.
 
 **What is left of the lap prelude, in the order the measurements put it:**
 
@@ -2942,16 +2945,39 @@ still refused outright by the two sum checks, while a band list THIS
 population cannot satisfy is data, and a node that throws on data cannot
 sit inside the loop it exists for.
 
-**A defect the port surfaced and did not fix.** The reference takes the
-first eligible member of an over-full band in station order, and a band's
-members are spread over the whole circuit -- so "the first k" is a
-CONTIGUOUS STRETCH of track. Every replacement the mix makes lands in the
-first tenth of the lap, and every share still comes out exactly right. It
-is transcribed rather than improved because a port that quietly changes
-the rule cannot be checked against it, and `quotaRebalance` takes the
-order as a param so that changing it later is one expression rather than
-a new node. Worth measuring what a hashed priority does to the picture
-before deciding.
+**~~A defect the port surfaced and did not fix~~ — FIXED 2026-08-28, ON
+BOTH PATHS.** The reference took the first eligible member of an over-full
+band in station order, and a band's members are spread over the whole
+circuit -- so "the first k" was a CONTIGUOUS STRETCH of track. Every
+replacement the mix made landed in the first tenth of the lap, and every
+share still came out exactly right. It was transcribed rather than
+improved because a port that quietly changes the rule cannot be checked
+against it, and `quotaRebalance` takes the order as a param so that
+changing it later is one expression rather than a new node.
+
+**MEASURED, THEN SHOWN, THEN TAKEN.** The paragraph above asked for the
+picture before deciding, and that is what happened. Over seeds 1-6 on the
+page's own configuration, the station order touches TWO lap tenths on
+every seed with nothing in the other eight; a hashed priority touches
+seven to ten. Longest contiguous run 4-9 falls to 2-3. What does NOT move
+is everything the rule states: band shares are the same INTEGER in all six
+bands on all six seeds, the placement count is identical, the station set
+is identical, and every seed still converges. What moves is asset identity
+on 12-18% of placements. Frames of the chase view -- the only viewpoint
+the demo says the result is consumed from -- show a continuous canopy of
+overhead furniture across the upper half becoming open sky and discrete
+gantries, with a mid-lap control confirming it is a LOCALISED artifact and
+not a change of look. Carlos looked at both and took it.
+
+BOTH STATEMENTS MOVED TOGETHER, which the "cannot be checked against it"
+argument above demanded: `repairBandMix` calls `mixDonorPriority` and
+`writeBandMix` spells `randomFrom(attribute(PLACEMENT.station),
+MIX_DONOR_KEY)`, one shared key constant, so the comparison suite still
+compares. That hash is the LIBRARY's rather than the demo's `rand`, and
+had to be -- the number is computed twice in two languages and must agree
+to the bit, and no field can compute `rand`'s mix, since the grammar has
+no bit operators. The choice was never between two hashes; it was between
+the library's hash and no shared order at all.
 
 ### Z-3 is a graph, both halves, 2026-08-26
 
@@ -3019,7 +3045,9 @@ now asserts its match count; this is the one that did not.
 does.** The mix refills a band, the next round's cull pushes the
 replacement off the racing line, the push changes its band, and the quota
 marks it again -- it is still the first eligible member of that band in
-station order. `repairBandMix` does not have this problem because it
+the priority order, whatever that order is; hashing the priority spreads
+WHICH placements are taken and does nothing about a placement being taken
+twice. `repairBandMix` does not have this problem because it
 remembers the pairs it has tried. `PLACEMENT.mixTried` is that memory, and
 it bounds the mix by the population exactly as the reference's own pass
 loop is bounded.

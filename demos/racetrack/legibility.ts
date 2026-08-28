@@ -100,10 +100,17 @@ export function landmarksPerStretch(
  * restores it, and the loop runs out.
  *
  * Protecting every unique asset stops the fight and starts a worse one:
- * on this vocabulary that is 94 of 229 assets withheld from the mix's
- * donors AND its replacement pool, which leaves Z-3 unable to reach its
- * bands at all. L-4's threshold is ONE per tenth, so one per tenth is
- * what gets protected — ten ids rather than ninety-four.
+ * on this vocabulary that is 71 to 79 assets of a 226-asset pool withheld
+ * from the mix's donors AND its replacement pool, which leaves Z-3 unable
+ * to reach its bands at all. L-4's threshold is ONE per tenth, so one per
+ * tenth is what gets protected — ten ids rather than seventy-odd.
+ *
+ * THE COUNT USED TO READ 94 OF 229 and was re-measured over seeds 1-6 on
+ * 2026-08-28, when Z-3's donor order changed which assets a lap ends up
+ * carrying exactly once. It is a range rather than a number because it
+ * always was one — it is a property of the lap, not of the kit — and
+ * quoting one seed's value made it look like the second. The argument is
+ * untouched at any value in that range: it is a third of the pool.
  *
  * Deterministic: the lowest-id unique asset in each stretch, so the same
  * lap always protects the same ten.

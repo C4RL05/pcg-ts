@@ -34,8 +34,10 @@
  *
  *   - L-6's COVER TILER genuinely reads one. `dress.ts` measures
  *     `buildBoxes` over the list every other repair has already rewritten
- *     this round, and its own comment insists on the placement ("34.2%
- *     before the cull, 24.8% after"). It also draws from `seed + rounds`,
+ *     this round, and its own comment insists on the placement (26.1-28.4%
+ *     before the cull against 22.1-23.3% after, on the enclosed kit over
+ *     seeds 1-3; it read "34.2% before, 24.8% after" until Z-3's donor
+ *     order was rehashed on 2026-08-28). It also draws from `seed + rounds`,
  *     so a second run over its own output places different tunnels from
  *     the same budget. Both halves fail.
  *   - L-5's FALSE-EDGE DETECTOR reads nothing of the kind — only `t`, `h`,
@@ -170,7 +172,7 @@ import {
   sub,
   vec,
 } from "pcg-ts";
-import { rand } from "./rand.js";
+import { MIX_DONOR_KEY, rand } from "./rand.js";
 import { TRACK_FRAME } from "./graph.js";
 import type { Kit } from "./kit.js";
 import type { Lap } from "./lap.js";
@@ -343,8 +345,14 @@ export const DRESS_OUTPUTS = {
    * WHAT ENCLOSURE DID IS A DIFFERENCE and a caller cannot take it from
    * one number. The lap arrives with incidental cover -- overhangs the
    * ordinary dressing happens to produce -- and the rule's whole job is to
-   * lift that to a share held in long stretches, so "8.8% of lap" means
-   * nothing without the "0.6%" it started from.
+   * lift that to a share held in long stretches, so "11.0% of lap" means
+   * nothing without the "0.6%" it started from. (Both are seed 1 on the
+   * shipped vocabulary, re-measured 2026-08-28; the after-figure read 8.8%
+   * before Z-3's donor order changed which asset stands at each station,
+   * and enclosure is a ray cast over the boxes those assets decompose
+   * into. `main.ts` carries the range over seeds 1-8. The pair is here as
+   * an illustration of why ONE number cannot say what the rule did, and
+   * that is what it still is.)
    */
   coverageFirst: "coverageFirst",
 } as const;
@@ -611,15 +619,24 @@ export const PLACEMENT = {
    * THE GRAPH'S `failed` SET, AND IT IS WHAT MAKES THE LOOP TERMINATE.
    * `repairBandMix` remembers the (donor, band) pairs it has tried and
    * will not offer the same donor twice, without which "the scan for a
-   * donor is a linear `find`, so the same first-in-band placement is
-   * chosen every time and the loop spends the whole population budget
-   * re-deciding the same thing" — its own words. The graph met the same
-   * wall one level up: the mix refills a band, the NEXT round's cull
-   * pushes the replacement clear of the racing line, the push changes its
-   * band, and the quota — which takes the first eligible member in station
-   * order, and that is still this one — marks it again. Measured over
-   * twenty seeds without this column, the graph ran out of rounds on two
-   * of them where `dressLap` settled on every one.
+   * donor is a minimum over a FIXED per-placement key, so the same
+   * lowest-priority member of the band is chosen every time and the loop
+   * spends the whole population budget re-deciding the same thing" — its
+   * own words. The graph met the same wall one level up: the mix refills a
+   * band, the NEXT round's cull pushes the replacement clear of the racing
+   * line, the push changes its band, and the quota — which takes the
+   * lowest-priority eligible member of that band, and that is still this
+   * one — marks it again. Measured over twenty seeds without this column,
+   * the graph ran out of rounds on two of them where `dressLap` settled on
+   * every one.
+   *
+   * THE ARGUMENT DOES NOT DEPEND ON WHAT THE ORDER IS, which is why it
+   * survived the 2026-08-28 move from station priority to a hashed one
+   * unchanged in substance. What traps the loop is that the order is a
+   * FUNCTION OF THE PLACEMENT and nothing else: re-running the scan over a
+   * list the round did not otherwise change returns the same donor,
+   * whether the key is an arc length or a hash of an id. Only the wording
+   * "first in station order" was ever about the station.
    *
    * A placement may therefore be redrawn at most ONCE per lap, which
    * bounds the mix by the population exactly as the reference's own pass
@@ -813,23 +830,66 @@ export interface DressGraphInput {
    * repair body round by round with the set fixed and again with it
    * recomputed each round gives **0 differing placements** on all eight,
    * compared by asset, station, lateral and height. That is the claim
-   * worth making, and it replaces two weaker ones that were here and are
-   * both wrong.
+   * worth making, and it survived being retaken on 2026-08-28 after Z-3's
+   * donor order changed — under conditions strictly harder than the ones
+   * it was first measured under, for the reason the last paragraph gives.
    *
-   * The first was "`mix` is 0 in round two on every seed of six". It is 0
-   * on seeds 1-7 and **1 on seed 8**, so the mix does run after round one
-   * and the snapshot is not protected by the loop stopping. The second was
-   * the reason given for `dressLap` rebuilding at all — "L-4 re-draws
-   * landmarks as the loop runs" — and L-4 moves **0 in every round on all
-   * eight seeds**, so on this vocabulary the rebuild answers a question
-   * nothing asks.
+   * THE ZEROS WERE PROVED CAPABLE OF BEING NON-ZERO before they were
+   * believed, which is the only thing that makes a table of zeros evidence.
+   * Three controls: pinning EVERYTHING from round one moves 23-46
+   * placements per seed — exactly round one's committed mix count; pinning
+   * everything from round TWO moves exactly 1, on seeds 1, 4, 5 and 8; and
+   * an empty set from round two moves 0 on all eight. The middle one is the
+   * decisive one, because it shows the comparator resolving a change of one
+   * placement in one round.
    *
-   * WHAT THE SNAPSHOT ACTUALLY RISKS is narrower than either: the set does
-   * drift once (seed 2, round 2, one landmark id in and one out), and the
-   * mix does target placements after round one (seeds 4 and 8), but the
-   * two never coincided. A seed where they did would diverge. Deriving the
-   * set in-graph would close that, and was measured and declined — see
-   * `PLAN.md`, "Stretch: `mixPinned` derived in-graph".
+   * THE SUPPORTING NARRATIVE HAS BEEN REWRITTEN AND THREE OF ITS FOUR
+   * FIGURES MOVED. It used to say the set drifts ONCE (seed 2, round 2)
+   * and that the mix targets after round one on seeds 4 and 8, "but the two
+   * never coincided — a seed where they did would diverge". Retaken:
+   *
+   *   - the set drifts on SIX of the eight (2, 3, 4, 6, 7, 8), always at
+   *     round two and stable after it, and seed 2's drift is two ids in and
+   *     two out rather than one and one;
+   *   - the mix targets after round one on seeds 1, 4, 5 and 8, one
+   *     placement each, and the round-two commits are identical either way;
+   *   - so the two DO coincide, on seeds 4 and 8 — and the lap comes out
+   *     the same. The conjecture is not just unproven now, it is FALSIFIED.
+   *
+   * WHY IT SURVIVES THE COINCIDENCE is the part worth keeping, because it
+   * is the real reason the snapshot is safe rather than the lucky one.
+   * `mixPinned` gates Z-3 three ways — donor eligibility, the replacement
+   * draw pool, and whole-band viability through `mixBandPools` — so a drift
+   * really does change what the mix may draw. But the coincidence is at the
+   * LAP level and the divergence would have to be at the PLACEMENT level:
+   * on seed 4 the drifted ids are carried by placements 2, 25, 172 and 196
+   * while the mix's one round-two target is 127, and on seed 8 they are 90,
+   * 92, 194 and 206 against a target of 162. The sets are disjoint, and a
+   * pin on an asset nobody is donating changes nothing.
+   *
+   * ONE CLAIM WAS WITHDRAWN RATHER THAN RETAKEN. This used to add that L-4
+   * "moves 0 in every round on all eight seeds", so `dressLap`'s rebuild
+   * answers a question nothing asks. The repair body contains no L-4 at
+   * all, so that figure is about `dressLap`'s loop and cannot be read off
+   * this harness; probing `repairLandmarks` against the body's rounds gives
+   * 0 on seven seeds and 1 in every round on seed 7, which is L-4's verdict
+   * on a population L-4 never repaired. It is not evidence either way and
+   * is no longer asserted.
+   *
+   * THE HARNESS'S ONE LIMIT, stated because it bounds two of the numbers
+   * above. Driving `buildRoundGraph` per round cannot carry
+   * {@link PLACEMENT.mixTried} across rounds — `placementCloudInTrackCoords`
+   * zero-fills that column and `StationedPlacement` has no field to hold it
+   * — so rounds two and later see a fuller donor pool than `repeatUntil`
+   * would. The drift and after-round-one figures are therefore UPPER BOUNDS
+   * on what happens in the loop. The zeros are not affected: both arms and
+   * every control run under the identical condition, so the comparison is
+   * exactly isolated, and a fuller donor pool is more opportunity to
+   * diverge rather than less.
+   *
+   * Deriving the set in-graph would remove the question entirely, and was
+   * measured and declined — see `PLAN.md`, "Stretch: `mixPinned` derived
+   * in-graph".
    */
   readonly mixPinned: ReadonlySet<number>;
   /**
@@ -3368,9 +3428,14 @@ function perBand(dst: Field, of: (band: Band) => number): Field {
  * of a pick nobody reads, and the commit gate throws it away.
  *
  * THE ONE DRAW IS NOT A SIMPLIFICATION OF THE REFERENCE'S EIGHT. Measured
- * across eight seeds, all 224 committed mix moves landed on the FIRST of
+ * across eight seeds, all 230 committed mix moves landed on the FIRST of
  * `MIX_DRAW_ATTEMPTS`, so the other seven are unexercised on this
- * vocabulary. Where a draw does miss its band the commit gate refuses it,
+ * vocabulary. (It read 224 before Z-3's donor order changed on 2026-08-28.
+ * The count moved and the claim did not: re-measured with an instrumented
+ * copy of `repairBandMix`, every one of the 230 committed on attempt 0, no
+ * donor was abandoned after eight draws, and a lap cooked with
+ * `MIX_DRAW_ATTEMPTS` forced to 1 comes out byte-identical -- which is the
+ * independent form of the same statement.) Where a draw does miss its band the commit gate refuses it,
  * the placement stays where it was, and the next round of the repair loop
  * draws again — with different numbers, because the lift has rewritten its
  * position and a point's identity is its position. That is the retry, one
@@ -3771,16 +3836,47 @@ export function mixPoseIds(lib: PoseLibrary): string[] {
  * already is — so what remains is portable and what has moved is the part
  * that never could be.
  *
- * THE PRIORITY IS THE STATION, WHICH IS THE REFERENCE'S ORDER AND NOT A
- * GOOD ONE. `repairBandMix` finds its donor with a linear `find` over a
- * list held in station order, so it always takes the first eligible
- * member of the over-full band — and since a band's members are spread
- * over the whole circuit, "the first k" is a CONTIGUOUS STRETCH of track.
- * Every replacement lands in the first tenth of the lap and the shares
- * come out exactly right. It is transcribed here because a port that
- * quietly improves the rule cannot be checked against it; `quotaRebalance`
- * takes the order as a param precisely so that changing it later is one
- * expression rather than a new node.
+ * THE PRIORITY IS THE STATION HASHED, AND IT USED TO BE THE STATION RAW.
+ * What this paragraph said before is worth keeping, because it is still
+ * the reason the two paths are checked against each other at all:
+ * `repairBandMix` found its donor with a linear `find` over a list held in
+ * station order, so it always took the first eligible member of the
+ * over-full band — and since a band's members are spread over the whole
+ * circuit, "the first k" is a CONTIGUOUS STRETCH of track. The station
+ * priority here was a TRANSCRIPTION of that, on the argument that a port
+ * which quietly improves the rule cannot be checked against the rule it
+ * ports.
+ *
+ * THAT ARGUMENT WAS TRADED AWAY ON 2026-08-28, DELIBERATELY AND WITH THE
+ * DIVERGENCE MEASURED FIRST. Over seeds 1-6, on the lap as the mix first
+ * sees it, every conversion landed in the first two tenths of the circuit
+ * on every seed, with nothing in the other eight; a hashed priority puts
+ * them in 7 to 10 tenths. `bandMix: donor spread` is that measurement,
+ * kept as a gate, with the old order run beside it as the control. What that costs on screen is what decided it — the station order
+ * built a continuous canopy of overhead furniture across the upper half of
+ * the chase view, where the hashed order leaves open sky with discrete
+ * gantries. The owner saw both and took the second.
+ *
+ * WHAT THE DIVERGENCE IS NOT is the reason this could be taken at all.
+ * Measured over the same seeds: band shares came out the same integer in
+ * all six bands on all six seeds, the placement count was identical, the
+ * station set was identical, and every cook still converged. The quota is
+ * the quota — `quotaRebalance` moves the MINIMUM number of placements
+ * either way, and the order only decides WHICH of the eligible members
+ * that minimum is drawn from. So the thing that moved is asset identity on
+ * 11 to 18 percent of placements — 11.3% at the least, on seed 5, and
+ * 17.6% at the most, on seed 4 — and nothing that the rule states.
+ *
+ * SO THE TWO PATHS ARE STILL HELD TO EACH OTHER, WHICH IS THE POINT. The
+ * transcription argument would have been abandoned by changing this alone;
+ * instead `repairBandMix` took the same order in the same commit, drawing
+ * from the same {@link mixDonorPriority}, so the decision suite still
+ * compares donor for donor rather than shrugging at a divergence. The
+ * relationship between the two is unchanged in kind — one reference, one
+ * port, exact agreement on the DECISION — and what changed is the rule
+ * both of them now state. `quotaRebalance` taking the order as a param is
+ * what made that one expression rather than a new node, which is the
+ * reason it takes one.
  */
 function writeBandMix(g: Graph, target: NodeHandle, tag: string): NodeHandle {
   const band = g.add(
@@ -3817,7 +3913,17 @@ function writeBandMix(g: Graph, target: NodeHandle, tag: string): NodeHandle {
         sub(1, attribute(PLACEMENT.mixPinned)),
         sub(1, attribute(PLACEMENT.mixTried)),
       ),
-      priority: attribute(PLACEMENT.station),
+      // THE SAME EXPRESSION `repairBandMix` EVALUATES IN TYPESCRIPT.
+      // `randomFrom` is `hashFloat(hashCombine(ctx.seed, keyHash, the f32
+      // bits of the value))` and `quotaRebalance` resolves its params at
+      // seed 0, so this number is reproducible off the station alone —
+      // which is what lets the reference sort its donors into the
+      // identical order. STILL THE STATION AND NOT THE ROW, so the stage
+      // stays invariant under the order of the list it is handed; the hash
+      // is what takes the arc ORDER out of it. See {@link
+      // mixDonorPriority} for both halves, and for why this is the
+      // library's hash rather than the demo's `rand`.
+      priority: randomFrom(attribute(PLACEMENT.station), MIX_DONOR_KEY),
       targetAttr: PLACEMENT.mixTarget,
     },
     `${tag}_mix`,
@@ -3922,22 +4028,36 @@ function writeSettleCount(g: Graph, target: NodeHandle, tag: string, trimmed = f
 /**
  * The repair body: one round of the rules that have a fixed point.
  *
- * THREE OF THE EIGHT, AND THE OTHER FIVE ARE NOT NEAR-MISSES. `dressLap`
- * iterates Z-1, L-1, L-6's top-up, L-6's trim, D-4, L-4, L-5 and Z-3. Of
- * those, exactly Z-1, L-1 and L-5 answer from the list they were handed:
- * the two L-6 halves and Z-3 and L-4 all read a lap-wide measurement of
- * the dressing every earlier repair rewrote, and three of them draw from
- * `seed + rounds`, which is worth naming precisely — a body whose seed
- * varies with the round number is a DIFFERENT FUNCTION each round, so it
- * does not have a fixed point to find. D-4 is pure but rewrites `station`
- * against the gap ring of the whole lap, which is the unbounded level's
- * business rather than a cell's.
+ * FIVE OF THE EIGHT, AND IT SAID THREE UNTIL 2026-08-28. `dressLap`
+ * iterates Z-1, L-1, L-6's top-up, L-6's trim, D-4, L-4, L-5 and Z-3.
+ * This body wires Z-1, L-1, L-5 and Z-3 unconditionally, and L-6's TRIM
+ * behind the `trim` flag below — so the count is four or five depending on
+ * how it is built. The paragraph that stood here listed Z-3 and both L-6
+ * halves among the rules that could NOT be in a per-cell body, which was
+ * true when it was written and had been overtaken twice: by Z-3's split
+ * (the DECISION became `quotaRebalance`, see {@link writeBandMix}) and by
+ * the trim (see the `trim` option). Two rules are still out and the
+ * ORIGINAL ARGUMENT is why:
  *
- * SO THE LOOP HERE IS SMALLER THAN `dressLap`'s AND IS NOT A SUBSET OF IT
- * IN BEHAVIOUR — it is the sub-loop those three would run on their own.
- * The test compares it against exactly that, and not against `dressLap`.
+ *   - L-6's TOP-UP reads a lap-wide coverage measurement to size a budget,
+ *     and the budget has to be taken once on a population no pass has
+ *     changed. That is the `trim` option's own reason for existing.
+ *   - L-4 reads uniqueness over the whole lap and draws from
+ *     `seed + rounds`, which is worth naming precisely — a body whose seed
+ *     varies with the round number is a DIFFERENT FUNCTION each round, so
+ *     it does not have a fixed point to find.
+ *   - D-4 is pure but rewrites `station` against the gap ring of the whole
+ *     lap, which is the unbounded level's business rather than a cell's.
  *
- * MEASURED, THE THREE BARELY NEED EACH OTHER — one round on the shipped
+ * WHAT LET Z-3 IN was not a weakening of that argument but a SPLIT along
+ * it: the half that is a fact about the whole lap is a node with no
+ * partitioned form, on an unbounded level, and the half that is left is a
+ * pure per-placement function. The trim came in the same way, at a
+ * measured price. So the loop here is still smaller than `dressLap`'s and
+ * still not a subset of it in behaviour, and the test still compares it
+ * against exactly the sub-loop it is rather than against `dressLap`.
+ *
+ * MEASURED, THE RULES BARELY NEED EACH OTHER — one round on the shipped
  * vocabulary, sometimes two. That is not an argument against the loop: it
  * is the same argument `dressLap` makes for having one, which is that a
  * single pass CANNOT be shown to be enough without running the second.
@@ -4143,11 +4263,22 @@ function writeCopyScale(
  * rounds each, interleaved A/B/A/B with a fresh graph per round so
  * nothing was memoised. Seed 1: 2,200 library boxes, 354 placements.
  *
- *   broadcast + filter   778,800 intermediate points   98ms
- *   selection                1,984 points               0.8ms
+ * THE 354 IS `dressLap`'s LIST AND THE PAGE'S PANEL READS 352, which is
+ * not a stale figure on either side — they are two settled lists, and the
+ * unqualified count was a trap for anyone who checked one against the
+ * other. This benchmark was run over the reference path's output, where
+ * Z-3 is pinned against `reserved ∪ landmarkAssets(the settled list)`; the
+ * lap level the page cooks decides its own list with only the reserved
+ * three pinned, which is a different mix and settles two placements short
+ * on this seed (352 = 341 before L-6 plus the 11 pieces it built). Same
+ * kit, same lap, same seed. `main.ts` argues why the page pins the smaller
+ * set. Measured on 2026-08-28.
  *
- * Both produce the same 1,984 boxes. The broadcast built 392 copies for
- * every one it kept; the selection builds the 1,984 and stops, at about
+ *   broadcast + filter   778,800 intermediate points   98ms
+ *   selection                1,980 points               0.8ms
+ *
+ * Both produce the same 1,980 boxes. The broadcast built 393 copies for
+ * every one it kept; the selection builds the 1,980 and stops, at about
  * 1/120th of the time — and the whole level-1 dress cook fell from 651ms
  * to 193ms over four laps with nothing else changed. The stage is now
  * LINEAR IN THE ANSWER rather than in the product of the vocabulary and
@@ -4324,14 +4455,30 @@ export function buildRoundGraph(
   /**
    * Build the round with L-6's TRIM in it.
    *
-   * THE ONLY WAY THE TRIM IS CHECKABLE AT ALL, and it is worth saying why
-   * rather than leaving it as a convenience. No lap the shipped vocabulary
-   * can dress reaches the ceiling -- measured, seeds 1-8 at density 1, 2
-   * and 3 top out at 20.0% against 25% -- so the rule never fires through
-   * `assemble`, and a suite that only cooked whole laps would be green for
-   * a trim that had been deleted. One round over a CONSTRUCTED
-   * over-enclosed list is where the rule can be held to its reference,
-   * which is the same argument this function already makes for Z-1 and L-1.
+   * THE ONLY WAY THE TRIM IS CHECKABLE AT THE DENSITY ANYTHING COOKS AT,
+   * and it is worth saying why rather than leaving it as a convenience. At
+   * density 1 -- which is what the page runs and what every whole-lap suite
+   * in this repo cooks -- no lap the shipped vocabulary can dress comes
+   * near the ceiling: re-measured over seeds 1-8, `dressLap` finishes
+   * between 9.89% and 14.45% against 25%, so the rule never fires there and
+   * a suite that only cooked whole laps would be green for a trim that had
+   * been deleted. One round over a CONSTRUCTED over-enclosed list is where
+   * the rule can be held to its reference, which is the same argument this
+   * function already makes for Z-1 and L-1.
+   *
+   * THIS USED TO CLAIM MORE THAN THAT AND THE STRONGER CLAIM IS FALSE. It
+   * read "seeds 1-8 at density 1, 2 and 3 top out at 20.0% against 25%",
+   * and the re-measurement of all twenty-four is 16.56-24.89% at density 2
+   * and 22.11-26.78% at density 3 -- so a dense lap DOES reach the ceiling
+   * and the trim fires on six of the twenty-four, taking between 4 and 35
+   * placements. That is a better world than the sentence described and it
+   * changes nothing about this parameter: a rule that fires on six laps out
+   * of twenty-four, none of which anything cooks by default, is still a
+   * rule no whole-lap suite can be trusted to exercise. What moved the
+   * numbers is Z-3's donor order (2026-08-28), which moved every lap's
+   * asset identity and the incidental enclosure with it; how much of the
+   * gap from 20.0% is that and how much was the figure already stale was
+   * not separated.
    */
   opts: { readonly trim?: boolean } = {},
 ): Graph {
@@ -4931,10 +5078,16 @@ export interface EnclosureReport {
    * L-6's TRIM: how many placements it moved, and off how many runs.
    *
    * THE OTHER HALF OF THE RULE, and the one that reports zero on every lap
-   * the shipped vocabulary can dress -- measured, seeds 1-8 at density 1,
-   * 2 and 3 reach at most 20.0% against a 25% ceiling, so the trim has
-   * nothing to do. It is reported anyway, because a rule that is only ever
+   * the page draws -- re-measured 2026-08-28, seeds 1-8 at density 1 finish
+   * between 9.89% and 14.45% against a 25% ceiling, so the trim has nothing
+   * to do there. It is reported anyway, because a rule that is only ever
    * seen not firing is a rule nobody can tell from a rule that is missing.
+   *
+   * IT IS NOT ZERO EVERYWHERE, WHICH THIS USED TO SAY IT WAS. The same
+   * sweep at densities 2 and 3 reaches 24.89% and 26.78%, and the trim
+   * fires on six of those twenty-four laps. See {@link buildRoundGraph}'s
+   * `trim` option for the full figures and for what still follows from
+   * them.
    */
   readonly trims: number;
   readonly runsTrimmed: number;

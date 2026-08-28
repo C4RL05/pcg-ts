@@ -15,7 +15,16 @@
  * bands. Two things have to hold for that to mean anything, and both are
  * checked below — the graph's band LADDER has to agree with
  * `bandOfPlacement` on every placement of a real lap, and its choice of
- * donors has to agree with the linear `find` the reference walks.
+ * DONORS has to agree with the reference's.
+ *
+ * THE DONOR ORDER IS A HASH SINCE 2026-08-28, AND THAT IS THE THIRD THING
+ * THIS FILE NOW MEASURES. Both paths used to take the lowest STATION of an
+ * over-full band, which put every conversion in the first two tenths of
+ * the circuit; both now take the lowest `mixDonorPriority`, which is that
+ * same station passed through the library hash `randomFrom` computes. The
+ * agreement above is what makes the change one rule stated twice rather
+ * than a port that quietly improved on its reference, and `bandMix: donor
+ * spread` is what says the new rule is worth having.
  *
  * AND THE FIXTURE HAS TO BE A LAP THE MIX ACTUALLY HAS WORK ON. A settled
  * dressing is one Z-3 has already balanced, so both paths agree on making
@@ -23,7 +32,13 @@
  * runs on the list as it reaches step 8 for the FIRST time.
  */
 import { describe, expect, it } from "vitest";
-import { Z3, bandOfPlacement, repairBandMix, type Band } from "../demos/racetrack/assets.js";
+import {
+  Z3,
+  bandOfPlacement,
+  mixInsideRule,
+  repairBandMix,
+  type Band,
+} from "../demos/racetrack/assets.js";
 import { placementsBeforeLanguage, reserveFor } from "../demos/racetrack/dress.js";
 import {
   MIX_BANDS,
@@ -45,6 +60,42 @@ import { lapFor } from "./support/lap.js";
 
 const KIT = shippedVocabulary();
 const SEEDS = [1, 2, 3, 4] as const;
+
+/**
+ * The seeds `bandMix: donor spread` measures over, and there are six of
+ * them where the rest of this file uses four.
+ *
+ * A SPREAD IS A CLAIM ABOUT LAPS AND NOT ABOUT ONE LAP. Four seeds would
+ * make "the conversions touch most of the circuit" an observation about a
+ * particular set of stations; six is what the change was decided on, and
+ * quoting the same set here is what makes the gate the record of that
+ * decision rather than a second measurement of something adjacent.
+ */
+const SPREAD_SEEDS = [1, 2, 3, 4, 5, 6] as const;
+
+/**
+ * How many tenths of the lap a set of conversions has to touch.
+ *
+ * WELL UNDER WHAT THE RULE ACHIEVES AND WELL OVER WHAT THE OLD ORDER CAN
+ * REACH, which is the only way a threshold between two behaviours is not
+ * brittle. The hashed order measures 7-10 tenths and the station order 1-2,
+ * so anywhere in 3..7 separates them; 5 sits in the middle of that gap and
+ * leaves either side room to move with the vocabulary.
+ */
+const SPREAD_FLOOR = 5;
+
+/**
+ * How long a case that walks {@link SPREAD_SEEDS} may take.
+ *
+ * SIX LAPS RATHER THAN FOUR, which is why this is not the 60 s
+ * `tests/racetrackDressGraph.test.ts` and
+ * `tests/racetrackPlacementAssembly.test.ts` carry under the same name.
+ * `lapFor` memoizes per process, so the first case to reach a seed pays for
+ * its road cook and the rest do not — but the first one pays for six of
+ * them. A TIMEOUT IS NOT A TOLERANCE: this is far enough above what was
+ * observed (a few seconds) that machine load decides nothing.
+ */
+const SIX_LAP_MS = 240_000;
 
 /**
  * The lap as the mix first sees it: stations, assets and Z-1, and nothing
@@ -166,10 +217,14 @@ describe("bandMix: the decision", () => {
     expect(graphMoved.size).toBe(refMoved.size);
 
     // THEN THE SETS, WHICH IS THE CLAIM. Same placements, same
-    // destinations — the graph's `priority` is the station and the
-    // reference's donor scan is a linear `find` over a station-ordered
-    // list, so "the first k eligible members of this band" is the same k
-    // placements either way.
+    // destinations — the graph's `priority` is
+    // `randomFrom(attribute(PLACEMENT.station), MIX_DONOR_KEY)` and the
+    // reference's donor scan takes the lowest `mixDonorPriority(station)`,
+    // which is the same expression evaluated in TypeScript, so "the lowest
+    // k eligible members of this band" is the same k placements either
+    // way. It used to be the station RAW on both sides and the sets
+    // matched for the same reason; what changed is the order, not the
+    // relationship between the two paths.
     const missing = [...refMoved.keys()].filter((i) => !graphMoved.has(i));
     const extra = [...graphMoved.keys()].filter((i) => !refMoved.has(i));
     expect({ missing, extra }).toEqual({ missing: [], extra: [] });
@@ -228,6 +283,195 @@ describe("bandMix: the decision", () => {
     const differing = withPins.target.filter((x, i) => x !== without.target[i]);
     expect(differing.length).toBeGreaterThan(0);
   });
+});
+
+/**
+ * WHERE ROUND THE LAP THE CONVERSIONS LAND, which is the property the
+ * hashed donor order was taken FOR.
+ *
+ * WHAT THE COUNTS CANNOT SEE. Every other case in this file is about the
+ * shares, and the shares were never wrong: `quotaRebalance` moves the
+ * minimum number of placements and lands every band inside Z-3 under any
+ * donor order at all. What the order decides is WHICH members of an
+ * over-full band leave, and until 2026-08-28 that was the station,
+ * ascending — so "the first k eligible members" was the first k along the
+ * track, every conversion landed in the first two tenths of the circuit,
+ * and the shares came out exactly right while the start of the lap grew a
+ * continuous canopy of overhead furniture. A test on the counts is green
+ * through all of that.
+ *
+ * SO THE MEASURE IS COVERAGE OF THE LAP, in tenths, and it is deliberately
+ * coarse. A distribution test would be brittle — the conversions are a
+ * dozen or two placements, so any statistic finer than "did this stretch
+ * get one" is measuring the draw's luck. Counting the tenths that received
+ * at least one conversion is the whole of it.
+ *
+ * AND THE FLOOR IS SET WELL UNDER WHAT THE RULE ACHIEVES, so that a
+ * re-baseline of the vocabulary does not trip it and the station order
+ * still cannot reach it.
+ *
+ * THE CONTROL IS THE OLD ORDER, RUN HERE RATHER THAN REMEMBERED. An
+ * assertion nothing fails is not an instrument: `repairBandMix`'s
+ * `priorityOf` seam exists so the station order can be handed back to it
+ * in the same process, on the same laps, and shown to fall under the
+ * floor. Both numbers are printed side by side.
+ */
+describe("bandMix: donor spread", () => {
+  /** Which tenth of the circuit a station falls in, 0..9. */
+  const tenthOf = (stationW: number, lapW: number): number =>
+    Math.min(9, Math.max(0, Math.floor((stationW / lapW) * 10)));
+
+  /**
+   * The exclusion both paths run under: L-6's cover is structure, so it is
+   * neither counted in a band's share nor available as a donor. Named for
+   * what it MATCHES, because `repairBandMix` and `mixInsideRule` both take
+   * it as an `exclude` predicate.
+   */
+  const isCover = (p: StationedPlacement): boolean => p.cover === true;
+
+  it.each(SPREAD_SEEDS)(
+    "spreads the conversions over the lap where the station order piled them at the start (seed %i)",
+    async (seed) => {
+      const { placements, pool, pinned, lap } = await unmixedLap(seed);
+
+      const hashed = repairBandMix(placements, pool, seed, "centre", pinned, isCover);
+      // THE CONTROL: the station, raw and ascending, which is the order
+      // this repair used before the hash.
+      const station = repairBandMix(
+        placements,
+        pool,
+        seed,
+        "centre",
+        pinned,
+        isCover,
+        (p) => p.station,
+      );
+
+      const tenths = (r: typeof hashed): Set<number> =>
+        new Set(
+          r.log.map((e) =>
+            tenthOf((placements[e.index] as StationedPlacement).station, lap.lengthW),
+          ),
+        );
+      const hashedTenths = tenths(hashed);
+      const stationTenths = tenths(station);
+
+      // eslint-disable-next-line no-console
+      console.log(
+        `seed ${seed}: hashed ${hashed.moves} moves over ${hashedTenths.size} tenths ` +
+          `[${[...hashedTenths].sort((a, b) => a - b).join(",")}], ` +
+          `station ${station.moves} moves over ${stationTenths.size} tenths ` +
+          `[${[...stationTenths].sort((a, b) => a - b).join(",")}]`,
+      );
+
+      // NON-VACUITY FIRST: a lap the mix had nothing to do on would spread
+      // zero conversions over zero tenths and fail for the wrong reason.
+      expect(hashed.log.length, `seed ${seed}: the mix made no moves to spread`).toBeGreaterThan(10);
+      expect(station.log.length, `seed ${seed}: the control made no moves`).toBeGreaterThan(10);
+
+      // THE GATE.
+      expect(
+        hashedTenths.size,
+        `seed ${seed}: the conversions touched only ${hashedTenths.size} tenths of the lap`,
+      ).toBeGreaterThanOrEqual(SPREAD_FLOOR);
+
+      // THE PROOF THAT THE GATE CAN FAIL. The station order does not reach
+      // the floor on any seed — if this ever passes, the measurement above
+      // is no longer measuring donor order.
+      expect(
+        stationTenths.size,
+        `seed ${seed}: the station order reached ${stationTenths.size} tenths, so the gate above ` +
+          "no longer separates the two orders and is not an instrument",
+      ).toBeLessThan(SPREAD_FLOOR);
+    },
+    SIX_LAP_MS,
+  );
+
+  it("leaves the shares Z-3 asks for either way, which is what makes this a free change", async () => {
+    // THE OTHER HALF OF THE CLAIM. The gate above would also pass for an
+    // order that scattered the conversions and stopped satisfying the
+    // rule. Both orders have to land every band inside Z-3, on every seed,
+    // and the move COUNT has to be the same — the quota is the quota.
+    for (const seed of SPREAD_SEEDS) {
+      const { placements, pool, pinned } = await unmixedLap(seed);
+      const hashed = repairBandMix(placements, pool, seed, "centre", pinned, isCover);
+      const station = repairBandMix(
+        placements,
+        pool,
+        seed,
+        "centre",
+        pinned,
+        isCover,
+        (p) => p.station,
+      );
+      expect(mixInsideRule(hashed.placements, "centre", isCover), `seed ${seed} hashed`).toBe(true);
+      expect(mixInsideRule(station.placements, "centre", isCover), `seed ${seed} station`).toBe(
+        true,
+      );
+      expect(hashed.moves, `seed ${seed}: the two orders moved a different number`).toBe(
+        station.moves,
+      );
+      expect(
+        hashed.placements.filter(Boolean).length,
+        `seed ${seed}: the two orders kept a different number of placements`,
+      ).toBe(station.placements.filter(Boolean).length);
+    }
+  }, SIX_LAP_MS);
+});
+
+/**
+ * THE SAME SEED, COOKED TWICE, COMPARED AS BYTES.
+ *
+ * WHY IT IS HERE AND NOT TAKEN ON TRUST. The donor order is now a hash,
+ * and a hash is exactly the kind of thing that can be right on average and
+ * unstable in fact — keyed on an iteration order, on a `Map`'s insertion
+ * sequence, on a float that rounds differently on a second pass.
+ * Determinism is the library's hard invariant, so the claim is checked the
+ * way the invariant is stated: same seed, byte-identical output.
+ *
+ * THE COLUMNS RATHER THAN A SUMMARY, because a summary is where a
+ * difference hides. The redraw's numeric columns are compared as raw
+ * bytes, which catches a one-ulp difference a tolerance would not, and the
+ * asset ids beside them, which no numeric compare sees at all.
+ */
+describe("bandMix: determinism", () => {
+  it("cooks the identical bytes on a second run of the same seed", async () => {
+    const seed = 3;
+    const { placements, pool, pinned, lap, frames } = await unmixedLap(seed);
+    const input = {
+      kit: KIT,
+      lap,
+      frames,
+      placements,
+      seed,
+      immovable: new Set<number>(),
+      mixPinned: pinned,
+      pool,
+    };
+    const first = await cookBandRedraw(input);
+    const second = await cookBandRedraw(input);
+
+    const bytes = (xs: readonly number[]): string =>
+      Buffer.from(new Float64Array(xs).buffer).toString("hex");
+    for (const [name, a, b] of [
+      ["t", first.t, second.t],
+      ["h", first.h, second.h],
+      ["tall", first.tall, second.tall],
+      ["pose", first.pose, second.pose],
+    ] as const) {
+      expect(bytes(a), `${name} differs between two cooks of seed ${seed}`).toBe(bytes(b));
+    }
+    // The columns bytes cannot state: the asset ids, the commit flags and
+    // the decision itself, which is where a differing DONOR shows up first.
+    expect(second.asset).toEqual(first.asset);
+    expect(second.applied).toEqual(first.applied);
+    expect(second.target).toEqual(first.target);
+    // NON-VACUITY: something was redrawn, so the comparison had content.
+    const redrawn = first.applied.filter(Boolean).length;
+    expect(redrawn).toBeGreaterThan(10);
+    // eslint-disable-next-line no-console
+    console.log(`seed ${seed}: ${redrawn} redraws, identical on a second cook`);
+  }, SIX_LAP_MS);
 });
 
 describe("bandMix: the redraw", () => {
