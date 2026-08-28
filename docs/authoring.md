@@ -2138,6 +2138,33 @@ downstream wants the widening either:
 > worse than no line at all: it gets copied into codebases that never
 > measure it, and then nobody can retire it.
 >
+> **The WebGPU/TSL path reaches the same three rules by a different
+> route, which is why they are rules and not an artefact of the classic
+> renderer.** Everything above is WebGL evidence; `three.webgpu.js`
+> carries `gpuType` in exactly two places, and only the second is news.
+> `getTypeFromAttribute` (`three.webgpu.js:65256-65272` in 0.185.1)
+> starts from the node type and DEMOTES it:
+>
+> ```js
+> if ( /^[iu]/.test( nodeType ) && attribute.gpuType !== IntType ) {
+>   const array = dataAttribute.array;
+>   if ( ( array instanceof Uint32Array || array instanceof Int32Array ) === false ) {
+>     nodeType = nodeType.slice( 1 );   // i32/u32 -> f32
+> ```
+>
+> So an integer node type falls back to float UNLESS the array is
+> 32-bit integer, or `gpuType` is `IntType`. That derives all three
+> cases rather than observing them: a `u32`/`i32` column is exempt by
+> the array check and needs no flag; a `Uint8Array` is NOT exempt and
+> demotes unless the flag is set, which is the same conclusion the draw
+> call reached for `bool`; and a `Float32Array` never matches
+> `/^[iu]/`, so the branch is not entered at all. The other occurrence
+> (`:67068`) is the bundled WebGL backend restating the disjunct above.
+> **An earlier version of this note claimed `gpuType` appears zero
+> times under three's WebGPU renderer. It appears twice**, and the one
+> that matters is the one that explains `bool` — the correction came
+> from an integrator who checked rather than took our word.
+>
 > **Where the flag IS load-bearing: any integer array narrower than 32
 > bits — `Uint8Array` among them**, which is how a `bool` channel is
 > stored. `gl.UNSIGNED_BYTE` fails both GL-type tests, so `integer` is
