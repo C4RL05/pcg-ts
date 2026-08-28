@@ -1,0 +1,1066 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
+<title>pcg-ts — racetrack</title>
+<link rel="icon" href="../icon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="../site.css" />
+</head>
+<body>
+<!--
+  THE RACETRACK GUIDE — what the demo decides, and how.
+
+  The demo at `/demos/racetrack/` shows a dressed road and nothing about
+  why anything stands where it does. This is that page: the ruler it
+  measures in, the rules it has to satisfy, and the loop that makes them
+  all come out true at once. The first per-demo guide, which is why the
+  directory is plural.
+
+  IT IS NOT A COPY OF THE DEMO. Every figure here is drawn on this page.
+  The plan view at the top is generated in the browser from the same lap
+  construction the demo uses, and the numbers in the stat row are read
+  off `demos/racetrack/vocabulary.json`. Nothing is a screenshot, so
+  nothing here goes stale the way a screenshot does. What it CAN do is
+  disagree with the demo if the rules change and this page does not,
+  which is the maintenance this page costs.
+
+  THE STYLE RULES ARE `../site.css`, SHARED. The block below is only what
+  this page adds: the plan view's frame, the pipeline spine, the drawing
+  ink for the hand-authored figures, and a set of token ALIASES. The
+  figures were drawn against palette names of their own; aliasing them
+  once here beat restating a hundred rules, and it means a change to the
+  site's palette reaches the drawings too.
+-->
+<style>
+  /* The aliases. These sit on :root and not on a wrapper because the
+     plan view reads them off document.documentElement when it draws.
+
+     `--road` is the one genuinely new value, and it is not invented:
+     0x333333 is the grey `demos/racetrack/main.ts` draws its own road
+     wireframe in, so the plan view here and the running demo agree on
+     what a road looks like. `--rule-2` is likewise new — it is the
+     FAINTER of two rules, the one drawn between rows of a list.
+
+     BOTH RULES SIT ONE STEP ABOVE WHERE THEY LOOK LIKE THEY BELONG.
+     These figures were drawn against a ground lifted off black, so a
+     --line stroke had something to sit against. Here the ground IS
+     black, and the same stroke reads as almost nothing. So the drawing
+     stroke takes --line-hi, which site.css already calls its emphasised
+     border, and the between-rows rule takes --line, which is what the
+     site draws its own list separators in.
+
+     --measure is deliberately NOT aliased: site.css already caps every
+     paragraph with it, and the drawings' own 66ch would have widened
+     the prose on this page alone. */
+  :root {
+    --ink-3: var(--faint);
+    --rule: var(--line-hi);
+    --rule-2: var(--line);
+    --panel: var(--card);
+    --sunk: var(--plate);
+    --signal: var(--amber);
+    --accent-soft: rgba(0, 255, 0, 0.12);
+    --signal-soft: rgba(255, 0, 0, 0.12);
+    --road: #333333;
+    --f-mono: var(--mono);
+  }
+
+  /* Section rhythm. site.css spaces the sections and rules between them;
+     the two wrappers below only group what is inside one. */
+  .sec-head { display: flex; flex-direction: column; gap: 10px; margin-bottom: 22px; }
+  .sec-body { display: flex; flex-direction: column; gap: 16px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 780px) { .two { grid-template-columns: 1fr; } }
+
+  /* ── the plan view ───────────────────────────────────────────────
+     A canvas, not a video and not a GIF: it draws a different lap on
+     every load, which is the whole claim the page is making. */
+  .stage {
+    position: relative;
+    border: 1px solid var(--line);
+    background: var(--plate);
+    border-radius: 0;
+    overflow: hidden;
+    margin: 22px 0 12px;
+  }
+  .stage canvas { display: block; width: 100%; height: auto; }
+  .stage-tag {
+    position: absolute; left: 12px; top: 10px;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--faint);
+  }
+  .stage-key {
+    position: absolute; right: 12px; bottom: 10px;
+    display: flex; gap: 14px; flex-wrap: wrap; justify-content: flex-end;
+    font-family: var(--mono); font-size: 10.5px; color: var(--faint);
+  }
+  .stage-key i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; }
+  .replay {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em;
+    text-transform: uppercase;
+    background: var(--card); color: var(--muted);
+    border: 1px solid var(--line); border-radius: 0;
+    padding: 7px 12px; cursor: pointer;
+  }
+  .replay:hover { color: var(--ink); border-color: var(--line-hi); }
+  .replay:focus-visible { outline: 2px solid var(--g); outline-offset: 2px; }
+
+  /* ── hand-drawn figures ──────────────────────────────────────────
+     They reuse site.css's .plate for the frame, so this page follows if
+     the site's figure frame ever moves. What .plate does NOT fit is the
+     ink: its rules are there to theme MERMAID output, and one of them —
+     a blanket `.plate svg text` — would flatten the three label weights
+     these drawings are built on. The rules below put the hierarchy back,
+     and they have to carry !important to outrank it. */
+  figure { margin: 0; }
+  figure .plate svg { display: block; width: 100%; height: auto; min-width: 520px; }
+  figcaption {
+    font-family: var(--mono); font-size: 12px; line-height: 1.5;
+    color: var(--faint); letter-spacing: 0.04em; margin: 8px 0 0;
+  }
+  figcaption b { color: var(--muted); font-weight: 600; }
+
+  .s-ink2  { fill: var(--muted); }
+  .s-dim   { stroke: var(--muted); stroke-width: 1.1; fill: none; }
+  .s-hair  { stroke: var(--line-hi); stroke-width: 1.1; fill: none; }
+  .s-lbl   { font-family: var(--mono); font-size: 11px; fill: var(--muted); }
+  .s-lbl-s { font-family: var(--mono); font-size: 9.5px; fill: var(--faint); }
+  .s-name  { font-family: var(--mono); font-size: 11px; fill: var(--ink); }
+  /* Several of these classes sit on a <g> rather than on the <text>
+     itself, so each needs the descendant form too: the blanket rule
+     targets the <text> element directly, and only a selector that also
+     reaches the <text> can outrank it. */
+  .plate svg .s-lbl,   .plate svg .s-lbl text   { fill: var(--muted) !important; }
+  .plate svg .s-lbl-s, .plate svg .s-lbl-s text { fill: var(--faint) !important; }
+  .plate svg .s-name,  .plate svg .s-name text  { fill: var(--ink) !important; }
+  .plate svg .s-ink2,  .plate svg .s-ink2 text  { fill: var(--muted) !important; }
+  .plate svg .np, .plate svg .np text { fill: var(--faint) !important; }
+  .plate svg .gl, .plate svg .gl text { fill: var(--faint) !important; }
+
+  /* ── the rules ───────────────────────────────────────────────────
+     site.css's .cards/.card carry the grid and the frame. These are the
+     three parts a rule card has that a plain card does not: the id it is
+     known by in the source, what KIND of rule it is, and the figure it
+     is measured at. */
+  .cards .card { display: flex; flex-direction: column; gap: 7px; }
+  .card .id {
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.1em; color: var(--g);
+  }
+  .card .kind {
+    align-self: flex-start;
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em;
+    text-transform: uppercase; padding: 2px 6px; border-radius: 0;
+  }
+  .card .kind.dist { background: var(--accent-soft); color: var(--g); }
+  .card .kind.thr  { background: var(--signal-soft); color: var(--amber); }
+  .card .fig {
+    font-family: var(--mono); font-size: 12px; color: var(--faint);
+    font-variant-numeric: tabular-nums; margin-top: auto; padding-top: 4px;
+  }
+
+  /* ── the pipeline ────────────────────────────────────────────────
+     A list where the ORDER is the argument, so it is set as rows with a
+     number column rather than as cards. One row is marked: the step
+     where the pipeline stops adding and starts repairing. */
+  .spine { display: flex; flex-direction: column; border-top: 1px solid var(--line); margin: 20px 0 6px; }
+  .step {
+    display: grid; grid-template-columns: 52px 190px 1fr;
+    gap: 16px; align-items: baseline;
+    padding: 13px 0; border-bottom: 1px solid var(--rule-2);
+  }
+  .step .n { font-family: var(--mono); font-size: 13px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .step .t { font-family: var(--mono); font-weight: 600; font-size: 15px; color: var(--ink); }
+  .step .d { font-size: 14.5px; color: var(--muted); }
+  .step .d em { font-style: normal; color: var(--g); }
+  .step.pivot { background: var(--signal-soft); margin: 0 -12px; padding-left: 12px; padding-right: 12px; }
+  .step.pivot .t { color: var(--amber); }
+  @media (max-width: 720px) {
+    .step { grid-template-columns: 40px 1fr; }
+    .step .d { grid-column: 2; }
+  }
+
+  /* ── the two questions asked of every entry ──────────────────────
+     A pair, and they have to read as one: will it fit, and where does
+     this kind of thing belong. Same frame, side by side, because
+     neither question outranks the other. */
+  .keeps { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 18px 0 6px; }
+  @media (max-width: 780px) { .keeps { grid-template-columns: 1fr; } }
+  .keep { border: 1px solid var(--line); border-radius: 0; padding: 16px 17px; background: var(--card); }
+  .keep h3 { margin: 0 0 8px; font-size: 15px; }
+  .keep ul { margin: 0; padding-left: 18px; }
+  .keep li { font-size: 14.5px; color: var(--muted); margin: 5px 0; }
+  .keep .tick { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; }
+  .keep .tick.in { color: var(--g); }
+
+  /* One sentence per section allowed to be louder than the paragraphs
+     around it. Mono, like every other heading on this site. */
+  .pull {
+    border-left: 2px solid var(--g);
+    padding: 4px 0 4px 20px;
+    font-family: var(--mono); font-weight: 600;
+    font-size: 19px; line-height: 1.35;
+    letter-spacing: -0.01em; max-width: 34ch; text-wrap: balance;
+  }
+  /* THE ONE FIGURE THAT MUST NOT FOLLOW THE PAGE INK. It is a picture of
+     the demo’s own screen, and the gap between two greys IS the argument
+     that section makes. The SWATCHES carry the demo’s true values
+     (0x999999 for the reference poses, 0x404040 for what the rules
+     built); the label beside a swatch is lifted to #8a8a8a, because
+     0x404040 on the demo’s own #111 ground measures about 1.6:1 and is
+     not readable as text. Painted through classes rather than fill=
+     because the blanket rule above is !important and a presentation
+     attribute cannot outrank it — which is exactly how both greys came
+     out white the first time. */
+  .plate .demo-key .k-ref  { fill: #999999 !important; }
+  .plate .demo-key .k-gen  { fill: #8a8a8a !important; }
+  .plate .demo-key .k-line { fill: #00ff00 !important; }
+  .plate .demo-key .k-car  { fill: #dddddd !important; }
+
+  .note { font-size: 14.5px; color: var(--muted); }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+</style>
+
+<main class="wrap">
+  <p class="eyebrow"><a href="../index.html">pcg-ts</a> &middot; guides &middot; racetrack</p>
+  <h1 class="page-title">Dressing a roadside</h1>
+  <p class="lead">The <a href="../demos/racetrack/">racetrack demo</a> is handed a road and works
+  out what should stand beside it, and where. This is the ruler it measures in, the rules it has
+  to satisfy, and the loop it runs until they all come out true at once.</p>
+
+  <div class="stage">
+    <span class="stage-tag">generated live &middot; plan view</span>
+    <canvas id="lap" width="1200" height="620" aria-label="A generated racetrack seen from above, with objects appearing along both sides of it"></canvas>
+    <div class="stage-key">
+      <span><i style="background:var(--g)"></i>centreline</span>
+      <span><i style="background:var(--road)"></i>road</span>
+      <span><i style="background:var(--muted)"></i>dressing</span>
+    </div>
+  </div>
+  <p><button class="replay" id="replay" type="button">Draw another lap</button></p>
+
+  <!-- ══ 1. THE IDEA ═══════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">The idea</p>
+      <h2>A roadside is not scenery. It is instructions.</h2>
+    </div>
+    <div class="sec-body">
+      <p>In a racing game, the trees, signs, barriers and grandstands beside the track are not decoration. They tell you a corner is coming, how hard it is, and where to brake. Take them away and the same road becomes unreadable at speed.</p>
+      <p>So the demo is given two things. A <strong>spec</strong> — rules with numbers in them: how much stuff, how far off the road, what must stay visible from the cockpit, what has to stand before a corner. And a <strong>vocabulary</strong> — the objects it may use, described as sizes and habits.</p>
+      <p class="pull">Then it dresses a road it has never seen, and every rule has to come out true.</p>
+    </div>
+  </section>
+
+  <!-- ══ 2. THE COORDINATE SYSTEM ══════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Step one</p>
+      <h2>Measure everything in road-widths.</h2>
+    </div>
+    <div class="sec-body">
+      <p>A rule that says <em>“a barrier 4 metres from the edge”</em> is a rule about one road. Said in <strong>half-widths</strong> — call it <span class="mono">W</span>, half the distance across the tarmac — it is a rule about every road. That single choice is what makes the whole spec portable: point it at a wider track, or a longer one, and nothing has to be restated.</p>
+
+      <figure>
+        <div class="plate">
+          <svg viewBox="0 0 1000 340" role="img" aria-label="Cross-section of a road showing the half-width W, the lateral bands beside it, the protected corridor above it, and the driver's eye height">
+            <defs>
+              <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,1 L9,5 L0,9 z" fill="var(--ink-3)"/>
+              </marker>
+              <pattern id="hatch" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+                <line x1="0" y1="0" x2="0" y2="7" stroke="var(--signal)" stroke-width="1" opacity=".5"/>
+              </pattern>
+            </defs>
+
+            <!-- ground line -->
+            <line x1="40" y1="250" x2="960" y2="250" stroke="var(--rule)" stroke-width="1"/>
+
+            <!-- road surface -->
+            <rect x="380" y="242" width="240" height="9" fill="var(--road)"/>
+            <line x1="500" y1="230" x2="500" y2="262" stroke="var(--accent)" stroke-width="2" stroke-dasharray="5 5"/>
+
+            <!-- protected corridor -->
+            <rect x="380" y="160" width="240" height="82" fill="url(#hatch)" stroke="var(--signal)" stroke-width="1" stroke-dasharray="4 3"/>
+            <text class="s-lbl" x="500" y="150" text-anchor="middle" fill="var(--signal)">keep this empty</text>
+            <text class="s-lbl-s" x="500" y="204" text-anchor="middle" fill="var(--signal)">|t| &lt; 1W&nbsp; ·&nbsp; h &lt; 1.2W</text>
+
+            <!-- half width dimension -->
+            <line class="s-dim" x1="500" y1="278" x2="620" y2="278" marker-start="url(#ar)" marker-end="url(#ar)"/>
+            <text class="s-lbl" x="560" y="294" text-anchor="middle">1 W</text>
+            <text class="s-lbl-s" x="560" y="308" text-anchor="middle">half the road</text>
+
+            <!-- bands to the right -->
+            <g>
+              <line class="s-hair" x1="620" y1="250" x2="620" y2="86"/>
+              <line class="s-hair" x1="680" y1="250" x2="680" y2="86"/>
+              <line class="s-hair" x1="740" y1="250" x2="740" y2="86"/>
+              <line class="s-hair" x1="830" y1="250" x2="830" y2="86"/>
+              <line class="s-hair" x1="945" y1="250" x2="945" y2="86"/>
+
+              <line class="s-dim" x1="620" y1="100" x2="680" y2="100" marker-start="url(#ar)" marker-end="url(#ar)"/>
+              <line class="s-dim" x1="680" y1="100" x2="740" y2="100" marker-start="url(#ar)" marker-end="url(#ar)"/>
+              <line class="s-dim" x1="740" y1="100" x2="830" y2="100" marker-start="url(#ar)" marker-end="url(#ar)"/>
+              <line class="s-dim" x1="830" y1="100" x2="945" y2="100" marker-start="url(#ar)" marker-end="url(#ar)"/>
+
+              <text class="s-lbl" x="650" y="90" text-anchor="middle">verge</text>
+              <text class="s-lbl" x="710" y="90" text-anchor="middle">near</text>
+              <text class="s-lbl" x="785" y="90" text-anchor="middle">mid</text>
+              <text class="s-lbl" x="887" y="90" text-anchor="middle">far</text>
+
+              <text class="s-lbl-s" x="650" y="116" text-anchor="middle">8%</text>
+              <text class="s-lbl-s" x="710" y="116" text-anchor="middle">29%</text>
+              <text class="s-lbl-s" x="785" y="116" text-anchor="middle">35%</text>
+              <text class="s-lbl-s" x="887" y="116" text-anchor="middle">13%</text>
+
+              <text class="s-lbl-s" x="620" y="266" text-anchor="middle">1.0</text>
+              <text class="s-lbl-s" x="680" y="266" text-anchor="middle">1.5</text>
+              <text class="s-lbl-s" x="740" y="266" text-anchor="middle">2.5</text>
+              <text class="s-lbl-s" x="830" y="266" text-anchor="middle">5</text>
+              <text class="s-lbl-s" x="947" y="266" text-anchor="start">13 W</text>
+
+              <!-- drafting break in the far band -->
+              <path d="M896,244 l6,-9 l8,18 l6,-9" fill="none" stroke="var(--ink-3)" stroke-width="1.2"/>
+            </g>
+
+            <!-- objects standing in the bands -->
+            <rect x="640" y="232" width="8" height="18" class="s-ink2"/>
+            <rect x="700" y="212" width="16" height="38" class="s-ink2"/>
+            <rect x="768" y="196" width="26" height="54" class="s-ink2"/>
+            <rect x="856" y="216" width="40" height="34" class="s-ink2"/>
+            <rect x="352" y="206" width="18" height="44" class="s-ink2"/>
+            <rect x="286" y="220" width="30" height="30" class="s-ink2"/>
+
+            <!-- mirrored labels left -->
+            <text class="s-lbl-s" x="380" y="266" text-anchor="middle">−1.0</text>
+            <text class="s-lbl-s" x="320" y="266" text-anchor="middle">−1.5</text>
+            <text class="s-lbl-s" x="240" y="266" text-anchor="middle">−2.5</text>
+            <line class="s-hair" x1="320" y1="250" x2="320" y2="230"/>
+            <line class="s-hair" x1="240" y1="250" x2="240" y2="230"/>
+
+            <!-- eye -->
+            <circle cx="500" cy="234" r="4" fill="var(--accent)"/>
+            <line class="s-dim" x1="470" y1="234" x2="470" y2="250" marker-start="url(#ar)" marker-end="url(#ar)"/>
+            <text class="s-lbl-s" x="462" y="240" text-anchor="end" fill="var(--accent)">eye, h = 0.3W</text>
+
+            <!-- axes legend -->
+            <g transform="translate(52,150)">
+              <text class="s-name" x="0" y="0">t</text><text class="s-lbl-s" x="14" y="0">across, + to the right</text>
+              <text class="s-name" x="0" y="22">h</text><text class="s-lbl-s" x="14" y="22">up, from the tarmac</text>
+              <text class="s-name" x="0" y="44">s</text><text class="s-lbl-s" x="14" y="44">along, from the start line</text>
+              <text class="s-lbl-s" x="0" y="70">all three in W</text>
+            </g>
+          </svg>
+        </div>
+        <figcaption><b>Cross-section.</b> Every object is filed under three numbers: how far along the lap, how far across, how high. The bands are the shares the spec asks for, and the finished lap has to land inside every one of them.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ══ 3. THE GRAPH ══════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">How the graph is built</p>
+      <h2>The graph makes the road and the ruler. The rules are code that reads them.</h2>
+    </div>
+    <div class="sec-body">
+      <p>pcg-ts is a <strong>node graph</strong>: little boxes that each do one thing to a pile of points, wired nose to tail. This demo's graph is about twenty nodes, and it has exactly two jobs — turn the given centreline into a road surface, and write the <span class="mono">s / t / h / W</span> coordinate system onto every point of it so that anything downstream can speak in road-widths.</p>
+
+      <figure>
+        <div class="plate">
+          <svg class="graph-fig" viewBox="0 0 1080 470" role="img" aria-label="Node graph: the spline enters as data, is resampled and framed, then branches into the road surface and the roadside rows">
+            <defs>
+              <marker id="wire" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M0,1 L8,5 L0,9 z" fill="var(--rule)"/>
+              </marker>
+              <!-- A <style> inside <defs> is DOCUMENT scoped, not SVG scoped: these
+                   would otherwise be page-wide rules on names two letters long.
+                   Every selector is prefixed with the figure own class so the
+                   names cannot reach anything else. -->
+              <style>
+                .graph-fig .nb { fill: var(--panel); stroke: var(--rule); stroke-width: 1.25; rx: 0; }
+                .graph-fig .nb-in { fill: var(--accent-soft); stroke: var(--accent); }
+                .graph-fig .nb-out { fill: var(--sunk); stroke: var(--ink-3); stroke-dasharray: 3 2.5; }
+                .graph-fig .w { stroke: var(--rule); stroke-width: 1.5; fill: none; marker-end: url(#wire); }
+                .graph-fig .nt { font-family: var(--f-mono); font-size: 11.5px; fill: var(--ink); }
+                .graph-fig .np { font-family: var(--f-mono); font-size: 9.5px; fill: var(--ink-3); }
+                .graph-fig .gl { font-family: var(--f-mono); font-size: 10px; fill: var(--ink-3); letter-spacing: .12em; }
+              </style>
+            </defs>
+
+            <!-- lane labels -->
+            <text class="gl" x="16" y="30">THE SEAM</text>
+            <text class="gl" x="16" y="150">THE RULER</text>
+            <text class="gl" x="16" y="330">THE OUTPUTS</text>
+            <line class="s-hair" x1="16" y1="42" x2="1064" y2="42" stroke-dasharray="2 4"/>
+            <line class="s-hair" x1="16" y1="162" x2="1064" y2="162" stroke-dasharray="2 4"/>
+            <line class="s-hair" x1="16" y1="342" x2="1064" y2="342" stroke-dasharray="2 4"/>
+
+            <!-- row 1: input + resample + frame -->
+            <g>
+              <rect class="nb nb-in" x="16" y="62" width="150" height="52"/>
+              <text class="nt" x="28" y="82">dataInput</text>
+              <text class="np" x="28" y="98">your centreline</text>
+
+              <rect class="nb" x="206" y="62" width="168" height="52"/>
+              <text class="nt" x="218" y="82">pathResample</text>
+              <text class="np" x="218" y="98">900 evenly spaced</text>
+
+              <rect class="nb" x="414" y="62" width="168" height="52"/>
+              <text class="nt" x="426" y="82">writeCurveFrame</text>
+              <text class="np" x="426" y="98">tangent, curvature</text>
+
+              <path class="w" d="M166,88 H200"/>
+              <path class="w" d="M374,88 H408"/>
+            </g>
+
+            <!-- row 2: the four attribute writes -->
+            <g>
+              <rect class="nb" x="16" y="182" width="150" height="52"/>
+              <text class="nt" x="28" y="202">setAttribute</text>
+              <text class="np" x="28" y="218">halfWidth &nbsp;·&nbsp; W</text>
+
+              <rect class="nb" x="206" y="182" width="168" height="52"/>
+              <text class="nt" x="218" y="202">setAttribute</text>
+              <text class="np" x="218" y="218">stationW &nbsp;·&nbsp; s</text>
+
+              <rect class="nb" x="414" y="182" width="168" height="52"/>
+              <text class="nt" x="426" y="202">setAttribute</text>
+              <text class="np" x="426" y="218">across &nbsp;·&nbsp; right of travel</text>
+
+              <rect class="nb" x="622" y="182" width="168" height="52"/>
+              <text class="nt" x="634" y="202">setAttribute</text>
+              <text class="np" x="634" y="218">up &nbsp;·&nbsp; surface normal</text>
+
+              <path class="w" d="M498,114 V140 H91 V176"/>
+              <path class="w" d="M166,208 H200"/>
+              <path class="w" d="M374,208 H408"/>
+              <path class="w" d="M582,208 H616"/>
+            </g>
+
+            <!-- row 3 -->
+            <g>
+              <rect class="nb" x="206" y="362" width="168" height="52"/>
+              <text class="nt" x="218" y="382">sweepProfile</text>
+              <text class="np" x="218" y="398">ribbon, 2W wide</text>
+
+              <rect class="nb" x="414" y="362" width="168" height="52"/>
+              <text class="nt" x="426" y="382">pathResample</text>
+              <text class="np" x="426" y="398">one row per side</text>
+
+              <rect class="nb nb-out" x="622" y="362" width="168" height="52"/>
+              <text class="nt" x="634" y="382">mergePoints</text>
+              <text class="np" x="634" y="398">stations to dress</text>
+
+              <path class="w" d="M706,234 V292 H290 V356"/>
+              <path class="w" d="M706,292 H498 V356"/>
+              <path class="w" d="M582,388 H616"/>
+            </g>
+
+            <!-- annotations -->
+            <text class="np" x="820" y="86" fill="var(--accent)">↑ the one thing pcg-ts does not make</text>
+            <text class="np" x="820" y="102">the road arrives as data, so you</text>
+            <text class="np" x="820" y="118">can point it at your own track</text>
+
+            <text class="np" x="820" y="386">↓ from here on it is</text>
+            <text class="np" x="820" y="402">plain TypeScript reading</text>
+            <text class="np" x="820" y="418">the cooked lap back</text>
+          </svg>
+        </div>
+        <figcaption><b>The graph, simplified.</b> Every downstream rule reads <b>stationW</b>, <b>across</b> and <b>up</b> off the points rather than recomputing them — one definition of “right of travel”, so the road and the things beside it cannot disagree.</figcaption>
+      </figure>
+
+      <p class="note">Worth saying plainly: the graph does <strong>not</strong> place the scenery. The placement rules are ordinary TypeScript that cooks the graph, reads the lap back, and works out a list of things to stand beside it. The graph's own roadside row — two evenly spaced lines of points — is a deliberate placeholder, kept only so the seam between “where the road is” and “what stands beside it” is already cut.</p>
+    </div>
+  </section>
+
+  <!-- ══ 4. THE DATA ═══════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">What data we use</p>
+      <h2>A vocabulary of boxes, and the habits of each box.</h2>
+    </div>
+    <div class="sec-body">
+      <p>The demo reads one data file, <code>demos/racetrack/vocabulary.json</code>. Think of it as a parts list: each object described as a handful of axis-aligned boxes, plus a record of how that kind of object <strong>behaves</strong> — how far off the road it stands, how high, how often, which side, whether it prefers corners or straights.</p>
+
+      <div class="stats">
+        <div class="stat"><b>229</b><span>objects</span></div>
+        <div class="stat"><b>2,200</b><span>boxes</span></div>
+        <div class="stat"><b>362</b><span>recorded poses</span></div>
+        <div class="stat"><b>5</b><span>shape classes</span></div>
+        <div class="stat"><b>286 W</b><span>reference lap</span></div>
+      </div>
+
+      <figure>
+        <div class="plate">
+          <svg viewBox="0 0 1000 300" role="img" aria-label="One entry from the vocabulary: a tree reduced to four boxes, beside the statistics recorded for it">
+            <!-- left: the object as boxes -->
+            <g transform="translate(60,40)">
+              <text class="s-lbl-s" x="0" y="-14">ANY OBJECT, AS THE FILE SEES IT</text>
+              <!-- silhouette ghost -->
+              <path d="M70,150 C70,110 40,105 44,72 C48,40 78,26 96,34 C112,10 150,18 152,46 C176,52 176,92 150,100 C140,130 118,146 110,150 Z"
+                    fill="var(--rule-2)" stroke="var(--rule)" stroke-width="1"/>
+              <rect x="86" y="148" width="10" height="48" fill="var(--rule-2)" stroke="var(--rule)"/>
+              <!-- the four boxes -->
+              <rect x="44" y="30" width="70" height="62" fill="none" stroke="var(--ink)" stroke-width="1.4"/>
+              <rect x="108" y="42" width="66" height="58" fill="none" stroke="var(--ink)" stroke-width="1.4"/>
+              <rect x="62" y="86" width="76" height="66" fill="none" stroke="var(--ink)" stroke-width="1.4"/>
+              <rect x="84" y="146" width="16" height="52" fill="none" stroke="var(--ink)" stroke-width="1.4"/>
+              <text class="s-lbl-s" x="0" y="220">Four boxes, the median. You cannot get the</text>
+              <text class="s-lbl-s" x="0" y="234">object back out — but you can build one to fit.</text>
+            </g>
+
+            <!-- right: the record -->
+            <g transform="translate(430,26)">
+              <line class="s-hair" x1="-40" y1="0" x2="-40" y2="250"/>
+              <text class="s-lbl-s" x="0" y="0">ONE REAL ENTRY, AND ITS HABITS</text>
+              <g class="s-lbl">
+                <text x="0" y="30">size</text>          <text x="150" y="30" class="s-ink2">0.92 × 0.86 × 1.81 W</text>
+                <text x="0" y="54">stands at</text>     <text x="150" y="54" class="s-ink2">t = 1.66 W &nbsp;(1.45 … 3.51)</text>
+                <text x="0" y="78">height</text>        <text x="150" y="78" class="s-ink2">h = 0.91 W</text>
+                <text x="0" y="102">how often</text>    <text x="150" y="102" class="s-ink2">18 times a lap</text>
+                <text x="0" y="126">side bias</text>    <text x="150" y="126" class="s-ink2">72% right of travel</text>
+                <text x="0" y="150">clumping</text>     <text x="150" y="150" class="s-ink2">gap CV 3.17</text>
+                <text x="0" y="174">likes corners</text><text x="150" y="174" class="s-ink2">straight 0.53 &nbsp; easy 1.69</text>
+                <text x="150" y="192" class="s-ink2">medium 0.99 &nbsp; tight 1.58</text>
+              </g>
+              <text class="s-lbl-s" x="0" y="228">“likes corners” is a multiplier: this one turns up</text>
+              <text class="s-lbl-s" x="0" y="242">three times as often on a bend as on a straight.</text>
+            </g>
+          </svg>
+        </div>
+        <figcaption><b>One entry.</b> The boxes are never drawn as art. They are read for size — will this fit? — and the habits are read to decide where this kind of thing belongs.</figcaption>
+      </figure>
+
+      <div class="keeps">
+        <div class="keep">
+          <p class="tick in mono">Size</p>
+          <h3>Will it fit?</h3>
+          <ul>
+            <li>Across, along and tall, in W</li>
+            <li>Enough to test it against the driving corridor, the overhead ceiling and whatever stands next to it</li>
+          </ul>
+        </div>
+        <div class="keep">
+          <p class="tick in mono">Habits</p>
+          <h3>Where does it belong?</h3>
+          <ul>
+            <li>Typical lateral and height, with a spread</li>
+            <li>Which side it favours, how clumped it is, how much it prefers a bend to a straight</li>
+          </ul>
+        </div>
+      </div>
+
+      <p class="note">Each entry also carries a set of recorded <strong>poses</strong>, and they are the reason the dressing does not look stamped. The format stores no rotation, so an object has one representative shape — but every pose keeps its own boxes, and 362 poses give 361 distinct sets. The turn that was never written down survives in the shapes.</p>
+    </div>
+  </section>
+
+  <!-- ══ 5. TWO KINDS OF RULE ══════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">The important distinction</p>
+      <h2>Some rules you can roll dice for. Some you have to go back and fix.</h2>
+    </div>
+    <div class="sec-body">
+      <p>A rule like <em>“35% of things sit in the mid band”</em> is a <strong>distribution</strong>. You can satisfy it while placing, by picking each object with the right odds. A rule like <em>“the driver must be able to see the next stretch of road”</em> is a <strong>threshold</strong>. No amount of careful dice-rolling guarantees it, because it is a promise about the result, not a shape of the results.</p>
+      <p>Thresholds get a <strong>repair pass</strong>: place first, then measure, then move or drop the offenders. Getting this backwards is what makes a rule set look self-contradictory when it is only being applied in the wrong order.</p>
+
+      <div class="cards">
+        <div class="card">
+          <span class="id">D-1</span><span class="kind dist">distribution</span>
+          <p>How much stuff there is, overall.</p>
+          <span class="fig">0.95 per W of lap &nbsp;·&nbsp; 0.71–1.54</span>
+        </div>
+        <div class="card">
+          <span class="id">Z-3</span><span class="kind dist">distribution</span>
+          <p>How it splits across the bands, from verge to horizon.</p>
+          <span class="fig">15 / 8 / 29 / 35 / 13 / 0.5 %</span>
+        </div>
+        <div class="card">
+          <span class="id">D-4</span><span class="kind thr">threshold</span>
+          <p>No long empty stretches. Most of the lap has something within reach.</p>
+          <span class="fig">85% within 2W &nbsp;·&nbsp; gaps ≤ 25W</span>
+        </div>
+        <div class="card">
+          <span class="id">Z-1</span><span class="kind thr">threshold</span>
+          <p>Nothing may stand in the volume the car drives through.</p>
+          <span class="fig">|t| &lt; 1W, h &lt; 1.2W kept clear</span>
+        </div>
+        <div class="card">
+          <span class="id">L-1</span><span class="kind thr">threshold</span>
+          <p>From the cockpit, the road ahead must stay visible. Blockers move out or go.</p>
+          <span class="fig">next 12W, eye at h = 0.3W</span>
+        </div>
+        <div class="card">
+          <span class="id">L-2</span><span class="kind thr">threshold</span>
+          <p>Every corner gets something tall before its entry, so you can see it coming.</p>
+          <span class="fig">one marker per corner</span>
+        </div>
+        <div class="card">
+          <span class="id">L-3</span><span class="kind thr">threshold</span>
+          <p>Evenly spaced marks through the braking zone — a ruler you read at speed.</p>
+          <span class="fig">on one line, outside the corner</span>
+        </div>
+        <div class="card">
+          <span class="id">L-4</span><span class="kind thr">threshold</span>
+          <p>Every tenth of the lap gets a landmark you recognise, so you know where you are.</p>
+          <span class="fig">≥ 1 repeated asset per tenth</span>
+        </div>
+        <div class="card">
+          <span class="id">L-5</span><span class="kind thr">threshold</span>
+          <p>No false edges: a line of objects must never read as a road edge that isn't there.</p>
+          <span class="fig">checked on |t|, then broken up</span>
+        </div>
+        <div class="card">
+          <span class="id">L-6</span><span class="kind thr">threshold</span>
+          <p>Some of the lap runs under cover — tunnels and bridges, placed as runs, not as single objects.</p>
+          <span class="fig">10–25% of the lap enclosed</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 6. THE ORDER ══════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">The pipeline</p>
+      <h2>The order is the design.</h2>
+    </div>
+    <div class="sec-body">
+      <p>Nine stages, and they only work in this sequence. The cull sits sixth rather than fourth — everything the legibility rules add has to face the visibility test too, and a corner marker is exactly the tall thing near the racing line that the test exists to catch.</p>
+
+      <div class="spine">
+        <div class="step"><span class="n">0</span><span class="t">Reserve</span><span class="d">Set aside the objects tall enough to be corner markers, before anything else can spend them.</span></div>
+        <div class="step"><span class="n">1</span><span class="t">Stations</span><span class="d">Decide how many things there are and roughly where along the lap they go.</span></div>
+        <div class="step"><span class="n">2</span><span class="t">Assets</span><span class="d">Give each station an object, drawn from the habits recorded against it.</span></div>
+        <div class="step"><span class="n">3</span><span class="t">Corridor</span><span class="d">Push anything overhanging the driving volume outwards — by its <em>near face</em>, not its centre.</span></div>
+        <div class="step"><span class="n">4</span><span class="t">Language</span><span class="d">Add the corner markers and the braking rulers. This is the part that makes the road readable.</span></div>
+        <div class="step"><span class="n">5</span><span class="t">Landmarks</span><span class="d">Make sure every tenth of the lap has something recognisable in it.</span></div>
+        <div class="step pivot"><span class="n">6</span><span class="t">Sightline</span><span class="d">The cull. Anything blocking the view ahead is moved out or removed — <em>including things stages 4 and 5 just placed</em>.</span></div>
+        <div class="step"><span class="n">7</span><span class="t">Coverage</span><span class="d">Close the gaps the cull just opened, by moving the most redundant object into them.</span></div>
+        <div class="step"><span class="n">8</span><span class="t">Band mix</span><span class="d">Re-balance the bands, which the cull also disturbed. Objects move between bands; the count never changes.</span></div>
+      </div>
+
+      <p class="note">Every repair reports how many times it had to fire. A repair that never runs and a generator that never needed one produce identical green tests — so the count is part of the output, not just the pass.</p>
+    </div>
+  </section>
+
+  <!-- ══ 7. THE LOOP ═══════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Why it runs more than once</p>
+      <h2>Fixing one rule breaks another. So it goes round until nothing moves.</h2>
+    </div>
+    <div class="sec-body">
+      <figure>
+        <div class="plate">
+          <svg viewBox="0 0 1000 250" role="img" aria-label="Seven repairs wired in a loop: five across the top, two returning along the bottom, feeding back until a round passes with nothing moved">
+            <defs>
+              <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,1 L9,5 L0,9 z" fill="var(--ink-3)"/>
+              </marker>
+            </defs>
+
+            <!-- the loop the boxes sit around -->
+            <ellipse cx="500" cy="122" rx="168" ry="46" fill="none" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 4"/>
+
+            <!-- the forward pass, left to right -->
+            <g class="s-lbl" text-anchor="middle">
+              <rect x="60"  y="18" width="130" height="30" fill="var(--panel)" stroke="var(--rule)"/><text x="125" y="38">Z-1 corridor</text>
+              <rect x="252" y="18" width="130" height="30" fill="var(--panel)" stroke="var(--rule)"/><text x="317" y="38">L-1 cull</text>
+              <rect x="444" y="18" width="130" height="30" fill="var(--panel)" stroke="var(--rule)"/><text x="509" y="38">L-6 cover</text>
+              <rect x="636" y="18" width="130" height="30" fill="var(--panel)" stroke="var(--rule)"/><text x="701" y="38">D-4 gaps</text>
+              <rect x="828" y="18" width="130" height="30" fill="var(--panel)" stroke="var(--rule)"/><text x="893" y="38">L-4 landmarks</text>
+
+              <!-- and the return, right to left -->
+              <rect x="828" y="196" width="130" height="30" fill="var(--panel)" stroke="var(--rule)"/><text x="893" y="216">L-5 edges</text>
+              <rect x="60"  y="196" width="130" height="30" fill="var(--panel)" stroke="var(--rule)"/><text x="125" y="216">Z-3 mix</text>
+            </g>
+
+            <g stroke="var(--ink-3)" stroke-width="1.2" fill="none" marker-end="url(#ar2)">
+              <path d="M194,33 H246"/>
+              <path d="M386,33 H438"/>
+              <path d="M578,33 H630"/>
+              <path d="M770,33 H822"/>
+              <path d="M893,52 V190"/>
+              <path d="M824,211 H196"/>
+              <path d="M125,192 V54"/>
+            </g>
+
+            <g text-anchor="middle">
+              <text class="s-name" x="500" y="108" style="font-size:13px">round again</text>
+              <text class="s-lbl-s" x="500" y="127">until a whole round moves nothing</text>
+              <text class="s-lbl-s" x="500" y="144" fill="var(--signal)">at most 12 &nbsp;·&nbsp; typically 3</text>
+            </g>
+          </svg>
+        </div>
+        <figcaption><b>The repair tail.</b> Pushing an object out of the driving corridor opens a gap; closing the gap disturbs the band mix; re-balancing the mix can put something back in the corridor. Each pass is minimal — no single move is removable — and the loop stops when a full round changes nothing.</figcaption>
+      </figure>
+      <p class="note">Two failures worth remembering, both found by looking at the screen rather than at the tests. A repair that keeps handing work to the next repair never settles — trace what each round actually moved before blaming the rules. And a repair that cannot recognise its own no-op will fire forever on a rounding error: a height of <span class="mono">1.2</span> that comes back as <span class="mono">1.1999999999999997</span> looks like a thing that still needs fixing.</p>
+    </div>
+  </section>
+
+  <!-- ══ 8. ON SCREEN ══════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">What you see when you run it</p>
+      <h2>Two greys, and the whole argument is between them.</h2>
+    </div>
+    <div class="sec-body">
+      <div class="two">
+        <figure>
+          <div class="plate" style="background:#111;border-color:#333">
+            <svg viewBox="0 0 460 200" role="img" aria-label="The demo's own colour key on its black background">
+              <rect x="0" y="0" width="460" height="200" fill="#111"/>
+              <g class="demo-key" style="font-family:var(--f-mono);font-size:12px">
+                <rect x="28" y="30" width="26" height="14" fill="none" stroke="#999999" stroke-width="1.2"/>
+                <text x="70" y="42" class="k-ref">the vocabulary's own poses</text>
+                <rect x="28" y="66" width="26" height="14" fill="none" stroke="#404040" stroke-width="1.2"/>
+                <text x="70" y="78" class="k-gen">what the rules generated</text>
+                <rect x="28" y="102" width="26" height="14" fill="none" stroke="#333333" stroke-width="1.2"/>
+                <text x="70" y="114" class="k-gen">the road</text>
+                <line x1="28" y1="145" x2="54" y2="145" stroke="#00ff00" stroke-width="2"/>
+                <text x="70" y="150" class="k-line">the centreline you gave it</text>
+                <path d="M34,170 l16,8 l-16,8 z" fill="#ffffff"/>
+                <text x="70" y="184" class="k-car">the car</text>
+              </g>
+            </svg>
+          </div>
+          <figcaption><b>The key.</b></figcaption>
+        </figure>
+        <div class="sec-body" style="gap:14px">
+          <p>Both layers are on screen at once. The lighter wireframe drops the vocabulary's own poses straight onto the lap, placed by nothing but their three numbers. The darker wireframe is what the rules built from nothing.</p>
+          <p>They stand side by side on purpose. Statistics can say the generated set matches the reference on every single figure, and it can still look wrong at eye level. The only test that catches that is a person looking at it.</p>
+          <p class="note">There is also a density slider, because “how much stuff” is taste as much as measurement — the rule gives a range, not a number.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Next</p>
+    <h2>Where to go from here</h2>
+    <p>The demo itself is at <a href="../demos/racetrack/">demos/racetrack</a>, and
+    <a href="../demos/road/">demos/road</a> is the same page with none of the rules in it — the
+    diff between them is what this guide describes. <a href="../architecture.html">Architecture</a>
+    is how the library underneath is put together, and the
+    <a href="../gallery.html">corpus gallery</a> is every graph in the repository, cooked and
+    shot.</p>
+    <p><a href="../index.html">← back to the landing page</a></p>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
+    <span>pcg-ts <!--pcg:version-->v0.16.0<!--/pcg:version--></span>
+    <span>MIT license</span>
+    <a href="../manual.html">user manual</a>
+    <a href="../architecture.html">architecture</a>
+    <a href="../roadmap.html">roadmap</a>
+    <a href="../gallery.html">corpus gallery</a>
+    <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>
+    <span>ESM · TypeScript strict · three.js optional</span>
+  </div>
+</footer>
+
+<!-- The twelve tracks, drawn over the page, for checking that a new
+     figure lines up with the column the prose is set in. Hidden until
+     the script below is asked for it by `?grid` or the `g` key. -->
+<div class="grid-guide" aria-hidden="true"><div class="wrap"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div></div>
+
+<script>
+(() => {
+  // `g` toggles the grid; `?grid` opens with it up. Ignored while a field
+  // has focus, or typing a seed of 4816 would flash the overlay twice.
+  const root = document.documentElement;
+  let note = null;
+  function show(on) {
+    root.classList.toggle("show-grid", on);
+    if (on && note === null) {
+      note = document.createElement("div");
+      note.className = "grid-note";
+      // MEASURED off a track, not read off the property: a custom
+      // property returns the token it was written as, so reading --track
+      // hands back the calc() rather than the 54px it comes to — and a
+      // readout that cannot resolve its own arithmetic is worth nothing
+      // to the person checking whether a width lands on it.
+      const cell = document.querySelector(".grid-guide span");
+      const track = Math.round(cell.getBoundingClientRect().width * 10) / 10;
+      const gutter = getComputedStyle(document.querySelector(".grid-guide .wrap")).columnGap;
+      note.textContent = `12 x ${track}px · gutter ${gutter} · prose 9 · g to hide`;
+      document.body.appendChild(note);
+    }
+    if (note !== null) note.style.display = on ? "" : "none";
+  }
+  if (new URLSearchParams(location.search).has("grid")) show(true);
+  addEventListener("keydown", (e) => {
+    const t = e.target;
+    const typing = t instanceof HTMLElement &&
+      (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "g" || e.key === "G") show(!root.classList.contains("show-grid"));
+  });
+})();
+</script>
+
+<script>
+(function () {
+  "use strict";
+
+  var cv = document.getElementById("lap");
+  var ctx = cv.getContext("2d");
+  var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* Deterministic RNG — the library's own house rule: no Math.random. */
+  function rng(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      var t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  var V = {
+    sub: function (a, b) { return [a[0] - b[0], a[1] - b[1]]; },
+    add: function (a, b) { return [a[0] + b[0], a[1] + b[1]]; },
+    mul: function (a, k) { return [a[0] * k, a[1] * k]; },
+    len: function (a) { return Math.hypot(a[0], a[1]); },
+    norm: function (a) { var l = Math.hypot(a[0], a[1]) || 1; return [a[0] / l, a[1] / l]; },
+    dot: function (a, b) { return a[0] * b[0] + a[1] * b[1]; }
+  };
+
+  /* A filleted polygon: vertices on a jittered circle, corners rounded by
+     arcs. The corner COUNT is the vertex count and each corner's radius is
+     its fillet's, which a sum of harmonics cannot give you. */
+  function filletedLap(seed) {
+    var r = rng(seed);
+    var n = 8 + Math.floor(r() * 4);
+    var verts = [];
+    for (var i = 0; i < n; i++) {
+      var a = (i / n) * Math.PI * 2 + (r() - 0.5) * 0.24;
+      var rad = 0.66 + r() * 0.44;
+      verts.push([Math.cos(a) * rad, Math.sin(a) * rad]);
+    }
+
+    var pts = [];
+    for (var j = 0; j < n; j++) {
+      var p0 = verts[(j + n - 1) % n], p1 = verts[j], p2 = verts[(j + 1) % n];
+      var v0 = V.norm(V.sub(p0, p1)), v2 = V.norm(V.sub(p2, p1));
+      var ang = Math.acos(Math.max(-1, Math.min(1, V.dot(v0, v2))));
+      if (!isFinite(ang) || ang < 0.08) { pts.push(p1.slice()); continue; }
+
+      var want = 0.06 + r() * 0.13;
+      var tan = want / Math.tan(ang / 2);
+      var cap = Math.min(V.len(V.sub(p0, p1)), V.len(V.sub(p2, p1))) * 0.45;
+      var t = Math.min(tan, cap);
+      var rr = t * Math.tan(ang / 2);
+
+      var a0 = V.add(p1, V.mul(v0, t));
+      var a2 = V.add(p1, V.mul(v2, t));
+      var bis = V.norm(V.add(v0, v2));
+      var c = V.add(p1, V.mul(bis, rr / Math.sin(ang / 2)));
+
+      var s0 = Math.atan2(a0[1] - c[1], a0[0] - c[0]);
+      var s2 = Math.atan2(a2[1] - c[1], a2[0] - c[0]);
+      var da = s2 - s0;
+      while (da > Math.PI) da -= Math.PI * 2;
+      while (da < -Math.PI) da += Math.PI * 2;
+
+      pts.push(a0);
+      var steps = Math.max(4, Math.ceil(Math.abs(da) / 0.1));
+      for (var k = 1; k <= steps; k++) {
+        var aa = s0 + (da * k) / steps;
+        pts.push([c[0] + Math.cos(aa) * rr, c[1] + Math.sin(aa) * rr]);
+      }
+    }
+
+    /* Resample to even spacing so a station is a distance, not an index. */
+    var closed = pts.concat([pts[0]]);
+    var cum = [0];
+    for (var m = 1; m < closed.length; m++) cum.push(cum[m - 1] + V.len(V.sub(closed[m], closed[m - 1])));
+    var total = cum[cum.length - 1];
+    var count = 640, out = [], idx = 1;
+    for (var q = 0; q < count; q++) {
+      var d = (q / count) * total;
+      while (idx < cum.length - 1 && cum[idx] < d) idx++;
+      var t0 = cum[idx - 1], t1 = cum[idx];
+      var f = t1 > t0 ? (d - t0) / (t1 - t0) : 0;
+      out.push([
+        closed[idx - 1][0] + (closed[idx][0] - closed[idx - 1][0]) * f,
+        closed[idx - 1][1] + (closed[idx][1] - closed[idx - 1][1]) * f
+      ]);
+    }
+
+    /* The windowed wobble: the long edges have to bend, or half the lap
+       reads as infinite radius — but a quarter of it must stay straight,
+       so the wobble is active over part of the lap and exactly zero over
+       the rest. */
+    var ph = r() * Math.PI * 2, ph2 = r() * Math.PI * 2;
+    /* Off a SNAPSHOT, not off `out` as it is being written. Reading the
+       neighbours back after they have already been displaced feeds the
+       correction into itself, and the curve alternates side to side at
+       one sawtooth per sample. */
+    var base = out.map(function (p) { return [p[0], p[1]]; });
+    var n2 = base.length;
+    for (var w = 0; w < n2; w++) {
+      var u = w / n2;
+      var win = Math.max(0, Math.sin(u * Math.PI * 2 + ph) - 0.3) / 0.7;
+      var prev = base[(w + n2 - 1) % n2], next = base[(w + 1) % n2];
+      var nx = next[1] - prev[1];
+      var ny = -(next[0] - prev[0]);
+      var nl = Math.hypot(nx, ny) || 1;
+      var push = 0.05 * win * Math.sin(u * Math.PI * 6 + ph2);
+      out[w] = [base[w][0] + (nx / nl) * push, base[w][1] + (ny / nl) * push];
+    }
+    return out;
+  }
+
+  /* The lateral bands, and the share of objects each one takes. */
+  var BANDS = [
+    { lo: 1.0, hi: 1.5, share: 0.08 },
+    { lo: 1.5, hi: 2.5, share: 0.29 },
+    { lo: 2.5, hi: 5.0, share: 0.35 },
+    { lo: 5.0, hi: 9.0, share: 0.13 },
+    { lo: 1.0, hi: 1.5, share: 0.15 }
+  ];
+
+  function dressing(pts, seed) {
+    var r = rng(seed ^ 0x9E37);
+    var items = [];
+    var n = Math.round(pts.length * 0.42);
+    for (var i = 0; i < n; i++) {
+      var at = Math.floor(r() * pts.length);
+      var roll = r(), acc = 0, b = BANDS[0];
+      for (var k = 0; k < BANDS.length; k++) { acc += BANDS[k].share; if (roll <= acc) { b = BANDS[k]; break; } }
+      var side = r() < 0.55 ? 1 : -1;
+      var t = (b.lo + r() * (b.hi - b.lo)) * side;
+      items.push({ at: at, t: t, w: 0.30 + r() * 0.75, u: i / n });
+    }
+    items.sort(function (a, b2) { return a.at - b2.at; });
+    return items;
+  }
+
+  var state = null;
+
+  function build(seed) {
+    var pts = filletedLap(seed);
+    state = { pts: pts, items: dressing(pts, seed), t0: performance.now(), seed: seed };
+  }
+
+  function css(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function draw(now) {
+    if (!state) return;
+    var dpr = Math.min(2, window.devicePixelRatio || 1);
+    var w = cv.clientWidth || 1200;
+    var h = Math.round(w * 0.46);
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+      cv.width = Math.round(w * dpr);
+      cv.height = Math.round(h * dpr);
+      cv.style.height = h + "px";
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    var pts = state.pts;
+    var minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
+    for (var i = 0; i < pts.length; i++) {
+      if (pts[i][0] < minx) minx = pts[i][0];
+      if (pts[i][0] > maxx) maxx = pts[i][0];
+      if (pts[i][1] < miny) miny = pts[i][1];
+      if (pts[i][1] > maxy) maxy = pts[i][1];
+    }
+    var pad = 62;
+    var sc = Math.min((w - pad * 2) / (maxx - minx), (h - pad * 2) / (maxy - miny));
+    var ox = w / 2 - ((minx + maxx) / 2) * sc;
+    var oy = h / 2 - ((miny + maxy) / 2) * sc;
+    var X = function (p) { return p[0] * sc + ox; };
+    var Y = function (p) { return p[1] * sc + oy; };
+
+    var W = sc * 0.055;                 // one half-width, in pixels
+    var prog = reduced ? 1 : Math.min(1, (now - state.t0) / 2600);
+    var ease = 1 - Math.pow(1 - prog, 3);
+
+    /* the road ribbon */
+    var roadCol = css("--road"), inkCol = css("--muted"), accCol = css("--accent");
+    ctx.lineWidth = W * 2;
+    ctx.strokeStyle = roadCol;
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    for (var a = 0; a < pts.length; a++) {
+      var p = pts[a];
+      if (a === 0) ctx.moveTo(X(p), Y(p)); else ctx.lineTo(X(p), Y(p));
+    }
+    ctx.closePath();
+    ctx.stroke();
+
+    /* the centreline, drawn in as the lap is revealed */
+    var shown = Math.max(2, Math.floor(pts.length * ease));
+    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = accCol;
+    ctx.beginPath();
+    for (var b = 0; b < shown; b++) {
+      var q = pts[b];
+      if (b === 0) ctx.moveTo(X(q), Y(q)); else ctx.lineTo(X(q), Y(q));
+    }
+    if (ease >= 1) ctx.closePath();
+    ctx.stroke();
+
+    /* the dressing, appearing behind the centreline */
+    ctx.fillStyle = inkCol;
+    for (var c = 0; c < state.items.length; c++) {
+      var it = state.items[c];
+      if (it.at > shown) continue;
+      var age = Math.min(1, (shown - it.at) / 26);
+      var i0 = pts[(it.at + pts.length - 1) % pts.length];
+      var i1 = pts[(it.at + 1) % pts.length];
+      var tx = i1[0] - i0[0], ty = i1[1] - i0[1];
+      var tl = Math.hypot(tx, ty) || 1;
+      var ax = ty / tl, ay = -tx / tl;                     // right of travel
+      var px = pts[it.at][0] + ax * it.t * 0.055;
+      var py = pts[it.at][1] + ay * it.t * 0.055;
+      var s = Math.max(1.4, it.w * W) * age;
+      ctx.globalAlpha = 0.28 + 0.62 * age;
+      ctx.fillRect(px * sc + ox - s / 2, py * sc + oy - s / 2, s, s);
+    }
+    ctx.globalAlpha = 1;
+
+    /* the car */
+    if (!reduced) {
+      var pos = Math.floor((now / 26) % pts.length);
+      var cp = pts[pos];
+      var np = pts[(pos + 3) % pts.length];
+      var ang = Math.atan2(np[1] - cp[1], np[0] - cp[0]);
+      ctx.save();
+      ctx.translate(X(cp), Y(cp));
+      ctx.rotate(ang);
+      ctx.fillStyle = css("--ink");
+      ctx.beginPath();
+      ctx.moveTo(7, 0); ctx.lineTo(-5, 4.5); ctx.lineTo(-5, -4.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    requestAnimationFrame(draw);
+  }
+
+  var seed = 7;
+  build(seed);
+  requestAnimationFrame(draw);
+
+  document.getElementById("replay").addEventListener("click", function () {
+    seed = (seed * 1664525 + 1013904223) >>> 8;
+    build(seed);
+  });
+
+  window.addEventListener("resize", function () { /* handled in draw */ });
+})();
+</script>
+</body>
+</html>
