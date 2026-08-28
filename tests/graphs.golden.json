@@ -1,5 +1,5 @@
 {
-  "formatVersion": 2,
+  "formatVersion": 3,
   "tolerance": {
     "absolute": 0.001,
     "relative": 0.001
@@ -1211,6 +1211,30 @@
               {
                 "assetId": "prop",
                 "count": 200,
+                "channels": [
+                  {
+                    "name": "color",
+                    "type": "f32",
+                    "itemSize": 3,
+                    "values": {
+                      "min": [
+                        0,
+                        0,
+                        0.8
+                      ],
+                      "max": [
+                        0.74,
+                        0.83,
+                        0.8
+                      ],
+                      "mean": [
+                        0.3761,
+                        0.4183,
+                        0.8
+                      ]
+                    }
+                  }
+                ],
                 "translation": {
                   "min": [
                     -29.8765,
@@ -1337,6 +1361,119 @@
                 10
               ]
             }
+          }
+        ]
+      }
+    },
+    "basics-instance-channels.json": {
+      "outputs": {
+        "instances": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 240,
+            "batches": [
+              {
+                "assetId": "reed",
+                "count": 240,
+                "channels": [
+                  {
+                    "name": "seed",
+                    "type": "u32",
+                    "itemSize": 1,
+                    "values": {
+                      "min": [
+                        13351196
+                      ],
+                      "max": [
+                        4242567841
+                      ],
+                      "mean": [
+                        2109411151.5875
+                      ]
+                    }
+                  },
+                  {
+                    "name": "phase",
+                    "type": "f32",
+                    "itemSize": 1,
+                    "values": {
+                      "min": [
+                        0.0179
+                      ],
+                      "max": [
+                        6.2553
+                      ],
+                      "mean": [
+                        3.0786
+                      ]
+                    }
+                  },
+                  {
+                    "name": "color",
+                    "type": "f32",
+                    "itemSize": 3,
+                    "values": {
+                      "min": [
+                        0.2507,
+                        0.55,
+                        0.3036
+                      ],
+                      "max": [
+                        0.5974,
+                        0.55,
+                        0.7991
+                      ],
+                      "mean": [
+                        0.4253,
+                        0.55,
+                        0.5495
+                      ]
+                    }
+                  }
+                ],
+                "translation": {
+                  "min": [
+                    -19.8771,
+                    0,
+                    -19.971
+                  ],
+                  "max": [
+                    19.9868,
+                    0,
+                    19.9812
+                  ],
+                  "mean": [
+                    1.3098,
+                    0,
+                    0.7254
+                  ]
+                },
+                "scale": {
+                  "min": [
+                    1,
+                    1,
+                    1
+                  ],
+                  "max": [
+                    1,
+                    1,
+                    1
+                  ],
+                  "mean": [
+                    1,
+                    1,
+                    1
+                  ]
+                },
+                "rotation": {
+                  "min": 0,
+                  "max": 0,
+                  "mean": 0
+                }
+              }
+            ]
           }
         ]
       }
@@ -3668,6 +3805,30 @@
               {
                 "assetId": "arch",
                 "count": 11,
+                "channels": [
+                  {
+                    "name": "color",
+                    "type": "f32",
+                    "itemSize": 3,
+                    "values": {
+                      "min": [
+                        0.2,
+                        0.6,
+                        0.95
+                      ],
+                      "max": [
+                        0.2,
+                        0.6,
+                        0.95
+                      ],
+                      "mean": [
+                        0.2,
+                        0.6,
+                        0.95
+                      ]
+                    }
+                  }
+                ],
                 "translation": {
                   "min": [
                     -11.0297,
@@ -3711,6 +3872,30 @@
               {
                 "assetId": "gantry",
                 "count": 9,
+                "channels": [
+                  {
+                    "name": "color",
+                    "type": "f32",
+                    "itemSize": 3,
+                    "values": {
+                      "min": [
+                        0.45,
+                        0.85,
+                        0.3
+                      ],
+                      "max": [
+                        0.45,
+                        0.85,
+                        0.3
+                      ],
+                      "mean": [
+                        0.45,
+                        0.85,
+                        0.3
+                      ]
+                    }
+                  }
+                ],
                 "translation": {
                   "min": [
                     -49.9338,
@@ -3754,6 +3939,30 @@
               {
                 "assetId": "rib",
                 "count": 28,
+                "channels": [
+                  {
+                    "name": "color",
+                    "type": "f32",
+                    "itemSize": 3,
+                    "values": {
+                      "min": [
+                        0.95,
+                        0.5,
+                        0.15
+                      ],
+                      "max": [
+                        0.95,
+                        0.5,
+                        0.15
+                      ],
+                      "mean": [
+                        0.95,
+                        0.5,
+                        0.15
+                      ]
+                    }
+                  }
+                ],
                 "translation": {
                   "min": [
                     42.2879,

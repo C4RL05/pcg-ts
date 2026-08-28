@@ -2,9 +2,11 @@
 /**
  * Regenerate the corpus golden (tests/graphs.golden.json) by cooking every
  * example under `graphs/` and recording its SHAPE-LEVEL statistics:
- * element counts per domain, attribute presence, instance batch shape, the
- * bounds of `P`, and a per-batch reduction of the instance transforms
- * (translation, scale and rotation, as min/max/mean).
+ * element counts per domain, attribute presence, instance batch shape,
+ * each batch's per-instance channels (name, dtype, item size and
+ * per-component min/max/mean), the bounds of `P`, and a per-batch
+ * reduction of the instance transforms (translation, scale and rotation,
+ * as min/max/mean).
  *
  * Usage: node scripts/gen-graphs-golden.mjs
  *

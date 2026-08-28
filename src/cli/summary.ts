@@ -6,12 +6,17 @@
  */
 import {
   type Attribute,
+  type AttrData,
   type AttrType,
   DOMAINS,
   type DataItem,
   type DataValue,
   type Domain,
   type Geometry,
+  type InstanceBatch,
+  type DeviceInstanceBatch,
+  deviceInstanceAttributesOf,
+  instanceAttributesOf,
   isDeviceResidentInstances,
   primitiveTypeCounts,
 } from "../index.js";
@@ -156,6 +161,38 @@ export function geometrySummary(geo: Geometry): GeometrySummary {
   return summary;
 }
 
+/**
+ * One per-instance channel of an instance batch — what `spawnInstances`'
+ * `instanceAttrs` carried across the spawner, plus the reserved `"color"`
+ * entry a `colorAttr` produces.
+ *
+ * SHAPE AND NOT STATISTICS, deliberately. What an author needs back from
+ * `pcg inspect` is the one thing they cannot see anywhere else: that the
+ * channel they named actually crossed, under the name and the dtype they
+ * wrote it with. A channel that was dropped, renamed, or silently widened
+ * to f32 is exactly what this makes visible, and none of those show up in
+ * a minimum or a mean.
+ */
+export interface ChannelSummary {
+  readonly name: string;
+  /** Element type, preserved from the point attribute. Never `"string"` — the spawner refuses those. */
+  readonly type: AttrType;
+  /**
+   * Components per instance. DERIVED as `column.length / count`, because
+   * the batch never carries it; `0` when the batch holds no instances,
+   * where there is nothing to divide by and nothing to describe.
+   */
+  readonly itemSize: number;
+}
+
+/** One instance batch, reduced to its asset, its size and its channels. */
+export interface BatchSummary {
+  readonly assetId: string;
+  readonly count: number;
+  /** In the order the spawner wrote them, which is the order `instanceAttrs` named them. */
+  readonly channels: readonly ChannelSummary[];
+}
+
 /** A cooked item, whatever its kind. */
 export type ItemSummary =
   | { readonly kind: "geometry"; readonly tags: readonly string[]; readonly geometry: GeometrySummary }
@@ -164,9 +201,55 @@ export type ItemSummary =
       readonly kind: "instances";
       readonly tags: readonly string[];
       readonly residency: "cpu" | "device";
-      readonly batches: readonly { readonly assetId: string; readonly count: number }[];
+      readonly batches: readonly BatchSummary[];
       readonly instances: number;
     };
+
+/**
+ * The {@link AttrType} a CPU channel's array class stands for. `string`
+ * cannot occur — `instanceAttrs` refuses a string attribute at the
+ * spawner, since its column is indices into a table that does not cross
+ * with it — so `Uint32Array` is unambiguously `u32`.
+ */
+function channelType(column: AttrData): AttrType {
+  if (column instanceof Float32Array) return "f32";
+  if (column instanceof Int32Array) return "i32";
+  if (column instanceof Uint8Array) return "bool";
+  return "u32";
+}
+
+/**
+ * A CPU batch's channels, read through `instanceAttributesOf` rather than
+ * off `batch.attributes` — that is the one form that is always right, and
+ * it lifts a hand-built batch's plain `colors` into the reserved channel
+ * so both spellings report identically.
+ */
+function cpuChannels(batch: InstanceBatch): ChannelSummary[] {
+  const channels: ChannelSummary[] = [];
+  for (const [name, column] of Object.entries(instanceAttributesOf(batch))) {
+    channels.push({
+      name,
+      type: channelType(column),
+      itemSize: batch.count > 0 ? column.length / batch.count : 0,
+    });
+  }
+  return channels;
+}
+
+/**
+ * A device batch's channels. The device twin carries its own `type` and
+ * `itemSize`, so nothing is derived here: the buffer PADS an itemSize of
+ * 3 to four slots and carries a `bool` as u32 words, and reporting the
+ * padded width would describe the buffer rather than the channel the
+ * author asked for.
+ */
+function deviceChannels(batch: DeviceInstanceBatch): ChannelSummary[] {
+  const channels: ChannelSummary[] = [];
+  for (const [name, channel] of Object.entries(deviceInstanceAttributesOf(batch))) {
+    channels.push({ name, type: channel.type, itemSize: channel.itemSize });
+  }
+  return channels;
+}
 
 /** Summarize one data item. */
 export function summarizeItem(item: DataItem): ItemSummary {
@@ -180,10 +263,17 @@ export function summarizeItem(item: DataItem): ItemSummary {
   // Device-resident batches keep their transforms in GPU memory and
   // reading `batches` throws by design; report the shape either way.
   const device = isDeviceResidentInstances(item);
-  const batches = (device ? (item.deviceBatches ?? []) : item.batches).map((b) => ({
-    assetId: b.assetId,
-    count: b.count,
-  }));
+  const batches: BatchSummary[] = device
+    ? (item.deviceBatches ?? []).map((b) => ({
+        assetId: b.assetId,
+        count: b.count,
+        channels: deviceChannels(b),
+      }))
+    : item.batches.map((b) => ({
+        assetId: b.assetId,
+        count: b.count,
+        channels: cpuChannels(b),
+      }));
   return {
     kind: "instances",
     tags,
@@ -201,13 +291,30 @@ export function attrListText(attrs: readonly AttrStats[]): string {
     .join(", ");
 }
 
+/**
+ * A batch's channels as ` [phase(f32), plantId(u32)]`, spelled like
+ * {@link attrListText} because a channel IS a point attribute that
+ * crossed the spawner. Empty string — not `(none)` — when there are no
+ * channels: most batches have none, and a per-batch "(none)" would push
+ * the asset list off the line to say nothing.
+ */
+export function channelListText(channels: readonly ChannelSummary[]): string {
+  if (channels.length === 0) return "";
+  const list = channels
+    .map((c) => `${c.name}(${c.type}${c.itemSize > 1 ? `x${c.itemSize}` : ""})`)
+    .join(", ");
+  return ` [${list}]`;
+}
+
 /** One dense line describing an item — the `cook` and `validate` listing form. */
 export function itemLine(summary: ItemSummary): string {
   if (summary.kind === "value") {
     return `value      ${JSON.stringify(summary.value)}`;
   }
   if (summary.kind === "instances") {
-    const assets = summary.batches.map((b) => `${b.assetId} x${b.count}`).join(", ");
+    const assets = summary.batches
+      .map((b) => `${b.assetId} x${b.count}${channelListText(b.channels)}`)
+      .join(", ");
     return `instances  ${plural(summary.instances, "instance")} in ${plural(
       summary.batches.length,
       "batch",

@@ -23,7 +23,8 @@ whatever `VERSION` says.
 
 - Data flows through graphs as collections of items: geometry items,
   value items (plain numbers/strings/bools), instances items (transform
-  batches for renderers, each optionally carrying per-instance RGB).
+  batches for renderers, each optionally carrying named per-instance
+  attribute channels — colour among them, not beside them).
   Items carry tags and a revision id (`rev`).
 - You BUILD those three with `makeGeometryItem(geo, tags?)`,
   `makeValueItem(value, tags?)` and `makeInstancesItem(batches, tags?)` —
@@ -1113,7 +1114,7 @@ value, spawn, io, composite.
 - selfPrune — greedy minimum-distance thinning (lowest index wins)
 - setAttribute — create/overwrite an attribute from a field-capable value; `type: "string"` picks per element from a `values` list by numeric selector (floor+clamp, total) or writes a constant `stringValue`; optional `seed` param folds into the field evaluation (0 = node seed unchanged)
 - setBounds — stamp boundsMin/boundsMax on every point
-- spawnInstances — terminal: points to render-agnostic instance batches (4x4 column-major transforms, plus optional per-instance RGB); `assetAttr` names a string attribute for per-point asset ids (empty entries fall back to `assetId`). NEITHER IS CHECKED, and cannot be: an asset id is a free string whose real set belongs to the renderer, so a misspelled or invented one cooks, validates and reports its instance count, then draws as whatever that renderer does with a name it does not know (for a viewer of arbitrary graphs, a stand-in shape rather than an error). `pcg assets <graph.json>` lists every id a graph can emit — this param and the `assetAttr` tables together, across every branch rather than the one a seed reached, and reporting a set it cannot determine as OPEN instead of guessing. Check that list against your renderer; one batch per asset in ascending first-occurrence point order, instances within a batch in ascending point order. `colorAttr` (default `""`) names an f32 point attribute with tupleSize >= 3 whose components 0/1/2 become the instance's RGB — this is how instances of ONE asset id vary in appearance (age, health, season, hue drift) without splitting into more assets. ALPHA IS DROPPED: both three adapters take RGB, so the standard f32x4 `color`'s fourth component has nowhere to go. It is OPT-IN and nothing is sniffed: every cloud in this library already carries `color` at [1,1,1,1], so its presence states no intent, and writing an all-white instance-colour buffer would flip three's program variant (`instanceColor !== null` forces the `vColor` varying and a shader recompile) for zero pixels changed — a value-scan to auto-enable would be O(n) per cook AND make the shader variant data-dependent, which is worse. ACCEPTED COST, stated rather than hidden: an author who writes `setAttribute("color", ...)` and never names it here gets silence, not a warning. Any colour-shaped attribute works (`color`, or a `tint`/`speciesColor` you wrote). A missing attribute, or one that is not f32 with tupleSize >= 3, is an error listing the point attributes that WOULD fit and two fixes. BUDGET: at most 1048576 instances PER COOK (one per input point; 64 MiB of matrices), checked before allocation, so a runaway density is a diagnostic naming the count and the fix instead of an allocation failure. Per COOK, never per world — a global "instances alive" ceiling would depend on which cells happen to be resident and so be order-dependent, which the determinism invariant forbids; a streamed world may legitimately hold many times the budget across its resident cells
+- spawnInstances — terminal: points to render-agnostic instance batches (4x4 column-major transforms, plus optional named per-instance attribute channels, the reserved `color` among them); `assetAttr` names a string attribute for per-point asset ids (empty entries fall back to `assetId`). NEITHER IS CHECKED, and cannot be: an asset id is a free string whose real set belongs to the renderer, so a misspelled or invented one cooks, validates and reports its instance count, then draws as whatever that renderer does with a name it does not know (for a viewer of arbitrary graphs, a stand-in shape rather than an error). `pcg assets <graph.json>` lists every id a graph can emit — this param and the `assetAttr` tables together, across every branch rather than the one a seed reached, and reporting a set it cannot determine as OPEN instead of guessing. Check that list against your renderer; one batch per asset in ascending first-occurrence point order, instances within a batch in ascending point order. `colorAttr` (default `""`) names an f32 point attribute with tupleSize >= 3 whose components 0/1/2 become the instance's RGB — this is how instances of ONE asset id vary in appearance (age, health, season, hue drift) without splitting into more assets. ALPHA IS DROPPED: both three adapters take RGB, so the standard f32x4 `color`'s fourth component has nowhere to go. It is OPT-IN and nothing is sniffed: every cloud in this library already carries `color` at [1,1,1,1], so its presence states no intent, and writing an all-white instance-colour buffer would flip three's program variant (`instanceColor !== null` forces the `vColor` varying and a shader recompile) for zero pixels changed — a value-scan to auto-enable would be O(n) per cook AND make the shader variant data-dependent, which is worse. ACCEPTED COST, stated rather than hidden: an author who writes `setAttribute("color", ...)` and never names it here gets silence, not a warning. Any colour-shaped attribute works (`color`, or a `tint`/`speciesColor` you wrote). A missing attribute, or one that is not f32 with tupleSize >= 3, is an error listing the point attributes that WOULD fit and two fixes. `instanceAttrs` (stringList, default `[]`) carries ANY OTHER point attributes across as NAMED per-instance channels, in the order given: each becomes `batch.attributes[<the attribute's own name>]` — no renaming, so the name in the graph and the name the host binds are the same string. This is the whole per-instance ABI between a graph and its host. The field grammar has no time input ON PURPOSE — a graph settles STRUCTURE and the host animates it — so anything the host must drive per instance at runtime (a phase offset, a stable id, a species index, an RGBA tint, a wind stiffness) has to leave the graph on this list; before it existed only transforms and RGB could cross, and a host had to re-derive the rest from a position, which stopped agreeing with the graph that authored it. DTYPE AND TUPLE SIZE ARE PRESERVED from the point attribute, never widened to f32: f32 has a 24-bit mantissa, so a u32 id past 2^24 (16777216) lands on its neighbour and two instances become one to a host keying on it, and nothing downstream wants the widening anyway (`THREE.InstancedBufferAttribute` takes any typed array). A channel column is tightly packed, `count * tupleSize` elements, instance k at `k * tupleSize`; ITEM SIZE IS NOT CARRIED — recover it as `column.length / count`, so there is no second place for it to be wrong. ORDER IS THE INVARIANT: `attributes[name][k]` and `transforms[k]` are the SAME instance, written in one loop from one source index, so no second traversal exists to fall out of step. `InstanceBatch.colors` is SUGAR for the reserved `"color"` entry of that same record, not a sibling of it — on a batch this library builds it is an accessor returning `attributes["color"]`, one buffer under two spellings, kept so consumers written against the older shape keep working (`instanceAttributesOf(batch)` normalizes either spelling, including a hand-built batch that set a plain `colors` and no `attributes`, and THROWS if a batch carries two different colour buffers — enumerate channels through it rather than reading `.attributes` directly). That is exactly why `instanceAttrs` REFUSES `"color"`: a renderer binds instance colour structurally (three's `InstancedMesh.instanceColor`, a mesh property that flips the shader variant, not a geometry attribute), so a generic channel of that name would be uploaded twice and mean two things — `colorAttr` is its route, and to carry RGBA (which colorAttr's alpha drop cannot) copy the attribute to another name upstream and name THAT here. FIVE things error, each naming the offending entry and the way out, in the order they are checked: an EMPTY name; the same name listed TWICE; the reserved name `"color"` — checked BEFORE the lookup, so it reports as reserved even when no such attribute exists; an attribute MISSING from the point domain (the message lists the point attributes that could become channels); and a `string` attribute (its column is indices into a per-attribute string table that does not travel with it, so a renderer would receive integers that mean nothing — use `assetAttr` for per-point asset ids, or encode the choice as u32/i32 upstream). All five are raised by `buildInstanceBatches`, which is what prefixes them, so grep for the PARAM name rather than the node type. `[]` (the default) carries nothing and allocates nothing, and `batch.attributes` is then ABSENT, exactly as `colors` is absent when no colour was asked for. NOT DEVICE-*PRODUCED* TODAY, WHICH IS NARROWER THAN "CPU-ONLY" AND IS ROUTINELY MISREAD: a spawn naming any channel is REJECTED BY THE DEVICE RUN PLANNER (reason `run-plan-failed`) and the whole terminal falls back to the CPU spawner (see the device-resident instancing section). That is a gate on PRODUCTION ONLY and it says nothing about the other two things a reader assumes it says. (1) RENDERING a channel under a `WebGPURenderer` IS SUPPORTED: `toInstancedMeshes` binds every non-reserved channel as an `InstancedBufferAttribute` of its own name, imports only `three` and branches on nothing renderer-shaped, so a WebGPU material reads it exactly as a WebGL one does — that is the whole supported path for per-instance data in a shader. The library ships the DATA, not the shader: nothing here imports `three/tsl`, and `normalized`/`gpuType` are left at three's defaults, so DECLARING the attribute (TSL `attribute()`, a `ShaderMaterial`, an `onBeforeCompile` patch) and the shader-side type of an integer channel are the HOST'S. The one WebGPU refusal is the DEVICE-RESIDENT adapter, which binds only the instance matrix and the reserved colour. (2) COOKING IS NOT PINNED TO THE MAIN THREAD: `pcg-ts/worker` cooks off-thread and `EncodedInstanceBatch.attributes` carries EVERY named channel (colour included — `colors` is an accessor over the reserved entry and has no wire form of its own), each column on the structured-clone TRANSFER LIST, so batches arrive as buffer ownership rather than as a copy. The worker pays one `slice()` per column on its own thread (cook arrays alias live memo caches and must not be detached); the main thread pays nothing. "CPU" here means NOT-THE-GPU-DEVICE, never on-your-frame. BUDGET: at most 1048576 instances PER COOK (one per input point; 64 MiB of matrices), checked before allocation, so a runaway density is a diagnostic naming the count and the fix instead of an allocation failure. Per COOK, never per world — a global "instances alive" ceiling would depend on which cells happen to be resident and so be order-dependent, which the determinism invariant forbids; a streamed world may legitimately hold many times the budget across its resident cells
 - splineSample — arc-length sampling along polyline primitives, treating every polyline of the input as ONE concatenated curve (emits tangent, curveU); its in-graph source is pointsToPath or pathResample, and its own output is a plain point CLOUD, no longer a path. Each sample ALSO carries every attribute of the polyline PRIMITIVE it landed on, even though the polylines are measured as one concatenated curve — a sample exactly on a join between two polylines takes the LATER one's values. `primtype` is never carried and there is no opt-out; a collision with a name this node writes is REFUSED, naming the fix
 - subgraph — composite node wrapping an inner graph; create with `subgraphNode(inner, inputs, outputs, params)` (pins AND params are per-instance), inspect with `getSubgraphSpec` / `describeSubgraphPins` / `describeSubgraphParams`, serializes recursively as `subgraph` or by name as `ref`. Its two loop siblings `forEach` (`forEachNode`) and `repeatUntil` (`repeatUntilNode`), both described above, carry the SAME payload under their own `type` — the wrapper kind lives in `type` and nowhere else — and a `repeatUntil` node's `params` additionally hold the loop's own `maxRounds` and `settleAttr`, which no body exposes and every instance has
 - surfaceSample — area-weighted scatter on a triangle mesh with density acceptance (emits normal); each sample also carries every attribute of its own triangle's PRIMITIVE, so a per-face value written upstream survives the sampling instead of dying at it (`primtype` excepted, no opt-out, collisions refused)
@@ -1708,7 +1709,10 @@ Surface:
     compiled into the pipeline (unknown resident kind, field compile
     error, tuple/layout mismatch, missing standard attribute, buffer
     limit, a spawn over the instance budget or naming a bad
-    `assetAttr`/`colorAttr`, or an `attributeIs`/`byAttribute` anywhere in the run —
+    `assetAttr`/`colorAttr`, a spawn naming ANY `instanceAttrs` channel
+    (the one entry here that is not a mistake — a binding budget, see
+    the device-resident instancing section),
+    or an `attributeIs`/`byAttribute` anywhere in the run —
     its kernel compiles and dispatches fine on the per-node path, but
     the uniform it reads is a string-table index of the geometry being
     cooked and a PLAN has only attribute descriptors and a count).
@@ -1726,6 +1730,10 @@ Surface:
     the device today is one of the per-field or per-run reasons above.
     v0.7's `spawn-asset-attr` was the only one and v0.8 retired it:
     `spawnInstances` is device-resident with `assetAttr` set as well.
+    `instanceAttrs` is deliberately NOT a node-level gate either: an
+    `eligible` predicate would keep `spawnInstances` off EVERY resident
+    run in the graph, where the run planner rejects only the run that
+    actually names channels.
   - Element count is NEVER a fallback reason; `dispatch-too-large` no
     longer exists (chunking removed it).
 - `NodeDef.gpu?: "fields" | "always"` — GPU-adoption marker. `"fields"`
@@ -1903,6 +1911,60 @@ multi-asset since v0.8.0:
   leaving it undefined. Anyone extending the device path must respect
   that stride — it is the one place the two layouts legitimately
   differ.
+- NAMED CHANNELS ARE NOT COMPOSED BY THIS KERNEL. Read that as a limit
+  on device PRODUCTION and nothing else — it is NOT a statement that a
+  channel cannot reach a GPU, and it is NOT a statement that the cook
+  runs on your frame. See the two scoping notes at the end of this
+  bullet before planning around it. `instanceAttrs` is the ONE
+  `spawnInstances` param that is not device-resident, and it is the one
+  spawner condition in this section that is NOT about a mistake. A spawn
+  naming any channel REJECTS the whole resident run as
+  `run-plan-failed`; the CPU spawner then serves the ENTIRE terminal —
+  the transforms it composes there, its colour AND its channels — so
+  nothing is dropped and nothing is silent, and the rejection is counted
+  in `CookStats.gpu.fallbacks` like every other. The counter key is ALL
+  a caller observes: the planner's rejection words a sentence
+  (`instanceAttrs names N per-instance channel(s); the device spawner
+  composes transforms and colour only`) but `PlanRejection` carries only
+  the reason, so that wording never leaves `planResidentRun` — assert on
+  the counter, not on a message. The reason is a BINDING BUDGET, not a
+  difficulty: the compose kernel's widest form already binds seven
+  storage buffers (P, rot, scale, transforms, the permutation, the
+  colour source, the colour output) against the baseline
+  `maxStorageBuffersPerShaderStage` of 8, so an ARBITRARY number of
+  gather channels does not fit in it. The node declares no `eligible`
+  gate for this — a gate would keep `spawnInstances` off every resident
+  run in the graph, where the planner rejects only the run that actually
+  names channels. `DeviceInstanceBatch` has the device twin of the
+  channel for a host composing its own buffers; this library's resident
+  spawner does not fill it yet. Consequence for parity: such a spawn has
+  NO parity class at all — there is no device output to compare,
+  transforms included.
+  SCOPING NOTE 1 — RENDERING IS SUPPORTED. The CPU batch this fallback
+  produces carries every channel, and `toInstancedMeshes` binds each as
+  an `InstancedBufferAttribute` of its own name; it is renderer-agnostic,
+  so a `WebGPURenderer` draws it exactly as a `WebGLRenderer` does. A
+  CPU-produced column reaching a WebGPU/TSL material is the SUPPORTED
+  path for per-instance data in a shader and nothing in this section
+  touches it. The library ships the data, not the shader — no `three/tsl`
+  import, `normalized`/`gpuType` at three's defaults — so the material is
+  the host's to write. SET `gpuType` on an integer channel: three
+  defaults an attribute to `FloatType`, so an unset u32 channel is read
+  as a float in the shader and suffers exactly the 2^24 widening the
+  spawner refused to do to it. SCOPE OF "SUPPORTED": the binding is
+  pinned by unit tests, but NO demo binds a custom channel and NO test in
+  this repo issues a draw call — the pixels are intended and documented,
+  not proven by the suite. The lone WebGPU-side refusal is the
+  DEVICE-RESIDENT adapter (`createWebGpuInstanceAdapter`), which binds
+  only the instance matrix and the reserved colour, and which throws on a
+  hand-built device batch carrying anything else, naming both ways out
+  (drop `deviceInstances` for CPU batches, or bind
+  `batch.attributes[name].handle.resource` yourself).
+  SCOPING NOTE 2 — THE FALLBACK NEED NOT BE ON THE MAIN THREAD. It is a
+  CPU cook, not a main-thread one: `pcg-ts/worker` cooks off-thread and
+  ships every channel with the transforms on the transfer list (buffer
+  ownership, not a copy), so losing the device path does not by itself
+  cost a frame hitch.
 - SHARED DEVICE IS MANDATORY. One `GPUDevice` must back both the
   `GpuFieldEvaluator` and the `THREE.WebGPURenderer`: a `GPUBuffer`
   belongs to the device that created it, two devices cannot share one,
@@ -2031,7 +2093,10 @@ multi-asset since v0.8.0:
   from a buffer you already own, so the adapter seeds three's WebGPU
   backend attribute record (`renderer.backend.get(attribute).buffer`)
   to make three's own buffer creation and upload a no-op. Peer range
-  `three@^0.185.1`, verified against `0.185.1`.
+  `three@^0.185.0`, verified against `0.185.1` — the floor is the minor
+  line, not one patch, because nothing here compares version strings and
+  `checkAdoptionSeam` probes the seam behaviourally instead — once per
+  `createWebGpuInstanceAdapter` call, per adapter rather than per build.
   `checkAdoptionSeam(renderer, makeAttribute)` (exported from
   `pcg-ts/three`) is the guard: it seeds a sentinel on a throwaway
   attribute, runs three's creation path over it, and verifies the
@@ -2315,8 +2380,8 @@ stale and a stale skill is worse than none.
 
 ## Example corpus (index: docs/graphs.md, machine-readable: docs/graphs.json)
 
-60 graphs under `graphs/`, each named by what it teaches and
-carrying its own `meta` block: 46 single-concept `basics-*.json`, 6
+79 graphs under `graphs/`, each named by what it teaches and
+carrying its own `meta` block: 65 single-concept `basics-*.json`, 6
 composed `examples-*.json`, plus the 8-file staged pipeline
 `pipeline-*.json` below. Every one cooks from
 JSON alone — no `dataInput`, whose items never survive serialization —

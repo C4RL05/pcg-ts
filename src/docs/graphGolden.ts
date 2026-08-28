@@ -6,9 +6,10 @@
  *
  * 1. **Against a stored golden — shape-level only.** {@link graphStats}
  *    keeps element counts per domain, attribute presence (name, type and
- *    tuple size), instance batch shape, the bounds of `P`, and a per-batch
- *    reduction of the instance transforms — the last two compared within a
- *    tolerance. It deliberately throws away every raw float it computes on
+ *    tuple size), instance batch shape, each batch's per-instance channels
+ *    (see {@link ChannelStats}), the bounds of `P`, and a per-batch
+ *    reduction of the instance transforms — every number among them
+ *    compared within a tolerance. It deliberately throws away every raw float it computes on
  *    the way: a golden holding float dumps fights every legitimate change —
  *    a faster spatial grid, a reassociated sum, a different rounding in a
  *    transform — and a suite that cries wolf on improvements gets relaxed
@@ -54,17 +55,20 @@
  */
 import {
   type Attribute,
+  type AttrData,
   type DataCollection,
   type DataItem,
   DOMAINS,
   type Domain,
   type Geometry,
+  type InstanceBatch,
   type InstancesItem,
   cook,
   deserializeGraph,
+  instanceAttributesOf,
   isDeviceResidentInstances,
 } from "../index.js";
-import { summarizeItem } from "../cli/summary.js";
+import { type BatchSummary, summarizeItem } from "../cli/summary.js";
 // Side effect only: this is what makes `ref: { name }` resolvable.
 import "../primitives/index.js";
 
@@ -185,9 +189,53 @@ export interface ScalarStats {
  * All three are ABSENT on a device-resident batch, whose transforms were
  * never composed on the host; see {@link batchStats}.
  */
+/**
+ * One per-instance channel of a batch, reduced.
+ *
+ * WHY THE GOLDEN RECORDS THESE AT ALL. A channel is the ABI between a
+ * graph and its host (`spawnInstances`' `instanceAttrs`, plus the
+ * reserved `"color"` entry a `colorAttr` writes), and it contributes no
+ * element count, no `P` bounds and no transform statistic. Before this
+ * existed, a regression that dropped every channel in the corpus — the
+ * spawner skipping the write, a param stopping being read, an adapter
+ * seam losing the record — regenerated a BYTE-IDENTICAL golden. There
+ * was no assertion in this file that could fail for it.
+ *
+ * `name`, `type` and `itemSize` catch the channel disappearing, being
+ * renamed, or losing its dtype to a widening; `values` catches the
+ * column still being there and holding the wrong numbers. The item size
+ * is the DERIVED one (`column.length / count`) rather than a stored
+ * field, because the batch carries no stored one to record.
+ */
+export interface ChannelStats {
+  readonly name: string;
+  /** `f32` / `i32` / `u32` / `bool` — preserved from the point attribute, never widened. */
+  readonly type: string;
+  /** Components per instance, derived as `column.length / count`. */
+  readonly itemSize: number;
+  /**
+   * Per-component min / max / mean over the batch's instances, compared
+   * within the same tolerance as everything else here.
+   *
+   * Absent on an empty batch (nothing to reduce) and on a device-resident
+   * one (the column is in GPU memory and was never composed on the host),
+   * exactly as the transform statistics are. A component with no finite
+   * value at all records `NaN`, which JSON writes as `null` and the
+   * comparison then reports as a difference — loudly, which is the right
+   * outcome for a corpus channel that has gone non-finite.
+   */
+  readonly values?: AxisStats;
+}
+
 export interface BatchStats {
   readonly assetId: string;
   readonly count: number;
+  /**
+   * Per-instance channels, in the order the spawner wrote them. Absent —
+   * never empty — when the batch carries none, which is most of the
+   * corpus; see {@link ChannelStats}.
+   */
+  readonly channels?: readonly ChannelStats[];
   /** World position of each instance: column 3 of its matrix. */
   readonly translation?: AxisStats;
   /** Per-axis scale: the length of each basis column. */
@@ -238,11 +286,14 @@ export interface GraphStats {
  * `formatVersion` went to 2 when instance batches gained their transform
  * statistics: a reader holding a version-1 file would find batches with no
  * transforms and conclude the corpus had none, which is the one wrong
- * answer available. Nothing migrates old files — the golden is derived,
- * and `npm run graphs:golden` re-derives it.
+ * answer available. It went to 3 when they gained their per-instance
+ * channels, for exactly that reason a second time — a version-2 file
+ * records no channel anywhere, and a reader cannot tell that from a
+ * corpus that spawns none. Nothing migrates old files — the golden is
+ * derived, and `npm run graphs:golden` re-derives it.
  */
 export interface GraphsGolden {
-  readonly formatVersion: 2;
+  readonly formatVersion: 3;
   /** The tolerance every compared number in the file is checked within. */
   readonly tolerance: { readonly absolute: number; readonly relative: number };
   readonly examples: Readonly<Record<string, GraphStats>>;
@@ -362,15 +413,89 @@ function batchTransformStats(
  * guard rather than a path — but the golden generator is exactly the kind
  * of caller that would otherwise trip it.
  */
-function batchStats(item: InstancesItem): BatchStats[] {
+function batchStats(item: InstancesItem, shapes: readonly BatchSummary[]): BatchStats[] {
   if (isDeviceResidentInstances(item)) {
-    return (item.deviceBatches ?? []).map((b) => ({ assetId: b.assetId, count: b.count }));
+    return (item.deviceBatches ?? []).map((b, i) => ({
+      assetId: b.assetId,
+      count: b.count,
+      // Shape only: a device channel's bytes are in GPU memory, so there
+      // is nothing here to reduce — the same reason the transforms carry
+      // no statistics on this residency.
+      ...channelShapes(shapes[i]),
+    }));
   }
-  return item.batches.map((b) => ({
+  return item.batches.map((b, i) => ({
     assetId: b.assetId,
     count: b.count,
+    ...channelStats(b, shapes[i]),
     ...batchTransformStats(b.assetId, b.transforms, b.count),
   }));
+}
+
+/**
+ * Per-component min / max / mean of one channel column, in the same
+ * terms — and the same tolerance class — as the transform statistics.
+ *
+ * `undefined` for an empty batch, which has no distribution, matching
+ * {@link batchTransformStats}. Only finite values accumulate; a
+ * component with none records `NaN` rather than an `Infinity` extreme
+ * that rounding would turn into a number.
+ */
+function columnStats(column: AttrData, count: number, itemSize: number): AxisStats | undefined {
+  if (count <= 0 || itemSize <= 0) return undefined;
+  const min = new Array<number>(itemSize).fill(Number.POSITIVE_INFINITY);
+  const max = new Array<number>(itemSize).fill(Number.NEGATIVE_INFINITY);
+  const sum = new Array<number>(itemSize).fill(0);
+  const finite = new Array<number>(itemSize).fill(0);
+  for (let k = 0; k < count; k++) {
+    const offset = k * itemSize;
+    for (let c = 0; c < itemSize; c++) {
+      const v = column[offset + c]!;
+      if (!Number.isFinite(v)) continue;
+      if (v < min[c]!) min[c] = v;
+      if (v > max[c]!) max[c] = v;
+      sum[c]! += v;
+      finite[c]!++;
+    }
+  }
+  return {
+    min: min.map((v, c) => (finite[c]! > 0 ? round(v) : Number.NaN)),
+    max: max.map((v, c) => (finite[c]! > 0 ? round(v) : Number.NaN)),
+    mean: sum.map((v, c) => (finite[c]! > 0 ? round(v / finite[c]!) : Number.NaN)),
+  };
+}
+
+/** The channel shapes a summary already worked out, or nothing to add. */
+function channelShapes(shape: BatchSummary | undefined): { channels?: ChannelStats[] } {
+  if (shape === undefined || shape.channels.length === 0) return {};
+  return {
+    channels: shape.channels.map((c) => ({ name: c.name, type: c.type, itemSize: c.itemSize })),
+  };
+}
+
+/**
+ * A CPU batch's channels, shape and statistics together.
+ *
+ * The shapes come from the CLI summary for the same reason the geometry
+ * attribute signatures do — one implementation of "what is on this
+ * batch" behind both `pcg inspect` and the golden — and the columns are
+ * read off the batch here, because the summary deliberately does not
+ * carry bytes.
+ */
+function channelStats(
+  batch: InstanceBatch,
+  shape: BatchSummary | undefined,
+): { channels?: ChannelStats[] } {
+  const shaped = channelShapes(shape);
+  if (shaped.channels === undefined) return {};
+  const columns = instanceAttributesOf(batch);
+  return {
+    channels: shaped.channels.map((c) => {
+      const column = columns[c.name];
+      const values = column === undefined ? undefined : columnStats(column, batch.count, c.itemSize);
+      return values === undefined ? c : { ...c, values };
+    }),
+  };
 }
 
 /** `P:f32x3`, `density:f32`, `seed:u32` — name, type, and tuple size when it is not 1. */
@@ -431,7 +556,7 @@ function itemStats(item: DataItem): GraphItemStats {
     tags: summary.tags,
     residency: summary.residency,
     instances: summary.instances,
-    batches: batchStats(item),
+    batches: batchStats(item, summary.batches),
   };
 }
 
@@ -464,7 +589,7 @@ export function renderGraphsGolden(
     examples[e.file] = e.stats;
   }
   const golden: GraphsGolden = {
-    formatVersion: 2,
+    formatVersion: 3,
     tolerance: { absolute: TOLERANCE_ABS, relative: TOLERANCE_REL },
     examples,
   };
@@ -563,6 +688,44 @@ function diffScalarStats(
   }
 }
 
+/** `color:f32x3` — the signature a channel is matched on. */
+function channelSignature(c: ChannelStats): string {
+  return `${c.name}:${c.type}${c.itemSize > 1 ? `x${c.itemSize}` : ""}`;
+}
+
+/**
+ * Compare one batch's channels: first that the same channels are there
+ * under the same names, types and item sizes, then what each holds.
+ *
+ * The list diff is the one that catches the failure this record exists
+ * for — a spawner that stopped writing the channels — so it names the
+ * mechanism, because "channels missing color:f32x3" is only actionable
+ * if a reader knows which param puts it there.
+ */
+function diffChannels(
+  where: string,
+  actual: readonly ChannelStats[] | undefined,
+  expected: readonly ChannelStats[] | undefined,
+  out: string[],
+): void {
+  const a = actual ?? [];
+  const e = expected ?? [];
+  const diff = listDiff(a.map(channelSignature), e.map(channelSignature));
+  if (diff !== undefined) {
+    out.push(
+      `${where} channels ${diff}; a channel comes from spawnInstances' instanceAttrs, or from ` +
+        'colorAttr, which writes the reserved "color" one',
+    );
+  }
+  for (const channel of e) {
+    const mine = a.find((c) => c.name === channel.name);
+    // A channel that is gone, or is no longer the same shape, is already
+    // reported above; comparing its numbers would bury that line.
+    if (mine === undefined || channelSignature(mine) !== channelSignature(channel)) continue;
+    diffAxisStats(`${where} channel "${channel.name}"`, "value", mine.values, channel.values, out);
+  }
+}
+
 function diffItem(where: string, actual: GraphItemStats, expected: GraphItemStats): string[] {
   const out: string[] = [];
   if (actual.kind !== expected.kind) {
@@ -630,6 +793,7 @@ function diffItem(where: string, actual: GraphItemStats, expected: GraphItemStat
       // asset's would bury that line under statistics nobody asked for.
       if (ab.assetId !== eb.assetId) continue;
       const at = `${where}: batch ${i} "${eb.assetId}"`;
+      diffChannels(at, ab.channels, eb.channels, out);
       diffAxisStats(at, "translation", ab.translation, eb.translation, out);
       diffAxisStats(at, "scale", ab.scale, eb.scale, out);
       diffScalarStats(at, "rotation", ab.rotation, eb.rotation, out);
@@ -714,6 +878,25 @@ function hashAttribute(attr: Attribute, count: number): string {
   return value + ":" + hashBytes(encoder.encode(attr.stringTable.join(" ")));
 }
 
+/**
+ * A CPU batch's channels as one hash per channel, keyed by name; absent
+ * when the batch carries none, so a channel-less corpus fingerprints
+ * exactly as it did before channels existed.
+ */
+function channelFingerprint(batch: InstanceBatch): { channels?: Record<string, string> } {
+  const columns = instanceAttributesOf(batch);
+  const names = Object.keys(columns);
+  if (names.length === 0) return {};
+  const channels: Record<string, string> = {};
+  for (const name of names) {
+    const column = columns[name]!;
+    channels[name] = hashBytes(
+      new Uint8Array(column.buffer, column.byteOffset, column.byteLength),
+    );
+  }
+  return { channels };
+}
+
 function hashTypedArray(array: Uint32Array): string {
   return hashBytes(new Uint8Array(array.buffer, array.byteOffset, array.byteLength));
 }
@@ -780,6 +963,13 @@ export function graphFingerprint(outputs: Record<string, DataCollection>): Recor
           transforms: hashBytes(
             new Uint8Array(b.transforms.buffer, b.transforms.byteOffset, b.transforms.byteLength),
           ),
+          // Channels are cook output like any other, so they belong in the
+          // determinism hash too — a channel whose values moved between two
+          // runs of one build is the same class of bug as a transform that
+          // did. Read through the normalizer so a batch spelling its colour
+          // as a plain `colors` hashes identically to one spelling it as the
+          // reserved channel.
+          ...channelFingerprint(b),
         })),
       };
     });

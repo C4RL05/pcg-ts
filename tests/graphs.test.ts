@@ -5,8 +5,10 @@
  *
  * WHAT THE GOLDEN PINS, AND WHY IT IS NOT A FLOAT DUMP. It holds element
  * counts per domain, attribute presence (name, type, tuple size),
- * instance batch shape, the bounds of `P`, and per-batch instance
- * transform statistics — the last two compared within a tolerance. A
+ * instance batch shape, each batch's per-instance channels (name, type,
+ * item size, and per-component statistics), the bounds of `P`, and
+ * per-batch instance transform statistics — the numeric ones compared
+ * within a tolerance. A
  * float-exact corpus fights every legitimate change — a faster spatial
  * grid, a reassociated sum, a rounding difference in a transform — and a
  * suite that fails on improvements is a suite that gets relaxed until it
@@ -180,10 +182,11 @@ describe("example corpus", () => {
     // exactly the case where its numbers cannot be trusted, and exactly the
     // case a silent header would hide.
     const problems: string[] = [];
-    if (golden.formatVersion !== 2) {
+    if (golden.formatVersion !== 3) {
       problems.push(
-        `  formatVersion ${JSON.stringify(golden.formatVersion)}; this build writes and reads 2 ` +
-          "(version 2 added per-batch instance transform statistics)",
+        `  formatVersion ${JSON.stringify(golden.formatVersion)}; this build writes and reads 3 ` +
+          "(version 2 added per-batch instance transform statistics; version 3 added their " +
+          "per-instance channels)",
       );
     }
     if (golden.tolerance?.absolute !== TOLERANCE_ABS || golden.tolerance?.relative !== TOLERANCE_REL) {
@@ -314,7 +317,8 @@ describe("example corpus", () => {
               ...diffs.map((d) => `  ${d}`),
               "",
               "The golden pins element counts, attribute names and types, instance",
-              "batches, and bounds plus instance transform statistics within a tolerance —",
+              "batches and their per-instance channels, and bounds plus instance transform",
+              "statistics within a tolerance —",
               "never raw floats — so an unrelated numerical improvement should not have",
               "moved it. If this change is intended, re-derive the golden and read the",
               "diff before committing:",

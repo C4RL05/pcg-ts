@@ -1936,7 +1936,9 @@ which the three adapter turns into `InstancedMesh.instanceColor`.
 **Alpha is dropped**, and that is stated here rather than discovered:
 both three adapters take RGB, so the standard `color` attribute's
 fourth component has nowhere to go. Naming `color` itself works fine —
-it is f32 `tupleSize` 4 — you just get its RGB.
+it is f32 `tupleSize` 4 — you just get its RGB. To carry the alpha, or
+anything else per instance, use the general channel:
+[The per-instance channel](#the-per-instance-channel-the-abi-between-a-graph-and-its-host).
 
 **It is opt-in, and nothing is picked up automatically.** This is the
 one place the reasoning differs from primitive-attribute carrying,
@@ -1969,6 +1971,249 @@ would fail or not depending on the order it streamed in — exactly the
 order-dependence the determinism invariant forbids. A streamed `World`
 may hold many times the budget across its live cells, and that is
 correct.
+
+## The per-instance channel: the ABI between a graph and its host
+
+Colour is one channel out of a general mechanism, and the general one is
+worth stating on its own terms because of *why* it has to exist.
+
+**The field grammar has no time input, and that is deliberate.** A
+graph produces STRUCTURE; the host animates it. Nothing inside a cook
+can be a function of the frame, so anything the host must drive per
+instance at runtime — a phase offset, a stable id, a species index, an
+RGBA tint, a wind stiffness — has to leave the graph as *data*. That
+makes `spawnInstances`' `instanceAttrs` the ABI between the two: before
+it existed only transforms and RGB could cross the spawner, and a host
+had to re-derive everything else from a position, which stopped
+agreeing with the graph that authored it the first time either side
+changed.
+
+`instanceAttrs` is a `stringList`, default `[]`: point attribute names,
+carried in the order given.
+
+```json
+{ "id": "spawn", "type": "spawnInstances",
+  "params": { "assetId": "reed",
+              "instanceAttrs": ["phase", "windStiffness", "plantId"] } }
+```
+
+Each named attribute becomes `batch.attributes[<the attribute's own
+name>]` — the name is not remapped, so what an author wrote upstream is
+what a shader reads:
+
+```ts
+import { instanceAttributesOf } from "pcg-ts";
+
+for (const item of outputs.instances) {
+  if (item.kind !== "instances") continue;
+  for (const batch of item.batches) {
+    const channels = instanceAttributesOf(batch);  // the ONE form to read
+    channels.phase;      // Float32Array, count * 1
+    channels.plantId;    // Uint32Array,  count * 1 — still u32
+  }
+}
+```
+
+**Read channels through `instanceAttributesOf(batch)`, not off
+`batch.attributes`.** It is the one form that is always right. Every
+adapter in this library starts there and special-cases exactly one name,
+which is why the two spellings of colour never became two code paths.
+
+**The lift is keyed on the reserved colour CHANNEL, never on whether
+`attributes` exists.** That distinction is the whole rule, and getting it
+backwards is what a hand-built batch pays for:
+
+| the batch | what you get back |
+|---|---|
+| no plain `colors` | its own `attributes`, or a shared frozen empty record when it has none |
+| plain `colors`, no `"color"` channel | `{ ...attributes, color: colors }` — with `attributes` **absent**, `{}`, or holding other channels alike |
+| both spellings, **same** buffer | `attributes` unchanged |
+| both spellings, **different** buffers | it **throws** (below) |
+
+Spreading `undefined` is `{}`, and a spread copies own enumerable keys —
+the same set — so absent, empty and populated `attributes` are one case
+and not three. `{ attributes: {}, colors }`, which is what a host writes
+when it fills the record generically and finds nothing to put in it, and
+`{ attributes: { phase }, colors }`, which is the same defect one channel
+later, both keep their colour.
+
+> Earlier versions lifted only when `attributes` was **absent**, and
+> silently dropped the colour in the other two shapes. If you are reading
+> an adapter — or a doc — that still says "when the batch has no record",
+> it is a version behind this one.
+
+"Already carries that channel" means an **own, enumerable** property, the
+set `Object.keys` / `Object.entries` / a spread report and the only set an
+adapter can loop. A `color` reachable only through a prototype (a host
+layering its channels over a defaults object) or hidden as
+non-enumerable does not count as present, so your plain `colors` is
+lifted rather than dropped in favour of a channel nothing downstream
+could enumerate.
+
+**The one shape that throws: two different colour buffers.** They are one
+thing spelled twice, so nothing could pick a winner without silently
+discarding the other — the normalizer refuses instead of guessing. The
+error names the batch, both spellings with their lengths, and the two
+ways out:
+
+```
+instanceAttributesOf: batch "reed" carries two different colour buffers —
+attributes["color"] (1800 elements) and colors (1800 floats). `colors` is
+sugar for the reserved "color" channel and not a second buffer, so there is
+no rule for which one a renderer should draw. Set exactly one of them: keep
+the channel and omit `colors`, or keep the plain `colors` and drop the
+"color" entry from attributes. (Batches the library mints install `colors`
+as an accessor over the channel, so the two can never disagree there.)
+```
+
+**You cannot hit it with a batch this library built**, which is why the
+error is worded at hand-built ones. The internal constructor the spawner
+and the worker's decode mint through installs `colors` as an *accessor*
+over the reserved channel, so the two spellings are the same array by
+construction and the identity test always passes. That constructor is
+deliberately **not** exported, which is why the message states that
+property as the reason library batches are safe rather than offering it as
+a call you could make. Your fix is **set exactly one spelling**: keep the
+`"color"` channel and omit `colors`, or keep the plain `colors` and drop
+the channel. Setting both to the *same* array is fine and is not the error
+case.
+
+A caller building a batch writes the object literal the `InstanceBatch`
+type documents and reads it back through `instanceAttributesOf`, which is
+published for exactly that half of the job.
+
+**The layout.** A channel is one tightly packed column of
+`count * tupleSize` elements, instance `k` at `k * tupleSize`.
+`itemSize` is **derived** by the consumer as `column.length / count`
+and is not carried on the CPU batch — so there is no second place for it
+to be wrong and no stored copy that can disagree with the buffer it
+describes. `toInstancedMeshes` recovers it exactly that way, and refuses
+a column that is not a whole number of components per instance rather
+than reading a prefix of it. (The device twin does carry it, and has to:
+`DeviceInstanceAttribute.itemSize` is the width the *author* asked for,
+which a device buffer cannot be measured for because WGSL pads a
+3-component channel to four slots.)
+
+**Instance order is the invariant everything else rests on**:
+`attributes[name][k]` and `transforms[k]` are the same instance, for
+every channel, on every path. The spawner writes them in ONE loop from
+ONE source index, so there is no second traversal that could fall out of
+step. `tests/instanceAttributes.test.ts` pins it anyway, because a host
+cannot check it and every consumer assumes it.
+
+**The dtype is preserved, not widened to f32.** A channel is a point
+attribute that crossed the spawner carrying the element type it had on
+the point domain — `f32`, `i32`, `u32` or `bool`, backed by
+`Float32Array` / `Int32Array` / `Uint32Array` / `Uint8Array`. That is
+`src/data`'s own `AttrType` vocabulary rather than a second one. The
+reason is exactness rather than tidiness: **f32 carries a 24-bit
+mantissa, so consecutive integers stop being representable past 2^24
+(16 777 216)** — an id above that lands on its neighbour and two
+instances become one instance to a host keying on it. Nothing
+downstream wants the widening either:
+`THREE.InstancedBufferAttribute` takes any typed array.
+
+**`"color"` is reserved and `instanceAttrs` refuses it by name.** A
+renderer treats colour *structurally* rather than generically — three
+hangs it on `InstancedMesh.instanceColor`, a mesh property that flips
+the shader variant, not a geometry attribute — so a channel that merely
+happened to be called `color` would be uploaded twice and mean two
+things. `colorAttr` is its route, and `InstanceBatch.colors` is sugar
+for that same reserved entry: one buffer, two spellings, kept only so
+consumers written against the older shape keep working. To carry RGBA —
+which `colorAttr`'s alpha drop cannot — copy the attribute to another
+name upstream and name *that* in `instanceAttrs`.
+
+**`string` channels are refused, and the refusal is not a limitation to
+work around.** A string column's data is indices into a per-attribute
+string table, and the table does not cross the spawner with the column,
+so a renderer would receive meaningless integers. The case that really
+wants strings — per-point asset ids — has its own route, `assetAttr`,
+which resolves them to batches before anything leaves the graph.
+
+**Five things error**, each naming the offending entry and the way out:
+an empty name in the list, the same name listed twice (a channel is
+named after its attribute, so a repeat would be one channel listed
+twice), the reserved name `color`, an attribute that is not on the
+point domain (the message lists the point attributes that *could*
+become channels), and a `string` attribute. The reserved-name check runs
+*before* the lookup, so `color` reports as reserved even when no such
+attribute exists.
+
+Those messages are raised by `buildInstanceBatches`, which is what
+prefixes them — the spawner's `assetAttr` and `colorAttr` diagnostics
+follow the same convention, so grep for the param name rather than for
+the node type.
+
+**Absent, not empty, is the default.** `instanceAttrs: []` carries
+nothing and allocates nothing, and `batch.attributes` is then absent
+exactly as `colors` is absent when no colour was asked for.
+
+**What a renderer does with them.** `toInstancedMeshes` sets each
+non-reserved channel on the mesh's geometry as an
+`InstancedBufferAttribute` under the channel's own name. A batch
+carrying any such channel therefore gets its own geometry **clone** —
+the asset's geometry is shared with every other batch and must not be
+written — marked by `ownsGeometry(mesh)` and disposed by whoever
+disposes the mesh. Colour alone does not clone, since `instanceColor`
+is a mesh property. Two refusals live on that seam rather than at the
+spawner: a channel named after something three already means
+(`position`, `normal`, `uv`, `instanceMatrix` and seven more) is
+refused instead of overwriting the asset's vertex data, and a channel
+wider than 4 components is refused because a vertex attribute cannot
+carry more — split it upstream into several narrower ones.
+
+**"CPU-only" is a statement about one of three things, and it is worth
+separating them before you plan around it.** The phrase has been read
+here as "this stalls your frame", which is the opposite of what is true.
+
+- **Producing** a channel on the GPU device: **not built.** A spawn
+  naming any `instanceAttrs` channel rejects the resident run as
+  `run-plan-failed` and the CPU spawner serves the whole terminal. The
+  reason is a binding budget, not a difficulty — see
+  [Device-resident instancing](#device-resident-instancing-drawing-without-a-readback).
+  Note what this does *not* cover: the reserved `color` channel IS
+  composed on the device (that is what `colorAttr` does), so "no gather
+  channels on the device" would be wrong. It is the open-ended list that
+  does not fit.
+- **Rendering** a channel under a `WebGPURenderer`: **supported, and the
+  device-production limit does not touch it.** `toInstancedMeshes`
+  imports only `three` and branches on nothing renderer-shaped; an
+  `InstancedBufferAttribute` is as valid under `WebGPURenderer` as under
+  `WebGLRenderer`. A CPU-produced column reaching a WebGPU material is
+  the whole supported path for per-instance data in your shaders, and it
+  is the one to plan on. What the library ships is the DATA, not the
+  shader: nothing here imports `three/tsl` or writes a material, and
+  `normalized`/`gpuType` are left at three's defaults, so declaring the
+  attribute (a TSL `attribute()` node, a `ShaderMaterial`, an
+  `onBeforeCompile` patch) — and the shader-side type of an integer
+  channel — is yours. Set that `gpuType`: three defaults an attribute to
+  `FloatType`, so an integer channel declared without it is read back as
+  a float and suffers at the shader exactly the 2^24 widening the
+  spawner refused to do to it. **Scope of the word "supported":** the
+  binding is pinned by unit tests, but no demo binds a custom channel
+  and no test in this repo issues a draw call, so the pixels are
+  intended and documented rather than proven by the suite. The one place
+  a custom channel is refused on the WebGPU side is the *device-resident*
+  adapter, which binds only the two channels three treats structurally;
+  see below.
+- **Cooking** on the main thread: **not required.** `pcg-ts/worker`
+  cooks off-thread, and `EncodedInstanceBatch.attributes` carries every
+  named channel — colour among them, since `colors` is an accessor over
+  the reserved entry and has no wire form of its own. Every column rides
+  the structured-clone **transfer list**, so the batch arrives on the
+  main thread as buffer ownership rather than as a copy. The worker pays
+  one `slice()` per column on its own thread (the cook's arrays alias
+  live memo caches and must not be detached); the main thread pays
+  nothing. "CPU" here means "not the GPU device", never "on your frame".
+
+So a host that wants per-instance data in a WebGPU material has a
+complete path today: cook in a worker, receive the channels zero-copy,
+bind them with `toInstancedMeshes`, read them from your own material —
+remembering that each channelled batch gets its own geometry clone to
+dispose, as above.
+What you cannot do yet is have the device *compose* those channels
+without a readback.
 
 ## Editing live graphs
 
@@ -3601,7 +3846,7 @@ geometry input and one geometry output, plus one *terminal* kind:
 | `transformPoints` | always |
 | `jitterPoints` | always |
 | `orientAlongVector` | always |
-| `spawnInstances` | the resolver advertises the kind — with or without `assetAttr` (since v0.8.0) and with or without `colorAttr`; terminal only, and it declares no `eligible` gate; see [Device-resident instancing](#device-resident-instancing-drawing-without-a-readback) |
+| `spawnInstances` | the resolver advertises the kind UNCONDITIONALLY — with or without `assetAttr` (since v0.8.0), with or without `colorAttr`, and whatever `instanceAttrs` says; the RUN then fuses only with an EMPTY `instanceAttrs`; terminal only, and it declares no `eligible` gate (the channel case is rejected by the run planner instead, so it keeps the node off only the run that names one); see [Device-resident instancing](#device-resident-instancing-drawing-without-a-readback) |
 
 plus, for every member: every `Field` in its param tree carries a spec
 *this resolver accepts* — authored always, derived only under
@@ -3649,11 +3894,17 @@ That is by design, not a bug; benchmark from cold caches.
 - `run-plan-failed` — a member cannot be compiled into the resident
   pipeline: unknown resident kind, field compile error, tuple-size or
   layout mismatch, a missing standard attribute, over the
-  storage-buffer limit, or a `spawnInstances` over the instance budget
-  or naming an `assetAttr`/`colorAttr` it cannot use. Genuinely invalid
-  params still surface the identical CPU error from the per-node path,
-  which is why none of those spawner conditions needed a reason of its
-  own. An `attributeIs` or `byAttribute` anywhere in the run declines here
+  storage-buffer limit, or a `spawnInstances` over the instance budget,
+  naming an `assetAttr`/`colorAttr` it cannot use, or naming any
+  per-instance channel in `instanceAttrs`. Genuinely invalid params
+  still surface the identical CPU error from the per-node path, which is
+  why none of those spawner conditions needed a reason of its own — with
+  one exception worth stating, because it is the only one of those
+  spawner conditions that is not a mistake: `instanceAttrs` is a
+  perfectly valid param that the CPU path executes fine, so there is no
+  CPU error to surface. It rejects because the device spawner cannot
+  *produce* those channels (below), not because the graph is wrong.
+  An `attributeIs` or `byAttribute` anywhere in the run declines here
   too, and for
   a reason worth separating from the rest: its kernel compiles and
   dispatches perfectly well — the per-node path runs it on the device.
@@ -3817,6 +4068,35 @@ writes `4k+3` as a literal `0f` rather than leaving it undefined —
 respect that stride if you extend the device path, because it is the
 one place the two layouts legitimately differ.
 
+**Enumerate a device batch's handles through
+`deviceInstanceAttributesOf(batch)`, never alongside `batch.colors`.**
+Reading `batch.colors` for its *byte length*, as above, is fine — on a
+batch this library builds it is an accessor over the reserved `"color"`
+channel. Walking `attributes` and `colors` side by side to collect
+handles is not: colour is a channel *in* that record, so the same handle
+would be counted twice. `deviceInstanceAttributesOf` applies exactly the
+CPU rule described in
+[The per-instance channel](#the-per-instance-channel-the-abi-between-a-graph-and-its-host)
+— the lift is keyed on the `"color"` channel and not on whether
+`attributes` exists, so absent, `{}` and populated records converge; only
+own, enumerable keys count; and two **different** handles under the two
+spellings throw, naming the batch and the same two fixes. The lifted
+entry is `{ handle: colors, type: "f32", itemSize: 3 }`.
+
+Getting this wrong costs more here than on the CPU. **Every handle is an
+owner obligation** — the device path has no GC, so a handle you fail to
+enumerate is a buffer nothing will ever free (a visible leak, counted in
+`poolStats`), and one you enumerate twice is a double free. Note that the
+refusal *throws out of the enumeration*, so an owner that retains handles
+while walking that record must make its `transforms` retain independent
+of the call. `WorldThreeBinding` retains `transforms` first for precisely
+this reason; if the normalizer then refuses, it retains the batch's raw
+reachable handle set (deduplicated by identity) and re-throws the
+refusal, so the batch's reachable buffers stay freeable and the
+diagnosis still reaches the caller. Best-effort by construction: that
+sweep is itself guarded, so a hostile `attributes` getter can leave it
+incomplete — "reachable" is doing real work in that sentence.
+
 Writing your own adapter?
 `deviceTransformsBuffer(handle)` from `pcg-ts/gpu` is the one supported
 way to get the buffer back; bind exactly `handle.byteLength` bytes from
@@ -3887,6 +4167,72 @@ is missing or is not f32 with `tupleSize >= 3`, rejects the run as
 `run-plan-failed` and the CPU node raises the single diagnostic. The
 device path words no message of its own, so the two paths cannot word
 it differently.
+
+**`instanceAttrs` is not device-*produced*, and it is the one spawner
+condition here that is not about a mistake.** A spawn naming any
+[per-instance channel](#the-per-instance-channel-the-abi-between-a-graph-and-its-host)
+rejects the whole run as `run-plan-failed`, and the CPU spawner then
+serves the *entire* terminal — the transforms it composes there, its
+colour, and the channels. Nothing is dropped and nothing is silent: the
+rejection is counted in `CookStats.gpu.fallbacks` like every other.
+
+What a caller observes is the counter key and nothing more. The
+planner's own rejection carries a sentence — `instanceAttrs names N
+per-instance channel(s); the device spawner composes transforms and
+colour only` — but `PlanRejection` carries only the reason, so that
+wording never leaves `planResidentRun`. Quoted here because it is what
+you will find in the source, not because a cook will hand it to you.
+
+The reason is a binding budget rather than a difficulty. The compose
+kernel's widest form already binds **seven** storage buffers — `P`,
+`rot`, `scale`, `transforms`, the permutation, the colour source and the
+colour output — against the baseline `maxStorageBuffersPerShaderStage`
+of 8 (`MAX_STORAGE_BUFFERS`). One slot is left, so an *arbitrary* number
+of gather channels does not fit in that kernel at all. Colour is not
+what the budget cut — it is one known channel the kernel was built
+with, not an open-ended list — so a spawn that names *no* channel keeps
+its colour on the device exactly as before. Read that narrowly: a spawn
+that does name one loses the device path for the whole terminal, and
+composes its colour on the CPU along with everything else. The channel
+check runs before the `colorAttr` one, so there is no partial device
+spawn.
+
+**Read that as a limit on PRODUCTION and nothing else.** Two things it
+is regularly misread as forbidding, both of which are supported:
+
+- **Rendering the channel under a `WebGPURenderer`.** The CPU batch this
+  fallback produces carries every channel, and `toInstancedMeshes` binds
+  each one as an `InstancedBufferAttribute` of its own name — renderer
+  agnostic, so a WebGPU material reads it exactly as a WebGL one does.
+  That is the supported route for per-instance data in a shader and it
+  is untouched by anything on this page. (The `deviceInstances` adapter
+  is the exception: it binds only the instance matrix and the reserved
+  colour, and refuses a hand-built device batch carrying anything else,
+  naming both ways out.)
+- **Keeping the cook off your frame.** The fallback is a CPU cook, not a
+  main-thread one. Run it through `pcg-ts/worker` and the channels cross
+  on the transfer list with the transforms — buffer ownership, not a
+  copy — so a spawn that loses the device path does not thereby cost you
+  a frame hitch.
+
+This is a gate on device *production* only. The device batch type
+carries the channel shape (`DeviceInstanceBatch.attributes`,
+`DeviceInstanceAttribute`, and `deviceInstanceAttributeLayout` for what
+WGSL makes of a dtype and an item size) so that a host composing its own
+buffers has the vocabulary — but this library's resident spawner only
+ever fills the reserved colour entry, never a named one, and the WebGPU
+adapter refuses a batch carrying a named one rather than drawing without
+it. That refusal is a thrown error naming the
+batch, the channel and its layout, with the two ways out: drop
+`deviceInstances: true` to cook CPU batches, or bind the buffer yourself
+from `batch.attributes[name].handle.resource`. Unlike the planner's, it
+is a hard error and not a counted fallback — by then there is no CPU
+path left to fall back to.
+
+The rejection did not widen the fallback vocabulary, for the same reason
+the budget and `colorAttr` did not: `run-plan-failed` already says a
+member could not be planned, and a second code would only be a second
+place to keep the same fact.
 
 `stats.dispatches` counts the multi-asset compose once per asset: the
 unit is (step, asset), not step. See
@@ -3977,7 +4323,11 @@ its own and uploads the attribute's (empty) array over the top. The
 adapter therefore seeds three's WebGPU backend attribute record
 (`renderer.backend.get(attribute).buffer`) so that three's own creation
 and upload become a no-op. That is an internal, so the peer range is
-pinned to `three@^0.185.1` and verified against `0.185.1`.
+`three@^0.185.0`, verified against `0.185.1`. The floor is the minor
+line rather than one patch because nothing here compares version
+strings: `checkAdoptionSeam` probes the seam behaviourally once per
+`createWebGpuInstanceAdapter` call — per adapter, not per build or per
+frame — which is a stronger guarantee than a range can be.
 
 `checkAdoptionSeam(renderer, makeAttribute)`, exported from
 `pcg-ts/three`, is the guard that pins the seam: it seeds a sentinel on
@@ -4026,6 +4376,16 @@ zero, out-of-gamut negatives, f32 max, min-normal and subnormals. The
 pad slot at `4k+3` is asserted zero over that same sample, since a kernel
 that wrote the source's *alpha* there instead of a literal `0f` would
 leak a component the CPU path drops.
+
+**The other per-instance channels have no parity class at all, because
+they never run here.** A spawn naming anything in `instanceAttrs`
+rejects the resident run as `run-plan-failed` and the CPU spawner serves
+the whole terminal — so for such a spawn there is no device output to
+compare, transforms included, and the numbers in the table above simply
+do not apply to it. That is a CPU-only fallback like any other in this
+document: counted under `run-plan-failed`, never silent. See
+[Device-resident instancing](#device-resident-instancing-drawing-without-a-readback)
+for the binding budget behind it.
 
 What this does **not** weaken: everything else. The determinism suites
 pin the CPU path, the CPU spawner's `composeTRS` goldens are unchanged,

@@ -499,8 +499,8 @@ describe("describeGraphAssets: the graph corpus", () => {
   );
 
   it("finds every spawner in the corpus, bodies included", () => {
-    expect(new Set(spawners.map((s) => s.file)).size).toBe(23);
-    expect(spawners).toHaveLength(36);
+    expect(new Set(spawners.map((s) => s.file)).size).toBe(24);
+    expect(spawners).toHaveLength(37);
     // Eight of them are inside a `write/instances-by-species` body.
     expect(spawners.filter((s) => s.node.includes(" > "))).toHaveLength(8);
   });
@@ -537,6 +537,10 @@ describe("describeGraphAssets: the graph corpus", () => {
         "pine",
         "post",
         "prop",
+        // `basics-instance-channels` spawns one asset and carries the
+        // per-instance channels instead — the id is a literal, so it is
+        // here for the plain reason the rest of this list exists.
+        "reed",
         "rod",
         "tube",
         "willow",

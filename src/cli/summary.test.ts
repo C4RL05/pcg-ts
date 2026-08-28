@@ -178,6 +178,95 @@ describe("itemLine / attrListText", () => {
       "instances  3 instances in 1 batch (cpu) — tree x3",
     );
   });
+
+  it("names each per-instance channel, so a spawn can be confirmed to have carried it", () => {
+    // The gap this closes: `instanceAttrs` is the ABI between a graph and
+    // its host, and before this the CLI reported only the asset and the
+    // count — an author had no way to see whether the channel they named
+    // crossed the spawner at all.
+    const item = makeInstancesItem([
+      {
+        assetId: "reed",
+        count: 2,
+        transforms: new Float32Array(32),
+        attributes: {
+          phase: new Float32Array([0.25, 0.75]),
+          plantId: new Uint32Array([17, 99]),
+        },
+      },
+    ]);
+    expect(itemLine(summarizeItem(item))).toBe(
+      "instances  2 instances in 1 batch (cpu) — reed x2 [phase(f32), plantId(u32)]",
+    );
+  });
+
+  it("keeps a channel's dtype rather than reporting everything as f32", () => {
+    // The whole reason the dtype is preserved across the spawner is that
+    // f32 stops representing consecutive integers past 2^24, so an `inspect`
+    // that reported a u32 id column as f32 would hide exactly the widening
+    // the channel exists to avoid.
+    const item = makeInstancesItem([
+      {
+        assetId: "rock",
+        count: 2,
+        transforms: new Float32Array(32),
+        attributes: {
+          id: new Uint32Array([16_777_217, 16_777_218]),
+          flag: new Uint8Array([1, 0]),
+          bias: new Int32Array([-3, 4]),
+        },
+      },
+    ]);
+    const summary = summarizeItem(item);
+    if (summary.kind !== "instances") throw new Error("expected an instances summary");
+    expect(summary.batches[0].channels).toEqual([
+      { name: "id", type: "u32", itemSize: 1 },
+      { name: "flag", type: "bool", itemSize: 1 },
+      { name: "bias", type: "i32", itemSize: 1 },
+    ]);
+  });
+
+  it("derives itemSize from the column, and reports 0 where there is nothing to divide by", () => {
+    const wide = makeInstancesItem([
+      {
+        assetId: "banner",
+        count: 2,
+        transforms: new Float32Array(32),
+        attributes: { rgba: new Float32Array(8) },
+      },
+    ]);
+    const wideSummary = summarizeItem(wide);
+    if (wideSummary.kind !== "instances") throw new Error("expected an instances summary");
+    expect(wideSummary.batches[0].channels).toEqual([
+      { name: "rgba", type: "f32", itemSize: 4 },
+    ]);
+
+    const empty = makeInstancesItem([
+      {
+        assetId: "banner",
+        count: 0,
+        transforms: new Float32Array(0),
+        attributes: { rgba: new Float32Array(0) },
+      },
+    ]);
+    const emptySummary = summarizeItem(empty);
+    if (emptySummary.kind !== "instances") throw new Error("expected an instances summary");
+    expect(emptySummary.batches[0].channels).toEqual([
+      { name: "rgba", type: "f32", itemSize: 0 },
+    ]);
+  });
+
+  it("reports a hand-built batch's plain colors as the reserved channel", () => {
+    // `colors` is sugar over `attributes.color`, and the normalizer is what
+    // makes the two spellings report identically instead of one of them
+    // reading as no channel at all.
+    const item = makeInstancesItem([
+      { assetId: "bush", count: 1, transforms: new Float32Array(16), colors: new Float32Array(3) },
+    ]);
+    expect(itemLine(summarizeItem(item))).toBe(
+      "instances  1 instance in 1 batch (cpu) — bush x1 [color(f32x3)]",
+    );
+  });
 });
 
 describe("sampleRows", () => {

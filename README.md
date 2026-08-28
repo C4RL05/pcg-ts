@@ -803,7 +803,13 @@ same binding draw instance matrices straight out of the GPU buffer the
 cook composed them in, skipping the `Float32Array` entirely — see
 [Device-resident instancing](#device-resident-instancing) below.
 `three/webgpu` is imported lazily by that factory, so a WebGL app pays
-nothing for its existence.
+nothing for its existence. With no `World` in the picture,
+`toDeviceInstanceObjects(batches, adapter, bounds?)` is the device
+counterpart of `toInstancedMeshes`: it hands each device-resident batch
+to that adapter and returns one scene object per batch, releasing the
+ones it had already built if a later one fails. `bounds` is per asset id
+rather than per cell, because a device batch has no CPU matrices to
+compute a bounding sphere from.
 
 ## GPU cooking (WebGPU)
 
@@ -1070,7 +1076,7 @@ reads as exactly what the rules added.
 has its own chapter above.
 
 A recipe that is only one cook of one graph is not a demo here; it is
-one of the 67 files in `graphs/`, cooked by `pcg cook`, rendered by
+one of the 79 files in `graphs/`, cooked by `pcg cook`, rendered by
 `npm run preview`, editable in the editor, and pictured in [the
 gallery](https://c4rl05.github.io/pcg-ts/gallery.html). All of it runs
 locally from one vite server:
