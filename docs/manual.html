@@ -1382,6 +1382,8 @@ WorldValidationError: level 0 (<span class="s">"a"</span>): cookOutputs names un
 
     <p>For composites, <code>describeSubgraphPins(def)</code> resolves a subgraph definition's per-instance pins — the exposed name plus the concrete kind of the inner pin, resolved live through nested subgraphs. It returns <code>{"inputs":[],"outputs":[{"name":"out","kind":"geometry"}]}</code> for a single-output wrapper, <code>undefined</code> for a non-subgraph definition, and throws (naming the pin and inner node) when later edits have broken the wrapper.</p>
 
+    <p><strong>A wrapper can add pins the body never exposed, and those carry a flag.</strong> A <code>repeatUntil</code> definition publishes <code>rounds</code> and <code>converged</code> itself, so they appear here as ordinary outputs with <code>"synthesized": true</code> — <code>{"name":"rounds","kind":"value","synthesized":true}</code>. They are real and wirable, and on a loop they are the only way to tell a settled result from one that ran out of rounds. The flag carries the other half: the pin is <em>not the body's</em>, so it will not be found among the exposed outputs and does not move when those are renamed. The key is <em>absent</em> rather than <code>false</code> on an ordinary pin, so code comparing against <code>{name, kind}</code> still matches the ordinary case. <code>forEach</code> synthesizes nothing, so this is <code>repeatUntil</code>-only today.</p>
+
     <h3>Writing: the mutation API and its exact cache semantics</h3>
     <p>Every mutation bumps the graph version. The cache consequences are specified, not incidental:</p>
 
