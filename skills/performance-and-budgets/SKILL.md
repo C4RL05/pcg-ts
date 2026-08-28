@@ -73,16 +73,40 @@ companion `maxCooksPerUpdate` bounds the same queue by count, which is the
 better knob when per-cell cost is unpredictable. `World.update` also passes
 its budget down as each cell's yield budget, so one number does both jobs.
 
-**Granularity is one node, always.** The yield check happens between nodes;
-a node's `execute` is never sliced on the CPU. A single 200 ms node blows
-any budget, and no budget will fix it — that is a node to make cheaper or
-to move to a coarser level. Same shape at the World level: the in-flight
-cell always runs to completion.
+**Granularity is one node — the EXECUTOR never slices one.** The yield
+check sits after `cookNode` returns (`src/graph/execute.ts:1353-1359`), and
+a node is handed only `signal`/`checkCancelled()`, which throws rather than
+yielding. There are no generators, resumable state or `shouldYield` hooks
+anywhere in `src/`. So a single 200 ms LEAF node blows any budget and no
+budget will fix it — that is a node to make cheaper or to move to a coarser
+level. Same shape at the World level: the in-flight cell always runs to
+completion.
 
-From the CLI, `--budget <ms>` is the cook budget and must exceed zero —
-`--budget 0` exits 2 with `cook: flag "--budget" expects a number greater
-than 0 (milliseconds), got 0`. Zero is reachable only from TypeScript,
-which is what the next section uses it for.
+**But a node may slice ITSELF, and four do.** `budgetMs` is forwarded into
+node execution, and the composites meter it internally: `forEach`
+(`src/nodes/forEach.ts:286-290`), `repeatUntil`
+(`src/nodes/repeatUntil.ts:545-549`), `subgraph` (`src/graph/subgraph.ts:837`,
+whose inner cook runs this same loop with its own slice clock) and the
+resident GPU run, between member kernel encodings (`src/gpu/run.ts:1280-1284`).
+With a GPU resolver, `src/nodes/util.ts:328-330` also awaits a real device
+readback inside ordinary leaf nodes. Read "granularity is one node" as a
+statement about the EXECUTOR, not a guarantee that every node is atomic in
+wall-clock time.
+
+That distinction has teeth for measurement. Because the executor cannot
+interrupt a leaf, the longest single leaf `elapsedMs` is a hard floor no
+budget can lower — which makes `onNodeDone.elapsedMs` enough to derive the
+longest uninterrupted block without any event-loop probe. Replaying the
+accumulate-and-reset policy over those timings is an UPPER BOUND rather than
+the real boundaries, because a composite's single `elapsedMs` spans yields
+it took internally, and a rejected fused-run plan does real work
+(`assembleInputs` plus member hashing) and reports no `onNodeDone` at all.
+
+From the CLI, `--budget <ms>` takes any non-negative number. **`--budget 0`
+is allowed and meaningful** — every budget check is `budgetMs !== undefined`
+rather than a truthiness test, so 0 yields after every node, which is the
+maximum-partitioning self-test the next section describes. Negative and NaN
+are still misuse.
 
 ## Partition-safety, and the check that proves it
 

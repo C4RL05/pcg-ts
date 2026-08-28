@@ -875,7 +875,7 @@ function hashAttribute(attr: Attribute, count: number): string {
   if (attr.type !== "string") return value;
   // Indices alone say nothing: two runs agree on index 3 while disagreeing
   // on what index 3 spells.
-  return value + ":" + hashBytes(encoder.encode(attr.stringTable.join(" ")));
+  return value + ":" + hashBytes(encoder.encode(attr.stringTable.join("\u0000")));
 }
 
 /**

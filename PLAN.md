@@ -251,6 +251,70 @@ the over-generation dominate. Supers are ~17 on a 350W lap and clusters
 ~8 each, so a max of 2x on both is ~270 intermediate points -- nothing.
 The instance pick is the only step where N x R could bite.
 
+### Stretch: intra-node yielding — MEASURED AND REJECTED, 2026-08-28
+
+An external integrator's cook-cost harness, run headless against `dist/`,
+found one corpus graph that cannot launch inside a frame — and it is not a
+spawn graph. Re-derived independently here with an instrument proved
+against known synthetic costs first (30 ms busy loop read 30.06 ms, 5 ms
+read 5.04 ms, an idle control reported no blocks at all, and a lone 30 ms
+block among fast turns was found without smearing).
+
+**The finding.** `examples-headless-scatter` at 16000 points: one
+`setAttribute` node (`height`, fbm perlin over four octaves) costs
+**20.6 ms p50 / 28.5 ms p95 on its own**, against a 24.5 ms total cook.
+Three independent measurements — two here, one by an agent not shown the
+others — landed inside 3%, and the integrator's 21.2 ms floor agrees. It
+decomposes cleanly: ~1.2 ms is the node's whole per-point machinery and
+**~4.9 ms is each perlin octave** (64,000 evaluations at ~305 ns). This is
+noise arithmetic, not framework overhead. Scaling is exactly linear —
+5.23 / 10.21 / 20.64 / 40.71 ms at 4k / 8k / 16k / 32k.
+
+**No budget lowers it.** At `budgetMs: 0`, the library's own documented
+maximum partitioning, block p95 is still **20.61 ms**. The executor's
+budget check sits outside `cookNode` (`src/graph/execute.ts:1353-1359`) and
+a node is handed only `signal`/`checkCancelled()`, which throws rather than
+yielding.
+
+**Do not build intra-node chunking.** It is feasible — `setAttribute`'s
+point loop is pure per-point, so chunking would be byte-identical, and
+there is in-repo precedent in the four composites that already meter the
+forwarded `budgetMs` themselves (`forEach`, `repeatUntil`, `subgraph`, the
+resident GPU run). The measurement is what kills it: forwarding a budget
+into `repeatUntil` **doubled that node's own wall time, 24.2 → 48.6 ms**, at
+roughly **1 ms per `setTimeout(0)` yield** on this platform. Slicing a
+20 ms node into 1 ms slices would cost more than the node. Written down
+here so it is not proposed again.
+
+**Three escape hatches, in order of what they actually do.**
+
+- **`pcg-ts/worker` RELOCATES it, and that is usually enough.** Measured on
+  the same graph at 16000: main-thread blocks fall to p50 0.38 / p95 0.71 /
+  max 0.98 ms, with a 25.07 ms round trip and 0.30 ms decode. It does not
+  make the work smaller — useless if the result is needed this frame, right
+  for anything streamed.
+- **The GPU path targets this node specifically.** `setAttribute` already
+  declares `gpu: "fields"` and a `resident` block
+  (`src/nodes/attributes.ts:306-311`), and this graph's value is an authored
+  `FieldSpec` — the eligible category. A 19.4 ms per-point fbm is the
+  archetypal WGSL kernel, and this is the one hatch that makes the number
+  smaller rather than moving it.
+- **World cell sizing is the product answer.** `src/runtime/world.ts:1057-1062`
+  checks the budget BEFORE dispatching each cell and defers the rest, so at
+  the World level the atomic unit is a cell and cell size is a real floor
+  knob.
+
+**A measurement trap worth keeping.** A budgeted `stats.elapsedMs` includes
+yield latency and is not work: the same cook read 24.9 ms budgeted against
+23.7 ms unbudgeted here, and 39.8 against 23.8 in an otherwise-idle process,
+because `setTimeout(0)` on an idle Windows loop pays real timer latency.
+**Quote node times or unbudgeted totals, never a budgeted total.** Relatedly,
+deriving the longest uninterrupted block by replaying the accumulate-and-reset
+policy over `onNodeDone.elapsedMs` is exact for CPU leaf graphs (28.46
+replayed against 28.56 measured) but an UPPER BOUND in general — on
+`basics-repeat-until-settled` it over-stated by 11x, because a composite's
+single `elapsedMs` spans yields it took internally.
+
 ### What a windowed per-sector repair would cost, measured 2026-08-24
 
 The racetrack now streams its dressing on `cellMode: "path"` sectors, and

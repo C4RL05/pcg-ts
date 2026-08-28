@@ -2113,6 +2113,30 @@ instances become one instance to a host keying on it. Nothing
 downstream wants the widening either:
 `THREE.InstancedBufferAttribute` takes any typed array.
 
+> **The widening can come back at the shader, and preserving the dtype
+> is what creates the hazard.** three defaults an instanced attribute to
+> `FloatType`. So a `u32` channel bound without setting `gpuType` is read
+> back as a float and suffers at the shader exactly the 2^24 collision
+> the spawner just refused — the column is exact, the draw is not. The
+> library binds the attribute and leaves `normalized`/`gpuType` at
+> three's defaults, so this one is yours: set `gpuType` when you declare
+> an integer channel. The alternative, and the idiom an integrating host
+> arrived at independently, is to keep the column `f32` end to end and
+> convert in the shader (`int(attribute('aOrigIndex', 'float'))`) — which
+> is exact only while the values stay under 2^24, and is the right choice
+> precisely when they do.
+
+**A node is the unit of yielding, so one expensive node is a floor.**
+Under `cook(graph, { budgetMs })` the executor yields between nodes, never
+inside one: it checks the budget after a node returns. A single leaf node
+that costs 20 ms therefore blocks for 20 ms whatever budget you set, and
+the fix is to make it cheaper, split it upstream, or cook it off the main
+thread through `pcg-ts/worker`. The composites are the exception and meter
+the budget themselves — `forEach`, `repeatUntil`, `subgraph` and the
+resident GPU run — which is why the `forEach` section below can say budget
+is honoured inside iterations without contradicting this. `skills/performance-and-budgets`
+carries the full rule and the partition-safety check built on it.
+
 **`"color"` is reserved and `instanceAttrs` refuses it by name.** A
 renderer treats colour *structurally* rather than generically — three
 hangs it on `InstancedMesh.instanceColor`, a mesh property that flips

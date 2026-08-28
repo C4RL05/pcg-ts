@@ -738,7 +738,7 @@ describe("what the halo guard is guarding", () => {
     expect(message).toContain(`queries radius ${WIDE}`);
     // ...and never a node that is inside the declared halo, which is what
     // the reduce-over-the-sample version did.
-    expect(message).not.toMatch(/queries radius 1/);
+    expect(message).not.toMatch(/queries radius 1\b/);
     // The counts stay exact and the sample is described as a sample.
     expect(message).toContain(`${EXEMPLAR_LIMIT + 12} readable reaches in this graph`);
     expect(message).toContain(`${EXEMPLAR_LIMIT} named here`);
