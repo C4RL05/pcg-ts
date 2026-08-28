@@ -1530,6 +1530,13 @@ export function addPlacementAssembly(
         PLACED.h,
         PLACED.row,
         PLACED.corner,
+        // WHICH RUNG OF L-3's LADDER THE LATERAL CAME OFF, which is HOW the
+        // ruler was placed and not a fact about a placement -- the same
+        // distinction the four uniforms above are stripped for. It is read
+        // by `readCornerLanguage` and by the suites that measure how much
+        // of the lap the clearance search moved, and by nothing downstream
+        // of here.
+        PLACED.rung,
         CHOICE.curveK,
         CHOICE.uPick,
         CHOICE.uLat,

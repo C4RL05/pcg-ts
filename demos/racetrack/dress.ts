@@ -89,7 +89,7 @@ import {
   reserveMarkers,
 } from "./legibility.js";
 import { repairFalseEdges } from "./falseEdges.js";
-import { type Frame, cullSightlines, defaultEyeStations } from "./sightline.js";
+import { type Frame, blocksCone, cullSightlines, defaultEyeStations } from "./sightline.js";
 import { LONG_QUANTILE, longCoverBudgetW, placeEnclosure, reduceEnclosure } from "./tunnels.js";
 import { measureEnclosure } from "./enclosure.js";
 import { FITTED, makeStationsDetailed,
@@ -354,6 +354,18 @@ export interface DressStats {
   readonly markersAdded: number;
   readonly brakeMarks: number;
   readonly brakeDisplaced: number;
+  /**
+   * L-3 rulers whose lateral had to step out to clear L-1's cone, and the
+   * ones no rung could clear.
+   *
+   * READ TOGETHER WITH `dropped`. `rulersStepped` is how much of the lap
+   * the group clearance search moved — zero is the lap that had no search
+   * in it — and `rulersFellBack` is the only place a braking mark can
+   * still be lost, because a corner that fell back is a corner the cull is
+   * left to thin out exactly as it did before.
+   */
+  readonly rulersStepped: number;
+  readonly rulersFellBack: number;
   readonly blocked: number;
   readonly pushedOut: number;
   readonly dropped: number;
@@ -743,10 +755,46 @@ export function dressLap(
   let placements: StationedPlacement[] = staged.placements;
   let corridorFixes = staged.corridorFixes;
 
+  // WHERE THE EYES ARE, HOISTED ABOVE THE PLACEMENT AND NOT ONLY ABOVE THE
+  // LOOP. L-3 now asks L-1's question at draw time — "would all three of
+  // this ruler's marks clear the cone here" — and it has to ask it of the
+  // SAME eye set the cull will use twenty lines below, or the two rules
+  // disagree about what blocked means and the search buys nothing. One
+  // list, built once, read by both.
+  const eyes = defaultEyeStations(lap.lengthW);
+
   // 4. L-2 and L-3. Markers land outside the corridor by construction, so
   //    they do not need step 3 run again over them. Where each marker and
   //    each ruler mark GOES comes from the caller when a graph drew it;
   //    see `DressOptions.language`.
+  //
+  //    AND L-3 IS TOLD WHERE THE CONE IS. The brake mark is `immovable`,
+  //    which is this pipeline's `dropRatherThanMove` and the page's
+  //    `pushMax: 0` — a blocked mark is DELETED, not shoved out of line,
+  //    because a braking reference in the wrong place is worse than none.
+  //    The consequence is that L-1 can only ever take marks off a ruler,
+  //    so the repair has to happen before the ruler is placed: this
+  //    predicate is what lets `placeCornerLanguage` choose a lateral all
+  //    three marks survive rather than one the cull will thin out. It is a
+  //    box test on the reserved brake asset alone, since every mark on the
+  //    lap is that asset at that size.
+  const brakeClear = markers
+    ? (mark: { station: number; t: number; h: number }): boolean =>
+        !blocksCone(
+          {
+            station: mark.station,
+            t: mark.t,
+            h: mark.h,
+            across: markers.brake.size.across,
+            along: markers.brake.size.along,
+            tall: markers.brake.size.tall,
+          },
+          lap.lengthW,
+          frameAt,
+          lap.halfWidth,
+          eyes,
+        )
+    : undefined;
   const lang = placeCornerLanguage(
     placements,
     corners,
@@ -755,6 +803,7 @@ export function dressLap(
     seed,
     opts.language,
     opts.bookkeeping,
+    brakeClear,
   );
   placements = lang.placements;
 
@@ -780,7 +829,6 @@ export function dressLap(
   //      assumed: a repair loop that silently ran out of rounds would
   //      leave a lap breaking a threshold with a stat line full of
   //      plausible numbers.
-  const eyes = defaultEyeStations(lap.lengthW);
   let rounds = 0;
   let blocked = 0;
   let pushedOut = 0;
@@ -1051,6 +1099,8 @@ export function dressLap(
       markersConverted: lang.converted,
       markersAdded: lang.added,
       brakeMarks: lang.brakeAdded,
+      rulersStepped: lang.rulersStepped,
+      rulersFellBack: lang.rulersFellBack,
       brakeDisplaced: lang.brakeDisplaced,
       blocked,
       pushedOut,

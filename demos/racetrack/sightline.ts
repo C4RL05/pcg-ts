@@ -192,6 +192,46 @@ export function occludes(
   return false;
 }
 
+/**
+ * Would the cull find this box standing in the cone?
+ *
+ * THE CULL'S OWN TEST, LIFTED SO A PLACER CAN ASK IT BEFORE PLACING. It
+ * was the `blocks` closure inside {@link cullSightlines} and nothing else
+ * could reach it, so a rule that wanted to avoid the cone rather than be
+ * repaired by it had to restate the question — the narrowing, the wrap,
+ * the `some` over the fan — and a second statement of "blocked" that
+ * disagrees with the cull's is the one defect this demo keeps finding.
+ * The cull now calls this for its own verdict and for every rung of its
+ * push ladder, so there is one definition and a caller asking in advance
+ * gets exactly the answer it would have got afterwards.
+ *
+ * `eyes` IS PASSED IN RATHER THAN DEFAULTED, because the caller that
+ * matters here is a repair loop that already built the set once and a
+ * placer that must use the SAME set: `defaultEyeStations` allocates the
+ * whole lap's worth per call, and asking it per candidate lateral per
+ * mark would rebuild it a few hundred times a lap for no change in the
+ * answer.
+ */
+export function blocksCone(
+  o: Occluder,
+  lapW: number,
+  frameAt: (stationW: number, lateralW: number, heightW: number) => Frame,
+  halfWidth: number,
+  eyes: readonly number[],
+): boolean {
+  for (const s of eyes) {
+    // Only the eyes that could see this placement at all: the cone
+    // reaches 12W, so an eye more than that behind it cannot be blocked
+    // by it, and one ahead of it never was.
+    let d = o.station - s;
+    while (d < -lapW / 2) d += lapW;
+    while (d > lapW / 2) d -= lapW;
+    if (d < -o.along / 2 || d > SIGHTLINE.aheadW + o.along / 2) continue;
+    if (occludes(o, s, frameAt, halfWidth)) return true;
+  }
+  return false;
+}
+
 /** What the cull did. Reported, and logged for the minimality check. */
 export interface CullResult<T extends Occluder> {
   readonly kept: T[];
@@ -240,17 +280,19 @@ export function cullSightlines<T extends Occluder>(
   let blocking = 0;
 
   for (const o of placements) {
-    // Only the eyes that could see this placement at all: the cone
-    // reaches 12W, so an eye more than that behind it cannot be blocked
-    // by it, and one ahead of it never was.
-    const relevant = eyes.filter((s) => {
-      let d = o.station - s;
-      while (d < -lapW / 2) d += lapW;
-      while (d > lapW / 2) d -= lapW;
-      return d >= -o.along / 2 && d <= SIGHTLINE.aheadW + o.along / 2;
-    });
+    // THE NARROWING MOVED INTO {@link blocksCone} AND IS NO LONGER HOISTED
+    // PER PLACEMENT. It used to be a `filter` computed once and closed
+    // over by every rung of the ladder below, on the argument that "the
+    // same eye set has to serve every candidate" — which is still true and
+    // is why nothing changes: a pushed candidate differs from `o` only in
+    // `t`, and the window is a function of `station` and `along` alone, so
+    // recomputing it per rung recomputes the SAME set. What that costs is
+    // a walk of the eye list per rung instead of one allocation per
+    // placement; what it buys is that a placer asking "would this be
+    // blocked" ahead of time cannot reach a different answer, because
+    // there is now only one place the question is written down.
     const blocks = (cand: T): boolean =>
-      relevant.some((s) => occludes(cand, s, frameAt, halfWidth));
+      blocksCone(cand, lapW, frameAt, halfWidth, eyes);
 
     if (!blocks(o)) {
       kept.push(o);

@@ -21,6 +21,7 @@ import {
   rand,
 } from "./assets.js";
 import { type Corner, beforeEntryW } from "./corners.js";
+import { SIGHTLINE } from "./sightline.js";
 import { SAME_PLACE_W, SAME_STATION_W } from "./tolerance.js";
 
 /** L-4's numbers. */
@@ -421,6 +422,103 @@ export function rulerStations(c: Corner, lapW: number): number[] {
   return out;
 }
 
+/**
+ * The lateral magnitudes L-3 may draw at, in the order it tries them.
+ *
+ * FIRST IS THE DRAW, AND THAT IS THE WHOLE POINT OF THE ORDER. A corner
+ * whose ruler already clears L-1's cone must come out bit-identical to
+ * the lap that had no search in it at all, because the rest of the lap is
+ * built from a station process and an asset draw that this ruler's
+ * lateral does not feed — but the placements it DISPLACES do move with
+ * it, so a search that reordered its own first choice would relay the
+ * whole lap to fix five marks.
+ *
+ * THE REST IS L-1's OWN LADDER, WALKED OUTWARD. `cullSightlines` repairs
+ * a blocker by stepping it out in `SIGHTLINE.pushStepW` rungs to at most
+ * `SIGHTLINE.maxPushW`, and this is the same ladder asked in advance and
+ * asked for the three marks TOGETHER. Reusing the numbers is not tidiness:
+ * a ruler that had to travel further than the cull would move a single
+ * piece is a ruler standing somewhere L-1 itself would never have put
+ * anything, and the rung size is what decides whether "the same lateral"
+ * survives the f32 the graph resolves it through.
+ *
+ * OUTWARD ONLY, because inward is the corridor. L-3's marks sit at
+ * `c.outside * mag` with `mag` from `BRAKING.lateralW`, whose floor of
+ * 1.5W is already the clearance Z-1 asks for; a rung that reduced the
+ * magnitude would walk the ruler into the racing line to get it out of
+ * the sight line, which is the one place a braking reference must never
+ * be. That is also the direction `cullSightlines` pushes, by the sign of
+ * the lateral it already has.
+ */
+export function rulerLateralLadder(drawn: number): number[] {
+  const out = [drawn];
+  for (let push = SIGHTLINE.pushStepW; push <= SIGHTLINE.maxPushW; push += SIGHTLINE.pushStepW) {
+    out.push(drawn + push);
+  }
+  return out;
+}
+
+/**
+ * Where a braking mark would stand, for a caller that can say whether
+ * L-1's cone is clear there.
+ *
+ * The three fields a mark IS — everything else about it (its asset, its
+ * box) belongs to the reservation and is the same for every mark on the
+ * lap, so the predicate closes over it rather than being handed it three
+ * times per rung.
+ */
+export type MarkClearance = (mark: {
+  readonly station: number;
+  readonly t: number;
+  readonly h: number;
+}) => boolean;
+
+/**
+ * The lateral at which all three of a corner's marks clear L-1's cone.
+ *
+ * WHY THE GROUP AND NOT THE MARK. L-1's cull is per placement, and the
+ * page locks the brake asset — `immovable`, which the graph spells as
+ * `pushMax: 0` and the reference as `dropRatherThanMove` — so a mark
+ * standing in the cone is DELETED rather than shoved out of line. That is
+ * the right trade for a single mark and it is the wrong outcome for a
+ * ruler: what the driver is left with is two marks where the rule
+ * promised three, and the promise L-3 makes is about the SET. Choosing
+ * the lateral for the set is the only repair that keeps all three, and it
+ * has to happen at draw time because by the time the cull runs the only
+ * moves left are the two this rule refuses.
+ *
+ * THE FALLBACK IS TODAY. When no rung clears all three the drawn lateral
+ * is returned, the marks go down where they always went, and the cull
+ * takes whatever it must — so this search can improve a corner and can
+ * never make one worse. A corner that reaches it is reported by
+ * `fellBack` rather than thrown, because "this circuit has a corner whose
+ * braking window cannot be cleared at any lateral L-1 would itself move
+ * to" is a fact about the spline and the reserved asset's footprint, not
+ * an error in the placer.
+ */
+export function chooseRulerLateral(
+  drawn: number,
+  outside: number,
+  stations: readonly number[],
+  h: number,
+  clear: MarkClearance,
+): { mag: number; rung: number; fellBack: boolean } {
+  const ladder = rulerLateralLadder(drawn);
+  for (let rung = 0; rung < ladder.length; rung++) {
+    const mag = ladder[rung];
+    const t = outside * mag;
+    let all = true;
+    for (const station of stations) {
+      if (!clear({ station, t, h })) {
+        all = false;
+        break;
+      }
+    }
+    if (all) return { mag, rung, fellBack: false };
+  }
+  return { mag: drawn, rung: 0, fellBack: true };
+}
+
 /** Shortest distance between two stations round the loop. */
 function apartW(a: number, b: number, lapW: number): number {
   const d = beforeEntryW(a, b, lapW);
@@ -438,6 +536,25 @@ export interface CornerLanguage {
   readonly brakeAdded: number;
   /** Ordinary placements removed from a braking window to pay for them. */
   readonly brakeDisplaced: number;
+  /**
+   * Rulers whose lateral came off a later rung of {@link rulerLateralLadder}
+   * than the draw, because the drawn one put a mark in L-1's cone.
+   *
+   * REPORTED SEPARATELY FROM THE COUNTS ABOVE because it is the one number
+   * that says how much of the lap the search moved. Zero means every ruler
+   * stands exactly where the draw put it and the lap is the lap that had
+   * no search in it; the count of tight corners means the search relaid
+   * every ruler on the circuit, which is a finding about the spline or the
+   * reserved asset rather than about this rule.
+   */
+  readonly rulersStepped: number;
+  /**
+   * Rulers where no rung of the ladder cleared all three marks, so the
+   * draw was used and L-1 was left to do whatever it does.
+   *
+   * These are the only corners that can still lose a mark.
+   */
+  readonly rulersFellBack: number;
   /** Corners the language reached. */
   readonly corners: number;
   readonly tightCorners: number;
@@ -518,6 +635,25 @@ export function placeCornerLanguage(
   seed: number,
   drawn?: DrawnCornerLanguage,
   booked?: CornerBookkeepingResult,
+  /**
+   * Whether L-1's cone is clear at a mark's position, so L-3 can draw a
+   * lateral that all three of a corner's marks survive.
+   *
+   * OPTIONAL, AND ABSENT MEANS THE LAP THIS FUNCTION ALWAYS BUILT. A
+   * caller that cannot answer the question — a suite with no lap geometry
+   * behind its placements, or a graph that has already DECIDED the marks
+   * and handed them in through `drawn` — gets the plain draw, which is
+   * what every one of them got before the search existed.
+   *
+   * IGNORED WHEN `drawn` IS PRESENT, and that is not an optimisation. A
+   * cook that decided where the marks go decided their lateral too, and
+   * that lateral came out of the graph's own search against the graph's
+   * own cull; re-running this one over the top would answer a DIFFERENT
+   * question — "is it clear by the reference cull's coarser eye set" —
+   * and overwrite a settled answer with it. The two searches are two
+   * statements of one rule, and only one of them is in force per lap.
+   */
+  clear?: MarkClearance,
 ): CornerLanguage {
   const tight = corners.filter((c) => c.tightestW < BRAKING.tighterThanW);
   const verticalsBefore = countVerticalsInBrakingWindows(placements, tight, lapW);
@@ -528,6 +664,8 @@ export function placeCornerLanguage(
       added: 0,
       brakeAdded: 0,
       brakeDisplaced: 0,
+      rulersStepped: 0,
+      rulersFellBack: 0,
       corners: corners.length,
       tightCorners: tight.length,
       verticalsBefore,
@@ -551,6 +689,8 @@ export function placeCornerLanguage(
   let added = 0;
   let brakeAdded = 0;
   let brakeDisplaced = 0;
+  let rulersStepped = 0;
+  let rulersFellBack = 0;
 
   /** How repeated each asset is, so the cheapest thing to lose is known. */
   const repeats = (): Map<number, number> => {
@@ -631,12 +771,29 @@ export function placeCornerLanguage(
     // the graph's marks arrive in the same order this loop wants them,
     // three per tight corner in racing order.
     const cooked = drawn ? drawn.rulers.slice(ti * BRAKING.count, (ti + 1) * BRAKING.count) : [];
-    const mag =
+    // EXACTLY EVEN, SPANNING THE WINDOW END TO END — hoisted above the
+    // lateral because the lateral now depends on them. Spacing CV is zero
+    // by construction, against the 0.46 the source manages by accident.
+    const stations = rulerStations(c, lapW);
+    const drawnMag =
       BRAKING.lateralW[0] + rand(seed, ti, 0x3b01) * (BRAKING.lateralW[1] - BRAKING.lateralW[0]);
+    const h = MARKER.heightW[0];
     // Still drawn, because a cook that handed back nothing must leave
     // this loop running the process every suite without a graph measures.
-    const t = c.outside * mag;
-    const h = MARKER.heightW[0];
+    //
+    // AND THEN STEPPED OUT UNTIL ALL THREE CLEAR L-1, when a caller can
+    // say. See {@link chooseRulerLateral}: the draw is the first rung, so
+    // a corner that was already clear is bit-identical to the lap this
+    // loop built before the search existed, and a corner that was not gets
+    // ONE lateral that every mark on it survives instead of two marks and
+    // a hole where the cull took the third.
+    const chosen =
+      clear && !drawn
+        ? chooseRulerLateral(drawnMag, c.outside, stations, h, clear)
+        : { mag: drawnMag, rung: 0, fellBack: false };
+    if (chosen.rung > 0) rulersStepped++;
+    if (chosen.fellBack) rulersFellBack++;
+    const t = c.outside * chosen.mag;
 
     // Pay first, so the displaced placements cannot be the marks just
     // added — and so a window with nothing to give still gets its ruler.
@@ -675,9 +832,6 @@ export function placeCornerLanguage(
       brakeDisplaced++;
     }
 
-    // EXACTLY EVEN, spanning the window end to end. Spacing CV is zero by
-    // construction, against the 0.46 the source manages by accident.
-    //
     // EACH MARK IS TAKEN WHOLE FROM THE COOK when there is one, rather
     // than having one lateral read off the first and imposed on all three.
     // That distinction is not cosmetic and cost a falsification: reading
@@ -687,7 +841,6 @@ export function placeCornerLanguage(
     // survives -- came out looking correct here. Transcribing all three
     // puts the claim back where it is made, and `brakingRulersSatisfied`
     // is then a real check on it rather than a check on this line.
-    const stations = rulerStations(c, lapW);
     for (let k = 0; k < stations.length; k++) {
       const mark = cooked[k];
       out.push({
@@ -708,6 +861,8 @@ export function placeCornerLanguage(
     added,
     brakeAdded,
     brakeDisplaced,
+    rulersStepped,
+    rulersFellBack,
     corners: corners.length,
     tightCorners: tight.length,
     verticalsBefore,

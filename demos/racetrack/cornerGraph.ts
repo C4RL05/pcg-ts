@@ -58,6 +58,7 @@ import {
   cook,
   copyToPoints,
   createPointCloud,
+  createPolyline,
   dataInput,
   floor,
   div,
@@ -72,6 +73,8 @@ import {
   max,
   mod,
   mul,
+  occlusionCull,
+  orientAlongVector,
   pointLine,
   randomField,
   pathRuns,
@@ -82,7 +85,9 @@ import {
   select,
   setAttribute,
   sub,
+  transferAlongPath,
   transferByIndex,
+  vec,
 } from "pcg-ts";
 import type { PlaceableAsset } from "./assets.js";
 import { CORNER_R_W, type Corner, SEVERITY } from "./corners.js";
@@ -91,8 +96,10 @@ import {
   MARKER,
   type MarkerKit,
   markerCandidates,
+  rulerLateralLadder,
 } from "./legibility.js";
-import { CORNER_MODEL } from "./graph.js";
+import { SIGHTLINE } from "./sightline.js";
+import { CORNER_MODEL, TRACK_FRAME } from "./graph.js";
 import type { Lap } from "./lap.js";
 import { lapAsPath } from "./stationGraph.js";
 
@@ -521,6 +528,16 @@ export const PLACED = {
   row: "markRow",
   /** Which corner it belongs to, by that corner's own index. */
   corner: "markCorner",
+  /**
+   * Which rung of {@link rulerLateralLadder} this mark's lateral came off.
+   *
+   * ZERO IS THE DRAW, so a lap where nothing had to move reads all zeroes
+   * and is the lap that had no search in it. Written by both stages even
+   * though only L-3 has a ladder: the two publish one shape, and a reader
+   * of a mark should never have to know which stage made it to know which
+   * columns it can ask for.
+   */
+  rung: "markRung",
 } as const;
 
 /**
@@ -605,6 +622,14 @@ export interface MarkPlacement {
   readonly station: number;
   readonly t: number;
   readonly h: number;
+  /**
+   * Which rung of {@link rulerLateralLadder} the lateral came off.
+   *
+   * ALWAYS 0 FOR AN L-2 MARKER, and 0 for an L-3 mark whose corner was
+   * clear at the draw. A non-zero rung is the count a reader wants when
+   * asking how much of the lap L-3's clearance search moved.
+   */
+  readonly rung: number;
 }
 
 /** What one cook of the corner language decides. */
@@ -700,7 +725,7 @@ function addMarkerStage(
     `${pre}Lateral`,
   );
 
-  return put(
+  const heighted = put(
     g,
     { node: lateral, pin: "out" },
     PLACED.h,
@@ -710,6 +735,11 @@ function addMarkerStage(
     ),
     `${pre}Height`,
   );
+  // ALWAYS ZERO, BECAUSE L-2 HAS NO LADDER. Its marker is one object and a
+  // marker the cull moves is still a marker in the window, so there is
+  // nothing here to choose for a group. Written anyway so both stages hand
+  // back the same shape — see {@link PLACED.rung}.
+  return put(g, { node: heighted, pin: "out" }, PLACED.rung, 0, `${pre}Rung`);
 }
 
 /**
@@ -726,13 +756,26 @@ function addMarkerStage(
  * different magnitudes and the ruler would not be a ruler. The asset
  * choice learned the same lesson about its uniforms; this is the case
  * where getting it wrong is visible rather than merely wrong.
+ *
+ * AND THE DRAW IS NOT THE LAST WORD ON THAT LATERAL. L-1's cull deletes a
+ * locked mark rather than moving it, so a drawn lateral that puts one mark
+ * in the sight cone costs the ruler a mark and leaves the other two
+ * standing. {@link addRulerClearance} steps the magnitude out along L-1's
+ * own push ladder until the WHOLE ruler clears, and this stage carries
+ * that answer onto the copies exactly as it carries the draw — one lateral
+ * for all three either way. Rung 0 is the draw, so a corner that was
+ * already clear is bit-identical to the lap this stage built before the
+ * search existed.
  */
 function addRulerStage(
   g: Graph,
   corners: { readonly node: NodeHandle; readonly pin: string },
-  lapW: number,
+  sight: { readonly node: NodeHandle; readonly pin: string },
+  lap: Lap,
+  brake: PlaceableAsset,
   pre: string,
 ): NodeHandle {
+  const lapW = lap.lengthW;
   const which = put(g, corners, PLACED.corner, index(), `${pre}Which`);
 
   // The shared magnitude, drawn once per corner and before the copy.
@@ -754,6 +797,40 @@ function addRulerStage(
   );
   g.connect(mag, "out", tightOnly, "in");
 
+  // AND THEN STEPPED OUT UNTIL THE WHOLE RULER CLEARS L-1. See
+  // {@link addRulerClearance}: the drawn magnitude is rung 0, so a corner
+  // that was already clear keeps the exact lateral this stage drew and the
+  // lap is the lap that had no search in it. The answer is gathered back
+  // onto the corner rather than computed on the marks, because it is a
+  // fact about the RULER — three marks sharing one lateral is the whole of
+  // L-3, and a per-mark answer would be three answers.
+  const search = addRulerClearance(
+    g,
+    { node: tightOnly, pin: "out" },
+    sight,
+    lap,
+    brake,
+    `${pre}Sr`,
+  );
+  const chosen = g.add(
+    transferByIndex,
+    { index: index(), attributes: [PLACED.rung], outOfRange: "clamp" },
+    `${pre}Chosen`,
+  );
+  g.connect(tightOnly, "out", chosen, "in");
+  g.connect(search, "out", chosen, "source");
+  // THE DRAW, MOVED OUT BY WHOLE RUNGS. Overwritten in place rather than
+  // written beside, so the copy below carries one magnitude and nothing
+  // downstream can read the pre-search one by mistake — and so that a rung
+  // of 0 leaves the column bit-identical to what the draw put there.
+  const stepped = put(
+    g,
+    { node: chosen, pin: "out" },
+    RULER_MAG,
+    steppedMagnitude(PLACED.rung),
+    `${pre}Stepped`,
+  );
+
   // THE TEMPLATE'S POINTS ARE SPREAD, not coincident, for the reason
   // `stationGraph`'s slot template gives: `copyToPoints` offsets each copy
   // by its template point, and two copies at one position with one seed
@@ -773,13 +850,13 @@ function addRulerStage(
   const copies = g.add(
     copyToPoints,
     {
-      targetNames: [CORNER.entryW, CORNER.outside, PLACED.corner, RULER_MAG],
+      targetNames: [CORNER.entryW, CORNER.outside, PLACED.corner, RULER_MAG, PLACED.rung],
       topology: "drop",
     },
     `${pre}Copies`,
   );
   g.connect(template, "out", copies, "source");
-  g.connect(tightOnly, "out", copies, "target");
+  g.connect(stepped, "out", copies, "target");
 
   // Copy `s` of target `t` lands at output index `t * count + s`, so a
   // mark's rank within its own ruler is `index() mod count` -- the same
@@ -817,6 +894,539 @@ function addRulerStage(
 
 /** The ruler's shared lateral magnitude, drawn per corner. */
 const RULER_MAG = "rulerMag";
+
+/**
+ * {@link rulerLateralLadder}'s rung `k`, as a field over a rung column.
+ *
+ * ONE EXPRESSION, TWO CALLERS, AND THE DUPLICATE WAS A REAL HAZARD RATHER
+ * THAN AN UNTIDY ONE. The clearance search EVALUATES a candidate at rung
+ * `k` and the ruler stage PLACES the mark at the rung the search chose, and
+ * those were two independently written copies of `mag + rung * step`. Two
+ * copies that drift mean the search verifies one lateral and the stage
+ * stands the ruler at another — with every count still correct, every ruler
+ * still one line, and the marks quietly back in the cone. Nothing short of
+ * cooking a whole lap would notice, which is exactly the class of defect
+ * this file keeps writing comments about.
+ */
+function steppedMagnitude(rungAttr: string): Field {
+  return add(attribute(RULER_MAG), mul(attribute(rungAttr), SIGHTLINE.pushStepW));
+}
+
+/**
+ * How many rungs {@link rulerLateralLadder} offers, counting the draw.
+ *
+ * TAKEN FROM THE LADDER RATHER THAN FROM `SIGHTLINE`, so the graph cannot
+ * walk a different number of rungs from the rule. The ladder is built once
+ * off a zero draw here purely to be counted; its VALUES are not used,
+ * because rung `k` is `k * SIGHTLINE.pushStepW` past the draw and the
+ * graph says so directly — the accumulation `rulerLateralLadder` does is
+ * exact for a step of 0.5 (a power of two), so the two arithmetics agree
+ * to the bit.
+ *
+ * EXPORTED SO A TEST CAN PIN THE COUNT. The reference and the graph have
+ * to offer the same candidates in the same order, CANDIDATE FOR CANDIDATE
+ * — not merely reach the same answer on the seeds anyone happens to run.
+ * Two ladders of different lengths, or of the same length with a different
+ * step, agree wherever the first rung already cleared and diverge only on
+ * the corners the search exists for, which is the worst way for a defect
+ * to be distributed across a test suite.
+ *
+ * WHAT THE TEST CAN AND CANNOT REACH, because the honest answer is not
+ * "both". `tests/racetrackRulerClearance` pins the ladder's length against
+ * this constant, its origin, its per-rung offset and its total reach. All
+ * of that constrains the RULE. The graph's tie to it is structural rather
+ * than asserted: this constant is DERIVED from `rulerLateralLadder` rather
+ * than restated, and the offset arithmetic is {@link steppedMagnitude},
+ * which is one expression used both where a candidate is evaluated and
+ * where the chosen mark is placed. Those are the two places the duplication
+ * could have lived, and neither is a duplicate any more. What remains
+ * unasserted is `RULER_SLOTS` below, which is arithmetic on this constant.
+ */
+export const RULER_RUNGS = rulerLateralLadder(0).length;
+
+/**
+ * Slots in one tight corner's block of the candidate cloud: every rung's
+ * three marks, and then the ANCHOR.
+ *
+ * THE ANCHOR IS THE LAST SLOT AND THAT IS ARITHMETIC RATHER THAN A FLAG.
+ * `floor(slot / BRAKING.count)` is the rung a mark stands on for every
+ * slot below the anchor and lands exactly on `RULER_RUNGS` for the anchor
+ * itself, so one division names both the rung and the exception.
+ */
+const RULER_SLOTS = RULER_RUNGS * BRAKING.count + 1;
+
+/** The columns L-3's group clearance search works in. */
+const RULER_SEARCH = {
+  /** Which slot of its corner's block this point is. */
+  slot: "rulerSlot",
+  /** Which rung it stands on. `RULER_RUNGS` marks the anchor. */
+  rung: "rulerRung",
+  /** 1 on the anchor: the one point per corner the cull never tests. */
+  anchor: "rulerAnchor",
+  /** Group key, one per (corner, rung) — one whole ruler per group. */
+  group: "rulerGroup",
+  /** How many of a group's three marks survived. Reused as the fold. */
+  survivors: "rulerSurvivors",
+  /** This point's rung if its whole ruler cleared, else `RULER_RUNGS`. */
+  vote: "rulerVote",
+  /** The vote as this point cast it, kept across the per-corner fold. */
+  own: "rulerOwnVote",
+  /** How many points its corner's fold saw. 0 means it was in no group. */
+  inCorner: "rulerInCorner",
+} as const;
+
+/**
+ * L-3's lateral, chosen so that ALL THREE of a corner's marks clear L-1.
+ *
+ * WHY THIS EXISTS AT ALL. The page locks the brake asset — `immovable`,
+ * which `dressGraph`'s sightline cull spells as `pushMax: 0` and which
+ * `occlusionCull` reads as DROP RATHER THAN MOVE — because a braking
+ * reference shoved half a width out of line is worse than no reference.
+ * The cost of that contract is that L-1 can only ever take marks OFF a
+ * ruler, and a ruler two marks long is a rule that was enforced into
+ * failing. Measured on the page's own reservation, seed 2 lost one mark
+ * from each of five tight corners this way. The repair cannot be
+ * downstream of the cull, so it is upstream of it: pick the lateral the
+ * whole ruler survives, and the cull then has nothing to take.
+ *
+ * IT IS THE CULL'S OWN NODE AND NOT A RESTATEMENT OF IT. Every candidate
+ * mark is built into a real world box — sampled off the same path, lifted
+ * by the same arithmetic, sized by the same asset — and handed to
+ * `occlusionCull` with the same `lookAhead`, `samples`, `eyeOffset` and
+ * `pushMax: 0` the cull downstream will use. What comes back is the cull's
+ * verdict, because it IS the cull; a second definition of "blocked" that
+ * disagreed with it would choose a lateral the real cull then culls, which
+ * is the exact failure this demo keeps finding.
+ *
+ * THE SEARCH IS UNROLLED, NOT LOOPED. Thirteen rungs times three marks
+ * times the tight corners is about five hundred boxes on this lap, tested
+ * once — against a `repeatUntil` that would cook a cull per rung and needs
+ * the sight path broadcast into its body. Unrolling also makes "the FIRST
+ * rung that clears" true by construction rather than by the loop's exit
+ * order: every rung is tested, and the answer is a minimum.
+ *
+ * HOW THE GROUPS ARE COUNTED, because the node reports nothing.
+ * `occlusionCull` DELETES what it blocks and writes no column saying so,
+ * so a mark's verdict is legible only as its absence. That is enough: a
+ * rung is good exactly when all three of its marks are still there, which
+ * is a count per (corner, rung) — the `pointsToPath` + `promoteAttribute`
+ * grouped reduction, with the group key doing the arithmetic. Rungs that
+ * lost a mark come out short and lose the count; rungs that lost all three
+ * lose their group entirely, which reads as short for the same reason.
+ *
+ * AND THE ANCHOR IS WHY A CORNER CANNOT VANISH. A corner whose every
+ * candidate blocked would have no points left after the cull and no way to
+ * report that, so each corner also gets one point the cull is told not to
+ * test (`include: 0` keeps a point in place, untouched, at its own index).
+ * It votes `RULER_RUNGS` — worse than any real rung — so it decides the
+ * corner only when nothing else did, and that is the fallback: rung 0, the
+ * draw, the lap this stage built before the search existed. The change can
+ * improve a corner and can never make one worse.
+ *
+ * THE PREMISE THIS STAGE RESTS ON, NAMED BECAUSE NOTHING ELSE NAMES IT.
+ * The search runs BEFORE the repair loop and the cull it is predicting runs
+ * INSIDE it, so the two agree only for as long as nothing in between moves
+ * a brake mark. Four separate rules could, and four separate numbers stop
+ * them: Z-1's corridor is `|t| < 1` and a mark's lateral floor is
+ * `BRAKING.lateralW[0]`, 1.5; L-5 lowers placements in the verge HEIGHT
+ * band and a mark sits at `MARKER.heightW[0]`, above it; Z-3's mix is
+ * handed the reserved ids as `mixPinned`; and L-6 only ever moves cover.
+ * Widen the corridor past 1.5W, drop the brake id from `mixPinned`, or
+ * lower the marks, and this stage would still look correct — same params,
+ * same predicate — while quietly predicting a lap that no longer happens.
+ * `tests/racetrackLevels` is the only thing that would notice, which is why
+ * its "never missing" assertion runs on the seeds where rulers actually
+ * step rather than only on the ones where the draw was already clear.
+ *
+ * A FALLBACK IS NOT REPORTED SEPARATELY AND DOES NOT NEED TO BE. It comes
+ * out as rung 0, which is also what a corner that was clear at the draw
+ * comes out as — but the two are distinguishable downstream without a
+ * column, because falling back means NO rung cleared and rung 0 is a rung:
+ * a corner that fell back has a blocked mark at the lateral it was given,
+ * so L-1 deletes one and the shipped gate reports the ruler short. Zero
+ * missing marks on a lap is therefore also proof that no corner on it ran
+ * out of ladder, which is what `tests/racetrackLevels` measures.
+ */
+function addRulerClearance(
+  g: Graph,
+  tight: { readonly node: NodeHandle; readonly pin: string },
+  sight: { readonly node: NodeHandle; readonly pin: string },
+  lap: Lap,
+  brake: PlaceableAsset,
+  pre: string,
+): NodeHandle {
+  const halfWidth = lap.halfWidth;
+
+  // THE TEMPLATE'S POINTS ARE SPREAD for `addRulerStage`'s reason: two
+  // copies at one position with one seed are ONE identity to everything
+  // downstream. Nothing here draws, so it costs nothing to keep the habit.
+  const template = g.add(
+    pointLine,
+    {
+      mode: "endpoints",
+      count: RULER_SLOTS,
+      start: [0, 0, 0],
+      end: [RULER_SLOTS - 1, 0, 0],
+      includeEnd: true,
+    },
+    `${pre}Slots`,
+  );
+  const copies = g.add(
+    copyToPoints,
+    {
+      targetNames: [CORNER.entryW, CORNER.outside, PLACED.corner, RULER_MAG],
+      topology: "drop",
+    },
+    `${pre}Copies`,
+  );
+  g.connect(template, "out", copies, "source");
+  g.connect(tight.node, tight.pin, copies, "target");
+
+  // Copy `s` of target `t` lands at output index `t * count + s`, which is
+  // the same arithmetic `addRulerStage` reads its mark rank out of.
+  const slot = put(g, { node: copies, pin: "out" }, RULER_SEARCH.slot, mod(index(), RULER_SLOTS), `${pre}Slot`);
+  const rung = put(
+    g,
+    { node: slot, pin: "out" },
+    RULER_SEARCH.rung,
+    floor(div(attribute(RULER_SEARCH.slot), BRAKING.count)),
+    `${pre}Rung`,
+  );
+  const anchor = put(
+    g,
+    { node: rung, pin: "out" },
+    RULER_SEARCH.anchor,
+    ge(attribute(RULER_SEARCH.rung), RULER_RUNGS),
+    `${pre}Anchor`,
+  );
+  // ONE GROUP PER (CORNER, RUNG), and the anchor gets a group of its own
+  // by carrying rung `RULER_RUNGS` — so it can never be counted as one of
+  // some rung's three marks.
+  const group = put(
+    g,
+    { node: anchor, pin: "out" },
+    RULER_SEARCH.group,
+    add(
+      mul(attribute(PLACED.corner), RULER_RUNGS + 1),
+      attribute(RULER_SEARCH.rung),
+    ),
+    `${pre}Group`,
+  );
+
+  // WHERE THE MARK WOULD STAND. The stations are `rulerStations` and carry
+  // no draw; the lateral is the corner's own drawn magnitude stepped out by
+  // this rung. The anchor's numbers are nonsense and never read — it is
+  // excluded from the cull and dropped before anything downstream.
+  const markK = mod(attribute(RULER_SEARCH.slot), BRAKING.count);
+  const span = BRAKING.windowW[1] - BRAKING.windowW[0];
+  const beforeW = add(BRAKING.windowW[0], mul(markK, span / (BRAKING.count - 1)));
+  const stationed = put(
+    g,
+    { node: group, pin: "out" },
+    PLACED.stationW,
+    wrapTo(sub(attribute(CORNER.entryW), beforeW), lap.lengthW),
+    `${pre}Station`,
+  );
+  const lateral = put(
+    g,
+    { node: stationed, pin: "out" },
+    PLACED.t,
+    // THE SAME EXPRESSION THE STAGE WILL PLACE THE MARK WITH. See
+    // {@link steppedMagnitude}: a candidate evaluated at one arithmetic and
+    // placed at another is a lap that passes every count and stands in the
+    // cone.
+    mul(attribute(CORNER.outside), steppedMagnitude(RULER_SEARCH.rung)),
+    `${pre}Lateral`,
+  );
+  const heighted = put(
+    g,
+    { node: lateral, pin: "out" },
+    PLACED.h,
+    MARKER.heightW[0],
+    `${pre}Height`,
+  );
+
+  // ---- THE MARK AS A WORLD BOX --------------------------------------
+  //
+  // A STATION IS IN HALF-WIDTHS AND THE PATH IS IN WORLD UNITS, which is
+  // the trap `dressGraph.sampleTrackFrame` names and multiplies out at the
+  // same boundary, for the same reason: no rule should have to remember
+  // which of the two units it is holding.
+  const arced = put(
+    g,
+    { node: heighted, pin: "out" },
+    RULER_ARC_WORLD,
+    mul(attribute(PLACED.stationW), halfWidth),
+    `${pre}Arc`,
+  );
+  const at = g.add(
+    transferAlongPath,
+    {
+      arcAttr: RULER_ARC_WORLD,
+      // NAMED, NOT EMPTY: an empty list would drag the corner model and
+      // every other column the path carries onto five hundred candidates,
+      // and would skip `P` — which is the one that puts a station on the
+      // road.
+      attributes: ["P", TRACK_FRAME.across, TRACK_FRAME.up, TRACK_FRAME.along],
+      // Two unit vectors averaged are not a unit vector, and the shortfall
+      // is worst exactly where the track turns hardest — which is where
+      // every one of these marks is.
+      normalize: [TRACK_FRAME.across, TRACK_FRAME.up, TRACK_FRAME.along],
+    },
+    `${pre}At`,
+  );
+  g.connect(sight.node, sight.pin, at, "path");
+  g.connect(arced, "out", at, "at");
+
+  const lifted = g.add(
+    setAttribute,
+    {
+      name: "P",
+      tupleSize: 3,
+      value: add(
+        attribute("P", 3),
+        add(
+          mul(attribute(TRACK_FRAME.across, 3), mul(attribute(PLACED.t), halfWidth)),
+          mul(attribute(TRACK_FRAME.up, 3), mul(attribute(PLACED.h), halfWidth)),
+        ),
+      ),
+    },
+    `${pre}Lift`,
+  );
+  g.connect(at, "out", lifted, "in");
+
+  // THE BRAKE ASSET'S OWN WORLD BOX, as constants: every mark on the lap is
+  // that one reserved asset at that one size, so there is no table to look
+  // it up in and nothing per point to vary.
+  const scaled = g.add(
+    setAttribute,
+    {
+      name: "scale",
+      tupleSize: 3,
+      value: vec(
+        brake.size.across * halfWidth,
+        brake.size.along * halfWidth,
+        brake.size.tall * halfWidth,
+      ),
+    },
+    `${pre}Box`,
+  );
+  g.connect(lifted, "out", scaled, "in");
+  const rot = g.add(
+    orientAlongVector,
+    {
+      direction: attribute(TRACK_FRAME.along, 3),
+      up: attribute(TRACK_FRAME.up, 3),
+      axis: "+y",
+    },
+    `${pre}Rot`,
+  );
+  g.connect(scaled, "out", rot, "in");
+
+  // ---- L-1, ASKED IN ADVANCE ----------------------------------------
+  const cull = g.add(
+    occlusionCull,
+    {
+      // The anchor is never tested and comes out unmoved at its own index,
+      // which is the whole reason it can be relied on to be there.
+      include: sub(1, attribute(RULER_SEARCH.anchor)),
+      lookAhead: SIGHTLINE.aheadW * halfWidth,
+      samples: SIGHTLINE.samples,
+      eyeOffset: mul(attribute(TRACK_FRAME.up, 3), SIGHTLINE.eyeW * halfWidth),
+      pushAxis: attribute(TRACK_FRAME.across, 3),
+      // NOTHING IS PUSHED HERE, and that is the question rather than a
+      // limitation: this stage asks "would the cull keep this mark where it
+      // is", and the cull's answer for a locked mark is exactly `pushMax:
+      // 0`. A candidate that would only survive by being moved is not a
+      // candidate at all.
+      pushMax: 0,
+      pushStep: SIGHTLINE.pushStepW * halfWidth,
+      pushClearance: 0,
+    },
+    `${pre}Cone`,
+  );
+  g.connect(rot, "out", cull, "in");
+  g.connect(sight.node, sight.pin, cull, "sight");
+
+  // ---- WHICH RUNGS KEPT ALL THREE -----------------------------------
+  const one = put(g, { node: cull, pin: "out" }, RULER_SEARCH.survivors, 1, `${pre}One`);
+  const byRung = g.add(
+    pointsToPath,
+    { groupAttr: RULER_SEARCH.group, closed: false, shortGroups: "skip" },
+    `${pre}ByRung`,
+  );
+  g.connect(one, "out", byRung, "in");
+  // PROMOTE RATHER THAN `pathScan`, WHICH IS NOT A STYLE CHOICE. A scan
+  // REFUSES a geometry with no polylines on it, and this cloud legitimately
+  // has none — on a lap with no tight corner, and on the pathological lap
+  // where every candidate blocked. Promotion over no primitives writes
+  // nothing and cannot fail.
+  //
+  // AND A POINT THAT IS IN NO GROUP COMES BACK AS THE COLUMN'S DEFAULT,
+  // NOT AS ITS OWN VALUE. This is the one thing about `promoteAttribute`
+  // that is easy to get wrong from the outside, and the comment here used
+  // to state the opposite. The primitive-to-point half REPLACES the point
+  // column — `promote` calls `replace`, which resets every element to the
+  // default and then writes only the elements that had a contributor — so
+  // a point whose group `shortGroups: "skip"` skipped reads 0, and its own
+  // 1 is gone. That is still the right answer HERE, and for the right
+  // reason: 0 is not `BRAKING.count`, and a group too short to be a path is
+  // a group too short to be a whole ruler. The corner fold below cannot
+  // lean on it the same way, and does not — see the `inCorner` flag there.
+  const rungSum = g.add(
+    promoteAttribute,
+    { name: RULER_SEARCH.survivors, from: "point", to: "primitive", mode: "sum" },
+    `${pre}RungSum`,
+  );
+  g.connect(byRung, "out", rungSum, "in");
+  const rungCount = g.add(
+    promoteAttribute,
+    { name: RULER_SEARCH.survivors, from: "primitive", to: "point", mode: "first" },
+    `${pre}RungCount`,
+  );
+  g.connect(rungSum, "out", rungCount, "in");
+
+  // A VOTE OF `RULER_RUNGS` IS "NOT THIS ONE", and it is deliberately the
+  // value the anchor carries: the minimum below then reads "the lowest rung
+  // that kept its whole ruler, or nothing did".
+  const vote = put(
+    g,
+    { node: rungCount, pin: "out" },
+    RULER_SEARCH.vote,
+    select(
+      attribute(RULER_SEARCH.anchor),
+      RULER_RUNGS,
+      select(
+        eq(attribute(RULER_SEARCH.survivors), BRAKING.count),
+        attribute(RULER_SEARCH.rung),
+        RULER_RUNGS,
+      ),
+    ),
+    `${pre}Vote`,
+  );
+
+  // ---- THE LOWEST SUCH RUNG, PER CORNER -----------------------------
+  //
+  // THE VOTE IS KEPT ASIDE FIRST, BECAUSE THE FOLD DESTROYS IT. A corner
+  // whose only survivor is its anchor has a group of one, which
+  // `shortGroups: "skip"` skips, which means the promotion back writes
+  // nothing and leaves the anchor holding the column DEFAULT rather than
+  // the `RULER_RUNGS` it voted. Zero happens to be the rung the fallback
+  // wants, so reading the folded value alone gives the right answer — and
+  // gives it for the wrong reason, as "rung 0 cleared" rather than as
+  // "nothing cleared". That is a distinction the next reader of this
+  // column will need the moment the fallback stops being rung 0, so the
+  // vote is preserved under its own name and chosen between explicitly.
+  const own = put(
+    g,
+    { node: vote, pin: "out" },
+    RULER_SEARCH.own,
+    attribute(RULER_SEARCH.vote),
+    `${pre}Own`,
+  );
+  const marked = put(g, { node: own, pin: "out" }, RULER_SEARCH.inCorner, 1, `${pre}InCorner`);
+  const byCorner = g.add(
+    pointsToPath,
+    { groupAttr: PLACED.corner, closed: false, shortGroups: "skip" },
+    `${pre}ByCorner`,
+  );
+  g.connect(marked, "out", byCorner, "in");
+  const cornerMin = g.add(
+    promoteAttribute,
+    { name: RULER_SEARCH.vote, from: "point", to: "primitive", mode: "min" },
+    `${pre}CornerMin`,
+  );
+  g.connect(byCorner, "out", cornerMin, "in");
+  const cornerVote = g.add(
+    promoteAttribute,
+    { name: RULER_SEARCH.vote, from: "primitive", to: "point", mode: "first" },
+    `${pre}CornerVote`,
+  );
+  g.connect(cornerMin, "out", cornerVote, "in");
+  // WAS THERE A GROUP AT ALL. The same replace-then-write that loses the
+  // vote is what makes this legible: a point in no primitive reads the
+  // default 0, and a point in one reads its group's size, which is at
+  // least two because that is what made it a group.
+  const inSum = g.add(
+    promoteAttribute,
+    { name: RULER_SEARCH.inCorner, from: "point", to: "primitive", mode: "sum" },
+    `${pre}InSum`,
+  );
+  g.connect(cornerVote, "out", inSum, "in");
+  const inCorner = g.add(
+    promoteAttribute,
+    { name: RULER_SEARCH.inCorner, from: "primitive", to: "point", mode: "first" },
+    `${pre}InCount`,
+  );
+  g.connect(inSum, "out", inCorner, "in");
+  const settled = put(
+    g,
+    { node: inCorner, pin: "out" },
+    RULER_SEARCH.vote,
+    select(eq(attribute(RULER_SEARCH.inCorner), 0), attribute(RULER_SEARCH.own), attribute(RULER_SEARCH.vote)),
+    `${pre}Settled`,
+  );
+
+  // ONE POINT PER TIGHT CORNER, IN RACING ORDER, WHICH IS WHAT THE GATHER
+  // NEEDS. The anchors were laid down one per corner in the copy's
+  // target-major order, `occlusionCull` emits survivors in ascending input
+  // index, and a filter keeps what it keeps in place — so the anchors come
+  // out at 0..T-1 against a tight-corner cloud indexed the same way.
+  const anchors = g.add(
+    filterByExpression,
+    { predicate: attribute(RULER_SEARCH.anchor), topology: "drop" },
+    `${pre}Anchors`,
+  );
+  g.connect(settled, "out", anchors, "in");
+
+  // THE FALLBACK, SPELLED HERE AND NOWHERE ELSE: no rung cleared, so take
+  // the draw and let the cull do what it does.
+  return put(
+    g,
+    { node: anchors, pin: "out" },
+    PLACED.rung,
+    select(ge(attribute(RULER_SEARCH.vote), RULER_RUNGS), 0, attribute(RULER_SEARCH.vote)),
+    `${pre}Chosen`,
+  );
+}
+
+/** The candidate marks' arc along the sight path, in WORLD units. */
+const RULER_ARC_WORLD = "rulerArcWorld";
+
+/**
+ * The lap as something `occlusionCull` and `transferAlongPath` can read.
+ *
+ * WHY NOT `lapAsPath`. That one carries the corner model and the frames'
+ * arc, which is what the corner stage needs, and it does NOT carry the
+ * three frame axes — a lap is a polyline there, not a coordinate system.
+ * L-1's cone needs the eye lifted along the frame's OWN `up` (this lap has
+ * relief and the road banks on the surface normal, so a literal [0, 1, 0]
+ * puts the cockpit eye somewhere other than in the cockpit on every banked
+ * corner), and lifting a mark off the centreline needs `across` too.
+ *
+ * BUILT FROM THE `Lap` RATHER THAN TAKEN AS AN INPUT, so that all three
+ * callers of {@link addCornerLanguage} get the same sight path. Two of
+ * them — `cookCornerLanguage` and `cookLapPlacements` — hold a `Lap` and
+ * no cooked frames at all, and a stage that answered differently depending
+ * on which of them ran it would make
+ * `tests/racetrackCornerLanguage`'s "decides the language in the SAME
+ * graph" comparison a coincidence. Nothing is recomputed: `readLap` read
+ * these four columns off the frames as f32 and this writes them back as
+ * f32, which is a copy.
+ */
+export function lapAsSightPath(lap: Lap): Geometry {
+  const geo = createPolyline(lap.p, { closed: true });
+  const axis = (name: string, from: Float64Array): void => {
+    const col = geo.attrs.point.add(name, "f32", 3);
+    for (let i = 0; i < lap.count; i++) {
+      col.setTuple(i, [from[i * 3], from[i * 3 + 1], from[i * 3 + 2]]);
+    }
+  };
+  axis(TRACK_FRAME.across, lap.across);
+  axis(TRACK_FRAME.up, lap.up);
+  axis(TRACK_FRAME.along, lap.tangent);
+  return geo;
+}
 
 /** A station wrapped into [0, modulus), for a negative value too. */
 function wrapTo(value: Field, modulus: number): Field {
@@ -867,6 +1477,12 @@ export function addCornerLanguage(
 ): CornerLanguageStage {
   const tableIn = g.add(dataInput, {}, `${pre}Table`);
   g.setParam(tableIn, "items", [makeGeometryItem(markerCloud(markers))]);
+  // THE LAP AGAIN, AS A COORDINATE SYSTEM RATHER THAN AS A PATH. L-3's
+  // clearance search needs the frame axes and the corner stage's path does
+  // not carry them; see {@link lapAsSightPath} for why this is derived
+  // from the `Lap` instead of being taken as a second input.
+  const sightIn = g.add(dataInput, {}, `${pre}Sight`);
+  g.setParam(sightIn, "items", [makeGeometryItem(lapAsSightPath(lap))]);
   const stage = addCornerStage(g, path, { halfWidth: lap.halfWidth, prefix: `${pre}Cn` });
   return {
     markers: addMarkerStage(
@@ -876,7 +1492,14 @@ export function addCornerLanguage(
       lap.lengthW,
       `${pre}L2`,
     ),
-    rulers: addRulerStage(g, { node: stage.out, pin: "out" }, lap.lengthW, `${pre}L3`),
+    rulers: addRulerStage(
+      g,
+      { node: stage.out, pin: "out" },
+      { node: sightIn, pin: "out" },
+      lap,
+      markers.brake,
+      `${pre}L3`,
+    ),
   };
 }
 
@@ -904,6 +1527,8 @@ export function addCornerLanguage(
 export const CORNER_LANGUAGE_SCRATCH: readonly string[] = [
   ARC_ATTR,
   RULER_MAG,
+  RULER_ARC_WORLD,
+  ...Object.values(RULER_SEARCH),
   MASKED_RADIUS,
   STRAIGHT_TOTAL,
   EXIT_FRAME,
@@ -940,12 +1565,14 @@ export function readCornerLanguage(cooked: {
     const station = col(PLACED.stationW);
     const t = col(PLACED.t);
     const h = col(PLACED.h);
+    const rung = col(PLACED.rung);
     return corner.map((c, i) => ({
       corner: c,
       row: row[i],
       station: station[i],
       t: t[i],
       h: h[i],
+      rung: rung[i],
     }));
   };
   return {

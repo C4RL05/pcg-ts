@@ -567,29 +567,55 @@ describe("racetrack levels: a lap the graph decided for itself", () => {
    * a rule can be perfectly enforced at assembly and gone by the time
    * anything is drawn.
    *
-   * WHAT IS ASSERTED IS THE CONTRACT, NOT THE COUNT. `immovable` names
-   * the brake mark, which is the instruction "DROP a blocked ruler
-   * element rather than shove it to the verge" -- a braking reference in
-   * the wrong place is worse than none. So the things that must never
-   * happen are a BENT ruler and a WRONG-SIDE mark, and those are asserted
-   * flatly on every seed. How many marks the cull takes is a property of
-   * the spline and the reserved asset's footprint, so it is reported
-   * rather than pinned: gating it would freeze a number that is allowed
-   * to move and would say nothing about the rule.
+   * WHAT IS ASSERTED IS THE CONTRACT. `immovable` names the brake mark,
+   * which is the instruction "DROP a blocked ruler element rather than
+   * shove it to the verge" -- a braking reference in the wrong place is
+   * worse than none. So the things that must never happen are a BENT ruler
+   * and a WRONG-SIDE mark, and those are asserted flatly on every seed.
    *
-   * MEASURED WHEN THIS WAS WRITTEN, so a reader can tell a change from a
-   * regression: seed 2 loses 5 of its 36 marks, one each from tight
-   * corners 0, 1, 3, 6 and 9; seeds 1 and 3 lose none. Emptying
-   * `immovable` -- the control -- keeps all 36 and bends all five rulers
-   * instead, by 0.5W to 1.5W. That is the trade the contract makes, and
-   * it is why the drops are not a bug to be fixed here.
+   * AND THE COUNT IS NOW PART OF THE CONTRACT TOO, WHICH IT WAS NOT.
+   * This paragraph used to say the opposite -- "how many marks the cull
+   * takes is a property of the spline and the reserved asset's footprint,
+   * so it is reported rather than pinned" -- and recorded the measurement
+   * behind it: seed 2 lost 5 of its 36 marks, one each from tight corners
+   * 0, 1, 3, 6 and 9, and emptying `immovable` kept all 36 and bent all
+   * five rulers instead, by 0.5W to 1.5W. Both of those were true, and the
+   * conclusion drawn from them -- that the drops were the price of the
+   * contract and not a bug -- was wrong in one respect: it took the
+   * LATERAL as given. The cull could only drop or bend because the lateral
+   * had already been chosen without asking whether the ruler fitted.
+   *
+   * L-3 NOW CHOOSES THAT LATERAL FOR THE WHOLE RULER, off L-1's own push
+   * ladder, at draw time -- see `legibility.chooseRulerLateral` and
+   * `cornerGraph.addRulerClearance`. A ruler that fits somewhere is placed
+   * where it fits, so there is nothing left for the cull to take, and a
+   * missing mark stops being an allowed outcome and becomes a failure.
+   * Measured on the shipped vocabulary through this reservation over seeds
+   * 1-6: before, seed 2 lost 5 of 36 and seed 5 lost 10 of 30; after, every
+   * seed is whole, and 5 of seed 2's twelve rulers and 6 of seed 5's ten
+   * stepped out to get there. No corner ran out of ladder on any seed.
+   *
+   * WHICH IS WHY THE COUNT IS ASSERTED AND NOT PINNED: what is gated is
+   * "no mark went missing", which is a statement of the rule, and not "5
+   * rulers stepped", which is still a property of the spline and the
+   * footprint and is still only reported.
    */
   it(
     "never bends a braking ruler, whatever the cull takes",
     async () => {
       const kit = shippedVocabulary();
       const lost: string[] = [];
-      for (const seed of SEEDS) {
+      // SEED 5 ON TOP OF THE FILE'S THREE, AND IT IS THE ONE THAT CARRIES
+      // THIS TEST. Of seeds 1-3, only seed 2 has a ruler that has to step
+      // out to clear the cone at all -- 5 of its 12 -- so on the other two
+      // the assertions below are true of a lap the search never touched.
+      // Seed 5 steps 6 of 10 and was losing 10 of its 30 marks before the
+      // search existed, which makes it the strongest case on the shipped
+      // vocabulary and the one a regression would show up on first. It is
+      // added here rather than to `SEEDS` because the partition tests in
+      // this file cook a whole World per seed and do not need a fourth.
+      const l3Seeds = [...SEEDS, 5];
+      for (const seed of l3Seeds) {
         const { lap, frames } = await lapFor(seed);
         const { pool, markers } = await cookReserveMarkers({
           assets: (kit.assets as unknown as PlaceableAsset[]).filter((a) => a.where),
@@ -660,18 +686,38 @@ describe("racetrack levels: a lap the graph decided for itself", () => {
           `seed ${seed}: a braking mark ended up on the inside of its corner`,
         ).toEqual([]);
 
+        // AND NEVER MISSING. This is the assertion the group clearance
+        // search bought: L-3 chooses a lateral the whole ruler clears, so
+        // a mark the cull deleted is now a ruler that was placed where it
+        // did not fit rather than the contract being paid for. The
+        // failure names the corner and says "N missing", which tells a
+        // reader which end of the change broke -- a corner that ran out of
+        // ladder reads the same way as one where the search never ran.
+        expect(
+          ruled.failures.filter((f) => f.includes("missing")),
+          `seed ${seed}: the cull took a braking mark, so L-3 chose a lateral its ruler does not fit at`,
+        ).toEqual([]);
+
         const marks = list.filter((p) => p.asset.id === markers.brake.id).length;
         const want = tight.length * 3;
+        // EXACTLY, NOW, AND NOT AT MOST. The upper bound was the whole
+        // assertion while drops were allowed; with them forbidden the two
+        // halves of "the count is right" are worth telling apart, because
+        // too MANY marks is a placer bug and too few is a culled ruler,
+        // and one message for both sends a reader to the wrong file.
         expect(
           marks,
           `seed ${seed}: the cull cannot ADD braking marks, so this is a placer bug`,
         ).toBeLessThanOrEqual(want);
+        expect(marks, `seed ${seed}: braking marks went missing between assembly and the settled lap`).toBe(
+          want,
+        );
         lost.push(`seed ${seed}: ${marks}/${want} marks, ${ruled.failures.length} rulers short`);
       }
       // Reported so a change shows up in the run rather than only in a
-      // failure -- the drops are allowed to move and a reader still wants
-      // to see them.
-      expect(lost.length, lost.join(" | ")).toBe(SEEDS.length);
+      // failure -- how many rulers had to step is allowed to move and a
+      // reader still wants to see the counts.
+      expect(lost.length, lost.join(" | ")).toBe(l3Seeds.length);
     },
     LAP_MS,
   );
