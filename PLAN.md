@@ -4287,3 +4287,58 @@ the two-rulers expression by name. That is worse than a stale number. It was
 not taken unattended only because a teaching graph's quoted figures are
 content, not output, and rewriting five of them silently is not a thing to
 do without the author looking at the result.
+
+### The second repair pass has exactly one lock, and it is not the one anyone thought, 2026-08-28
+
+T4.4 asked for a fixture that makes the racetrack's post-enclosure repair
+pass FIRE, so that a pass which never runs is distinguishable from one that
+cannot. The answer arrived twice, and the second one is right.
+
+**THE FIRST ANSWER WAS "no kit can reach it", AND IT WAS WRONG.** The
+argument was two constants: L-1's sight fan runs from an eye at
+`SIGHTLINE.eyeW` 0.3W down to targets on the road surface so it never
+exceeds 0.3W, while `coverPlacements` floors a piece's centre at
+`CORRIDOR.ceilingW + tall/2`. A 1.2W floor against a 0.3W ceiling looks
+unreachable by construction. `dressGraph.ts:2691` already said otherwise,
+fifteen lines from the param being written about: "a coincidence of two
+constants and not a rule -- a lower kit, a taller eye or a fan over a crest
+all reach it."
+
+**THE LAP IS NOT FLAT, WHICH IS THE WHOLE THING.** `LAP.relief` is 26
+against a half-width of 9, so +/-2.89W, and a cover rib is horizontal in
+its OWN station's frame while the road falls away under its far end. Run
+L-1's own `occludes` over 87 ribs per lap at an underside of exactly
+`CORRIDOR.ceilingW`, seeds 1-6, sweeping the rib's LENGTH:
+
+    along   2.2   8   10.29   16   24   32    44     60
+    blocked   0   0       0    0    0    0   1-4    4-9
+
+Controls both directions: the same rib at h = 0.1 blocks 87 of 87, and the
+shipped floor at h = 2.158 blocks 0 even at 44W.
+
+**SO THE LEVER IS A LONGER ASSET, NOT A LOWER ONE**, and the first test
+could not have found that -- its adversarial sweep varied `tall` and the
+stated height while PINNING `across: 1.4, along: 2.2`, which are the two
+dimensions that decide it. `coverCandidates` filters on height and on
+`across` and puts NO CAP ON `along` AT ALL. What protects the demo is data:
+the longest shipped asset is 10.29W, a 4.3x margin. That is a property of
+the vocabulary and it moves when the vocabulary does.
+
+**AND THE PASS STILL WOULD NOT FIRE, because there is exactly one lock and
+it is shut.** `occlusionCull`'s `include` gate takes `1 - cover`, so cover
+is never tested whatever its shape. Add a 44W cover asset and the geometry
+becomes reachable and nothing happens -- you get a tunnel you cannot see
+through, which is a different bug. Delete the `include` param and the pass
+fires that day. One lock, named, with the geometry behind it now measured
+rather than assumed.
+
+The test is split accordingly: the height floor, which does hold for any
+kit, and a MEASURED MARGIN test that gates the art's reach and asserts 44W
+does block -- so the tripwire cannot pass vacuously the way its predecessor
+did.
+
+**Worth a decision, not taken here:** nothing caps `along` in
+`coverCandidates`. A cap would make the margin a rule instead of a
+coincidence. The alternative is to leave it and rely on the margin test,
+which is what shipped. Either is defensible; the current state is the
+second one, deliberately.
