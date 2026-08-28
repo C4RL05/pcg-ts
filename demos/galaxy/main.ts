@@ -214,10 +214,38 @@ let coreGlow: Sprite | undefined;
 let lastPending = 0;
 let lastCookMs = 0;
 
+/**
+ * Drop a cell's objects and free what this page owns of them.
+ *
+ * NO InstancedMesh CASE, ON PURPOSE, and the reason is that this page has
+ * no instance path at all: every cell is drawn as `Points` by
+ * {@link buildPoints}, `CellEntry.objects` is typed `Points[]`, and
+ * `Points` is not a superclass of `InstancedMesh` — so one cannot arrive
+ * here without a type error first. The demos that DO carry the branch
+ * (`racetrack`, `road`, `shared/draw.ts`) are exactly the ones that call
+ * `toInstancedMeshes` or drive a `WorldThreeBinding`; `infinite-world`,
+ * which spawns through a binding and never disposes a mesh itself,
+ * carries none either. A dead branch here would be an unreachable path no
+ * test could cover.
+ *
+ * WHAT WOULD BREAK IT: making this page spawn instances — a
+ * `spawnInstances` terminal on either graph, drawn through
+ * `toInstancedMeshes` or `shared/draw.ts`. Then the geometry below stops
+ * being ours unconditionally: an instanced mesh normally draws the ASSET
+ * MAP's shared geometry, and disposing that pulls the buffers out from
+ * under every other cell using the same asset. The rule to port at that
+ * point is `disposeDrawn`'s — `mesh.dispose()`, dispose the per-mesh
+ * material clone `toInstancedMeshes` always mints, and dispose the
+ * geometry ONLY when `ownsGeometry(mesh)` says the batch's named channels
+ * earned it a clone of its own.
+ */
 function removeCell(entry: CellEntry): void {
   for (const obj of entry.objects) {
     galaxyGroup.remove(obj);
-    obj.geometry.dispose(); // materials are shared, keep them
+    // Ours: `buildPoints` builds one BufferGeometry per cell. The two
+    // materials (`starMat`, `dustMat`) are page-wide and shared by every
+    // cell, so they outlive this.
+    obj.geometry.dispose();
   }
 }
 
@@ -592,6 +620,26 @@ function enterSystem(hit: PickHit): void {
   showCard(spec, hit.worldDist);
 }
 
+/**
+ * Tear the close-up system down.
+ *
+ * EVERYTHING IN `systemGroup` WAS BUILT BY {@link enterSystem} AND BY
+ * NOTHING ELSE — plain `Mesh`es, orbit `LineLoop`s, `Sprite`s and two
+ * lights (which hold nothing to free). Every geometry and material among
+ * them was minted for this one system, so here, unlike
+ * {@link removeCell}, both are ours and both die unconditionally.
+ *
+ * THAT IS ALSO WHY THERE IS NO InstancedMesh CASE, and this one is worth
+ * naming rather than assuming: `InstancedMesh` EXTENDS `Mesh`, so one
+ * would be caught by the branch below rather than skipped by it — and
+ * mishandled twice over. It would dispose the geometry that instanced
+ * mesh draws, which is normally the asset map's and shared with every
+ * other mesh using that asset, and it would skip `mesh.dispose()`, which
+ * is what frees the mesh's own instance buffers. If this page ever spawns
+ * instances, the InstancedMesh case has to come FIRST in this chain and
+ * follow `disposeDrawn`'s rule (mesh dispose, per-mesh material clone,
+ * geometry only when `ownsGeometry`). Today no code path puts one here.
+ */
 function exitSystem(): void {
   for (const child of [...systemGroup.children]) {
     systemGroup.remove(child);

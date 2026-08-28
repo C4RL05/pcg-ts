@@ -223,21 +223,34 @@ const litMaterialsFor = (index: number): DrawMaterials => ({
 const normalMaterials: DrawMaterials = {
   /**
    * Minted per draw, NOT `sharedNormal`. `disposeDrawn` frees a plain
-   * Mesh's material, so handing it the page-wide instance disposed it on
-   * the next cook — and the InstancedMeshes still holding it as their
-   * override lost their compiled program with it, every knob turn. The
-   * shared one is for the override alone, which dispose leaves untouched.
+   * Mesh's material, so handing it the page-wide instance would dispose
+   * that instance on the first cook that drew a mesh and the page would
+   * hand out a dead material from then on — the same trap
+   * `litMaterialsFor` above avoids. `sharedNormal` is for the INSTANCE
+   * override alone, where each mesh renders with a clone of it and
+   * disposal therefore never reaches the original.
    */
   mesh: () => new MeshNormalMaterial(),
   line: (vertexColors) => new LineBasicMaterial({ color: 0xcfd6e4, vertexColors }),
 };
 
 /**
- * One material for the whole page, not one per cook.
+ * One material for the whole page, not one per cook — and for the
+ * OPPOSITE reason to `normalMaterials.mesh` above, which is why the two
+ * sit next to each other spelled differently.
  *
- * `disposeDrawn` deliberately leaves an InstancedMesh's material alone —
- * normally it belongs to the memoized asset — so minting one of these per
- * cook would leak a GPU program on every knob turn.
+ * This one is handed to `drawItem` as its `instanceMaterial` override,
+ * and `toInstancedMeshes` CLONES every material slot it is given: what
+ * each InstancedMesh renders with is a clone of this, and the clone is
+ * what `disposeDrawn` frees (that clone's `dispose()` is the one signal
+ * three's renderer uses to release the mesh's cached render state). The
+ * original is never disposed by anybody, so minting one per cook would
+ * strand a MeshNormalMaterial behind every clone that WAS freed
+ * properly — a leak on every knob turn. Same conclusion the comment here
+ * used to reach, by a route that is no longer true: `disposeDrawn` does
+ * not leave an instanced mesh's material alone any more, and while it
+ * did, this page leaked one material and one cached render state per
+ * instanced mesh per cook.
  */
 const sharedNormal = new MeshNormalMaterial();
 

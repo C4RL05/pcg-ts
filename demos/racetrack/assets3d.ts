@@ -360,9 +360,16 @@ export function makePoseAssetMap(
  * WHICH MEANS THE CALL SITE IS DIFFERENT TOO. `disposeAssetMap` is called
  * the moment the meshes are built, because by then only the dead template
  * materials are left. This map's geometry is the geometry those meshes
- * DRAW — `toInstancedMeshes` shares it by reference and never clones it
- * (`src/three/instanced.ts` states the rule: dispose geometry with the
- * map, never per mesh) — so this waits until the meshes are gone.
+ * DRAW — `toInstancedMeshes` hands it to them BY REFERENCE (these poses
+ * carry no named per-instance channels, which is the one thing that would
+ * make it clone instead) — so this waits until the meshes are gone.
+ *
+ * AND IT WOULD STILL WAIT IF THAT CHANGED. A channelled batch gets a
+ * geometry CLONE of its own, flagged `ownsGeometry` and disposed with the
+ * mesh; the map's original is not that clone and is still nobody else's
+ * to free. Either way the rule from `src/three/instanced.ts` is the one
+ * that decides here: an asset map's geometry is disposed WITH THE MAP,
+ * never per mesh.
  *
  * A SET BECAUSE THE ENTRIES OVERLAP. Two ids answer with the same merged
  * geometry, so a loop over the keys would dispose each one twice: the

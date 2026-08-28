@@ -17,6 +17,7 @@
  */
 import { isDeviceResidentInstances, primitiveTypeCounts, type DataItem } from "pcg-ts";
 import {
+  ownsGeometry,
   toBufferGeometry,
   toInstancedMeshes,
   toLineGeometry,
@@ -53,9 +54,12 @@ export interface DrawOptions {
    * up. Overriding at draw time keeps the memoization and costs one
    * material for the whole scene.
    *
-   * The caller owns it: `disposeDrawn` does not free an InstancedMesh's
-   * material, because normally that material belongs to the asset. Mint
-   * one per page, not one per cook.
+   * THIS instance stays the caller's, and it must outlive the cook.
+   * `toInstancedMeshes` clones every material slot it is handed, so what
+   * each mesh actually renders with is a clone of this — and it is the
+   * CLONE that `disposeDrawn` frees, never the original. Mint one per
+   * page, not one per cook: a per-cook override would leak the original
+   * behind every clone that got disposed properly.
    */
   instanceMaterial?: Material;
   /** Draw points even for geometries that carry topology. */
@@ -191,16 +195,41 @@ export function drawItem(item: DataItem, opts: DrawOptions): Drawn {
 }
 
 /**
- * Release what `drawItem` minted, and only that. An InstancedMesh's
- * geometry and material belong to the ASSET — memoized across cooks in
- * `assets.ts` precisely so a viewer that re-cooks on every edit does not
- * leak a GPU program each time — so its own `dispose()` (instance buffers
- * only) is the whole job. Everything else was built for this cook alone.
+ * Release what `drawItem` minted, and only that.
+ *
+ * Three parts with three different owners, which is why this is not one
+ * `dispose()` per object:
+ *
+ * - MATERIALS are always ours. A plain Mesh's, LineSegments' or Points'
+ *   came from the caller's `DrawMaterials` factory for this cook. An
+ *   InstancedMesh's is a PER-MESH CLONE that `toInstancedMeshes` mints
+ *   unconditionally (see `cloneAssetMaterial`: that clone's `dispose()` is
+ *   the one signal three uses to release the mesh's cached render state),
+ *   so freeing it touches neither the memoized asset's material nor an
+ *   {@link DrawOptions.instanceMaterial} override — both of those are
+ *   still the caller's and both survive this. Skipping it, which this
+ *   used to do while claiming otherwise, leaks a material and its render
+ *   state on every cook.
+ * - An InstancedMesh's GEOMETRY is normally the ASSET's, shared by
+ *   reference and memoized across cooks in `assets.ts` precisely so a
+ *   viewer that re-cooks on every edit does not leak a GPU program each
+ *   time; disposing it would pull the buffers out from under every other
+ *   mesh drawing that asset. The exception is a batch carrying NAMED
+ *   per-instance channels: those bind as `InstancedBufferAttribute`s on
+ *   the geometry, so such a mesh cannot share the asset's and is handed a
+ *   clone of its own. `ownsGeometry` is the marker `toInstancedMeshes`
+ *   leaves on it, and that clone is disposed by nobody but us.
+ * - Every OTHER object's geometry was exported for this cook alone and
+ *   dies here unconditionally.
  */
 export function disposeDrawn(objects: readonly Object3D[]): void {
   for (const obj of objects) {
     if (obj instanceof InstancedMesh) {
       obj.dispose();
+      const instanced = obj.material;
+      if (Array.isArray(instanced)) for (const m of instanced) m.dispose();
+      else instanced.dispose();
+      if (ownsGeometry(obj)) obj.geometry.dispose();
       continue;
     }
     if (obj instanceof Mesh || obj instanceof LineSegments || obj instanceof Points) {

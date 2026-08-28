@@ -40,7 +40,7 @@
  * art; a wireframe reads as what it is, which is the measurement.
  */
 import { cook, firstGeometry, type DataCollection, type Geometry, type Graph } from "pcg-ts";
-import { toBufferGeometry, toLineGeometry } from "pcg-ts/three";
+import { ownsGeometry, toBufferGeometry, toLineGeometry } from "pcg-ts/three";
 import {
   BoxGeometry,
   ConeGeometry,
@@ -215,9 +215,35 @@ layers.push({
 let built: Object3D[] = [];
 
 function disposeBuilt(): void {
+  // WHAT THIS OWNS AND WHAT IT DOES NOT. The spline and the road surface
+  // are exported fresh by every cook, so their geometry dies here. The
+  // props mesh is the exception and used to be handled as if it were not:
+  // it BORROWS the module-level `PROP_BOX`, which the NEXT cook
+  // instances again, so disposing it threw away a shared cube's GPU
+  // buffers on every recook and forced a re-upload of a geometry this
+  // page never owned. An instanced mesh is asked rather than assumed —
+  // `ownsGeometry` is the marker `toInstancedMeshes` leaves on a mesh it
+  // handed a geometry CLONE (a batch carrying named per-instance
+  // channels, which cannot share the asset's because an
+  // `InstancedBufferAttribute` lives on the geometry). It is false for a
+  // mesh built by hand over a shared geometry, which is what this page
+  // builds, and the mesh's own `dispose()` still frees its instance
+  // buffers.
+  //
+  // MATERIALS ARE OURS. Every one past the car was minted by the cook
+  // being replaced, so the layer list is walked for them too.
   for (const obj of built) {
     scene.remove(obj);
+    if (obj instanceof InstancedMesh) {
+      obj.dispose();
+      if (ownsGeometry(obj)) obj.geometry.dispose();
+      continue;
+    }
     (obj as Mesh).geometry?.dispose();
+  }
+  for (const l of layers.slice(1)) {
+    l.chase.dispose();
+    if (l.map !== l.chase) l.map.dispose();
   }
   built = [];
   // The car is layer 0 and survives every recook; everything after it

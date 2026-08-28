@@ -55,6 +55,7 @@ import {
 } from "pcg-ts";
 import {
   WorldThreeBinding,
+  ownsGeometry,
   toBufferGeometry,
   toInstancedMeshes,
   toLineGeometry,
@@ -389,19 +390,26 @@ let vocabulary: Kit | undefined;
 let built: Object3D[] = [];
 
 function disposeBuilt(): void {
-  // WHAT THIS OWNS AND WHAT IT DOES NOT, and the ownership rule now comes
-  // from the asset map rather than from a name this file has to remember.
-  // An instanced mesh BORROWS its geometry — every one of them draws the
-  // asset map's single shared unit cube — and OWNS its material, which is
-  // a per-mesh clone and the one signal three uses to release that mesh's
-  // cached render state. So: dispose the mesh and its two materials,
-  // never its geometry. (This used to be spelled as an identity test
-  // against a module-level `PROP_BOX`, which was the same rule stated in
-  // a way only this file could check.)
+  // WHAT THIS OWNS AND WHAT IT DOES NOT, and the ownership rule is now
+  // ASKED rather than remembered. An instanced mesh OWNS its material,
+  // which is a per-mesh clone and the one signal three uses to release
+  // that mesh's cached render state — disposed below with the rest of the
+  // layer materials. Its GEOMETRY is usually borrowed: every box mesh
+  // this page spawns today draws the asset map's single shared unit cube,
+  // and throwing that away would pull the buffers out from under the next
+  // cook. But a batch carrying NAMED per-instance channels is handed a
+  // geometry CLONE of its own, because an `InstancedBufferAttribute`
+  // lives on the geometry — and that clone is disposed by nobody but
+  // here. `ownsGeometry` is the marker `toInstancedMeshes` leaves on the
+  // mesh, so the question is answered by the mesh instead of by a name
+  // this file has to keep in sync. (It was spelled as an identity test
+  // against a module-level `PROP_BOX` once, then as an unconditional
+  // skip; both were the borrowed case stated as if it were the only one.)
   for (const obj of built) {
     scene.remove(obj);
     if (obj instanceof InstancedMesh) {
       obj.dispose();
+      if (ownsGeometry(obj)) obj.geometry.dispose();
       continue;
     }
     (obj as Mesh).geometry?.dispose();
