@@ -409,3 +409,60 @@ describe("the three peer range", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * The version lives in THREE places and only two of them move together.
+ *
+ * `npm version` rewrites `package.json` and the lockfile. It does not know
+ * about `src/index.ts`'s `VERSION`, which is what the package EXPORTS and
+ * what `pcg --version` prints. So a release bumped the ordinary way ships a
+ * package that misreports itself: the registry serves 0.17.0 while the code
+ * inside says 0.16.0, and nothing anywhere fails.
+ *
+ * That is not hypothetical. On 2026-08-28 a publish was attempted with none
+ * of the three bumped, npm refused with "you cannot publish over the
+ * previously published versions", and the fix was three separate edits — the
+ * third of which is easy to forget precisely because the first two are
+ * automated. The lockfile had ALSO drifted on its own, sitting at 0.15.0
+ * while the manifest said 0.16.0, which is the same failure one file over.
+ *
+ * A test is the cheap answer: it costs nothing, it fails at the moment the
+ * bump is half-done rather than after the tarball is public, and unlike a
+ * note in PLAN.md it cannot be read past.
+ */
+describe("the version agrees with itself", () => {
+  const manifestVersion = pkg.version;
+
+  it("package.json declares a version", () => {
+    expect(manifestVersion, "package.json has no version field").toMatch(/^\d+\.\d+\.\d+/);
+  });
+
+  it("src/index.ts's exported VERSION matches package.json", () => {
+    const src = read("src/index.ts");
+    const found = /export const VERSION = "([^"]+)"/.exec(src);
+    expect(found, "src/index.ts no longer exports a string VERSION const").not.toBeNull();
+    expect(
+      found?.[1],
+      `src/index.ts exports VERSION "${found?.[1]}" but package.json says "${manifestVersion}".\n` +
+        "  These are bumped SEPARATELY: `npm version` moves package.json and the lockfile and\n" +
+        "  leaves this one behind. Publishing now ships a package whose own VERSION export and\n" +
+        "  `pcg --version` both report the wrong number, and nothing else catches it.\n" +
+        "  Fix: edit src/index.ts to match, then `npm run build`.",
+    ).toBe(manifestVersion);
+  });
+
+  it("the lockfile matches package.json", () => {
+    const lock = JSON.parse(read("package-lock.json")) as {
+      version?: string;
+      packages?: Record<string, { version?: string }>;
+    };
+    expect(
+      lock.version,
+      `package-lock.json says "${lock.version}" and package.json says "${manifestVersion}".\n` +
+        "  Run `npm install` (or `npm version <bump> --no-git-tag-version`) so the two agree.",
+    ).toBe(manifestVersion);
+    expect(lock.packages?.[""]?.version, "the lockfile's root package entry disagrees too").toBe(
+      manifestVersion,
+    );
+  });
+});
