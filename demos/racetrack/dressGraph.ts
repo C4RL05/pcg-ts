@@ -5156,11 +5156,35 @@ export interface RepairReport {
  * point of publishing them at all is that the two are comparable.
  *
  * IT IS ALSO WHAT MAKES THE PRELUDE DELETABLE. The two panel lines that
- * still read `DressStats` are the last thing on this page that needs
- * `dressLap` to have run, and most of `DressStats` cannot come back: five
- * of its fields are rules this graph does not contain (D-4's second pass,
- * L-4) and the per-round counters are not what `repeatUntil` publishes.
+ * still read `DressStats` were the last thing on this page that needed
+ * `dressLap` to have run, and most of `DressStats` does not come back.
  * What CAN be said honestly is this, and the fields say which is which.
+ *
+ * "CANNOT COME BACK" WAS TOO STRONG FOR HALF OF THEM, and the distinction
+ * matters because one half is a fact and the other is a price.
+ *
+ * UNOBTAINABLE IN PRINCIPLE, because the rule is not a stage at all:
+ * `landmarkFixes` is L-4, which this graph deliberately does not contain
+ * (see `dress.ts`'s rule list for why that is a decision), and
+ * `coverageMoves` and `worstGapW` are D-4's post-cull pass, likewise
+ * absent. No amount of plumbing produces a count of something that never
+ * runs.
+ *
+ * OBTAINABLE, BUT NOT BUILT: the per-round counters `corridorFixes` and
+ * `mixMoves`. It is true that `repeatUntil` publishes only the LAST
+ * round's carry, so reading them off the output gives the last round's
+ * numbers and on a converged lap that is zero -- which is exactly the trap
+ * `pushed` and `lowered` fell into above. But a cross-round TOTAL is not
+ * therefore impossible: it is a running column threaded on the carry,
+ * which is precisely what {@link writeSettleCount} already does for the
+ * settle signal. The price is a column per figure, written every round by
+ * every point, on the hot path of the loop.
+ *
+ * IT IS NOT BUILT BECAUSE NOTHING ASKS FOR IT. The panel does not show
+ * these two, and adding a per-point column per lap to publish a number no
+ * reader has wanted is the wrong trade until one does. Recorded here so
+ * that whoever wants them finds the mechanism rather than this
+ * paragraph's earlier claim that there wasn't one.
  */
 export function readRepairs(
   outputs: Readonly<Record<string, DataCollection | undefined>>,
