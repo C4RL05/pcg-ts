@@ -13,16 +13,21 @@ export * from "./errors.js";
 //     consumer holding a BATCH narrows it on the `residency`
 //     discriminant `InstanceBatch` documents, and a consumer holding an
 //     `InstancesItem` wants `isDeviceResidentInstances` — which stays
-//     exported. (`type AnyInstanceBatch` is left published for now, but
-//     it is the predicate's parameter type and nothing else: with the
-//     predicate gone, no public signature produces or consumes one.
-//     `InstancesItem` keeps `batches` and `deviceBatches` as separate
-//     fields rather than a union of the two.)
+//     exported.
+//   - `type AnyInstanceBatch` WENT WITH IT, and the first pass left it
+//     published "for now", which is the state worth naming rather than
+//     repeating. It is the predicate's parameter type and nothing else,
+//     so with the predicate gone no public signature produced or consumed
+//     one: a reader met a type in the typings, went looking for how to
+//     obtain it, and found nothing. A published name is a promise, and a
+//     promise nobody can call in is worse than an absent one — it implies
+//     a capability that is not there. `InstancesItem` keeps `batches` and
+//     `deviceBatches` as separate fields rather than a union of the two,
+//     so nothing public needs the union's NAME either.
 //
-// All three remain exported from ./data.js, which is what internal code
+// All four remain exported from ./data.js, which is what internal code
 // and the tests import. See publicSurface.test.ts.
 export {
-  type AnyInstanceBatch,
   type DataCollection,
   type DataItem,
   type DataValue,
@@ -76,6 +81,13 @@ export {
   // what it returns is the injected portal ids serialization goes out of
   // its way to hide. `describeSubgraphPins`/`describeSubgraphParams` are
   // the same wrapper described in the terms a caller can act on.
+  //
+  // `type SubgraphPlumbing` IS ABSENT FOR THE SECOND REASON RATHER THAN
+  // THE FIRST. It is that function's return type and nothing else's, so
+  // once the function went there was no public way to obtain a value of
+  // it — a name in the typings describing a shape no exported signature
+  // hands back. Both stay exported from ./subgraph.js, where the two
+  // internal callers and `mutation.test.ts` reach them by relative path.
   getSubgraphSpec,
   // Public because materializing a REGISTERED recipe is a public act:
   // `registerSubgraph` and `getRegisteredSubgraph` both ship, the recipe
@@ -92,7 +104,6 @@ export {
   type ExposedPin,
   type ExposedPinNames,
   type SubgraphPins,
-  type SubgraphPlumbing,
   type SubgraphSpec,
   type WrapperKind,
 } from "./subgraph.js";

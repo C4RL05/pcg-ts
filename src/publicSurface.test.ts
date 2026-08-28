@@ -16,6 +16,20 @@
  * is where the internal callers and the tests reach them; the barrels
  * carry the reason each was withdrawn. Do not re-add one here without
  * re-adding it to a barrel on purpose.
+ *
+ * TWO TYPES WENT WITH THEM AND THIS FILE CANNOT SEE EITHER, which is
+ * worth stating here because the gap is silent. `surfaceOf` reads the
+ * module's RUNTIME keys, and a `type` export has none — so
+ * `AnyInstanceBatch` and `SubgraphPlumbing`, each of which was the sole
+ * parameter or return type of one of the nine above, stayed published
+ * after their only producer left and no assertion here moved. Nothing
+ * public could make or take either: a reader met a name in the typings,
+ * went looking for how to obtain it, and found nothing. They were removed
+ * by hand once someone read the barrels.
+ *
+ * So this list is a pin on the VALUE surface and not on the API. The
+ * type surface has no equivalent gate, and the way to find an orphan like
+ * that today is to notice that the thing which produced it is gone.
  */
 import { describe, expect, it } from "vitest";
 
