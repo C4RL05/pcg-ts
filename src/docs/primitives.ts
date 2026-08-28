@@ -28,6 +28,7 @@
  */
 import {
   type DescribedSubgraphPin,
+  type Graph,
   type GraphMeta,
   type ParamSchema,
   type ParamType,
@@ -39,6 +40,11 @@ import {
   deserializeGraph,
   inferWrapperKind,
 } from "../index.js";
+// Deep, and the one import here that is: the breadcrumb stripper is
+// deliberately not package API (a probe id is scaffolding, not a concept the
+// library publishes), so `../index.js` cannot reach it. `node-reference.ts`
+// takes the same route into `../nodes/registry.js` for the same reason.
+import { stripProbeBreadcrumb } from "../nodes/subgraphRegistry.js";
 
 /** One rendered catalog: the bytes of each generated file. */
 export interface PrimitiveCatalog {
@@ -68,33 +74,69 @@ export interface PrimitiveInfo {
   readonly nodes: number;
 }
 
+/** The probe node's id; scaffolding, and stripped from every refusal. */
+const PROBE_ID = "probe";
+
 /**
  * Resolve one registry record into the catalog's view of it, materializing
  * the primitive to read its derived pin kinds and param schemas.
  *
  * Deterministic and side-effect free: `deserializeGraph` builds a throwaway
  * `Graph` and touches no global state.
+ *
+ * THE PROBE REFERENCES THE ENTRY BY NAME, so what is described is whatever
+ * the REGISTRY holds under `entry.name` — `entry.subgraph` is read only for
+ * the wrapper inference and the node count. That is right for the caller
+ * this has (`listSubgraphs()` hands back the registry's own frozen records,
+ * so the two cannot disagree) and it is what makes generating the catalog a
+ * proof that the registered primitives load. It does mean a hand-built
+ * `RegisteredSubgraph` whose payload differs from the registered one is
+ * described as the registered one, and an unregistered name fails with the
+ * registry's own message rather than being described from the payload.
  */
 export function describePrimitive(entry: RegisteredSubgraph): PrimitiveInfo {
-  const probe = deserializeGraph({
-    formatVersion: 1,
-    seed: 0,
-    // The probe's TYPE is inferred, never fixed at "subgraph". A recipe
-    // records a body and its exposed pins and nothing about which wrapper
-    // cooks them, so a body exposing a reserved name — `each` on a forEach
-    // body, `carry` on a repeatUntil one — is refused outright when probed
-    // as a plain subgraph, and the primitive becomes uncatalogable. That is
-    // not a documentation-only failure: this probe is how the catalog reads
-    // the DERIVED param schemas, so it is also the check that the shipped
-    // primitives still load, and it would have failed the whole `npm run
-    // docs` chain on the first loop-body primitive anyone registered.
-    nodes: [
-      { id: "probe", type: inferWrapperKind(entry.subgraph), params: {}, ref: { name: entry.name } },
-    ],
-    connections: [],
-    outputs: [],
-  });
-  const state = probe._nodes.get("probe");
+  let probe: Graph;
+  try {
+    probe = deserializeGraph({
+      formatVersion: 1,
+      seed: 0,
+      // The probe's TYPE is inferred, never fixed at "subgraph". A recipe
+      // records a body and its exposed pins and nothing about which wrapper
+      // cooks them, so a body exposing a reserved name — `each` on a forEach
+      // body, `carry` on a repeatUntil one — is refused outright when probed
+      // as a plain subgraph, and the primitive becomes uncatalogable. That is
+      // not a documentation-only failure: this probe is how the catalog reads
+      // the DERIVED param schemas, so it is also the check that the shipped
+      // primitives still load, and it would have failed the whole `npm run
+      // docs` chain on the first loop-body primitive anyone registered.
+      nodes: [
+        {
+          id: PROBE_ID,
+          type: inferWrapperKind(entry.subgraph),
+          params: {},
+          ref: { name: entry.name },
+        },
+      ],
+      connections: [],
+      outputs: [],
+    });
+  } catch (err) {
+    // The probe node is scaffolding, exactly as the registry's is, so it
+    // gets the registry's treatment: strip the breadcrumb and re-frame the
+    // refusal under the primitive's NAME, which is the only handle the
+    // caller has on it. Left alone, a structural refusal reached through the
+    // catalog reported `node "probe": ...` — a node that appears in no
+    // recipe, no saved graph and no catalog, so the one identifier the
+    // message led with named nothing the reader could act on.
+    throw new Error(
+      `describePrimitive("${entry.name}"): ${stripProbeBreadcrumb(
+        PROBE_ID,
+        err instanceof Error ? err.message : String(err),
+      )}`,
+      { cause: err },
+    );
+  }
+  const state = probe._nodes.get(PROBE_ID);
   // Unreachable: the node was just deserialized under that id.
   if (state === undefined) throw new Error(`describePrimitive("${entry.name}"): probe node missing`);
   const pins = describeSubgraphPins(state.def);
@@ -125,6 +167,14 @@ export function describePrimitive(entry: RegisteredSubgraph): PrimitiveInfo {
 interface CanonicalPin {
   readonly name: string;
   readonly kind: PinKind;
+  /**
+   * Present, and `true`, on a pin the WRAPPER declares rather than the
+   * recipe — `repeatUntil`'s `rounds` and `converged`. An agent reading
+   * this catalog needs both halves: that it can read the pin, and that it
+   * will not find it among the recipe's exposed outputs. Absent on an
+   * ordinary pin, so no entry that has none of them moves a byte.
+   */
+  readonly synthesized?: true;
 }
 
 interface CanonicalSchema {
@@ -173,6 +223,15 @@ function canonicalSchema(schema: ParamSchema): CanonicalSchema {
   };
 }
 
+/** See {@link canonicalSchema} for why this rebuilds rather than spreads. */
+function canonicalPin(pin: DescribedSubgraphPin): CanonicalPin {
+  return {
+    name: pin.name,
+    kind: pin.kind,
+    ...(pin.synthesized === true ? { synthesized: true as const } : {}),
+  };
+}
+
 function canonicalPrimitive(p: PrimitiveInfo): CanonicalPrimitive {
   return {
     name: p.name,
@@ -181,8 +240,8 @@ function canonicalPrimitive(p: PrimitiveInfo): CanonicalPrimitive {
     ...(p.meta?.description !== undefined ? { description: p.meta.description } : {}),
     ...(p.meta?.tags !== undefined ? { tags: p.meta.tags } : {}),
     nodes: p.nodes,
-    inputs: p.inputs.map((pin) => ({ name: pin.name, kind: pin.kind })),
-    outputs: p.outputs.map((pin) => ({ name: pin.name, kind: pin.kind })),
+    inputs: p.inputs.map(canonicalPin),
+    outputs: p.outputs.map(canonicalPin),
     // Exposure order is preserved for pins (it is the wrapper's pin order,
     // which is semantic) but params are SORTED: their order in a recipe is
     // whatever the author listed, so sorting makes reordering the envelope
@@ -218,7 +277,13 @@ function formatRange(schema: ParamSchema): string {
 
 function formatPins(pins: readonly CanonicalPin[]): string {
   if (pins.length === 0) return "*(none)*";
-  return pins.map((p) => "`" + p.name + "` (" + p.kind + ")").join(", ");
+  // "wrapper" rather than "synthesized" in the prose: a reader wants to know
+  // WHO declared the pin, and the answer is the loop node around the recipe,
+  // not the recipe. The name is still readable and still wirable — the note
+  // says where to look for it, not that it is second class.
+  return pins
+    .map((p) => "`" + p.name + "` (" + p.kind + (p.synthesized === true ? ", wrapper" : "") + ")")
+    .join(", ");
 }
 
 /** The anchor GitHub gives a heading; primitive names carry slashes. */

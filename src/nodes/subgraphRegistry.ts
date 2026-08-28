@@ -127,7 +127,39 @@ interface StoredSubgraph {
 const registry = new Map<string, StoredSubgraph>();
 
 const PROBE_ID = "recipe";
-const PROBE_PREFIX = new RegExp(`^node "${PROBE_ID}"(?: inner graph)?: `);
+
+/**
+ * @internal Strip the node breadcrumb `deserializeGraph` puts on an error
+ * raised under a MATERIALIZING PROBE.
+ *
+ * Every loader failure leads with the offending node's id, which is exactly
+ * right when the caller wrote that node — and exactly wrong when the node is
+ * scaffolding. Two callers wrap a recipe in a throwaway one-node graph to
+ * materialize it and never show that graph to anyone: this file's
+ * canonicalizing probe (`"recipe"`) and the primitive catalog's
+ * (`"probe"`). The id such a message leads with is then a node the author
+ * never wrote and cannot find in anything they hold, so each caller strips
+ * it and re-frames the rest under a name the author DOES hold — the
+ * primitive's. `pcg run`'s wrapper is deliberately not a third: its graph is
+ * "the JSON a caller could have written by hand" and the CLI can print it,
+ * so `"main"` there is a node the reader can actually go and look at.
+ *
+ * Shared rather than repeated because the stripping is not obvious: it drops
+ * `inner graph` along with the id (the message behind it already names the
+ * inner node, so keeping the qualifier would only add a second hop), but
+ * KEEPS every other qualifier — `subgraph inputs[0] ("pts")`, `subgraph
+ * params[0] ("count") targets[0]`, `subgraph payload` — because those say
+ * WHICH exposed declaration is at fault and are the caller's own content.
+ * Two hand-written copies of that rule would drift, and they had: the
+ * registry's own copy matched the two unqualified shapes only, so it leaked
+ * on every qualified one until this replaced it.
+ */
+export function stripProbeBreadcrumb(probeId: string, message: string): string {
+  // `: ` for the bare form and for `inner graph`; a lone space for a
+  // qualifier that is kept, so only the `node "<id>"` token is removed.
+  const escaped = probeId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return message.replace(new RegExp(`^node "${escaped}"(?: inner graph)?(?:: | )`), "");
+}
 
 function fail(name: string, message: string): never {
   throw new Error(`registerSubgraph "${name}": ${message}`);
@@ -341,7 +373,7 @@ function canonicalize(name: string, raw: SerializedSubgraph): SerializedSubgraph
   } catch (err) {
     // The probe node is scaffolding; strip its breadcrumb so the message
     // names the offending inner node and nothing else.
-    fail(name, (err instanceof Error ? err.message : String(err)).replace(PROBE_PREFIX, ""));
+    fail(name, stripProbeBreadcrumb(PROBE_ID, err instanceof Error ? err.message : String(err)));
   }
   const node = serializeGraph(graph).nodes[0];
   // Unreachable: the probe node IS a subgraph node, so serializeGraph

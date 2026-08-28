@@ -55,7 +55,14 @@ describe("describePrimitive — the probe's node type is inferred, not assumed",
     const info = describePrimitive(REPEAT);
     expect(info.name).toBe("test/relax");
     expect(info.inputs).toEqual([{ name: "carry", kind: "geometry" }]);
-    expect(info.outputs).toEqual([{ name: "carry", kind: "geometry" }]);
+    // The recipe exposes one output; the node HAS three. `rounds` and
+    // `converged` are the loop's own report and are catalogued as such —
+    // see primitivesSynthesizedPins.test.ts, which is about that alone.
+    expect(info.outputs).toEqual([
+      { name: "carry", kind: "geometry" },
+      { name: "rounds", kind: "value", synthesized: true },
+      { name: "converged", kind: "value", synthesized: true },
+    ]);
   });
 
   it("still describes an ordinary primitive", () => {

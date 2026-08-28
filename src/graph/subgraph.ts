@@ -288,6 +288,28 @@ export interface DescribedSubgraphPin {
   readonly name: string;
   /** Kind of the exposed inner pin, resolved through nested subgraphs. */
   readonly kind: PinKind;
+  /**
+   * Present, and always `true`, on a pin the WRAPPER declared rather than
+   * the body — `repeatUntil`'s `rounds` and `converged`, today the only
+   * two in the library.
+   *
+   * Reported rather than hidden, and reported as an ordinary pin rather
+   * than a separate list, because both halves of the fact matter to a
+   * caller and they pull opposite ways. It is a real output: it is on the
+   * def, it can be wired, and a description that omitted it would tell an
+   * agent the node has fewer outputs than it has — the failure mode being
+   * "there is no way to find out whether the loop converged", which is the
+   * whole point of those two pins. But it is NOT the body's, so it cannot
+   * be traced to an exposed inner pin, it does not move when the recipe's
+   * exposed outputs are renamed, and it survives editing the body. An
+   * ordinary entry carrying a flag says both; a second list would make
+   * every consumer that only wants "what can I read off this node" join
+   * two arrays to ask an easy question.
+   *
+   * Absent (not `false`) on an exposed pin, so an equality check against
+   * `{ name, kind }` still describes the ordinary case exactly.
+   */
+  readonly synthesized?: true;
 }
 
 /**
@@ -356,6 +378,12 @@ function resolveExposedKind(
  * instance's spec until a concrete pin is reached, so nested subgraphs
  * report exact kinds.
  *
+ * A pin the WRAPPER adds on top of the body's — `repeatUntil`'s `rounds`
+ * and `converged` — is included, flagged `synthesized`; see
+ * {@link DescribedSubgraphPin.synthesized} for why it is here and why it is
+ * marked. Wrapper pins follow the exposed ones, in the order the def
+ * declares them.
+ *
  * Returns a frozen snapshot; returns `undefined` for any def not created
  * by `subgraphNode` (consistent with {@link getSubgraphSpec}). Throws a
  * `GraphValidationError` naming the pin and inner node when a wrapper was
@@ -366,19 +394,42 @@ export function describeSubgraphPins<P>(def: NodeDef<P>): SubgraphPins | undefin
   if (spec === undefined) return undefined;
   const resolveSide = (
     exposed: readonly ExposedPin[],
+    declared: readonly PinDef[],
     side: "input" | "output",
-  ): readonly DescribedSubgraphPin[] =>
-    Object.freeze(
-      exposed.map((exp) =>
-        Object.freeze({
-          name: exp.name,
-          kind: resolveExposedKind(spec, exp, side, new Set([spec])),
-        }),
-      ),
+  ): readonly DescribedSubgraphPin[] => {
+    const fromBody = exposed.map((exp) =>
+      Object.freeze({
+        name: exp.name,
+        kind: resolveExposedKind(spec, exp, side, new Set([spec])),
+      }),
     );
+    // Whatever the def declares beyond the exposed names is the wrapper's
+    // own. Read as a DIFFERENCE against the spec rather than from a list of
+    // known wrapper pins, because `src/graph` is below `src/nodes`: the
+    // wrappers that synthesize pins live up there and cannot be named from
+    // here. That is the better direction anyway — the def is the authority
+    // on what the node's pins ARE (for name and kind; `multi` it does not
+    // carry, here or for an exposed pin), so a wrapper that grows one is
+    // described without this function learning about it. Their kinds come
+    // straight off the def: there is no inner pin to resolve, which is
+    // exactly the fact the flag records.
+    //
+    // WHAT MAKES THE NAME DIFFERENCE SAFE lives in the wrapper, not here: a
+    // body may not expose an output named `rounds` or `converged`, and
+    // `repeatUntilNode` refuses one outright (REPORT_PIN_NAMES in
+    // repeatUntil.ts) rather than shadowing it. Without that guard this
+    // filter would silently DROP the wrapper's pin and report the body's —
+    // re-introducing the exact under-report the flag exists to end — so a
+    // future wrapper that synthesizes a pin owes the same refusal.
+    const bodyNames = new Set(fromBody.map((p) => p.name));
+    const fromWrapper = declared
+      .filter((p) => !bodyNames.has(p.name))
+      .map((p) => Object.freeze({ name: p.name, kind: p.kind, synthesized: true as const }));
+    return Object.freeze([...fromBody, ...fromWrapper]);
+  };
   return Object.freeze({
-    inputs: resolveSide(spec.inputs, "input"),
-    outputs: resolveSide(spec.outputs, "output"),
+    inputs: resolveSide(spec.inputs, def.inputs, "input"),
+    outputs: resolveSide(spec.outputs, def.outputs, "output"),
   });
 }
 

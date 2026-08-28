@@ -177,6 +177,34 @@ describe("registering a primitive built in code", () => {
       }),
     ).toThrow(/ghost/);
   });
+
+  it("names no node the author did not write, on the qualified shapes too", () => {
+    // The case above pins the useful half of the message and would pass with
+    // "recipe" — the canonicalizing probe's id — still leading it, which it
+    // did: the old stripper matched `node "recipe": ` and `node "recipe"
+    // inner graph: ` only, so every message qualified by WHICH exposed
+    // declaration failed kept the breadcrumb. Measured before the shared
+    // stripper landed:
+    //   registerSubgraph "test/bad-exposed-pin": node "recipe" subgraph
+    //   inputs[0] ("pts"): unknown inner node "ghost"; inner nodes: ...
+    // "recipe" is not a node the author wrote, cannot be found in the recipe
+    // they passed, and is the first thing the message says.
+    const { inner } = buildLive();
+    let message = "";
+    try {
+      registerSubgraph("test/bad-exposed-pin", {
+        graph: inner,
+        inputs: [{ name: "pts", node: "ghost", pin: "in" }],
+      });
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).not.toContain("recipe");
+    // The qualifier survives — it names the author's own declaration, and is
+    // the half of the breadcrumb that was never scaffolding.
+    expect(message).toContain('subgraph inputs[0] ("pts"): unknown inner node "ghost"');
+    expect(message).toMatch(/^registerSubgraph "test\/bad-exposed-pin": /);
+  });
 });
 
 describe("named subgraph registry", () => {
