@@ -305,10 +305,37 @@ ownership notes only if you already know to look. One sentence there closes
 it. (`ownsGeometry` by contrast was reported clear, and they branch teardown
 on it as documented.)
 
-**Untested by either side:** channel NAMING. Their shaders declare fixed
-attribute names and our graphs choose them; today the only thing between
-those is that both happen to say `seed`. A channel a shader declares and no
-batch provides is exactly the shape that shades zeros with nothing flagged.
+**Channel NAMING, and the integrator's design resolves it — one way that
+matters for what we should build.** A graph names channels freely, but a
+pooled material's attribute names are COMPILED INTO ITS PIPELINE and cannot
+vary per clip without losing the pooling. Both cannot be free, so the host's
+names win and the content carries the mapping (a `CHANNEL_MAP` per actor on
+their side). Their cheap first move is routing a channel onto an attribute
+the template ALREADY declares — `cell` onto `aGridCoord`, driving existing
+grid-repeat behaviour with no shader change and no new pipeline variant.
+
+**What that means for us, and it removes an option rather than adding one:**
+
+- **Do NOT build static channel reporting** (a `pcg channels` reading
+  `instanceAttrs` off a graph without cooking, mirroring `pcg assets`). It
+  answers "do the graph's names match the shader's?", which is a question a
+  mapping host does not ask. It would also have to report a lower bound,
+  since `instanceAttrs` can be field-driven — a second source of truth that
+  can drift from the cook, which is the objection that killed the
+  invalidation preview.
+- **Do NOT add an alias/rename option to `toInstancedMeshes`.** The mapping
+  is per-content actor DATA on the host side, not per-call config; a
+  library-level alias map is a second home for the same mapping.
+- **DO consider the opt-in expectation** (see item 1 above). With a mapping
+  in play the failure is not "names disagree" but "the map is wrong or
+  stale", which produces the identical silent zeros. An opt-in
+  `expectChannels` is what turns that into a named error, and the host
+  asserts its OWN post-mapping names, which are exactly the names it knows.
+  One mechanism covers this and the silent-zeros hazard both.
+- **DO pin the zeros behaviour in `tests/instanceChannelRender.test.ts`** —
+  a shader declaring a channel no batch provides. Today "shades zeros, no
+  error, no validation message" is an integrator's observation on their
+  renderer rather than our documented behaviour. The rig already exists.
 
 **A method note from their own correction**, which generalises:
 `readRenderTargetPixelsAsync` returns TOP-DOWN, and a hand-picked probe row
