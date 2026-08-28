@@ -9,13 +9,15 @@
  * exactly those. A spec may additionally name any standard node's params,
  * which is how a graph built from plain nodes gets a panel.
  *
- * WHAT AUTHORING BUYS. Of the 126 params the shipped primitives expose,
- * seven declare both a min and a max. A panel derived from schemas alone
- * is therefore mostly typed boxes, which is honest but not tunable: you
- * cannot feel your way to a good value by dragging a number field. A
- * panel spec supplies exactly what the schema cannot know — a range worth
- * dragging, a human label, a unit, an order, a grouping, and which knobs
- * matter enough to show at all.
+ * WHERE THE SPEC FORMAT LIVES. `GraphPanelSpec` and its parts are NOT
+ * declared here: they are published as `pcg-ts/panels`, and this module
+ * re-exports them so its own consumers keep one import. The format used to
+ * be declared in this file, which put it outside `src/` — reachable only
+ * through this repo's Vite build, absent from `dist/`, and so unusable by
+ * any host outside the repository. That made "panel specs already do
+ * grouping and labels" a claim no integrator could act on. The types and
+ * the validator moved; the RENDERING below did not, because turning a spec
+ * into widgets is this repo's chrome, not the library's promise.
  *
  * WHY IT IS A SIDECAR. Labels and slider ranges are presentation, not
  * graph semantics: the same graph cooks identically without them. Keeping
@@ -29,75 +31,41 @@
  * and would try to deserialize a panel spec as one.
  */
 import type { ParamSchema } from "pcg-ts";
+import { type GraphPanelSpec, type PanelControlSpec, parsePanelSpec } from "pcg-ts/panels";
 import type { Control, ControlSection, ControlValue } from "./controls.js";
 
-/** One authored row. `param` names the knob; the rest is presentation. */
-export interface PanelControlSpec {
-  /**
-   * `"<nodeId>.<paramName>"`, or `"<nodeId>.<paramName>.<fieldParamName>"`
-   * for a literal named inside that param's field spec — the same key
-   * {@link Knob.key} carries, either way.
-   */
-  readonly param: string;
-  /**
-   * Further knob keys this row writes with the same value.
-   *
-   * One knob standing for several params is the library's own idea: a
-   * subgraph's exposed param already declares `targets` as a list. This
-   * is that idea for a graph of plain nodes, where a thing an author
-   * thinks of as one setting is spread over several. A box truss has four
-   * chord tubes; "chord" is one number, not four sliders that have to be
-   * dragged into agreement.
-   *
-   * The row reads the primary's value, so a mirror moved on its own — in
-   * the node inspector — reads as the graph's, not the panel's, until
-   * this row is next turned. The patch reports each param separately, so
-   * a shared link still replays exactly what the graph holds.
-   */
-  readonly also?: readonly string[];
-  readonly label?: string;
-  /**
-   * Hover text for the row, OVERRIDING the schema's. Both kinds of knob
-   * carry one already — a node param from its registered schema, a
-   * field-spec param from the `description` written beside its inline value
-   * — so this is where one presentation of a graph says it differently, not
-   * where the graph says it at all. A row that omits it keeps the graph's.
-   */
-  readonly description?: string;
-  /**
-   * Bounds, overriding the schema's. Both present from EITHER source
-   * promotes a typed box to a slider.
-   */
-  readonly min?: number;
-  readonly max?: number;
-  readonly step?: number;
-  readonly unit?: string;
-}
-
-export interface PanelSectionSpec {
-  readonly title: string;
-  readonly controls: readonly PanelControlSpec[];
-}
-
-export interface GraphPanelSpec {
-  readonly sections: readonly PanelSectionSpec[];
-}
+// Re-exported, not redeclared. The editor and the knob suites import the
+// spec types from here beside `Knob` and `buildKnobPanel`, and a second
+// declaration of a published format is the bug this move exists to remove
+// — one definition, in `pcg-ts/panels`, reached by whichever path a caller
+// already has.
+export type { GraphPanelSpec, PanelControlSpec, PanelSectionSpec } from "pcg-ts/panels";
 
 const PANELS = import.meta.glob("../graphs/panels/*.json", { query: "?raw", import: "default" });
 
-/** The panel spec for a corpus graph, or undefined when it has none. */
+/**
+ * The panel spec for a corpus graph, or undefined when it has none.
+ *
+ * The Vite glob is what makes this repo-internal: it is resolved at BUILD
+ * time against `graphs/panels/`, so this function can only ever answer for
+ * the shipped corpus. A host outside the repo reads its own file and calls
+ * {@link parsePanelSpec} directly — which is exactly what this does, rather
+ * than casting, so a corpus panel and an integrator's panel are held to one
+ * definition of the format.
+ */
 export async function loadPanelSpec(name: string): Promise<GraphPanelSpec | undefined> {
   const load = PANELS[`../graphs/panels/${name}.json`];
   if (load === undefined) return undefined;
-  const parsed: unknown = JSON.parse((await load()) as string);
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    !Array.isArray((parsed as GraphPanelSpec).sections)
-  ) {
-    throw new Error(`panel spec "${name}": expected an object with a "sections" array`);
+  const text = (await load()) as string;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw new Error(
+      `panel spec "${name}.json" is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
-  return parsed as GraphPanelSpec;
+  return parsePanelSpec(parsed, { source: `panel spec "${name}.json"` });
 }
 
 /**

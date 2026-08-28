@@ -17,6 +17,13 @@ export default defineConfig({
     "src/worker/index.ts",
     "src/worker/entryNode.ts",
     "src/worker/entryBrowser.ts",
+    // The panel spec format. Its own entry so a HOST can validate an
+    // authored panel without pulling the cooking core in behind it, and so
+    // the format is consumable from outside this repo at all — it lived in
+    // `shared/`, reachable only through this repo's own Vite build, which
+    // made "the sidecar format already does that" a claim no integrator
+    // could act on.
+    "src/panels/index.ts",
     // Build tooling, not public API: `scripts/gen-node-reference.mjs` is
     // plain ESM and needs a built path to import the doc renderers from.
     // Absent from package.json's `exports` map on purpose.

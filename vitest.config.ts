@@ -66,6 +66,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "pcg-ts/primitives": here("./src/primitives/index.ts"),
+      "pcg-ts/panels": here("./src/panels/index.ts"),
       "pcg-ts/three": here("./src/three/index.ts"),
       "pcg-ts/gpu": here("./src/gpu/index.ts"),
       "pcg-ts": here("./src/index.ts"),
