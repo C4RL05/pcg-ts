@@ -86,6 +86,27 @@ export function floor(a: FieldLike): Field {
 }
 
 /**
+ * Elementwise truncation TOWARD ZERO: `trunc(-1.5)` is -1 where
+ * `floor(-1.5)` is -2, and an exact integer comes back unchanged.
+ *
+ * Bit-exact on both paths for the reason `floor` is — whatever either
+ * returns is an f32 that was already representable, so there is no
+ * rounding left for the two to disagree about. The sign survives, so
+ * `trunc(-0.5)` is -0 and not +0, and a non-finite input is returned as
+ * it came.
+ *
+ * Reach for `floor` when a coordinate is being BINNED and for this when
+ * whole units are being COUNTED outward from an origin. Only `floor`
+ * gives bins of equal width across zero: `trunc` maps both (-1, 0) and
+ * (0, 1) to 0, so the bin at the origin comes out twice as wide as every
+ * other one — the same mirroring that makes a truncated remainder the
+ * wrong tiling primitive (see {@link mod} and {@link rem}).
+ */
+export function trunc(a: FieldLike): Field {
+  return elementwise("trunc", [a], (v) => Math.trunc(v[0]));
+}
+
+/**
  * Elementwise sign as -1, 0 or +1 — EXACT rather than budgeted, which is
  * what choosing the definition rather than inheriting one buys.
  *
@@ -146,6 +167,46 @@ export function fract(a: FieldLike): Field {
 export function mod(a: FieldLike, b: FieldLike): Field {
   return elementwise("mod", [a, b], (v) =>
     Math.fround(v[0] - Math.fround(v[1] * Math.floor(Math.fround(v[0] / v[1])))),
+  );
+}
+
+/**
+ * Elementwise TRUNCATED remainder, `x - y * trunc(x / y)` — the remainder
+ * whose sign follows the DIVIDEND, where {@link mod}'s follows the divisor.
+ * `rem(-1, 8)` is -1; `mod(-1, 8)` is 7. THEY DIFFER ONLY WHERE THE TWO
+ * OPERANDS DISAGREE IN SIGN and the division is not exact — `rem(9, 8)`
+ * and `mod(9, 8)` are both 1, `rem(9, -8)` is 1 where `mod(9, -8)` is -7 —
+ * which is exactly what makes picking the wrong one silent.
+ *
+ * THE NAME IS THE PAIR, not an abbreviation. Ada, Common Lisp, Haskell
+ * and Julia all spell this distinction `mod` / `rem` with these same two
+ * meanings, so the two words carry the semantics between them and neither
+ * needs a suffix. `fmod` was the other candidate and was rejected for
+ * being `mod` with a letter in front of it: the whole hazard here is
+ * reaching for one and getting the other, and a name that CONTAINS the
+ * other name is how that happens — to an autocomplete, to a grep, and to
+ * an agent scanning the catalog for "mod".
+ *
+ * Use it where the sign of the dividend is MEANING — a signed offset from
+ * a centre line, an error term that must stay on the side it came from —
+ * and `mod` where a coordinate is being wrapped into a tile, which is the
+ * job `mod` documents forever. On the negative side they disagree by a
+ * whole divisor, so this is never a drop-in for that.
+ *
+ * The operations are rounded to f32 INDIVIDUALLY, so the CPU runs the
+ * device's expansion step for step — the same construction that makes
+ * `mod` bit-exact, and it carries the same limit: once `|x / y|` passes
+ * 2^24 the quotient can no longer hold an exact integer and the answer
+ * stops meaning a remainder, on both paths equally. `rem(1e9, 3)` is 0
+ * here where JS `%` says 1, and `mod` does the same thing with the same
+ * divisor. So this follows fmod's CONVENTION without being fmod: a true
+ * remainder is exact for any operands, and it also gives a zero result
+ * the dividend's sign where this gives +0. A zero divisor is NaN,
+ * because `trunc(x / 0)` is infinite and `0 * Infinity` is NaN.
+ */
+export function rem(a: FieldLike, b: FieldLike): Field {
+  return elementwise("rem", [a, b], (v) =>
+    Math.fround(v[0] - Math.fround(v[1] * Math.trunc(Math.fround(v[0] / v[1])))),
   );
 }
 
@@ -217,20 +278,69 @@ export function step(edge: FieldLike, x: FieldLike): Field {
  *
  * It overflows to Infinity above about 88.7 and underflows to 0 below about
  * -103.9, on both paths, because that range belongs to f32 and not to the
- * implementation. For another base, `pow(b, x)` already exists; there is no
- * `exp2` in the grammar because that is what it would be a synonym for.
+ * implementation. For an arbitrary base, `pow(b, x)`; for base two,
+ * {@link exp2}, which is one device instruction where `pow` is three.
  */
 export function exp(a: FieldLike): Field {
   return elementwise("exp", [a], (v) => Math.exp(v[0]));
 }
 
 /**
+ * Elementwise 2^x, and NOT a synonym for `pow(2, x)` even though the two
+ * compute the same function.
+ *
+ * The device implements `pow(a, b)` as exactly `exp2(b * log2(a))` — that
+ * is the identity {@link pow}'s narrowed domain is adopted from — so
+ * `pow(2, x)` is THIS fn with a logarithm and a multiply in front of it,
+ * and it is billed at `pow`'s budget of 8 rather than this one's. The
+ * grammar withheld `exp2` on the synonym rule for exactly as long as it
+ * took to notice that the synonym runs the same instruction three times.
+ *
+ * Its range is f32's exponent range and nothing narrower: `exp2(128)` is
+ * Infinity because 2^128 is past f32's largest finite value, and
+ * `exp2(-150)` is 0 — where `exp` gives up at about 88.7 and -103.9, the
+ * same two limits expressed in the wrong base. A WHOLE exponent inside
+ * that range is exact on both paths: a power of two is an f32 with a zero
+ * mantissa, so the answer is representable and there is nothing for the
+ * CPU to round. That is a construction on the CPU side only: WGSL gives
+ * `exp2` a ULP tolerance rather than exactness, so the two paths agreeing
+ * there is MEASURED on the reference adapter (the device edge probe pins
+ * it) rather than guaranteed by the format. The budget is spent on the
+ * interior between them.
+ */
+export function exp2(a: FieldLike): Field {
+  return elementwise("exp2", [a], (v) => Math.pow(2, v[0]));
+}
+
+/**
  * Elementwise NATURAL logarithm. `log(0)` is -Infinity and `log(x)` for
- * x < 0 is NaN, on both paths. For another base, divide by a constant:
- * `div(log(x), log(b))`. See {@link exp} for the shared budget note.
+ * x < 0 is NaN, on both paths. For an arbitrary base, divide by a
+ * constant: `div(log(x), log(b))`; for base two, {@link log2}. See
+ * {@link exp} for the shared budget note.
  */
 export function log(a: FieldLike): Field {
   return elementwise("log", [a], (v) => Math.log(v[0]));
+}
+
+/**
+ * Elementwise BASE-2 logarithm — the inverse of {@link exp2}, and the one
+ * of these four the grammar had no spelling for at all.
+ *
+ * `div(log(x), log(2))` was the workaround, and it is two transcendentals
+ * and a division standing in for a single device instruction; the divisor
+ * is also a constant a reader has to evaluate before the expression means
+ * anything. This is the fn to reach for whenever the QUESTION is a count
+ * of doublings — which fbm octave a frequency belongs to, how many bits a
+ * range needs, how many halvings a level of detail is from the root —
+ * because that is what a base-2 logarithm answers directly.
+ *
+ * `log2(0)` is -Infinity and a negative input is NaN, on both paths, the
+ * same as {@link log}. Transcendental on both sides, so it carries a
+ * measured budget; an exact power of two is the case where the answer is
+ * a small whole number and has nothing to round.
+ */
+export function log2(a: FieldLike): Field {
+  return elementwise("log2", [a], (v) => Math.log2(v[0]));
 }
 
 // -- trigonometry ----------------------------------------------------------

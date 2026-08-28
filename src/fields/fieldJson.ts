@@ -96,6 +96,7 @@ import {
   dot,
   eq,
   exp,
+  exp2,
   evaluateField,
   floor,
   fract,
@@ -109,6 +110,7 @@ import {
   lerp,
   lt,
   log,
+  log2,
   makeField,
   max,
   min,
@@ -122,6 +124,7 @@ import {
   ramp,
   randomField,
   randomFrom,
+  rem,
   remap,
   select,
   sin,
@@ -131,6 +134,7 @@ import {
   step,
   sub,
   tan,
+  trunc,
   vec,
 } from "./index.js";
 import {
@@ -1154,8 +1158,37 @@ registerFixed(
     "truncated remainder mirrors the tile either side of the origin, so a pattern built on one " +
     "breaks along x = 0 and z = 0 — a seam that shows up only once a world crosses zero, which " +
     "is exactly where an unbounded generator lives. A zero divisor is NaN on both paths, because " +
-    `\`floor(x / 0)\` is infinite and \`0 * Infinity\` is NaN. ${BROADCAST}`,
+    `\`floor(x / 0)\` is infinite and \`0 * Infinity\` is NaN. For the other convention — the ` +
+    `sign following the DIVIDEND — the grammar has \`rem\`, which is a different number below ` +
+    `zero and the same one above it. ${BROADCAST}`,
   (f) => mod(f[0], f[1]),
+);
+registerFixed(
+  "rem",
+  "uniform",
+  [
+    arg("x", "Dividend, and the operand whose SIGN the result takes."),
+    arg("y", "Divisor. ZERO IS NaN."),
+  ],
+  "Elementwise TRUNCATED remainder, `x - y * trunc(x / y)` — the remainder whose sign follows " +
+    "the DIVIDEND, where `mod`'s follows the divisor. THE TWO DIFFER ONLY WHERE THE OPERANDS " +
+    "DISAGREE IN SIGN and the division is not exact, which is what makes picking the wrong one " +
+    "silent: `rem(-1, 8)` is -1 and `mod(-1, 8)` is 7, while `rem(9, 8)` and `mod(9, 8)` are " +
+    "both 1. A negative DIVISOR moves the disagreement to the other side: " +
+    "`rem(9, -8)` is 1 and `mod(9, -8)` is -7. It is the CONVENTION JavaScript's `%`, C's `fmod` " +
+    "and WGSL's `%` follow, though not their exact function: those are true remainders, correct " +
+    "for any operands, where this is the f32 expansion (see the 2^24 note below) and gives a " +
+    "zero result the sign +0 rather than the dividend's. The names are the pair Ada, Common " +
+    "Lisp, Haskell and Julia all use for " +
+    "exactly this distinction, so the two words carry the semantics between them; `fmod` was " +
+    "rejected as a name for containing the other name, which is how the wrong one gets reached " +
+    "for. Choose `mod` for wrapping a coordinate into a tile and `rem` where the dividend's sign " +
+    "is meaning rather than noise — a signed offset either side of a centre line. Bit-exact on " +
+    "both paths, by the same construction `mod` uses (each operation rounded to f32 " +
+    "individually, so the CPU runs the device's expansion step for step), and it inherits the " +
+    "same limit: once `|x / y|` passes 2^24 the quotient cannot hold an exact integer and " +
+    `neither path is computing a remainder any more. ${BROADCAST}`,
+  (f) => rem(f[0], f[1]),
 );
 registerFixed(
   "exp",
@@ -1164,20 +1197,53 @@ registerFixed(
   "Elementwise e raised to x. Transcendental on both sides, so it carries a measured GPU budget " +
     "rather than an exactness claim. It overflows to Infinity above about 88.7 and underflows to " +
     "0 below about -103.9 on both paths, because that range belongs to f32 and not to either " +
-    "implementation. `exp(mul(-1, d))` is the decay a falloff usually wants; for another base, " +
-    "`pow` is already there, which is why no `exp2` is.",
+    "implementation. `exp(mul(-1, d))` is the decay a falloff usually wants; for an arbitrary " +
+    "base reach for `pow`, and for base two for `exp2`.",
   (f) => exp(f[0]),
+);
+registerFixed(
+  "exp2",
+  "uniform",
+  [arg("x", "Exponent applied to 2.")],
+  "Elementwise 2 raised to x, and NOT a synonym for `pow(2, x)` despite computing the same " +
+    "function. Measured hardware implements `pow(a, b)` as exactly `exp2(b * log2(a))` — the " +
+    "identity `pow`'s narrowed domain is adopted from — so `pow(2, x)` is this fn with a " +
+    "logarithm and a multiply in front of it, billed at `pow`'s budget of 8 rather than this " +
+    "one's. Its range is f32's exponent range and nothing narrower: `exp2(128)` is Infinity " +
+    "because 2^128 is past f32's largest finite value, and `exp2(-150)` is 0, where `exp` gives " +
+    "up at about 88.7 and -103.9 — the same two limits in the wrong base. A WHOLE exponent " +
+    "inside that range comes back exact, a power of two being an f32 with a zero mantissa and so " +
+    "nothing for the CPU to round; that the DEVICE agrees there is measured on the reference " +
+    "adapter rather than guaranteed, since WGSL gives `exp2` a ULP tolerance and not an " +
+    "exactness rule. The measured budget is spent on the interior between them.",
+  (f) => exp2(f[0]),
 );
 registerFixed(
   "log",
   "uniform",
   [arg("x", "Value whose natural logarithm is taken. ZERO IS -Infinity, NEGATIVES ARE NaN.")],
   "Elementwise NATURAL logarithm — base e, not 10 and not 2. `log(0)` is -Infinity and a " +
-    "negative input is NaN, on both paths. For another base, divide by a constant: " +
-    "`div(log(x), log(b))`. Transcendental on both sides and so budgeted rather than exact. Its " +
+    "negative input is NaN, on both paths. For an arbitrary base, divide by a constant: " +
+    "`div(log(x), log(b))`; for base two, `log2` is one device instruction instead of three. " +
+    "Transcendental on both sides and so budgeted rather than exact. Its " +
     "usual job is compressing a range that spans orders of magnitude into one a colour or a " +
     "height can show.",
   (f) => log(f[0]),
+);
+registerFixed(
+  "log2",
+  "uniform",
+  [arg("x", "Value whose base-2 logarithm is taken. ZERO IS -Infinity, NEGATIVES ARE NaN.")],
+  "Elementwise BASE-2 logarithm, the inverse of `exp2` and the one thing here the grammar had " +
+    "no spelling for at all: `div(log(x), log(2))` is two transcendentals and a division " +
+    "standing in for a single device instruction, with a constant divisor a reader has to " +
+    "evaluate before the expression means anything. Reach for it whenever the QUESTION is a " +
+    "count of doublings — which fbm octave a frequency belongs to, how many bits a range needs, " +
+    "how many halvings a level of detail sits from the root. `log2(0)` is -Infinity and a " +
+    "negative input is NaN, on both paths, exactly as for `log`. Transcendental on both sides " +
+    "and so budgeted rather than exact; an exact power of two is the case whose answer is a " +
+    "small whole number with nothing to round.",
+  (f) => log2(f[0]),
 );
 registerFixed(
   "floor",
@@ -1187,8 +1253,22 @@ registerFixed(
     "and `floor(-0.5)` is -1, not 0. Its usual companion is binning — `floor(x / N)` is which tile " +
     "a coordinate falls in, where `mod(x, N)` is where inside that tile it sits. For the fractional " +
     "part reach for `fract`, which is what `sub(x, floor(x))` spelled before the grammar had a name " +
-    "for it.",
+    "for it. For rounding toward ZERO instead of toward -Infinity, `trunc`.",
   (f) => floor(f[0]),
+);
+registerFixed(
+  "trunc",
+  "uniform",
+  [arg("x", "Value to round toward zero.")],
+  "Elementwise truncation TOWARD ZERO, so `trunc(-1.5)` is -1 where `floor(-1.5)` is -2, and an " +
+    "exact integer comes back unchanged. The sign survives: `trunc(-0.5)` is -0, not +0. " +
+    "Bit-exact on both paths for the reason `floor` is — whatever either returns was already a " +
+    "representable f32, leaving nothing to round and so nothing to disagree about. Choose " +
+    "`floor` for BINNING a coordinate and this for COUNTING whole units outward from an origin: " +
+    "only `floor` gives bins of equal width across zero, since `trunc` maps both (-1, 0) and " +
+    "(0, 1) onto 0 and makes the bin at the origin twice as wide as every other one. That is the " +
+    "same mirroring that makes `rem` the wrong tiling primitive and `mod` the right one.",
+  (f) => trunc(f[0]),
 );
 registerFixed(
   "sqrt",

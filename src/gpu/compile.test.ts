@@ -304,10 +304,22 @@ describe("grammar coverage", () => {
     // A NEGATIVE dividend: the whole point of a floored mod is what it does
     // on this side of zero, so the minimal case has to be on that side.
     mod: { fn: "mod", args: [-1, 8] },
+    // The same negative dividend, and for the sharper version of the same
+    // reason: `rem` and `mod` are the SAME number above zero, so a minimal
+    // case on the positive side could not tell the two lowerings apart.
+    rem: { fn: "rem", args: [-1, 8] },
     sign: { fn: "sign", args: [-2] },
+    // Negative and fractional: rounding toward zero only differs from
+    // rounding down below zero, and only off the integers.
+    trunc: { fn: "trunc", args: [-1.5] },
     exp: { fn: "exp", args: [1] },
+    // A NON-integer exponent: a whole one is exact on both paths, so a
+    // minimal case built on 3 would read as if the fn were exact.
+    exp2: { fn: "exp2", args: [1.5] },
     // Strictly positive: zero is -Infinity and negatives are NaN, on both.
     log: { fn: "log", args: [2] },
+    // Not a power of two, for `exp2`'s reason in reverse.
+    log2: { fn: "log2", args: [3] },
     smoothstep: { fn: "smoothstep", args: [0, 1, 0.25] },
     distance: { fn: "distance", args: [[1, 2, 3], [4, 5, 6]] },
   };
@@ -323,6 +335,37 @@ describe("grammar coverage", () => {
       expect(k.wgsl).toContain("outBuf[i");
     });
   }
+
+  it("emits the FORM each remainder and base-two fn was decided on, not an equivalent", () => {
+    // Four lowerings whose choice of spelling is a decision the parity
+    // table rests on, pinned as TEXT because that is where the decision
+    // lives. Every one of them has a plausible alternative that compiles,
+    // runs, and produces a different number:
+    //
+    //  - `mod` and `rem` differ only in floor vs trunc, and WGSL's `%` is
+    //    the second. On the reference adapter `%` measures identical to
+    //    `rem`'s expansion (see the note in compile.ts), so the DEVICE
+    //    suite cannot tell them apart there and this is the only pin that
+    //    can — on any machine, adapter or none.
+    //  - `exp2` and `log2` written base-e (`exp(x * LN2)`,
+    //    `log(x) * LOG2E`) measure 6.0x and 2.0x worse and bust their
+    //    budgets, so the device suite DOES catch those — but only where
+    //    there is a device.
+    const wgsl = (spec: FieldSpecArg) => compileFieldSpec(spec, LAYOUT).wgsl;
+    const mod = wgsl(MINIMAL_SPECS.mod as FieldSpecArg);
+    expect(mod).toContain("floor(");
+    expect(mod).not.toContain("trunc(");
+    const rem = wgsl(MINIMAL_SPECS.rem as FieldSpecArg);
+    expect(rem).toContain("trunc(");
+    expect(rem).not.toContain("floor(");
+    expect(rem).not.toContain("%");
+    // The builtins, not the base-e compositions they could be written as.
+    expect(wgsl(MINIMAL_SPECS.exp2 as FieldSpecArg)).toContain("exp2(");
+    expect(wgsl(MINIMAL_SPECS.log2 as FieldSpecArg)).toContain("log2(");
+    // `trunc` is the one of the four that DOES take its builtin, which is
+    // the whole reason it is bit-exact rather than budgeted.
+    expect(wgsl(MINIMAL_SPECS.trunc as FieldSpecArg)).toContain("trunc(");
+  });
 });
 
 describe("codegen structure", () => {

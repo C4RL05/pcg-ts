@@ -16,6 +16,7 @@ import {
   dot,
   eq,
   exp,
+  exp2,
   floor,
   fract,
   ge,
@@ -25,6 +26,7 @@ import {
   lerp,
   lt,
   log,
+  log2,
   max,
   min,
   mul,
@@ -33,6 +35,7 @@ import {
   normalize,
   pow,
   ramp,
+  rem,
   smoothstep,
   remap,
   select,
@@ -42,6 +45,7 @@ import {
   step,
   sub,
   tan,
+  trunc,
   vec,
 } from "./combinators.js";
 import { attribute, constant, position } from "./inputs.js";
@@ -534,6 +538,168 @@ describe("mod", () => {
 
   it("is NaN for a zero divisor", () => {
     expect(asArray(ctx, mod(x, 0)).every(Number.isNaN)).toBe(true);
+  });
+});
+
+describe("trunc", () => {
+  // Either side of zero, two exact integers and a non-finite, because the
+  // whole reason this fn exists is what it does on the negative side.
+  const ctx = cloudCtx([-1.5, 0, 0, 2.75, 0, 0, -3, 0, 0, 5, 0, 0, -0.5, 0, 0, Infinity, 0, 0]);
+  const x = component(position(), 0);
+
+  it("rounds TOWARD ZERO, where floor rounds toward -Infinity", () => {
+    // -1.5 gives -1 and not -2. They part company on exactly the negative
+    // NON-integers — a negative integer, a positive value and a non-finite
+    // all come back the same from both — which is what makes reaching for
+    // the wrong one silent.
+    expect(asArray(ctx, trunc(x)).slice(0, 4)).toEqual([-1, 2, -3, 5]);
+    expect(asArray(ctx, floor(x)).slice(0, 4)).toEqual([-2, 2, -3, 5]);
+  });
+
+  it("returns an exact integer unchanged, on both signs", () => {
+    // Rows 2 and 3 are -3 and 5: no rounding to do, so nothing to get wrong.
+    expect(asArray(ctx, trunc(x)).slice(2, 4)).toEqual([-3, 5]);
+  });
+
+  it("keeps the sign of a value that truncates to zero", () => {
+    // -0.5 gives -0, not +0. `abs` then `floor` would give +0, and the two
+    // are only distinguishable by Object.is — which is why it is asserted
+    // that way rather than with toEqual.
+    expect(Object.is(asArray(ctx, trunc(x)).at(4), -0)).toBe(true);
+  });
+
+  it("returns a non-finite input as it came", () => {
+    expect(asArray(ctx, trunc(x)).at(5)).toBe(Infinity);
+  });
+});
+
+describe("rem against mod", () => {
+  // The same cloud both fns read, spanning both signs of the dividend.
+  const ctx = cloudCtx([-1, 0, 0, 9, 0, 0, -9, 0, 0, 8, 0, 0, 0, 0, 0]);
+  const x = component(position(), 0);
+
+  it("is TRUNCATED: the sign follows the dividend, not the divisor", () => {
+    // Hand-derived rather than computed, because computing them with
+    // `x - y * trunc(x / y)` would be asserting the implementation against
+    // itself: -1 - 8 * trunc(-0.125) is -1 - 8 * 0, which is -1.
+    expect(asArray(ctx, rem(x, 8))).toEqual([-1, 1, -1, 0, 0]);
+  });
+
+  it("differs from mod on EVERY negative dividend and on none of the rest", () => {
+    // The pair, written out side by side. This is the whole hazard: above
+    // zero they are the same number, so a graph built on the wrong one
+    // works until a coordinate crosses the origin.
+    const floored = asArray(ctx, mod(x, 8));
+    const truncated = asArray(ctx, rem(x, 8));
+    expect(floored).toEqual([7, 1, 7, 0, 0]);
+    expect(truncated).toEqual([-1, 1, -1, 0, 0]);
+    // Rows 0 and 2 hold -1 and -9; rows 1, 3 and 4 hold 9, 8 and 0.
+    expect([floored[0] === truncated[0], floored[2] === truncated[2]]).toEqual([false, false]);
+    expect([
+      floored[1] === truncated[1],
+      floored[3] === truncated[3],
+      floored[4] === truncated[4],
+    ]).toEqual([true, true, true]);
+  });
+
+  it("ignores the DIVISOR's sign, where mod is decided by it", () => {
+    // The mirror of the clause above, and the sharpest statement of the
+    // difference: a negative divisor moves every one of mod's answers and
+    // none of rem's. mod(9, -8) is -7 where rem(9, -8) is 1.
+    expect(asArray(ctx, rem(x, -8))).toEqual([-1, 1, -1, 0, 0]);
+    expect(asArray(ctx, rem(x, -8))).toEqual(asArray(ctx, rem(x, 8)));
+    expect(asArray(ctx, mod(x, -8))).toEqual([-1, -7, -1, 0, 0]);
+  });
+
+  it("is NaN for a zero divisor, exactly as mod is", () => {
+    expect(asArray(ctx, rem(x, 0)).every(Number.isNaN)).toBe(true);
+    expect(asArray(ctx, mod(x, 0)).every(Number.isNaN)).toBe(true);
+  });
+
+  it("is the EXPANSION and not fmod, which part company past a 2^24 quotient", () => {
+    // `rem` is `x - y * trunc(x / y)` with every step rounded to f32, which
+    // is what the kernel runs. A true fmod (JS `%`, C's `fmod`) is exact for
+    // any operands and answers 1 here; the expansion cannot hold a quotient
+    // of 333333333 in f32 and answers 0. The dividend is exactly
+    // representable and so is the divisor — this is the QUOTIENT's limit,
+    // not an input's. Pinned so the lowering cannot be "simplified" to a
+    // builtin fmod and quietly change the answer on the device.
+    const big = cloudCtx([1e9, 0, 0, -8, 0, 0]);
+    const bx = component(position(), 0);
+    expect(asArray(big, rem(bx, 3))[0]).toBe(0);
+    expect(1e9 % 3).toBe(1);
+    // And it is an INHERITED limit rather than this fn's: `mod` does the
+    // same thing with the same divisor, which is why the docs put the 2^24
+    // caveat on both.
+    expect(asArray(big, mod(bx, 3))[0]).toBe(0);
+    // The other, smaller divergence from JS `%`: a zero result comes out +0
+    // here, where fmod gives it the dividend's sign. `-8 % 8` is -0 in JS.
+    expect(Object.is(asArray(big, rem(bx, 8))[1], 0)).toBe(true);
+    expect(Object.is(-8 % 8, -0)).toBe(true);
+  });
+});
+
+describe("exp2 and log2", () => {
+  const ctx = cloudCtx([0, 0, 0, 1, 0, 0, 10, 0, 0, -1, 0, 0, 0.5, 0, 0]);
+  const x = component(position(), 0);
+
+  it("exp2 is exact on whole exponents, positive and negative", () => {
+    // A power of two is an f32 with a zero mantissa, so there is nothing
+    // for either path to round. 2^0, 2^1, 2^10, 2^-1.
+    expect(asArray(ctx, exp2(x)).slice(0, 4)).toEqual([1, 2, 1024, 0.5]);
+  });
+
+  it("exp2 has an interior, and at x = 0.5 it is the square root of two", () => {
+    expect(asArray(ctx, exp2(x)).at(4)).toBe(Math.fround(Math.SQRT2));
+  });
+
+  it("exp2's range is f32's exponent range, not exp's", () => {
+    // 2^127 is finite, 2^128 is past f32's largest value, 2^-149 is the
+    // smallest subnormal and 2^-150 is nothing. `exp` gives up at 88.7 and
+    // -103.9 — the same two limits expressed in the wrong base.
+    const wide = cloudCtx([127, 0, 0, 128, 0, 0, -149, 0, 0, -150, 0, 0]);
+    const w = component(position(), 0);
+    expect(asArray(wide, exp2(w))).toEqual([
+      Math.fround(1.7014118346046923e38),
+      Infinity,
+      Math.fround(1.401298464324817e-45),
+      0,
+    ]);
+  });
+
+  it("log2 is exact on powers of two, above and below one", () => {
+    const p = cloudCtx([1, 0, 0, 8, 0, 0, 0.5, 0, 0, 1024, 0, 0]);
+    expect(asArray(p, log2(component(position(), 0)))).toEqual([0, 3, -1, 10]);
+  });
+
+  it("log2(0) is -Infinity and a negative input is NaN, as for log", () => {
+    const out = asArray(cloudCtx([0, 0, 0, -1, 0, 0]), log2(component(position(), 0)));
+    expect(out[0]).toBe(-Infinity);
+    expect(out[1]).toBeNaN();
+  });
+
+  it("log2 of a non-power-of-two is the base-2 logarithm rounded to f32", () => {
+    // Written out rather than composed: `div(log(3), log(2))` is the
+    // spelling this fn replaces, and on the device it is a different
+    // number — 1.30 rangeUlp against this lowering's 0.65.
+    const out = asArray(cloudCtx([3, 0, 0]), log2(component(position(), 0)));
+    expect(out[0]).toBe(Math.fround(1.5849624872207642));
+    expect(out[0]).toBeCloseTo(Math.log2(3), 6);
+  });
+
+  it("round-trips through each other on whole exponents", () => {
+    expect(asArray(ctx, log2(exp2(x))).slice(0, 4)).toEqual([0, 1, 10, -1]);
+  });
+
+  it("agrees with pow(2, x) on the CPU, which is where the synonym question ENDS", () => {
+    // Honest about what this pins and what it does not. The CPU exp2 IS
+    // `Math.pow(2, x)`, so this holds by construction and is a consistency
+    // check rather than evidence. The reason to have both fns is a DEVICE
+    // fact and is measured there, not here: the device runs `pow(a, b)` as
+    // `exp2(b * log2(a))`, so `pow(2, x)` is this fn with two operations in
+    // front of it and is billed at 8 rangeUlp against this one's 1. See the
+    // exp2 row in parity.testsupport.ts for the measurement that decides it.
+    expect(asArray(ctx, exp2(x)).slice(0, 4)).toEqual(asArray(ctx, pow(2, x)).slice(0, 4));
   });
 });
 

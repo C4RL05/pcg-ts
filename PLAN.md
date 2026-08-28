@@ -779,9 +779,37 @@ spelling of. The `and`/`or` line therefore is not "no synonyms" but "no
 synonym for an operation whose existing spelling is already the obvious
 one", which is a narrower rule than this entry assumed it was applying.
 
-What is still absent, and now deliberately: `exp2`/`log2` (`pow(2, x)` is
+~~What is still absent, and now deliberately: `exp2`/`log2` (`pow(2, x)` is
 the first, nothing has asked for the second), a truncated remainder to sit
-beside the floored one, and `trunc` itself.
+beside the floored one, and `trunc` itself.~~ — ALL FOUR SHIPPED 2026-08-28,
+which takes the grammar 58 -> 62.
+
+**AND THE PARENTHESIS WAS THE WRONG ARGUMENT, measured.** `pow(2, x)` is
+not `exp2`. On this box's adapter `exp2` lands at 0.50 range-ulp against
+`exp`'s 4.12 — EIGHT TIMES tighter — and `log2` at 0.65 against `log`'s
+0.93, because the base-2 pair IS the hardware instruction and base-e is the
+scaled composition on top of it. Writing the new pair base-e instead was
+tried and measured 6.0x and 2.0x worse, busting a budget of 1 at 3.00 and
+1.30. So the entry had the dependency backwards: the base-e fns it already
+had are the derived ones.
+
+`rem` is the truncated remainder — sign follows the DIVIDEND, so
+`rem(-1, 8)` is -1 where `mod(-1, 8)` is 7. Named for the `mod`/`rem` split
+Ada, Common Lisp, Haskell and Julia all spell that way; `fmod` was declined
+for CONTAINING the other name, since reaching for one and getting the other
+is the failure mode. `trunc` and `rem` are bit-exact on the device (maxUlp
+0), and both bit-exactness claims were falsified before being believed —
+swapping `trunc` for `floor` in either lowering reddens the rows.
+
+Two things worth keeping from the build. WGSL's `%` is NOT emitted for
+`rem` even though it means the same: this adapter implements `%` as the
+spec's expansion, so emitting it leaves the whole device table green and
+the argument for the expansion is PORTABILITY rather than a measurement —
+which is why the emitted WGSL text is pinned in `compile.test.ts` instead,
+a pin that does fire. And the shader compiler algebraically folds
+`log2(exp2(x))` to `x`: the CPU runs `exp2(128)` to Infinity and answers
+Infinity where the device answers 128. Parity is a claim about one fn's
+lowering and not about an expression built from several.
 
 ### The graph written blind, 2026-08-17
 

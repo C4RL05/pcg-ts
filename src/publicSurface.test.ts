@@ -24,7 +24,7 @@ const ROOT_SURFACE = [
   "describeSubgraphParams",
   "describeSubgraphPins", "deserializeGraph", "distance",
   "div", "dot", "elementCount", "eq",
-  "evaluateField", "exp",
+  "evaluateField", "exp", "exp2",
   "extrudePolygon", "fbm", "fieldFromJson", "fieldToJson", "filterByAttribute",
   "filterByBounds", "filterByDensity", "filterByExpression", "filterByTag",
   "filterPrimitivesByAttribute", "filterPrimitivesByBounds", "firstGeometry", "floor", "forEachNode", "fract",
@@ -48,7 +48,7 @@ const ROOT_SURFACE = [
   "inferWrapperKind",
   "inlineParamMetaOf", "inlineParamSchema", "inlineParamValuesOf", "isDeviceInstanceBatch", "isDeviceResidentInstances", "isField", "jitterPoints",
   "keyNum", "keyRef", "le", "length", "lerp", "liveParamValueError", "listFieldFnInfos", "listFieldFns",
-  "listNodeTypes", "listSubgraphs", "log",
+  "listNodeTypes", "listSubgraphs", "log", "log2",
   "lt", "makeDeviceInstancesItem", "makeField",
   "makeGeometryItem", "makeInstancesItem", "makeValueItem", "max", "mergePoints", "mergePrimitives",
   "meshPrimitive", "min", "mod",
@@ -80,7 +80,7 @@ const ROOT_SURFACE = [
   // A uniform keyed on a VALUE the graph computes rather than on where
   // the element is, so a draw survives the element being moved.
   "randomFrom",
-  "registerSubgraph", "remap", "removeAttribute",
+  "registerSubgraph", "rem", "remap", "removeAttribute",
   // Wraps an inner graph and re-cooks it, feeding its "carry" output back
   // into its own input, until a detail-domain scalar reads zero — the
   // bounded fixed point a DAG cannot wire as a cycle.
@@ -94,7 +94,7 @@ const ROOT_SURFACE = [
   "strandedGraphParamValues", "sub",
   "subgraphContentHash",
   "subgraphNode", "surfaceSample", "sweepProfile", "tan", "transferAttribute", "transferNearest",
-  "transferRaycast", "transferUv", "transformPoints", "validateGraphMeta", "valueConstant",
+  "transferRaycast", "transferUv", "transformPoints", "trunc", "validateGraphMeta", "valueConstant",
   "valueNoise", "vec", "volumeSample", "withInlineParamValue", "worleyNoise", "writeCurveFrame",
   // Narrows a CellContext to its "xz" form. Public because every `bind`
   // on a square-cell level wants the cell rectangle and only a

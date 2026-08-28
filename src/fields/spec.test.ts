@@ -32,6 +32,7 @@ import {
   dot,
   eq,
   exp,
+  exp2,
   floor,
   fract,
   ge,
@@ -40,6 +41,7 @@ import {
   length,
   lerp,
   log,
+  log2,
   lt,
   max,
   min,
@@ -49,6 +51,7 @@ import {
   normalize,
   pow,
   ramp,
+  rem,
   remap,
   select,
   sign,
@@ -58,6 +61,7 @@ import {
   step,
   sub,
   tan,
+  trunc,
   vec,
   randomFrom,
 } from "./combinators.js";
@@ -294,7 +298,7 @@ const CASES: Case[] = [
   { name: "randomField negative key", make: () => randomField(-3) },
   { name: "randomField string key", make: () => randomField("species") },
 
-  // -- elementwise (34) -----------------------------------------------
+  // -- elementwise (38) -----------------------------------------------
   ...spread("add", BINARY, (a) => add(a[0], a[1])),
   ...spread("sub", BINARY, (a) => sub(a[0], a[1])),
   ...spread("mul", BINARY, (a) => mul(a[0], a[1])),
@@ -314,11 +318,15 @@ const CASES: Case[] = [
   ...spread("fract", UNARY, (a) => fract(a[0])),
   ...spread("sign", UNARY, (a) => sign(a[0])),
   ...spread("exp", UNARY, (a) => exp(a[0])),
+  ...spread("exp2", UNARY, (a) => exp2(a[0])),
   ...spread("log", UNARY, (a) => log(a[0])),
+  ...spread("log2", UNARY, (a) => log2(a[0])),
   ...spread("mod", BINARY, (a) => mod(a[0], a[1])),
+  ...spread("rem", BINARY, (a) => rem(a[0], a[1])),
   ...spread("smoothstep", TERNARY, (a) => smoothstep(a[0], a[1], a[2])),
   ...spread("abs", UNARY, (a) => abs(a[0])),
   ...spread("floor", UNARY, (a) => floor(a[0])),
+  ...spread("trunc", UNARY, (a) => trunc(a[0])),
   // Half of UNARY / BINARY is negative, so these two spend most of the
   // matrix on their NaN branch — which is the branch worth round-tripping,
   // since `pow` narrows its domain relative to the host's own operator.
@@ -538,6 +546,7 @@ describe("elementwise kind ↔ grammar fn", () => {
     ["max", () => max(1, 2)],
     ["abs", () => abs(1)],
     ["floor", () => floor(1)],
+    ["trunc", () => trunc(-1.5)],
     ["sqrt", () => sqrt(4)],
     ["pow", () => pow(2, 3)],
     ["sin", () => sin(1)],
@@ -561,16 +570,19 @@ describe("elementwise kind ↔ grammar fn", () => {
     ["fract", () => fract(1.5)],
     ["sign", () => sign(-2)],
     ["exp", () => exp(1)],
+    ["exp2", () => exp2(1.5)],
     ["log", () => log(2)],
+    ["log2", () => log2(3)],
     ["mod", () => mod(-1, 8)],
+    ["rem", () => rem(-1, 8)],
     ["smoothstep", () => smoothstep(0, 1, 0.25)],
   ];
 
-  it("names 34 constructors, each a registered fn", () => {
+  it("names 38 constructors, each a registered fn", () => {
     // `cross`, `dot`, `length` and `distance` are deliberately absent:
     // each is bespoke rather than built on `elementwise`, so none has a
     // `kind` string for this correspondence to pin.
-    expect(ELEMENTWISE.length).toBe(34);
+    expect(ELEMENTWISE.length).toBe(38);
     const registered = new Set(listFieldFns());
     for (const [name, make] of ELEMENTWISE) {
       expect(getFieldSpec(make())?.fn, `${name}: derived fn`).toBe(name);
