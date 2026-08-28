@@ -65,6 +65,8 @@ import {
   ID_SCALE,
   IDS,
   N,
+  SHARED_FIRST,
+  SHARED_SECOND,
   TINTS,
   expectedIdByte,
   expectedTintBytes,
@@ -74,11 +76,23 @@ import {
   browserSuiteName,
   openHarness,
   probeBrowser,
+  type ConsoleLine,
   type Harness,
 } from "./support/instanceChannelHarness.js";
 import type { CaseResult, RunResult, Sample } from "./support/instanceChannelPage.js";
 
 const PROBE = probeBrowser();
+
+/**
+ * The two cases whose whole subject is a WRONG PICTURE WITH NO
+ * COMPLAINT: a material declaring a channel the batch does not publish,
+ * and a second batch of one asset id that carries no channel while its
+ * sibling does. Run alone so the tab's log can be attributed to them.
+ */
+const SILENT_CASES = ["declared-absent-f32", "shared-asset-unchannelled-batch"] as const;
+
+/** The control for that measurement: a case that DOES make the driver talk. */
+const LOUD_CASE = "declared-absent-u32";
 
 /** Launching a browser, bundling a page and drawing five scenes. */
 const HARNESS_TIMEOUT_MS = 180_000;
@@ -120,6 +134,13 @@ describe.skipIf("reason" in PROBE)(
     let clean: RunResult;
     let reversed: RunResult;
     let dropped: RunResult;
+    let provided: RunResult;
+    let silentLines: readonly ConsoleLine[];
+    let loudLines: readonly ConsoleLine[];
+    let nodeLines: readonly ConsoleLine[];
+    let nodeFixedLines: readonly ConsoleLine[];
+    let nodeRun: RunResult;
+    let nodeFixedRun: RunResult;
 
     beforeAll(async () => {
       harness = await openHarness();
@@ -129,6 +150,42 @@ describe.skipIf("reason" in PROBE)(
       clean = await harness.run({ webgpu: true });
       reversed = await harness.run({ sabotage: "reverse", webgpu: true });
       dropped = await harness.run({ sabotage: "drop" });
+      // The missing-channel cases' knob, and it runs the other way round
+      // from the sabotage runs: those BREAK a working case, this FIXES a
+      // broken one. Same page, same materials, same draw — the only
+      // difference is that the batch publishes the channel the material
+      // declares.
+      provided = await harness.run({ provideChannels: true, webgpu: true });
+      // Two more evaluations, of ONE case each, and they measure the
+      // console rather than the pixels. The tab's log has no case
+      // boundaries in it, so attributing a line — or the absence of one —
+      // to a case means running that case alone. The second run is the
+      // CONTROL: an instrument that reports "nothing was said" has to be
+      // shown saying "something was said" on a case that does say
+      // something, or it is only measuring its own blind spot.
+      await harness.settle();
+      const beforeSilent = harness.console.length;
+      await harness.run({ only: [...SILENT_CASES] });
+      await harness.settle();
+      silentLines = harness.console.slice(beforeSilent);
+      await harness.run({ only: [LOUD_CASE] });
+      await harness.settle();
+      loudLines = harness.console.slice(beforeSilent + silentLines.length);
+      // And the same case AGAIN with the node pipeline switched on. The
+      // WebGL half of this run is one of the two just shown to print
+      // nothing, so whatever appears here is the WebGPU half's.
+      const beforeNode = harness.console.length;
+      nodeRun = await harness.run({ only: ["declared-absent-f32"], webgpu: true });
+      await harness.settle();
+      nodeLines = harness.console.slice(beforeNode);
+      const beforeNodeFixed = harness.console.length;
+      nodeFixedRun = await harness.run({
+        only: ["declared-absent-f32"],
+        webgpu: true,
+        provideChannels: true,
+      });
+      await harness.settle();
+      nodeFixedLines = harness.console.slice(beforeNodeFixed);
       if (process.env.PCG_CHANNEL_DEBUG === "1") {
         const compact = (run: RunResult, label: string): unknown => ({
           label,
@@ -137,10 +194,12 @@ describe.skipIf("reason" in PROBE)(
             rgba: c.samples.map((s) => [s.r, s.g, s.b, s.a]),
             bg: [c.background.r, c.background.g, c.background.b, c.background.a],
             glErrors: c.glErrors,
+            programs: c.programs,
           })),
           webgpu: run.webgpu.map((c) => ({
             name: c.name,
             skipped: c.skipped,
+            error: c.error,
             rgba: c.samples.map((s) => [s.r, s.g, s.b, s.a]),
             bg: [c.background.r, c.background.g, c.background.b, c.background.a],
           })),
@@ -150,8 +209,20 @@ describe.skipIf("reason" in PROBE)(
             JSON.stringify(
               {
                 renderer: clean.renderer,
-                runs: [compact(clean, "clean"), compact(reversed, "reverse"), compact(dropped, "drop")],
+                runs: [
+                  compact(clean, "clean"),
+                  compact(reversed, "reverse"),
+                  compact(dropped, "drop"),
+                  compact(provided, "provided"),
+                ],
                 pageErrors: harness.errors,
+                pageConsole: harness.console,
+                silentLines,
+                loudLines,
+                nodeLines,
+                nodeFixedLines,
+                nodeRun: compact(nodeRun, "nodeRun"),
+                nodeFixedRun: compact(nodeFixedRun, "nodeFixedRun"),
               },
               null,
               1,
@@ -172,11 +243,20 @@ describe.skipIf("reason" in PROBE)(
 
     const webgpuSkipReason = (): string => webgpuSkipReasonFrom([clean, reversed]);
 
+    /**
+     * The cases whose whole subject is a draw that DOES NOT happen: a
+     * type mismatch the driver refuses, and an integer attribute the
+     * material declares and nothing binds. Each has its own test, and
+     * both would fail the blanket "a fragment was written" sweep below
+     * for the reason they exist.
+     */
+    const DRAWS_NOTHING = new Set(["u32-declared-float", "declared-absent-u32"]);
+
     it("the browser drew: every instance wrote a fragment and the background did not", () => {
       expect(harness.errors, "the page raised no errors").toEqual([]);
       for (const c of clean.webgl) {
         expect(c.background.a, `${c.name}: the row above the instances is untouched clear`).toBe(0);
-        if (c.name === "u32-declared-float") continue; // see its own test
+        if (DRAWS_NOTHING.has(c.name)) continue; // see their own tests
         for (let i = 0; i < N; i++) {
           expect(c.samples[i].a, `${c.name} instance ${i}: a fragment was written here`).toBe(255);
         }
@@ -369,6 +449,285 @@ describe.skipIf("reason" in PROBE)(
         // the reason up by case name finds nothing and the skip would
         // read "no WebGPU cases ran" when the page knew exactly why.
         ctx.skip(webgpuSkipReason());
+      });
+    });
+
+    /**
+     * A CHANNEL THE MATERIAL DECLARES AND NO BATCH CARRIES.
+     *
+     * The failure an integrator actually hits, and it is not "the names
+     * disagree" — a host whose shader owns the attribute names carries a
+     * map from the graph's channel names onto its own, and a map entry
+     * can be stale. Nothing about that is malformed: the batch is a valid
+     * channelled batch, the material is a valid material, and neither
+     * knows the other exists. `toInstancedMeshes` binds what the batch
+     * carries; the shader declares what it declares.
+     *
+     * MEASURED, on this machine, in the run this file already had: an
+     * absent FLOAT attribute reads 0 for every instance, every fragment
+     * runs, no GL error is queued, and the picture is every instance
+     * identical. The `provided` run is the proof — the same page, the
+     * same materials, the same draw, with the batch publishing the name
+     * the material declares — and it draws the four colours.
+     *
+     * WHETHER ANYTHING SAYS SO DEPENDS ON THE MATERIAL, and that turned
+     * out to be the interesting half. Under a `ShaderMaterial` nothing is
+     * printed at any severity: `WebGLBindingStates` has a legitimate
+     * meaning for an unbound float attribute (the generic constant) and
+     * uses it without comment. Under a `NodeMaterial` three's
+     * `AttributeNode` looks the name up on the geometry as it builds and
+     * warns BY NAME. Same batch, same mistake, a diagnostic in one host
+     * and none in the other — both pinned below.
+     *
+     * Two neighbours are pinned beside it because they are NOT the same
+     * failure and the documentation has to be able to tell them apart:
+     * an absent INTEGER attribute is refused outright (`0x502`, no
+     * fragment, a driver warning), and a second batch of the same asset
+     * id carrying no channel at all shades zeros through the program its
+     * channelled sibling compiled.
+     *
+     * This is three's behaviour, not the library's. It is pinned here
+     * because the channel feature is what hands it to people.
+     */
+    describe("a channel the material declares and no batch carries", () => {
+      const BLACK: [number, number, number] = [0, 0, 0];
+
+      /**
+       * The WebGPU case of ONE named run, or a skip naming why there is
+       * none — the three states kept apart.
+       *
+       * A console measurement has to separate "the case ran and said
+       * nothing" from "the case never ran", because both look like an
+       * empty list and only the first is a finding. Everything below is
+       * required before a slice of the log may be attributed:
+       *
+       * - the page reported a case at all (an absent `navigator.gpu`, a
+       *   WebGL-backend fallback and a thrown init all arrive as one
+       *   sentinel entry named "webgpu" carrying `skipped`),
+       * - it did not throw mid-draw (`error`),
+       * - and it actually produced `N` samples.
+       *
+       * Anything else is `ctx.skip` with the page's own words. Never a
+       * pass, never a fail: a machine with no WebGPU has not disproved
+       * three's warning, and must not be allowed to say it has.
+       */
+      function drewOrSkip(run: RunResult, ctx: { skip: (note?: string) => void }): CaseResult {
+        const found = run.webgpu.find((c) => c.name === "declared-absent-f32");
+        const why =
+          found === undefined
+            ? (run.webgpu.find((c) => c.skipped !== undefined)?.skipped ??
+              webgpuSkipReasonFrom([run, clean, reversed]))
+            : (found.skipped ??
+              (found.error !== undefined
+                ? `the WebGPU case threw instead of drawing: ${found.error}`
+                : found.samples.length !== N
+                  ? `the WebGPU case reported ${found.samples.length} samples, expected ${N}`
+                  : undefined));
+        if (found === undefined || why !== undefined) {
+          ctx.skip(why ?? "the page ran no WebGPU case for this run");
+          throw new Error("unreachable: ctx.skip aborts");
+        }
+        return found;
+      }
+
+      it("an absent f32 channel reads zero for every instance, with no error anywhere", () => {
+        const c = caseOf(clean, "declared-absent-f32");
+        for (let i = 0; i < N; i++) {
+          expect(rgb(c.samples[i]), `instance ${i} reads the absent channel as zero`).toEqual(BLACK);
+          // The fragment RAN. A drawn black and an untouched target are
+          // the same three bytes and completely different events, and
+          // alpha is the byte that separates them (see the page header).
+          expect(c.samples[i].a, `instance ${i}: the fragment ran and wrote black`).toBe(255);
+        }
+        // ONE value across every instance — which on screen is "every
+        // instance identical", the shape a per-instance size or phase
+        // collapses to and the reason this is missed.
+        expect(new Set(c.samples.map((s) => `${s.r},${s.g},${s.b}`)).size).toBe(1);
+        expect(c.glErrors, "the driver queued nothing").toEqual([]);
+      });
+
+      it("and the same page draws the four colours once the batch publishes that name", () => {
+        const fixed = caseOf(provided, "declared-absent-f32");
+        for (let i = 0; i < N; i++) {
+          expect(rgb(fixed.samples[i]), `instance ${i}`).toEqual(expectedTintBytes(i));
+        }
+        // Byte for byte the working case's own pixels, from the same run:
+        // the material was always able to draw this, so the zeros above
+        // are the ABSENCE of the column and nothing else about the case.
+        expect(fixed.samples).toEqual(caseOf(provided, "f32-tint").samples);
+        expect(
+          fixed.samples,
+          "the clean run's zeros and this run's colours must differ, or the knob does nothing",
+        ).not.toEqual(caseOf(clean, "declared-absent-f32").samples);
+      });
+
+      it("an absent INTEGER channel is the loud one: the draw is refused", () => {
+        const c = caseOf(clean, "declared-absent-u32");
+        expect(c.samples.map((s) => s.a), "no fragment was written anywhere").toEqual([0, 0, 0, 0]);
+        expect(c.glErrors, "WebGL2 INVALID_OPERATION").toContain("0x502");
+        // Same case, same material, channel published: it draws. So the
+        // refusal is the missing declaration's, not the machine's.
+        const fixed = caseOf(provided, "declared-absent-u32");
+        expect(reds(fixed)).toEqual([0, 1, 2, 3].map(expectedIdByte));
+        expect(fixed.glErrors).toEqual([]);
+      });
+
+      it("a second batch of one asset id, carrying no channel, shades zeros through its sibling's program", () => {
+        const c = caseOf(clean, "shared-asset-unchannelled-batch");
+        // The CHANNELLED batch in the same scene draws correctly, so "the
+        // case was broken" is not an available explanation for the other
+        // two columns.
+        for (const i of SHARED_FIRST) {
+          expect(rgb(c.samples[i]), `instance ${i} is in the channelled batch`).toEqual(
+            expectedTintBytes(i),
+          );
+        }
+        for (const i of SHARED_SECOND) {
+          expect(rgb(c.samples[i]), `instance ${i} is in the batch with no channel`).toEqual(BLACK);
+          expect(c.samples[i].a, `instance ${i}: the fragment ran`).toBe(255);
+        }
+        expect(c.glErrors, "and nothing was refused").toEqual([]);
+        // TWO meshes, ONE program: the unchannelled mesh is not drawing
+        // through a pipeline of its own that happens to be missing an
+        // attribute, it is drawing through the pipeline its sibling
+        // compiled WITH those attributes. That is the integrator's
+        // report, as a number.
+        expect(c.meshes, "two batches of one asset id are two meshes").toBe(2);
+        expect(c.programs, "compiled once and shared").toBe(1);
+        expect(caseOf(clean, "f32-tint").meshes, "and one batch is one mesh").toBe(1);
+      });
+
+      it("that second batch draws correctly the moment it carries the channel too", () => {
+        const c = caseOf(provided, "shared-asset-unchannelled-batch");
+        for (let i = 0; i < N; i++) {
+          expect(rgb(c.samples[i]), `instance ${i}`).toEqual(expectedTintBytes(i));
+        }
+        expect(c.samples).not.toEqual(caseOf(clean, "shared-asset-unchannelled-batch").samples);
+      });
+
+      /**
+       * THE SUBSTANTIVE HALF: not "the pixels are wrong" but "nothing
+       * said so". Two extra evaluations in the setup hook draw the silent
+       * cases alone and then the loud one alone, because the tab's log
+       * has no case boundaries in it and a line can only be attributed to
+       * a case that ran by itself.
+       *
+       * The control is asserted FIRST and it is not decoration: a console
+       * hook that had come unwired, or a snapshot taken before the
+       * browser process flushed, would report "nothing was printed" for
+       * everything. The loud case is the same instrument, in the same
+       * session, hearing something.
+       */
+      it("and under WebGL nothing is printed at any severity — measured against a case that does print", () => {
+        expect(
+          loudLines.map((l) => `${l.type}: ${l.text}`),
+          "the control: the refused integer draw printed something",
+        ).not.toEqual([]);
+        expect(
+          loudLines.every((l) => l.type === "warn"),
+          `even the loud one only warns: ${loudLines.map((l) => l.type).join(", ")}`,
+        ).toBe(true);
+        expect(
+          silentLines.map((l) => `${l.type}: ${l.text}`),
+          "the two silent cases printed nothing at all — no error, no warning, no log",
+        ).toEqual([]);
+      });
+
+      /**
+       * AND THE NODE PIPELINE IS NOT SILENT, which is the one place the
+       * two renderers genuinely disagree and the reason this measurement
+       * is not a footnote.
+       *
+       * `AttributeNode` looks the attribute up on the geometry when it
+       * builds, finds nothing, and says so BY NAME. Nothing on the WebGL
+       * side does: `WebGLBindingStates` has a legitimate meaning for an
+       * unbound float attribute (the generic constant) and uses it
+       * without comment. So an integrator on a `NodeMaterial` has a
+       * diagnostic and one on a `ShaderMaterial` has none, from the same
+       * batch and the same mistake.
+       *
+       * This test is also what proves the console hook hears a JS
+       * `console.warn` at all: every other line in a MEASURED slice comes
+       * from ANGLE through the browser process, so without this one the
+       * silence measured above would rest on an untested path. (The tab
+       * does print one other JS warning across a session — three's
+       * `renderAsync()` deprecation — but it falls in no measured slice,
+       * so it cannot stand in for this.)
+       *
+       * THE GUARD IS ON THE RUN THAT PRODUCED THE LINES, and that is the
+       * whole correctness of this test rather than a detail. An absent
+       * `navigator.gpu`, a fallback to the WebGL backend, or a device
+       * that dies under a loaded full-suite run all produce a WebGPU half
+       * that never drew — and therefore no warning. Read as "three stayed
+       * silent" that is a fabricated finding; read as "not measurable" it
+       * is a skip. Gating on `clean` instead (which is what this did, and
+       * which reddened for exactly this reason) checks a DIFFERENT
+       * evaluation of the page: WebGPU can be fine in the first run and
+       * gone by the sixth.
+       */
+      it("but the node pipeline DOES name the missing attribute, so the silence is WebGL's alone", (ctx) => {
+        const drew = drewOrSkip(nodeRun, ctx);
+        const texts = nodeLines.map((l) => `${l.type}: ${l.text}`);
+        expect(drew.samples.map(rgb), "the node case drew the zeros these lines describe").toEqual(
+          [BLACK, BLACK, BLACK, BLACK],
+        );
+        for (const name of ["tint", "gain"]) {
+          expect(
+            texts.some((t) => t.includes("AttributeNode") && t.includes(`"${name}" not found`)),
+            `three named the missing "${name}"; it printed: ${texts.join(" | ") || "(nothing)"}`,
+          ).toBe(true);
+        }
+        // A warning, not an error — nothing is thrown and nothing stops.
+        expect(nodeLines.every((l) => l.type === "warn"), texts.join(" | ")).toBe(true);
+        // And it stops once the column exists — the same case, the same
+        // page, the same material, differing only in whether the batch
+        // publishes the name. So the warning reports the ABSENCE and is
+        // not a fixed noise this pipeline always makes.
+        //
+        // Guarded the same way, and this direction is the one that would
+        // LIE rather than shout: a corrected run whose WebGPU half never
+        // drew also prints no `AttributeNode` line, and without the guard
+        // that reads as "the warning stopped because the channel is
+        // there". Assert it DREW the four colours first, then assert the
+        // silence.
+        const fixed = drewOrSkip(nodeFixedRun, ctx);
+        expect(
+          fixed.samples.map(rgb),
+          "the corrected run drew the channel, so its silence is attributable",
+        ).toEqual([0, 1, 2, 3].map((i) => expectedTintBytes(i)));
+        expect(
+          nodeFixedLines.filter((l) => l.text.includes("AttributeNode")).map((l) => l.text),
+          `no attribute was reported missing; the run printed: ${
+            nodeFixedLines.map((l) => `${l.type}: ${l.text}`).join(" | ") || "(nothing)"
+          }`,
+        ).toEqual([]);
+      });
+
+      /**
+       * The same question under `WebGPURenderer`, which is the renderer
+       * the report came from and a different code path end to end: a
+       * `NodeMaterial` with a TSL `attribute()` naming a column the
+       * geometry has not got, on the WebGPU backend rather than through
+       * `WebGLBindingStates`' generic-attribute fallback.
+       *
+       * THE PIXELS ONLY. Whether anything was said about it is a separate
+       * measurement and a separate answer — see the console test above,
+       * which is where this pair stops agreeing.
+       */
+      it("WebGPURenderer draws the same picture: zeros, with every fragment written", (ctx) => {
+        // A THROW would be a perfectly good answer — a better one for an
+        // integrator — and it is not what happens. `drewOrSkip` turns one
+        // into a skip naming it, so a throw can never read here as a
+        // silent zero.
+        const c = drewOrSkip(clean, ctx);
+        for (let i = 0; i < N; i++) {
+          expect(rgb(c.samples[i]), `instance ${i}`).toEqual(BLACK);
+          expect(c.samples[i].a, `instance ${i}: the fragment ran`).toBe(255);
+        }
+        const fixed = provided.webgpu.find((x) => x.name === "declared-absent-f32");
+        expect(fixed?.samples.map(rgb), "the same material draws once the column exists").toEqual(
+          [0, 1, 2, 3].map((i) => expectedTintBytes(i)),
+        );
       });
     });
 

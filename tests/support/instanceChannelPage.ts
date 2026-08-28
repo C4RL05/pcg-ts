@@ -56,8 +56,23 @@ import {
 } from "three";
 import { createPointCloud } from "../../src/data/index.js";
 import { buildInstanceBatches } from "../../src/spawn/instances.js";
-import { toInstancedMeshes, type AssetMap } from "../../src/three/instanced.js";
-import { CELL, GAINS, HEIGHT, ID_BASE, ID_SCALE, IDS, N, TINTS, WIDTH } from "./instanceChannelFixture.js";
+import { ownsGeometry, toInstancedMeshes, type AssetMap } from "../../src/three/instanced.js";
+import {
+  CELL,
+  GAINS,
+  HEIGHT,
+  HOST_GAIN,
+  HOST_ID,
+  HOST_TINT,
+  ID_BASE,
+  ID_SCALE,
+  IDS,
+  N,
+  SHARED_FIRST,
+  SHARED_SECOND,
+  TINTS,
+  WIDTH,
+} from "./instanceChannelFixture.js";
 
 /* ------------------------------------------------------------------ *
  * The contract with the Node half
@@ -80,8 +95,31 @@ export interface CaseResult {
   readonly background: Sample;
   /** GL errors raised between the draw and the readback, if any. */
   readonly glErrors: string[];
+  /**
+   * Live programs on the renderer while this case drew.
+   *
+   * Recorded for one claim only, and it is the shared-asset case's: two
+   * meshes of the same asset whose materials are clones of one
+   * `ShaderMaterial` compile to ONE program, so the mesh that carries no
+   * channel is shading through a pipeline built for the attributes the
+   * other mesh has. That is the integrator's "joins a pipeline already
+   * compiled with those attributes", turned into a number.
+   */
+  readonly programs?: number;
+  /**
+   * Meshes drawn — one per batch. Reported so `programs` can be read as a
+   * claim about SHARING: "one program" says nothing on its own, and says
+   * everything beside "two meshes".
+   */
+  readonly meshes?: number;
   /** Set when the case could not run at all (never for the WebGL cases). */
   readonly skipped?: string;
+  /**
+   * Set when the case THREW instead of drawing — which is itself an
+   * answer, and a different one from "it drew zeros". Distinct from
+   * `skipped`, which means the case never applied to this machine.
+   */
+  readonly error?: string;
 }
 
 /** How to corrupt the binding, for the proof that the test can fail. */
@@ -91,6 +129,23 @@ export interface RunRequest {
   readonly sabotage?: Sabotage;
   /** Run the WebGPU cases too. They are gated on `navigator.gpu`. */
   readonly webgpu?: boolean;
+  /**
+   * Publish the channels the missing-channel cases deliberately withhold
+   * — the `CHANNEL_MAP` corrected, the second batch given the channel its
+   * sibling has. Nothing else changes: same page, same materials, same
+   * draw. This is the proof those cases can fail, and it runs the same
+   * way round as the `sabotage` knob does for the clean cases.
+   */
+  readonly provideChannels?: boolean;
+  /**
+   * Draw only these cases, by name. Absent draws them all.
+   *
+   * It exists for ONE measurement: whether a silent case is silent. The
+   * console is a whole-tab log with no case boundaries in it, so the only
+   * way to attribute a line — or its absence — to a case is to run that
+   * case and nothing else.
+   */
+  readonly only?: readonly string[];
 }
 
 export interface RunResult {
@@ -104,31 +159,51 @@ export interface RunResult {
  * Geometry / batch construction
  * ------------------------------------------------------------------ */
 
+/** Every instance the cases draw, in column order. */
+const ALL: readonly number[] = [0, 1, 2, 3];
+
 /**
- * A four-point cloud laid out one per column, carrying every channel the
- * cases draw with. The transforms come from the standard point attributes
- * and go through `buildInstanceBatches` — this is the shipped path from
- * point cloud to `InstanceBatch`, not a hand-built batch.
+ * A point cloud laid out one instance per column, carrying every channel
+ * the cases draw with. The transforms come from the standard point
+ * attributes and go through `buildInstanceBatches` — this is the shipped
+ * path from point cloud to `InstanceBatch`, not a hand-built batch.
+ *
+ * `indices` names WHICH of the four fixture instances this cloud holds,
+ * and each keeps its own column: a cloud of `[2, 3]` draws in columns 2
+ * and 3 and nowhere else. That is what lets one 64x16 readback answer for
+ * two batches of the same asset id drawn side by side.
+ *
+ * `hostTint` / `hostGain` / `hostId` duplicate `tint` / `gain` / `id`
+ * under the names a host's shader declares (see the fixture). Duplicated
+ * rather than renamed so that publishing one set or the other is the only
+ * variable between a missing-channel case and the run that fixes it.
  */
-function cloud() {
-  const geo = createPointCloud(N);
+function cloud(indices: readonly number[] = ALL) {
+  const geo = createPointCloud(indices.length);
   const P = geo.attrs.point.require("P");
   const scale = geo.attrs.point.require("scale");
   const tint = geo.attrs.point.add("tint", "f32", 3, [0, 0, 0]);
   const gain = geo.attrs.point.add("gain", "f32", 1, 0);
   const id = geo.attrs.point.add("id", "u32", 1, 0);
   const idf = geo.attrs.point.add("idf", "f32", 1, 0);
-  for (let i = 0; i < N; i++) {
+  const hostTint = geo.attrs.point.add(HOST_TINT, "f32", 3, [0, 0, 0]);
+  const hostGain = geo.attrs.point.add(HOST_GAIN, "f32", 1, 0);
+  const hostId = geo.attrs.point.add(HOST_ID, "u32", 1, 0);
+  for (let k = 0; k < indices.length; k++) {
+    const i = indices[k];
     // Column i spans x in [-2 + i, -1 + i] under the camera below.
-    P.setTuple(i, [-1.5 + i, 0, 0]);
+    P.setTuple(k, [-1.5 + i, 0, 0]);
     // 0.6 of the frustum height, so the top and bottom rows stay clear.
-    scale.setTuple(i, [1, 0.6, 1]);
-    tint.setTuple(i, [...TINTS[i]]);
-    gain.set(i, GAINS[i]);
-    id.set(i, IDS[i]);
+    scale.setTuple(k, [1, 0.6, 1]);
+    tint.setTuple(k, [...TINTS[i]]);
+    hostTint.setTuple(k, [...TINTS[i]]);
+    gain.set(k, GAINS[i]);
+    hostGain.set(k, GAINS[i]);
+    id.set(k, IDS[i]);
+    hostId.set(k, IDS[i]);
     // The SAME ids through an f32 column: the widening the spawner
     // refuses to do, done deliberately so the collision is measurable.
-    idf.set(i, IDS[i]);
+    idf.set(k, IDS[i]);
   }
   return geo;
 }
@@ -145,15 +220,21 @@ function assetMap(material: ShaderMaterial): AssetMap {
 /** three's ShaderMaterial prefix supplies position/instanceMatrix/matrices. */
 const VERTEX_TAIL = "gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);";
 
-function tintMaterial(): ShaderMaterial {
+/**
+ * The two names are parameters because the HOST owns them: a material
+ * declaring `hostTint` is the same material declaring `tint`, and the
+ * only difference the missing-channel cases turn on is whether the batch
+ * publishes a column under the name this shader asks for.
+ */
+function tintMaterial(tintName = "tint", gainName = "gain"): ShaderMaterial {
   return new ShaderMaterial({
     glslVersion: GLSL3,
     vertexShader: `
-      in vec3 tint;
-      in float gain;
+      in vec3 ${tintName};
+      in float ${gainName};
       out vec3 vTint;
       void main() {
-        vTint = tint * gain;
+        vTint = ${tintName} * ${gainName};
         ${VERTEX_TAIL}
       }
     `,
@@ -253,9 +334,29 @@ function sabotageChannel(mesh: InstancedMesh, name: string, mode: Sabotage): voi
   attr.needsUpdate = true;
 }
 
+/** One batch of a case's asset id. Most cases have exactly one. */
+interface BatchSpec {
+  /** Which fixture instances (and therefore columns) it covers. */
+  readonly indices?: readonly number[];
+  /** Point attributes it publishes as channels, in `instanceAttrs` order. */
+  readonly channels: readonly string[];
+  /**
+   * What `provideChannels` publishes INSTEAD — the corrected map, or the
+   * channel the second batch was missing. Absent means the knob does
+   * nothing to this batch, which is the case for everything that already
+   * publishes what its material declares.
+   */
+  readonly provided?: readonly string[];
+}
+
 interface GlCase {
   readonly name: string;
-  readonly channels: string[];
+  /**
+   * One entry per batch, all resolving the SAME asset id — which is the
+   * shape three's renderer sees when two cooked cells spawn the same
+   * asset and only one of them carries a channel.
+   */
+  readonly batches: readonly BatchSpec[];
   readonly material: () => ShaderMaterial;
   /** Applied to the built mesh before the draw. */
   readonly tweak?: (mesh: InstancedMesh) => void;
@@ -266,15 +367,15 @@ interface GlCase {
 const GL_CASES: readonly GlCase[] = [
   {
     name: "f32-tint",
-    channels: ["tint", "gain"],
-    material: tintMaterial,
+    batches: [{ channels: ["tint", "gain"] }],
+    material: () => tintMaterial(),
     sabotages: "tint",
   },
   {
     // The gpuType trap, direction one: the library leaves gpuType at
     // three's default (FloatType) and the host declares `uint`.
     name: "u32-default-gpuType",
-    channels: ["id"],
+    batches: [{ channels: ["id"] }],
     material: () => uintMaterial("id"),
     sabotages: "id",
   },
@@ -282,7 +383,7 @@ const GL_CASES: readonly GlCase[] = [
     // Direction two: the host does what the documentation says and sets
     // gpuType = IntType on the bound attribute.
     name: "u32-IntType",
-    channels: ["id"],
+    batches: [{ channels: ["id"] }],
     material: () => uintMaterial("id"),
     tweak: (mesh) => {
       // `getAttribute` is typed as the union with `InterleavedBufferAttribute`,
@@ -296,7 +397,7 @@ const GL_CASES: readonly GlCase[] = [
     // The widening the spawner refuses, performed on purpose: the same
     // ids carried in an f32 column.
     name: "f32-widened-id",
-    channels: ["idf"],
+    batches: [{ channels: ["idf"] }],
     material: () => floatIdMaterial("idf"),
   },
   {
@@ -304,8 +405,47 @@ const GL_CASES: readonly GlCase[] = [
     // GLSL spec and validated by WebGL2 — recorded, not asserted on
     // beyond "it does not silently return the right answer".
     name: "u32-declared-float",
-    channels: ["id"],
+    batches: [{ channels: ["id"] }],
     material: () => floatIdMaterial("id"),
+  },
+  /* ---------------------------------------------------------------- *
+   * THE STALE MAP: a material declaring a channel no batch publishes.
+   * ---------------------------------------------------------------- */
+  {
+    // The host's shader declares `hostTint` / `hostGain`; the content
+    // publishes `tint` / `gain`. Nothing is malformed — the batch is a
+    // perfectly good channelled batch, the material is a perfectly good
+    // material, and the two simply do not name the same thing. This is
+    // what a wrong or stale CHANNEL_MAP entry looks like from below.
+    name: "declared-absent-f32",
+    batches: [{ channels: ["tint", "gain"], provided: [HOST_TINT, HOST_GAIN] }],
+    material: () => tintMaterial(HOST_TINT, HOST_GAIN),
+  },
+  {
+    // The same mistake with an INTEGER declaration. Kept beside the float
+    // one because the two are not the same failure and the documentation
+    // has to say which is which.
+    name: "declared-absent-u32",
+    batches: [{ channels: ["id"], provided: [HOST_ID] }],
+    material: () => uintMaterial(HOST_ID),
+  },
+  {
+    // TWO batches of ONE asset id: the first carries the channel, the
+    // second carries none at all — a batch that never asked for one, not
+    // a batch whose channel was removed. Both meshes' materials are
+    // clones of the same `ShaderMaterial`, so three compiles ONE program
+    // for the pair (`programs` records it) and the second mesh shades
+    // through a pipeline built for attributes its geometry does not have.
+    //
+    // The second batch also shares the asset's geometry by reference —
+    // `toInstancedMeshes` clones only for a batch that carries channels —
+    // so there is nowhere for the attribute to have come from.
+    name: "shared-asset-unchannelled-batch",
+    batches: [
+      { indices: SHARED_FIRST, channels: ["tint", "gain"] },
+      { indices: SHARED_SECOND, channels: [], provided: ["tint", "gain"] },
+    ],
+    material: () => tintMaterial(),
   },
 ];
 
@@ -338,23 +478,45 @@ function runWebGL(request: RunRequest): { cases: CaseResult[]; renderer: string 
 
   const gl = renderer.getContext();
   const results: CaseResult[] = [];
-  const geo = cloud();
+  // One cloud per distinct instance split, built once: four points cost
+  // nothing, but rebuilding them per case would make "the same values"
+  // an assumption instead of a fact.
+  const clouds = new Map<string, ReturnType<typeof cloud>>();
+  const cloudFor = (indices: readonly number[]): ReturnType<typeof cloud> => {
+    const key = indices.join(",");
+    let found = clouds.get(key);
+    if (found === undefined) {
+      found = cloud(indices);
+      clouds.set(key, found);
+    }
+    return found;
+  };
 
   for (const spec of GL_CASES) {
+    if (request.only !== undefined && !request.only.includes(spec.name)) continue;
     const material = spec.material();
     const assets = assetMap(material);
-    const batches = buildInstanceBatches(geo, {
-      defaultAssetId: "q",
-      instanceAttrs: [...spec.channels],
+    // Each batch spec is its own `buildInstanceBatches` call, because one
+    // call yields one batch per asset id — two batches of ONE id is what
+    // two cooked cells produce, and that is the shape being tested.
+    const batches = spec.batches.flatMap((b) => {
+      const names = request.provideChannels === true && b.provided !== undefined ? b.provided : b.channels;
+      return buildInstanceBatches(cloudFor(b.indices ?? ALL), {
+        defaultAssetId: "q",
+        // Absent, not empty: `instanceAttrs: []` and no `instanceAttrs`
+        // are the same thing to the spawner, and absent is what a graph
+        // that never asked for a channel actually sends.
+        instanceAttrs: names.length > 0 ? [...names] : undefined,
+      });
     });
-    const [mesh] = toInstancedMeshes(batches, assets);
-    spec.tweak?.(mesh);
+    const meshes = toInstancedMeshes(batches, assets);
+    for (const mesh of meshes) spec.tweak?.(mesh);
     const mode = request.sabotage ?? "none";
     if (spec.sabotages !== undefined && mode !== "none") {
-      sabotageChannel(mesh, spec.sabotages, mode);
+      for (const mesh of meshes) sabotageChannel(mesh, spec.sabotages, mode);
     }
     const scene = new Scene();
-    scene.add(mesh);
+    for (const mesh of meshes) scene.add(mesh);
 
     // Drain anything a previous case left behind, so `glErrors` only
     // ever describes this draw.
@@ -386,11 +548,20 @@ function runWebGL(request: RunRequest): { cases: CaseResult[]; renderer: string 
       // Row 0 is below every instance (they cover the middle 60%).
       background: sampleOf(px, CELL / 2, 0),
       glErrors,
+      programs: renderer.info.programs?.length ?? -1,
+      meshes: meshes.length,
     });
 
-    scene.remove(mesh);
-    mesh.dispose();
-    mesh.geometry.dispose();
+    for (const mesh of meshes) {
+      scene.remove(mesh);
+      mesh.dispose();
+      // ONLY the per-batch clone. An unchannelled batch draws the asset
+      // map's geometry by reference, and disposing that here would tear
+      // down a geometry the next case still uses — the library's own
+      // teardown rule, applied because this page is a consumer of it.
+      if (ownsGeometry(mesh)) mesh.geometry.dispose();
+      for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) m.dispose();
+    }
     assets.q.geometry.dispose();
     material.dispose();
   }
@@ -460,7 +631,14 @@ async function runWebGPU(request: RunRequest): Promise<CaseResult[]> {
   camera.position.z = 5;
   const geo = cloud();
 
-  const specs: { name: string; channels: string[]; sabotages: string; color: () => unknown }[] = [
+  const specs: {
+    name: string;
+    channels: string[];
+    /** What `provideChannels` publishes instead; see `RunRequest`. */
+    provided?: string[];
+    sabotages?: string;
+    color: () => unknown;
+  }[] = [
     {
       name: "f32-tint",
       channels: ["tint", "gain"],
@@ -479,33 +657,73 @@ async function runWebGPU(request: RunRequest): Promise<CaseResult[]> {
         return tsl.vec4(tsl.mul(d, ID_SCALE / 255), 1, 1 / 255, 1);
       },
     },
+    {
+      // THE STALE MAP, under the renderer the integrator was on, and in
+      // the SAME shape as its WebGL namesake: a batch that publishes real
+      // channels under the content's names while the material's TSL
+      // `attribute()` nodes name the host's. Not "a batch with no
+      // channels" — that is the shared-asset case, and a doc sentence
+      // about a stale NAME should be measured against a stale name.
+      //
+      // Deliberately LAST: a node pipeline built against an attribute the
+      // geometry lacks is the one case here that might take the device
+      // down with it, and the two measurements above must not be
+      // collateral if it does.
+      name: "declared-absent-f32",
+      channels: [HOST_TINT, HOST_GAIN],
+      provided: ["tint", "gain"],
+      color: () => tsl.vec4(tsl.mul(tsl.attribute("tint", "vec3"), tsl.attribute("gain", "float")), 1),
+    },
   ];
 
   const results: CaseResult[] = [];
   for (const spec of specs) {
+    // Honoured here as well as on the WebGL side, and for the same
+    // reason: the console measurement needs a run that draws ONE case, or
+    // a line cannot be attributed to the case that printed it.
+    if (request.only !== undefined && !request.only.includes(spec.name)) continue;
+    const names = request.provideChannels === true && spec.provided !== undefined ? spec.provided : spec.channels;
     const material = new three.NodeMaterial();
     material.outputNode = spec.color() as never;
     const assets: AssetMap = { q: { geometry: new PlaneGeometry(1, 1), material } };
-    const batches = buildInstanceBatches(geo, { defaultAssetId: "q", instanceAttrs: [...spec.channels] });
+    const batches = buildInstanceBatches(geo, {
+      defaultAssetId: "q",
+      instanceAttrs: names.length > 0 ? [...names] : undefined,
+    });
     const [mesh] = toInstancedMeshes(batches, assets);
     const mode = request.sabotage ?? "none";
-    if (mode !== "none") sabotageChannel(mesh, spec.sabotages, mode);
+    if (mode !== "none" && spec.sabotages !== undefined) sabotageChannel(mesh, spec.sabotages, mode);
     const scene = new Scene();
     scene.add(mesh);
-    renderer.setRenderTarget(target);
-    renderer.clear();
-    await renderer.renderAsync(scene, camera);
-    const px = (await renderer.readRenderTargetPixelsAsync(target, 0, 0, WIDTH, HEIGHT)) as Uint8Array;
-    renderer.setRenderTarget(null);
-    await renderer.renderAsync(scene, camera);
+    // Per case rather than around the loop: a case that throws must
+    // report AS a case, so the ones after it still run and the one that
+    // failed still names what it did. `error` and `skipped` are different
+    // answers and the suite reads them differently.
+    try {
+      renderer.setRenderTarget(target);
+      renderer.clear();
+      await renderer.renderAsync(scene, camera);
+      const px = (await renderer.readRenderTargetPixelsAsync(target, 0, 0, WIDTH, HEIGHT)) as Uint8Array;
+      renderer.setRenderTarget(null);
+      await renderer.renderAsync(scene, camera);
 
-    const samples: Sample[] = [];
-    for (let i = 0; i < N; i++) samples.push(sampleOf(px, i * CELL + CELL / 2, HEIGHT / 2));
-    results.push({ name: spec.name, samples, background: sampleOf(px, CELL / 2, 0), glErrors: [] });
+      const samples: Sample[] = [];
+      for (let i = 0; i < N; i++) samples.push(sampleOf(px, i * CELL + CELL / 2, HEIGHT / 2));
+      results.push({ name: spec.name, samples, background: sampleOf(px, CELL / 2, 0), glErrors: [] });
+    } catch (err) {
+      renderer.setRenderTarget(null);
+      results.push({
+        name: spec.name,
+        samples: [],
+        background: { r: 0, g: 0, b: 0, a: 0 },
+        glErrors: [],
+        error: String(err),
+      });
+    }
 
     scene.remove(mesh);
     mesh.dispose();
-    mesh.geometry.dispose();
+    if (ownsGeometry(mesh)) mesh.geometry.dispose();
     assets.q.geometry.dispose();
     material.dispose();
   }

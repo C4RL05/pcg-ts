@@ -72,6 +72,7 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const read = (path: string): string => readFileSync(join(ROOT, path), "utf8");
 
 interface Manifest {
+  version: string;
   sideEffects?: unknown;
   exports: Record<string, { types: string; import: string } | string>;
   peerDependencies: Record<string, string>;

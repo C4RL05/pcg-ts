@@ -13,6 +13,35 @@
 
 /** Instances per case, and therefore 16-pixel columns in the target. */
 export const N = 4;
+
+/**
+ * THE HOST'S SPELLING OF A CHANNEL, WHICH IS NOT THE CONTENT'S.
+ *
+ * An integrating host owns the shader, so it owns the attribute NAMES the
+ * shader declares; a graph publishes channels under the point attribute's
+ * own name. Anything that maps one onto the other — the integrator's
+ * `CHANNEL_MAP` — can be stale, and a stale entry is not a mismatch the
+ * library can see: `toInstancedMeshes` binds what the batch carries and
+ * the material declares what it declares.
+ *
+ * The point cloud carries these three attributes with the SAME values as
+ * `tint` / `gain` / `id`, which is what makes the missing-channel cases
+ * provable: the run that publishes them instead is byte-for-byte the run
+ * that works, so "the channel was absent" is the only difference between
+ * the failing pixels and the passing ones.
+ */
+export const HOST_TINT = "hostTint";
+export const HOST_GAIN = "hostGain";
+export const HOST_ID = "hostId";
+
+/**
+ * How the shared-asset case splits four instances across TWO batches of
+ * one asset id: instances 0-1 in a channelled batch, 2-3 in a batch that
+ * carries no channel at all. Columns 0-1 therefore read the first mesh
+ * and columns 2-3 the second, so one readback answers for both.
+ */
+export const SHARED_FIRST: readonly number[] = [0, 1];
+export const SHARED_SECOND: readonly number[] = [2, 3];
 /** Pixels per instance column; also the target's height. */
 export const CELL = 16;
 export const WIDTH = N * CELL;

@@ -291,12 +291,24 @@ of the SAME assetId carrying no channels joins a pipeline already compiled
 with those attributes and quietly shades zeros, which renders as "every
 instance identical" and nothing flags it.
 
-**Do not reflexively add a warning.** In our default path every mesh gets
-its own material clone, so the mixture is harmless, and an unconditional
-warning would fire spuriously for every host that does not pool materials.
-The honest options are documenting the hazard or an opt-in check a pooling
-host calls. Left unbuilt until a real integration hits it, because that is
-the evidence that decides the shape.
+**CORRECTED 2026-08-29 — this is NOT pooling-specific, and the reasoning
+below was wrong.** The claim was that our default path is safe because
+every mesh gets its own material clone. It is not: `cloneAssetMaterial`
+gives each mesh its own `Material` INSTANCE, but three's `WebGLPrograms`
+keys the program cache on SHADER SOURCE, so two clones of one material
+resolve to ONE compiled program. Measured in
+`tests/instanceChannelRender.test.ts`: two `buildInstanceBatches` calls for
+assetId `"q"`, `meshes = 2`, `programs = 1`, `usedTimes = 2`, and the
+unchannelled sibling shades `[0,0,0,255]` while its partner draws correctly
+— from two ordinary cooked cells, with nothing misspelled anywhere and no
+pooling host involved.
+
+So the argument against an unconditional warning is weaker than stated: the
+hazard reaches every consumer, not just a pooling one. What still holds is
+that the adapter cannot see it — `toInstancedMeshes` binds what the batch
+carries and never learns what the material declares — so a check has to be
+told what to expect. The opt-in expectation remains the right shape, but for
+a better reason than "pooling hosts only".
 
 **2. `toInstancedMeshes`'s material clone is documented only from the
 disposal angle.** A host with a pooled or shared material must overwrite

@@ -197,11 +197,53 @@ coloured by a per-instance channel that only the shader can see.</p>
  * The harness
  * ------------------------------------------------------------------ */
 
+/** One line the tab printed, whatever severity it printed it at. */
+export interface ConsoleLine {
+  readonly type: string;
+  readonly text: string;
+}
+
 export interface Harness {
   /** Render every case and read the pixels back. */
   run(request: RunRequest): Promise<RunResult>;
   /** Errors the page raised, across every run so far. */
   readonly errors: readonly string[];
+  /**
+   * EVERY console line the tab printed, at any severity, across every run
+   * — warnings and logs included, which `errors` deliberately excludes.
+   *
+   * `errors` answers "did the page break". This answers a different and,
+   * for the missing-channel cases, the substantive question: whether
+   * anything was said AT ALL. A silent wrong result and a warned-about
+   * wrong result are different products to integrate against, and only a
+   * list that collects `console.warn` can tell them apart.
+   */
+  readonly console: readonly ConsoleLine[];
+  /**
+   * Wait until the tab has stopped printing, so `console` can be READ as
+   * a count rather than merely inspected.
+   *
+   * A console line crosses from the browser process over CDP and does not
+   * arrive with the `page.evaluate` that provoked it — ANGLE's driver
+   * warnings least of all, since they originate below the renderer. A
+   * before/after count taken without this would race, and the race runs
+   * the dangerous way: the lines would arrive after the snapshot, and
+   * "nothing was said" would look confirmed when it was merely early.
+   *
+   * WHAT THIS DOES AND DOES NOT GUARANTEE. It polls until two consecutive
+   * samples agree, so it BOUNDS the mis-attribution at one quiet window
+   * (~500 ms) rather than eliminating it: a line lagging its own run by
+   * longer than that still lands in the next slice, and a line lost that
+   * way is a line the silence assertion does not see. Measured, every
+   * line this page produces arrives inside the window — the attribution
+   * across a whole session's log is exact — but the bound is the honest
+   * description and a widened gap is where this would go wrong first.
+   * `CAP_MS` gives up quietly for the same reason a hook timeout is
+   * generous here: under a full-suite run the tab competes with
+   * everything else, and a hard failure there would be a machine-load
+   * report, not a finding.
+   */
+  settle(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -228,6 +270,7 @@ export async function openHarness(): Promise<Harness> {
     ],
   });
   const errors: string[] = [];
+  const lines: ConsoleLine[] = [];
   let page: Page;
   try {
     page = await browser.newPage();
@@ -236,10 +279,14 @@ export async function openHarness(): Promise<Harness> {
       // The tab asks for /favicon.ico unprompted and logs the 404 as an
       // error. Every other console error is the page's own and matters.
       const text = msg.text();
-      if (msg.type() === "error" && !text.includes("favicon")) {
-        const from = msg.location().url ?? "";
-        if (!from.endsWith("/favicon.ico")) errors.push(`console.error: ${text}`);
-      }
+      const from = msg.location().url ?? "";
+      const favicon = text.includes("favicon") || from.endsWith("/favicon.ico");
+      if (favicon) return;
+      // Recorded at EVERY severity: a warning is not an error but it is a
+      // diagnostic, and whether one exists is exactly what the
+      // missing-channel cases are measuring.
+      lines.push({ type: msg.type(), text });
+      if (msg.type() === "error") errors.push(`console.error: ${text}`);
     });
     page.on("requestfailed", (req) => {
       if (!req.url().endsWith("/favicon.ico")) errors.push(`requestfailed: ${req.url()}`);
@@ -270,8 +317,23 @@ export async function openHarness(): Promise<Harness> {
 
   return {
     errors,
+    console: lines,
     async run(request: RunRequest): Promise<RunResult> {
       return await page.evaluate((req) => window.__pcgChannels.run(req), request as RunRequest);
+    },
+    async settle(): Promise<void> {
+      const STEP_MS = 250;
+      const CAP_MS = 4_000;
+      const started = Date.now();
+      let seen = -1;
+      while (Date.now() - started < CAP_MS) {
+        // Slept IN THE PAGE: a `setTimeout` here would be a bare sleep in
+        // the test process, and the page's event loop is the one that has
+        // to turn for its messages to be flushed anyway.
+        await page.evaluate((ms) => new Promise((ok) => setTimeout(ok, ms)), STEP_MS);
+        if (lines.length === seen) return;
+        seen = lines.length;
+      }
     },
     async close(): Promise<void> {
       await browser.close().catch(() => undefined);

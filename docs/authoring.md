@@ -2325,6 +2325,51 @@ refused instead of overwriting the asset's vertex data, and a channel
 wider than 4 components is refused because a vertex attribute cannot
 carry more — split it upstream into several narrower ones.
 
+**A channel the material declares and no batch carries reads ZERO.** It
+is worth stating plainly because it does not look like a failure: every
+fragment runs, no exception is thrown, and no GL error is queued. A
+per-instance size, phase or hue collapses to a single value, so the
+picture is *every instance identical* — which reads as a content mistake
+rather than a binding one. Measured on three 0.185.1 in
+`tests/instanceChannelRender.test.ts`, which draws it and reads the
+pixels back under both renderers. Four things are worth telling apart:
+
+- **Whether anything SAYS so depends on how you declared it, and this is
+  the half to plan around.** A `ShaderMaterial` under `WebGLRenderer`
+  prints nothing at any severity: an unbound float attribute has a
+  legitimate meaning to the classic renderer — the generic
+  vertex-attribute constant, `(0, 0, 0, 1)`, so `0` for the `float` and
+  `vec3` declarations that make up most channels, though an `in vec4`
+  gets `w = 1` — and it is used without comment. A `NodeMaterial` under
+  `WebGPURenderer` warns by name as the node builds:
+  `THREE.AttributeNode: Vertex attribute "tint" not found on geometry.`
+  Same batch, same mistake, a usable diagnostic in one host and none at
+  all in the other. Those are the two pairs measured; that the deciding
+  factor is the MATERIAL rather than the renderer is inference from
+  `AttributeNode` living in three's backend-agnostic node core, not
+  something the suite varies independently.
+- **A stale name map is the realistic cause, not a typo.** A host whose
+  shader owns the attribute names carries a map from a graph's channel
+  names onto its own; when an entry goes stale, nothing is malformed. The
+  batch is a valid channelled batch, the material is a valid material,
+  and neither can see the other.
+- **An INTEGER declaration fails loudly instead.** `in uint` with nothing
+  bound is not a constant, it is invalid, so WebGL2 refuses the draw with
+  `INVALID_OPERATION`, no fragment appears at all, and the driver warns.
+  So the silent case above is narrower than "a missing channel": it is a
+  FLOAT declaration in a `ShaderMaterial` — which is most of them, but
+  both axes matter.
+- **Two batches of one asset id, only one carrying the channel, is the
+  same failure with nothing misspelled anywhere.** Each mesh's material
+  is a clone of one source, so three compiles ONE program for the pair
+  and the unchannelled mesh shades through a pipeline built for
+  attributes its geometry has not got. Its instances read zero while its
+  sibling's draw correctly, in one scene, from one asset.
+
+This is three's behaviour rather than the library's, and the library
+cannot currently intercept it: `toInstancedMeshes` binds what the batch
+carries and never sees what the material declares.
+
 **"CPU-only" is a statement about one of three things, and it is worth
 separating them before you plan around it.** The phrase has been read
 here as "this stalls your frame", which is the opposite of what is true.
