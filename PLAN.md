@@ -933,10 +933,16 @@ one. The two rules differ because the two destinations do.
 The entry is kept because the shape recurs: a constraint inherited from
 the wrong layer, carried in a comment confident enough that nobody
 re-derived it until a consumer made it hurt.
-Two smaller ones with it: nothing enforces that a level's halo matches the
-radius of the neighbour query that needs it (the suite reads the radius out
-of the JSON to stop the two drifting), and a `ParamPatch` can only replace
-a whole `FieldSpec`, never a number inside one.
+Two smaller ones with it. ~~Nothing enforces that a level's halo matches
+the radius of the neighbour query that needs it~~ — BUILT 2026-08-28,
+`src/runtime/reach.ts`; the suite's hand-read of the radius out of the JSON
+is now one call. And a `ParamPatch` can only replace a whole `FieldSpec`,
+never a number inside one — RE-CONFIRMED CALLER-BLOCKED 2026-08-28, and
+cheap to re-check: `bindPatches` has exactly two consumers outside the
+runtime, `graphs/examples-streamed-terrain.json` and
+`tests/worldStreaming.test.ts`, and neither patches into a field spec. The
+racetrack does not use `bindPatches` at all. Backlog's own rule is to let
+the consumer specify the mechanism, so this waits for one.
 
 **What the suite asserts, and what it refuses to.** Byte-identity across
 budgets, across cell orders, and across the two together, each with a

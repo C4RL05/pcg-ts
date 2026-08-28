@@ -7,6 +7,7 @@ import type { GpuFieldResolver } from "../fields/index.js";
 import { CookCancelledError, cook, type Graph } from "../graph/index.js";
 import { hashCombine } from "../random/index.js";
 import { applyParamPatches } from "./patches.js";
+import { neighborReach } from "./reach.js";
 import type {
   BindPatches,
   CellContext,
@@ -584,6 +585,17 @@ export class World {
             `${label}: a directional window (${named}) on an unbounded level, which is one global cell and partitions no arc length, so there is no sector for the window to choose between; remove ${named}, or give this level a finite cellSize with cellMode: "path" and a path table`,
           );
         }
+        // Same argument, for the QUERY window rather than the streaming
+        // one: a halo is the band of a NEIGHBOUR's content a cell has to
+        // generate to answer correctly at its own boundary, and one global
+        // cell has neither a neighbour nor a boundary. Refused rather than
+        // ignored, because a level that states one is describing a
+        // partitioning it does not have.
+        if (def.halo !== undefined) {
+          throw new WorldValidationError(
+            `${label}: declares halo (${String(def.halo)}) on an unbounded level, which is ONE global cell holding the whole world — it has no neighbouring cell to borrow points from and no seam to be wrong at, so there is nothing for a halo to do and nothing to check it against. Remove halo, or give this level a finite cellSize`,
+          );
+        }
         return;
       }
       if (typeof def.cellSize !== "number" || !Number.isFinite(def.cellSize) || def.cellSize <= 0) {
@@ -615,7 +627,89 @@ export class World {
           `${label}: has a path table but cellMode is "${mode}", which partitions space rather than arc length; set cellMode: "path" to stream sectors along the centreline, or remove the path field`,
         );
       }
-      // THE WINDOW, IN EXACTLY ONE SPELLING. `generationRadius` is the
+      // THE QUERY WINDOW, which is a different window from everything
+      // else on this level. `generationRadius` and the directional pair
+      // say which cells exist and stay resident; `halo` says how far
+      // OUTSIDE its own rectangle one cell has to generate content it will
+      // then throw away, so that the points it keeps answer the way they
+      // would in one unpartitioned cook. The two are validated apart
+      // because they fail apart: an undersized streaming window shows up
+      // as a hole in the world, and an undersized halo shows up as
+      // nothing at all — a truncated neighbour set, a deterministic wrong
+      // answer, at the seams only.
+      if (def.halo !== undefined) {
+        if (mode === "path") {
+          throw new WorldValidationError(
+            `${label}: declares halo (${String(def.halo)}) on a "path" level, whose cells are arc sectors measured in ARC LENGTH, while every neighbour-query reach in a graph is a WORLD distance; the two are not comparable quantities and do not convert without the centreline, which the World never sees (the same reason cellSize is only compared within a mode family). Remove halo — a sector that reads no neighbour needs none — or stream this content on an "xz"/"xyz" level, where a halo is a world distance and can be checked against the graph`,
+          );
+        }
+        if (typeof def.halo !== "number" || !Number.isFinite(def.halo) || def.halo < 0) {
+          throw new WorldValidationError(
+            `${label}: halo must be a finite number >= 0 — the world-unit width of the band of neighbouring content each cell generates and then clips away — got ${String(def.halo)}`,
+          );
+        }
+        const reach = neighborReach(def.graph);
+        // Reported before the width comparison, because it is not a
+        // comparison: for these nodes NO halo is wide enough, so passing
+        // the width check would be the more misleading outcome.
+        const blocked = reach.unpartitionable[0];
+        if (blocked !== undefined) {
+          throw new WorldValidationError(
+            `${label}: node "${blocked.node}" ${blocked.why}. This level declares halo ${def.halo}; widening it is not the fix`,
+          );
+        }
+        if (reach.width > def.halo) {
+          // Everything printed here is bounded by neighborReach's own
+          // sampling: a nested graph can hold millions of query nodes (a
+          // wrapper chain that instantiates the level below it twice
+          // doubles per level), and a message that named them all
+          // measured 3.2 million characters — an error nobody can read,
+          // produced instead of the one-line answer they needed.
+          // `widest`, NOT a reduce over `sources`. That list is capped at
+          // EXEMPLAR_LIMIT, so reducing over it names whichever of the
+          // first eight happened to be widest — which on a graph with
+          // more than eight queries is usually not the node the number
+          // came from. The message then named a node whose reach was
+          // BELOW the declared halo, called it "the widest of 20", and
+          // told the reader to raise the halo past a number that node
+          // never asked for: three false statements in one sentence, in
+          // the one place an author is trying to find the offending node.
+          const worst = reach.widest;
+          const named = reach.sources.map((s) => `"${s.node}" ${s.param} ${s.reach}`).join(", ");
+          const more = reach.sourceCount - reach.sources.length;
+          // "N named here" rather than "N in this graph", because the
+          // list IS a sample and saying otherwise invites the reader to
+          // conclude something from its absence. The count beside it is
+          // exact, so both numbers are true as written.
+          const others =
+            reach.sourceCount > 1
+              ? ` (${reach.sourceCount} readable reaches in this graph, ${reach.sources.length} named here: ${named}${
+                  more > 0 ? `, and ${more} more` : ""
+                })`
+              : "";
+          const unreadMore = reach.unboundedCount - reach.unbounded.length;
+          const unreadable =
+            reach.unboundedCount > 0
+              ? `. Note also that ${reach.unboundedCount} reach${
+                  reach.unboundedCount === 1 ? "" : "es"
+                } in this graph could not be read at all and are NOT covered by this check: ${reach.unbounded
+                  .map((g) => `"${g.node}" (${g.type}): ${g.why}`)
+                  .join("; ")}${unreadMore > 0 ? `; and ${unreadMore} more` : ""}`
+              : "";
+          // `widest` is undefined exactly when `width` is 0, and `width`
+          // is above a halo of at least 0 here, so it is always set. The
+          // narrowing keeps that a compile-time fact rather than a `!`.
+          const blame =
+            worst !== undefined
+              ? `node "${worst.node}" (${worst.type}) queries ${worst.param} ${worst.reach}`
+              : `no single node could be named`;
+          throw new WorldValidationError(
+            `${label}: halo ${def.halo} is narrower than the neighbour-query reach its own graph asks for — ${blame}${others}. A cell widened by ${def.halo} hands that query a neighbour set truncated at the cell boundary, so the streamed result differs from an unpartitioned cook at every seam, deterministically and without throwing. Raise halo to at least ${reach.width}, or bring the reach down to ${def.halo} or less${unreadable}`,
+          );
+        }
+      }
+      // THE STREAMING WINDOW, IN EXACTLY ONE SPELLING.
+      // `generationRadius` is the
       // symmetric one and applies in every mode; `aheadArc`/`behindArc`
       // are the directional one and mean something only along a curve. On
       // a "path" level the two describe the SAME policy — generationRadius
@@ -1345,6 +1439,11 @@ export class World {
     // is itself derived from. See CellContextBase.worldSeed.
     const worldSeed = this.worldSeed;
     const levelSeed = hashCombine(worldSeed, idx);
+    // The query window's widening, done here so a bind spends the number
+    // the level DECLARED rather than one of its own. A level with no halo
+    // gets 0, and haloMin/haloMax then are min/max — same objects' values,
+    // so a bind may read the widened pair unconditionally.
+    const h = def.halo ?? 0;
     let ctx: CellContext;
     if (def.cellSize === "unbounded") {
       ctx = {
@@ -1354,6 +1453,10 @@ export class World {
         coord: [0, 0],
         min: [-Infinity, -Infinity],
         max: [Infinity, Infinity],
+        // An unbounded level refuses a halo (see the constructor), and
+        // ±Infinity is already every point there is.
+        haloMin: [-Infinity, -Infinity],
+        haloMax: [Infinity, Infinity],
         worldSeed,
         levelSeed,
         // One global cell has no coordinates to fold: the per-cell seed IS
@@ -1388,6 +1491,8 @@ export class World {
         coord: c,
         min: [c[0] * s, c[1] * s, c[2] * s],
         max: [(c[0] + 1) * s, (c[1] + 1) * s, (c[2] + 1) * s],
+        haloMin: [c[0] * s - h, c[1] * s - h, c[2] * s - h],
+        haloMax: [(c[0] + 1) * s + h, (c[1] + 1) * s + h, (c[2] + 1) * s + h],
         worldSeed,
         levelSeed,
         seed: hashCombine(worldSeed, idx, c[0], c[1], c[2]),
@@ -1403,6 +1508,8 @@ export class World {
         coord: [c[0], c[1]],
         min: [c[0] * s, c[1] * s],
         max: [(c[0] + 1) * s, (c[1] + 1) * s],
+        haloMin: [c[0] * s - h, c[1] * s - h],
+        haloMax: [(c[0] + 1) * s + h, (c[1] + 1) * s + h],
         worldSeed,
         levelSeed,
         seed: hashCombine(worldSeed, idx, c[0], c[1]),

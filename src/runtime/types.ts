@@ -190,6 +190,22 @@ export interface CellContextXZ extends CellContextBase {
   readonly min: readonly [number, number];
   /** World-space cell rectangle maximum `[x, z]` (+Infinity when unbounded). */
   readonly max: readonly [number, number];
+  /**
+   * {@link min}, moved out by the level's {@link LevelDef.halo} — the
+   * QUERY window, where `min`/`max` are the OWNERSHIP window.
+   *
+   * A level that declares no halo gets `min` back here unchanged, so a
+   * bind may read this pair unconditionally. Bind a source's query bounds
+   * to these and its ownership clip to `min`/`max`, and the widening
+   * becomes the runtime's arithmetic instead of a constant living in the
+   * author's module — which is the whole reason the halo is declared: a
+   * number the runtime computes is a number the runtime can also CHECK
+   * against what the level's graph asks for (`neighborReach`, in
+   * `src/runtime/reach.ts`).
+   */
+  readonly haloMin: readonly [number, number];
+  /** {@link max}, moved out by {@link LevelDef.halo}; see {@link haloMin}. */
+  readonly haloMax: readonly [number, number];
 }
 
 /** Cell context of an `"xyz"` level; see {@link CellContext}. */
@@ -202,6 +218,14 @@ export interface CellContextXYZ extends CellContextBase {
   readonly min: readonly [number, number, number];
   /** World-space cell cube maximum `[x, y, z]`. */
   readonly max: readonly [number, number, number];
+  /**
+   * {@link min}, moved out by the level's {@link LevelDef.halo} — the
+   * query window to the ownership window `min`/`max`, and equal to `min`
+   * on a level that declares no halo. See {@link CellContextXZ.haloMin}.
+   */
+  readonly haloMin: readonly [number, number, number];
+  /** {@link max}, moved out by {@link LevelDef.halo}; see {@link haloMin}. */
+  readonly haloMax: readonly [number, number, number];
 }
 
 /**
@@ -465,6 +489,69 @@ export interface LevelDef {
    * two halves carry their own bands instead of sharing one scalar.
    */
   readonly retainBehindArc?: number;
+  /**
+   * How far outside its own rectangle this level's cells QUERY, in world
+   * units. `"xz"` and `"xyz"` levels only, and optional.
+   *
+   * This is not a streaming window like {@link generationRadius} — those
+   * say which cells stay resident — it is the width of the band of
+   * neighbouring content each cell must generate and then throw away so
+   * that the points it KEEPS get the same answers they would get in one
+   * unpartitioned cook. Declaring it does two things:
+   *
+   *   - The runtime hands each bind the widened box as
+   *     {@link CellContextXZ.haloMin}/`haloMax` alongside the unwidened
+   *     `min`/`max`, so the arithmetic that used to live as a `const` in
+   *     the author's module is done once, by the runtime, from the number
+   *     the level declares.
+   *   - `World` CHECKS it, at construction, against what this level's
+   *     graph asks for. A node querying neighbours within R inside a cell
+   *     given a halo of H < R receives a truncated neighbour set and
+   *     writes an answer that differs from the unstreamed one at every
+   *     seam — deterministically, and without throwing. That is the bug
+   *     this field exists to make loud.
+   *
+   * WHAT THE CHECK PROVES, AND WHAT IT DOES NOT. It proves `halo` is at
+   * least every neighbour-query reach the graph states as a literal
+   * number. It cannot prove the converse — three reaches are invisible to
+   * any static read, and `neighborReach` (`src/runtime/reach.ts`, not on
+   * the package's public surface yet) reports each of them by name
+   * rather than passing them over: a radius that is a `Field` (whose
+   * bound is the global maximum the expression can return anywhere in the
+   * world, derived by the author and unmeasurable from a clipped cell),
+   * the unlimited sentinels (`sampleNearestPoint.maxDistance` of 0 means
+   * unlimited, not zero, and `transferAttribute`'s DEFAULT mapping caps
+   * nothing at all), and the nodes whose reach comes out of upstream
+   * geometry rather than a param (`occlusionCull`, `pathCoverage`).
+   *
+   * The widest gap is the one that produces no entry at all: a node type
+   * the reader has no table for is SILENT, and the whole-input family —
+   * `transferAlongPath`, `pathScan`, `pathRuns`, `runFit`,
+   * `attributeReduce`, `quotaRebalance`, `mergePoints` — reads what it
+   * was given rather than a neighbourhood, so a cell holding a fraction
+   * of the input computes a different answer and no halo is the fix.
+   * Passing this check says nothing about them.
+   *
+   * It is also a check on the graph AS BUILT, which leaves two things a
+   * bind can do to it invisible: a bind that ignores `haloMin`/`haloMax`
+   * and widens by its own constant, and a bind that RAISES a reach per
+   * cell (`g.setParam(count, "radius", 40)` under a declared halo of 2).
+   * Both type-check and cook. Derive bind's params from `ctx` and static
+   * configuration, as the determinism contract above already requires,
+   * and neither arises.
+   *
+   * The declaration is worth having anyway — a wrong number the runtime
+   * reads is checkable, and a right number that only a comment knows is
+   * not — but read it as a floor, never as a certificate.
+   *
+   * REFUSED on an unbounded level (one global cell has no neighbour to
+   * borrow from) and on a `"path"` level (a sector is measured in ARC
+   * LENGTH while every reach in the graph is a world distance, and the
+   * two do not convert without the centreline, which the World never
+   * sees — the same reason `cellSize` is only ever compared within a mode
+   * family).
+   */
+  readonly halo?: number;
   /**
    * The graph cooked for each cell of this level. It is shared across the
    * level's cells: before each cell cook the runtime calls {@link bind},
