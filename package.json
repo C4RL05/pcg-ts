@@ -41,9 +41,23 @@
     "docs/design.md",
     "docs/graphs.md",
     "docs/graphs.json",
-    "graphs/basics-*.json",
-    "graphs/pipeline-*.json",
+    "graphs",
     "skills"
+  ],
+  "sideEffects": [
+    "./src/**",
+    "./shared/**",
+    "./demos/**",
+    "./editor/**",
+    "./dist/chunk-*.js",
+    "./dist/index.js",
+    "./dist/gpu/index.js",
+    "./dist/cli/index.js",
+    "./dist/primitives/index.js",
+    "./dist/worker/index.js",
+    "./dist/worker/entryNode.js",
+    "./dist/worker/entryBrowser.js",
+    "./dist/docs/index.js"
   ],
   "exports": {
     ".": {
@@ -78,6 +92,10 @@
       "types": "./dist/worker/entryBrowser.d.ts",
       "import": "./dist/worker/entryBrowser.js"
     },
+    "./panels": {
+      "types": "./dist/panels/index.d.ts",
+      "import": "./dist/panels/index.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -97,10 +115,10 @@
     "docs:gallery": "node scripts/gen-gallery.mjs",
     "docs:site": "node scripts/gen-site.mjs",
     "graphs:golden": "node scripts/gen-graphs-golden.mjs",
-    "prepublishOnly": "npm run check && npm test && npm run build && node scripts/smoke-dist.mjs"
+    "prepublishOnly": "npm run build && npm run check && npm test && node scripts/smoke-dist.mjs"
   },
   "peerDependencies": {
-    "three": "^0.185.1"
+    "three": "^0.185.0"
   },
   "peerDependenciesMeta": {
     "three": {
