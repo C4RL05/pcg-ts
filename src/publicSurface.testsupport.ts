@@ -18,8 +18,12 @@
  * a single root-level test importing all three trips both.
  *
  * VALUE exports only: `interface` and `type` vanish at runtime, so
- * `Object.keys` cannot see them. Type-only additions carry no runtime
- * coupling and would show up as a .d.ts diff at build time.
+ * `Object.keys` cannot see them. That gap is covered separately, by
+ * {@link entryPointSurface} in publicTypeSurface.testsupport.ts — and this paragraph
+ * used to close with "type-only additions carry no runtime coupling and
+ * would show up as a .d.ts diff at build time", which is FALSE and is why
+ * the gap went unnoticed. `dist/` is gitignored, so no .d.ts diff reaches
+ * a reviewer or CI.
  */
 
 /** Sorted value-export names of a module namespace object. */
