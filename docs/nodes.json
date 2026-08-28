@@ -779,7 +779,8 @@
     "category": "composite",
     "inputs": [],
     "outputs": [],
-    "params": {}
+    "params": {},
+    "selfMetered": true
   },
   {
     "type": "jitterPoints",
@@ -2099,7 +2100,8 @@
         "default": "moves",
         "description": "Name of the DETAIL-domain attribute the body writes to say whether anything still changed. Read after every round from every geometry item on the carry output: all zero means settled (stop, and that round counts), anything else means loop. The detail domain is used because it is the one domain that holds exactly one value per geometry, and because a subgraph wrapper has no non-geometry output pin a scalar could ride out on — attributeReduce is what normally writes it (mode 'count' over a filtered cloud, or 'sum' of a per-point moved flag). The attribute MUST exist on the carry geometry every round: an absent one is refused by name rather than treated as zero, because treating it as zero turns a typo here, or a body that never wired the reduction, into 'converged on round one' — a wrong answer that cooks cleanly and saves cleanly. A tuple attribute settles only when every component is zero, and NaN never settles (so unmeasurable data runs the budget out and reports converged false, instead of stopping on garbage)."
       }
-    }
+    },
+    "selfMetered": true
   },
   {
     "type": "runFit",
@@ -2529,7 +2531,8 @@
     "category": "composite",
     "inputs": [],
     "outputs": [],
-    "params": {}
+    "params": {},
+    "selfMetered": true
   },
   {
     "type": "surfaceSample",

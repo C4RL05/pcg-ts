@@ -360,6 +360,8 @@ Composite node that cooks an inner graph ONCE PER ELEMENT instead of once. Exact
 
 **Category:** composite
 
+**Meters the cook budget itself:** under `cook(graph, { budgetMs })` this node yields to the event loop inside its own execute, so its `NodeDoneInfo.elapsedMs` is wall time spanning those yields — not an uninterrupted block. Derive a longest-block figure from a cook with the budget unset.
+
 **Inputs:** *(none)*
 
 **Outputs:** *(none)*
@@ -854,6 +856,8 @@ Composite node that cooks an inner graph REPEATEDLY, feeding each round's output
 
 **Category:** composite
 
+**Meters the cook budget itself:** under `cook(graph, { budgetMs })` this node yields to the event loop inside its own execute, so its `NodeDoneInfo.elapsedMs` is wall time spanning those yields — not an uninterrupted block. Derive a longest-block figure from a cook with the budget unset.
+
 **Inputs:** *(none)*
 
 **Outputs:** *(none)*
@@ -1018,6 +1022,8 @@ Samples points along polyline primitives by arc length, treating all polylines o
 Composite node wrapping an inner graph as a single node. Pins and params are per-instance, derived from the exposed inner pins and the exposed inner params, so this registry entry declares none — create instances with subgraphNode(innerGraph, exposedInputs, exposedOutputs, exposedParams) and read an instance's real interface with describeSubgraphPins(def) and describeSubgraphParams(def). A serialized subgraph node carries its exposed-param VALUES in "params" and its inner graph plus the exposed pin and param DECLARATIONS either inline under "subgraph" ({ graph, inputs, outputs, params }), recursively in the same versioned format, or by reference under "ref" ({ name, hash? }) to a subgraph registered with registerSubgraph. "subgraph" and "ref" are mutually exclusive; a ref's "hash" is optional, and pins the reference to that exact content (a mismatch is an error, never a warning).
 
 **Category:** composite
+
+**Meters the cook budget itself:** under `cook(graph, { budgetMs })` this node yields to the event loop inside its own execute, so its `NodeDoneInfo.elapsedMs` is wall time spanning those yields — not an uninterrupted block. Derive a longest-block figure from a cook with the budget unset.
 
 **Inputs:** *(none)*
 
