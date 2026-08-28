@@ -160,9 +160,15 @@ describe.skipIf("reason" in PROBE)(
       }
     }, HARNESS_TIMEOUT_MS);
 
+    // Same budget as the setup hook, and for the same reason: closing a
+    // headed Chrome is not instant, and under a full-suite run it competes
+    // with everything else for the machine. Vitest's default 10 s hook
+    // timeout is enough in isolation and is NOT enough in a full run, which
+    // reddened the file twice with all twelve tests passing -- a failure
+    // that reports as a suite error and names no assertion.
     afterAll(async () => {
       await harness?.close();
-    });
+    }, HARNESS_TIMEOUT_MS);
 
     const webgpuSkipReason = (): string => webgpuSkipReasonFrom([clean, reversed]);
 

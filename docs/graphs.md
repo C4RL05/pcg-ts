@@ -126,7 +126,7 @@ Cook it: `pcg cook graphs/basics-attribute-remap.json --stats`
 
 **compose several primitives into a scatter**
 
-Four primitives and one terminal node build a complete placement pass: scatter with a guaranteed spacing, cut it to noise-defined regions, turn every point a random way, give every point one uniform random size, then spawn. Each step is a name from the catalog rather than a hand-built cluster of nodes, which is what keeps the graph readable and its behaviour documented. Note what varies: the scatter and the two write steps differ per instance, while the noise mask does not — two masks with the same params cut identically unless their `variant` differs.
+Three primitives and one terminal node build a complete placement pass: scatter with only a token minimum spacing, so the positions read as random — clumps and clearings rather than an even field — cut it to noise-defined regions, give every point one uniform random size, then spawn. Each step is a name from the catalog rather than a hand-built cluster of nodes, which is what keeps the graph readable and its behaviour documented. Note what varies: the scatter and the size write differ per instance, while the noise mask does not — two masks with the same params cut identically unless their `variant` differs.
 
 **Tags:** `basics`, `primitives`, `composition`, `spawn`
 
@@ -134,7 +134,7 @@ Four primitives and one terminal node build a complete placement pass: scatter w
 
 **Node types:** `spawnInstances`, `subgraph`
 
-**Primitives:** `fill/scatter-even`, `filter/mask-by-noise`, `write/random-scale`, `write/random-yaw`
+**Primitives:** `fill/scatter-even`, `filter/mask-by-noise`, `write/random-scale`
 
 **Outputs:** `instances` (from `spawn`.`instances`)
 
