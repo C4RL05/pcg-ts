@@ -849,7 +849,8 @@
                 "color:f32x4",
                 "seed:u32",
                 "tangent:f32x3",
-                "curveU:f32"
+                "curveU:f32",
+                "station:f32"
               ],
               "primitive": [
                 "primtype:string",
@@ -891,8 +892,8 @@
                 "seed:u32",
                 "tangent:f32x3",
                 "curveU:f32",
-                "lapLength:f32",
                 "station:f32",
+                "lapLength:f32",
                 "u:f32",
                 "c:f32",
                 "off:f32",
