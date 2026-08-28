@@ -315,6 +315,7 @@ function sightChains(geo: Geometry, pd: ArrayLike<number>, ps: number): SightCha
 
 /** Params of {@link occlusionCull}. */
 export interface OcclusionCullParams {
+  include: FieldParam;
   lookAhead: FieldParam;
   samples: number;
   eyeOffset: FieldParam;
@@ -329,13 +330,20 @@ export const occlusionCull = standardNode<OcclusionCullParams>({
   type: NODE,
   category: "filter",
   description:
-    "Removes points whose ORIENTED BOX stands in a line of sight, after first trying to move them out of it. Its subject is three things and nothing else: a cloud of EYE POSES, the TARGETS visible from each of them, and a cloud of boxes that may block the lines between — so it serves a driver who must see the road ahead, a guard who must see the gate, and a camera that must see the actor, with no knowledge of roads, gates or actors in it. The `in` pin carries the boxes: each point's `P` is the box centre, its `rot` (f32x4) the orientation and its `scale` (f32x3) the FULL extents, which are the same three columns spawnInstances reads, so what is tested is what will be drawn. The `sight` pin carries the lines: its points are the eye positions, raised by `eyeOffset`, and the path through them supplies the targets. FROM EACH EYE THE TEST IS A FAN OF CHORDS, not one chord to the far end, and that is the difference between a rule that works and one that passes vacuously: the requirement is that the next `lookAhead` of PATH be visible, and a box can leave the far point in plain view while standing in front of everything between — a single chord to the end of the run would clear it. `samples` chords are tested per eye, to points evenly spaced in ARC LENGTH along the run ahead. The test itself runs in each box's OWN frame (the slab method over its three axes), never in the world: a box turned into the sight line presents a narrower profile than its world-aligned hull, and on a straight the two agree while through a bend they do not — which is precisely where the rule matters, so testing the hull would check the one case that never fails. A blocked point is PUSHED before it is dropped: the node steps it along `pushAxis` in `pushStep` increments up to `pushMax`, away from the sight path, and keeps the first position that clears every chord. Only a point that cannot be cleared by pushing is removed. That order is the point of the node and not an optimisation — pushing PRESERVES THE POPULATION COUNT, so any rule upstream that budgeted a number of points still has that number, and the asset the author placed is still in the scene; dropping spends both. With the default `pushMax` of 0 nothing is pushed and every blocker is dropped, which is the conservative reading: this node will not silently relocate an authored point by a distance nobody chose. DETERMINISM: points are visited in an order fixed by point IDENTITY — the bits of the stored position plus the per-point `seed` attribute — and never by array index, so shuffling the input, filtering something upstream, or deriving the same points inside another cell's halo yields the identical survivor set. Order matters here only when `pushClearance` is above 0, which makes a pushed point avoid the points already settled and so makes one verdict depend on others; below that every point is decided from the sight input alone. HALO: with `pushClearance` at 0 the answer for a point depends on the eyes within roughly `lookAhead + pushMax` of it and on nothing else, so a partitioned cook is exact given a window that wide. Above 0 it is a GREEDY op, and a greedy op has no finite width — this point settled here because that one settled there, an unbounded chain no halo covers — so a per-cell cook will differ from a whole-region one, and the difference shows up as pushed points overlapping at the seams rather than as an error. OUTPUT is a point cloud of the survivors with every point attribute carried, and the input's topology is NOT preserved under any setting. There is no `topology: \"keep\"` here, unlike the five point filters, for a reason those five do not have: this node MOVES points as well as removing them, and a primitive kept over a moved point would describe a shape nobody authored — a road that follows its lamp posts sideways. Rebuild any network downstream (pointsToPath, connectPoints). One consequence worth stating because nothing else will say it: a PUSHED point comes out with a different `P`, and `P` is half of a point's identity, so anything identity-keyed downstream (filterByDensity's probabilistic mode, selfPrune's tiebreak, randomField) re-rolls for exactly the points this node moved. COST is one occlusion test per (point, nearby eye, sample), so it scales with the eye density of the sight path as well as with the cloud — resample the path to the spacing the rule actually needs rather than to the spacing it happens to have.",
+    "Removes points whose ORIENTED BOX stands in a line of sight, after first trying to move them out of it. Its subject is three things and nothing else: a cloud of EYE POSES, the TARGETS visible from each of them, and a cloud of boxes that may block the lines between — so it serves a driver who must see the road ahead, a guard who must see the gate, and a camera that must see the actor, with no knowledge of roads, gates or actors in it. The `in` pin carries the boxes: each point's `P` is the box centre, its `rot` (f32x4) the orientation and its `scale` (f32x3) the FULL extents, which are the same three columns spawnInstances reads, so what is tested is what will be drawn. The `sight` pin carries the lines: its points are the eye positions, raised by `eyeOffset`, and the path through them supplies the targets. FROM EACH EYE THE TEST IS A FAN OF CHORDS, not one chord to the far end, and that is the difference between a rule that works and one that passes vacuously: the requirement is that the next `lookAhead` of PATH be visible, and a box can leave the far point in plain view while standing in front of everything between — a single chord to the end of the run would clear it. `samples` chords are tested per eye, to points evenly spaced in ARC LENGTH along the run ahead. The test itself runs in each box's OWN frame (the slab method over its three axes), never in the world: a box turned into the sight line presents a narrower profile than its world-aligned hull, and on a straight the two agree while through a bend they do not — which is precisely where the rule matters, so testing the hull would check the one case that never fails. `include` DECIDES WHETHER A POINT IS ASKED AT ALL, and a point it switches off is carried to the output unmoved and IN ITS PLACE — never tested, never pushed, never dropped — which is how a class of geometry that is STRUCTURE rather than scenery stays out of a rule about what may stand in a sight line: a tunnel's ribs span the road by construction, and 'clearing' one by shoving it aside opens a hole in the roof it is part of. Doing that with a filter and a merge instead would CONCATENATE, so the exempt points would come out at the end of the cloud and every index after them would shift, which for a cloud copyToPoints or spawnInstances reads in order is a different scene. A blocked point is PUSHED before it is dropped: the node steps it along `pushAxis` in `pushStep` increments up to `pushMax`, away from the sight path, and keeps the first position that clears every chord. Only a point that cannot be cleared by pushing is removed. That order is the point of the node and not an optimisation — pushing PRESERVES THE POPULATION COUNT, so any rule upstream that budgeted a number of points still has that number, and the asset the author placed is still in the scene; dropping spends both. With the default `pushMax` of 0 nothing is pushed and every blocker is dropped, which is the conservative reading: this node will not silently relocate an authored point by a distance nobody chose. DETERMINISM: points are visited in an order fixed by point IDENTITY — the bits of the stored position plus the per-point `seed` attribute — and never by array index, so shuffling the input, filtering something upstream, or deriving the same points inside another cell's halo yields the identical survivor set. Order matters here only when `pushClearance` is above 0, which makes a pushed point avoid the points already settled and so makes one verdict depend on others; below that every point is decided from the sight input alone. HALO: with `pushClearance` at 0 the answer for a point depends on the eyes within roughly `lookAhead + pushMax` of it and on nothing else, so a partitioned cook is exact given a window that wide. Above 0 it is a GREEDY op, and a greedy op has no finite width — this point settled here because that one settled there, an unbounded chain no halo covers — so a per-cell cook will differ from a whole-region one, and the difference shows up as pushed points overlapping at the seams rather than as an error. OUTPUT is a point cloud of the survivors with every point attribute carried, and the input's topology is NOT preserved under any setting. There is no `topology: \"keep\"` here, unlike the five point filters, for a reason those five do not have: this node MOVES points as well as removing them, and a primitive kept over a moved point would describe a shape nobody authored — a road that follows its lamp posts sideways. Rebuild any network downstream (pointsToPath, connectPoints). One consequence worth stating because nothing else will say it: a PUSHED point comes out with a different `P`, and `P` is half of a point's identity, so anything identity-keyed downstream (filterByDensity's probabilistic mode, selfPrune's tiebreak, randomField) re-rolls for exactly the points this node moved. COST is one occlusion test per (point, nearby eye, sample), so it scales with the eye density of the sight path as well as with the cloud — resample the path to the spacing the rule actually needs rather than to the spacing it happens to have.",
   inputs: [
     { name: "in", kind: "geometry" },
     { name: "sight", kind: "geometry" },
   ],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
+    include: {
+      type: "f32",
+      default: 1,
+      acceptsField: true,
+      description:
+        "Nonzero (the default) puts the point IN the test: its box is checked against every chord it can reach, and it is pushed or dropped on the answer. Zero takes it out entirely — no chord is ever tested against it, and it is carried to the output UNMOVED AND IN ITS PLACE, between the same two neighbours it arrived between. THAT LAST PART IS WHY THIS IS A PARAM AND NOT SOMETHING A CALLER CAN SPELL WITH A FILTER. Holding a class of points out of this node by filtering them off and merging them back concatenates: the exempt ones arrive at the END of the cloud, every index after the first of them shifts, and a cloud that copyToPoints or spawnInstances reads in order becomes a different scene — so the only way to say 'do not test this point' without also saying 'and put it somewhere else' is here. IT IS NOT A SECOND SPELLING OF `pushMax` 0, and the two cannot compete because they answer different questions: `pushMax` 0 says 'drop this one rather than move it', which is a verdict on a point that WAS tested and did block, while this says the question is never asked — so for an excluded point `pushAxis` and `pushMax` are never read, and it can be neither pushed nor dropped no matter what they say. An excluded point is never a blocker, so nothing about how blockers are handled reaches it. It does still OCCUPY its position: `pushClearance` counts it among the points already settled, exactly as it counts a point that was tested and cleared, because a pushed point has to avoid what is there rather than what was tested. As a FIELD it is evaluated on the `in` points, one flag per point, which is the form this is really for — attribute(\"cover\"), or a comparison against a class column, excludes a KIND of thing rather than a list of indices, and the expression goes on meaning the right thing after the cloud upstream changes length. A non-finite value is refused with the param named, as every field-capable param in this node is: a NaN gate is a broken expression rather than a decision, and it is deliberately not filterByExpression's reading, where NaN means drop. NOTHING IS REPORTED, which a reader has to know before relying on the output: this node writes no column saying which points it tested, so a point it never asked about and a point it asked and cleared are indistinguishable on the way out — both come out exactly where they started. The `include` expression IS the record of the difference, it is one the caller already has, and asking it again is cheaper than a column this node would have to write on every cook for the callers that do not care.",
+    },
     lookAhead: {
       type: "f32",
       default: 12,
@@ -472,6 +480,20 @@ export const occlusionCull = standardNode<OcclusionCullParams>({
       "an eye offset is a position's worth of numbers",
       "point",
       sn,
+    );
+    // FIRST OF THE THREE ON THE BOX CLOUD, because it is the only one that
+    // decides whether the other two are ever read. Resolved for every point
+    // even so: a field is one expression over a domain, and evaluating it
+    // for some points and not others would make the column a function of
+    // the answer it is supposed to gate.
+    const include = scalarPerElement(
+      geo,
+      "include",
+      params.include,
+      nodeSeed,
+      "a flag",
+      "point",
+      n,
     );
     const pushAxis = vec3PerElement(
       geo,
@@ -671,6 +693,38 @@ export const occlusionCull = standardNode<OcclusionCullParams>({
       const cx = pd[o];
       const cy = pd[o + 1];
       const cz = pd[o + 2];
+      // EXCLUDED: KEPT WHERE IT IS, AND KEPT WHERE IT WAS IN THE LIST.
+      //
+      // The early exit is the whole feature. `kept` and `finalPos` are the
+      // two things the emit below reads, and writing them here — with the
+      // position the point ARRIVED with, never a pushed one — puts the
+      // point back into the survivor set at its own index, so the gather
+      // that follows finds it between the same two neighbours. `moved`
+      // stays 0, so the output's `P` is the input's bits rather than a
+      // round trip through `finalPos`, and an excluded point is byte-equal
+      // to itself.
+      //
+      // IT STILL GOES INTO THE CLEARANCE GRID, which is the one thing an
+      // exclusion must NOT skip. `pushClearance` asks what is already
+      // standing where a push wants to land, and a point this node was told
+      // not to test is standing there just as solidly as one it tested and
+      // cleared. Leaving it out would make `include` quietly change where
+      // OTHER points come to rest, which is exactly the coupling the param
+      // exists to avoid.
+      //
+      // `=== 0` RATHER THAN quotaRebalance's `!(v !== 0)`, and the two
+      // agree here: that spelling exists to let a NaN count as included,
+      // and no NaN can reach this line because `scalarPerElement` resolves
+      // through `resolveOn`, which refuses a non-finite value naming the
+      // param. One reading of NaN, decided in one place.
+      if (include[i] === 0) {
+        kept[i] = 1;
+        finalPos[i * 3] = cx;
+        finalPos[i * 3 + 1] = cy;
+        finalPos[i * 3 + 2] = cz;
+        settled?.insert(i);
+        continue;
+      }
       // A missing `rot` column is the identity rotation — the attribute's
       // own default, and a box aligned to the world axes. A missing
       // `scale` column is a DEGENERATE box with no extent at all, and that

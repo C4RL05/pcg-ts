@@ -2673,6 +2673,57 @@ function writeWorldTransform(
  * makes a level-1 cell exact given a window of `lookAhead + pushMax`
  * around it. `cullSightlines` has no clearance either, so nothing is being
  * given up to buy that.
+ *
+ * L-6's COVER IS EXEMPT, WHICH IS Z-1's EXEMPTION AND THE SAME SENTENCE
+ * BEHIND IT. {@link corridorFields} states it as a field: cover is placed
+ * clear by construction, and standing a tunnel rib off to the corridor edge
+ * puts a hole in the roof over the racing line. L-1 may move a placement
+ * 6.5W laterally, so it produces that hole at least as readily as Z-1 does,
+ * and the rule needs the same exclusion.
+ *
+ * IT WAS UNREACHED RATHER THAN UNNEEDED, and the two are not the same
+ * thing. A cover piece's BASE clears `CORRIDOR.ceilingW` by construction —
+ * `coverPlacements` floors its centre at `1.2 + tall/2`, and the lowest one
+ * over seeds 1-6 sits at 3.6W — while every chord of the cone runs from an
+ * eye at `SIGHTLINE.eyeW`, 0.3W, DOWN to a target on the road surface, so
+ * nothing in the fan gets within a W of the lowest rib. Measured before the
+ * exemption was added: 69 cover pieces over seeds 1-6, none pushed and none
+ * dropped. That is a coincidence of two constants and not a rule — a lower
+ * kit, a taller eye or a fan over a crest all reach it — and the lap is
+ * bit-identical with the exemption in, which is what makes this a latent
+ * defect fixed rather than a picture changed.
+ *
+ * `locked` WOULD BE THE WRONG SPELLING OF IT, and it is the near miss worth
+ * naming because the column is already here and already field-driven.
+ * `pushMax: 0` is `occlusionCull`'s way of saying "drop rather than move",
+ * which is what L-3's ruler elements want; giving it to cover would have
+ * L-1 DELETE the rib instead of shoving it aside, and a missing rib is the
+ * same hole in the roof with the rib gone too. The exemption has to mean
+ * "not tested", not "not moved" — which is a different param, and until
+ * this campaign it was a param the library did not have.
+ *
+ * "A TUNNEL YOU CAN SEE THROUGH IS NOT AN OCCLUSION" IS NOT AVAILABLE AS AN
+ * ARGUMENT, and it is worth writing down because it is the first thing a
+ * reader will reach for. This stage's subject is the PLACEMENT and not the
+ * box — the head of this comment argues why — so the node tests one solid
+ * oriented box per placement with the slab method, and the opening a car
+ * drives through is inside that box and invisible to the test. A rib
+ * spanning the road IS an occluder by this node's reading, correctly. The
+ * only honest answer is to not ask it about cover.
+ *
+ * AND THE EXEMPTION IS A PARAM RATHER THAN A FILTER, WHICH WAS MEASURED THE
+ * HARD WAY. The obvious spelling — hold the cover out of the node with
+ * `filterByExpression` and merge it back — is the one {@link PLACEMENT.group}
+ * already refuses for L-5, for the reason it gives there: `mergePoints`
+ * CONCATENATES. It looks safe here because L-6 appends its pieces, so cover
+ * is the tail of the list and concatenating puts it back where it was — and
+ * that is true right up until a caller hands in a list that already carries
+ * cover. `dressLap`'s own output does: on seed 1 its 16 pieces sit at
+ * indices 16 to 34 of 354, on seed 3 at 107 to 202. Built and measured, the
+ * merge reordered those laps and `tests/racetrackDressGraph.test.ts`'s box
+ * comparison failed on it. `occlusionCull` grew an `include` gate instead,
+ * which keeps an excluded point IN ITS PLACE, and this demo is the reason
+ * that param exists.
  */
 function writeSightlineCull(
   g: Graph,
@@ -2683,6 +2734,11 @@ function writeSightlineCull(
   const cull = g.add(
     occlusionCull,
     {
+      // L-6's cover, held out of the test — the same column Z-1 reads and
+      // the same `1 - flag` idiom {@link writeBandMix} spells its own
+      // exclusion with. See the header for why this is a param and not a
+      // filter, and for what a cover piece's `conePushW` reads.
+      include: sub(1, attribute(PLACEMENT.cover)),
       lookAhead: SIGHTLINE.aheadW * halfWidth,
       samples: SIGHTLINE.samples,
       eyeOffset: mul(attribute(TRACK_FRAME.up, 3), SIGHTLINE.eyeW * halfWidth),
@@ -2729,6 +2785,19 @@ function writeSightlineCull(
   // MOVED ONE. See `PLACEMENT.placedP`: the difference is purely along
   // `across`, so this projection is exact, where projecting the position
   // itself would carry `up . across` times the height.
+  //
+  // A COVER PIECE READS EXACTLY 0 HERE, THE SAME AS A PLACEMENT THE CULL
+  // CLEARED, and that is chosen rather than fallen into. `occlusionCull`
+  // writes no column saying which points it tested — its `include` doc says
+  // so — and an exempt piece comes out with `P` bit-identical to its
+  // `placedP`, so the difference is an exact zero vector, the projection an
+  // exact 0, and `t + 0` is `t` to the bit. Reporting the two the same way
+  // is what {@link writeSettleCount} needs: a round whose only event was a
+  // rib nobody tested must not count as a round that moved something, or
+  // the loop never settles on a lap with a tunnel on it. Where a reader has
+  // to tell "not asked" from "asked and clear", the answer is
+  // `PLACEMENT.cover` itself — the same expression the gate is driven by,
+  // still on the cloud, and cheaper than a column every cook would pay for.
   const push = g.add(
     setAttribute,
     {
@@ -5334,8 +5403,14 @@ function writeCoverPlacements(
     [PLACEMENT.coverRun, attribute(PLAN.startW)],
     // `PLACEMENT.poseU` IS DELIBERATELY NOT HERE, and it is the one column
     // a piece lacks that the body reads. It arrives 0 through the merge's
-    // default and is consumed only where `mixTarget >= 0`, which cover
-    // never reaches -- the mix's `include` excludes it. So it is inert
+    // default and is COMMITTED only where `mixTarget >= 0`, which cover
+    // never reaches -- the mix's `include` excludes it, and
+    // `quotaRebalance` writes -1 into `mixTarget` for every point its own
+    // `include` switched off. The word used to be "consumed" and that
+    // overstated it: the column IS read for every survivor, since it is
+    // half of the redraw's `poseSlot`, and a 0 lands on `poseOff` -- an
+    // in-range row whose gathered pose the commit gate then discards. Read
+    // always, spent never. So it is inert
     // today and it is the single thing to write first if cover is ever
     // made mix-eligible.
     // A NEGATIVE ID, COUNTING DOWN FROM -2, and the first draft renumbered

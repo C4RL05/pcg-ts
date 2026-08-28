@@ -419,6 +419,277 @@ describe("occlusionCull: field-capable params", () => {
   });
 });
 
+/**
+ * `include`, whose whole point is the two words "in its place".
+ *
+ * WHAT MAKES THIS A PARAM RATHER THAN A CALLER'S FILTER, and what these
+ * cases have to hold it to: a caller CAN keep a class of points away from
+ * this node by filtering them off and merging them back, and the result is
+ * wrong in a way that is invisible until something reads the cloud in
+ * order — the exempt points arrive at the END, every index after the first
+ * of them shifts, and a copyToPoints downstream lays its copies out in the
+ * new order. So the interleaving case below is the load-bearing one, and it
+ * is paired with the order that a concatenating implementation WOULD have
+ * produced, from the same fixture, so that it cannot pass by agreeing with
+ * both.
+ */
+describe("occlusionCull: include", () => {
+  /**
+   * The verdict this param overrides, in both directions, over one fixture:
+   * a box on the sight line is dropped when it is tested and kept exactly
+   * where it stands when it is not. Two cooks, one flag, and nothing else
+   * different — which is what makes the second cook evidence about
+   * `include` rather than about the box.
+   */
+  it("carries an excluded blocker through where a tested one is dropped", async () => {
+    const fixture = (): Geometry => {
+      const geo = boxesAt(
+        [
+          [0, 0.5, 5],
+          [10, 0.5, 5],
+        ],
+        [
+          [2, 2, 2],
+          [2, 2, 2],
+        ],
+      );
+      const gate = geo.attrs.point.add("tested", "f32", 1, 0);
+      gate.set(0, 0);
+      gate.set(1, 1);
+      return geo;
+    };
+
+    const tested = await cull(fixture(), denseRun());
+    expect(positionsOf(tested)).toEqual([[10, 0.5, 5]]);
+
+    const gated = await cull(fixture(), denseRun(), { include: attribute("tested") });
+    expect(positionsOf(gated)).toEqual([
+      [0, 0.5, 5],
+      [10, 0.5, 5],
+    ]);
+  });
+
+  /**
+   * The same over the OTHER verdict. With an allowance the blocker is
+   * pushed rather than dropped, and a pushed point is the case a caller is
+   * most likely to miss: the population count is unchanged either way, so
+   * nothing but the position says whether the exclusion was honoured.
+   */
+  it("carries an excluded blocker through where a tested one is pushed", async () => {
+    const fixture = (): Geometry => {
+      const geo = boxesAt([[0, 0.5, 5]], [[2, 2, 2]]);
+      geo.attrs.point.add("tested", "f32", 1, 0);
+      return geo;
+    };
+    const pushed = await cull(fixture(), denseRun(), { pushMax: 6, pushStep: 1 });
+    expect(positionsOf(pushed)).toEqual([[2, 0.5, 5]]);
+
+    const gated = await cull(fixture(), denseRun(), {
+      pushMax: 6,
+      pushStep: 1,
+      include: attribute("tested"),
+    });
+    expect(positionsOf(gated)).toEqual([[0, 0.5, 5]]);
+  });
+
+  /**
+   * THE ONE THAT WOULD CATCH A CONCATENATING IMPLEMENTATION, which is the
+   * reason the excluded points here are INTERLEAVED rather than the tail of
+   * the cloud. A suffix is the case every wrong implementation also gets
+   * right: filter the class off, cull the rest, merge the two back, and the
+   * order is only preserved because the exempt ones happened to already be
+   * last. Real populations are not so tidy — the racetrack demo's own list
+   * carries its tunnel pieces at indices 16 to 34 of 354 on one seed and
+   * 107 to 202 on another — so the fixture puts three excluded blockers in
+   * the middle, with tested points and a real drop on both sides of them.
+   */
+  it("keeps an excluded point between the neighbours it arrived between", async () => {
+    const positions = [
+      [10, 0.5, 2],
+      [0, 0.5, 4],
+      [10, 0.5, 6],
+      [0, 0.5, 8],
+      [0, 0.5, 10],
+      [0, 0.5, 12],
+      [10, 0.5, 14],
+      [0, 0.5, 16],
+      [10, 0.5, 18],
+      [10, 0.5, 20],
+    ];
+    // Indices 3, 4 and 5: on the line, so every one of them WOULD be
+    // dropped, and in the middle of the cloud rather than at the end.
+    const excluded = new Set([3, 4, 5]);
+    const geo = boxesAt(
+      positions,
+      positions.map(() => [2, 2, 2]),
+    );
+    const gate = geo.attrs.point.add("tested", "f32", 1, 1);
+    for (const i of excluded) gate.set(i, 0);
+
+    const out = await cull(geo, denseRun(), { include: attribute("tested") });
+
+    // 1 and 7 are on the line and tested, so they go; everything else
+    // stays, in the order it arrived.
+    const dropped = new Set([1, 7]);
+    const expected = positions.filter((_, i) => !dropped.has(i));
+    expect(positionsOf(out)).toEqual(expected);
+
+    // AND THE BOUND MOVED ASIDE. The same survivors, ordered the way a
+    // filter-and-merge would have ordered them — tested first, exempt
+    // appended — derived from this fixture rather than typed, so it stays
+    // the right counter-example if the fixture changes. The assertion above
+    // is only evidence because these two differ.
+    const concatenated = [
+      ...positions.filter((_, i) => !dropped.has(i) && !excluded.has(i)),
+      ...positions.filter((_, i) => excluded.has(i)),
+    ];
+    expect(
+      concatenated,
+      "the fixture does not discriminate: concatenation gives the same order",
+    ).not.toEqual(expected);
+    // The node did not do that. Stated against the node's own output rather
+    // than only against `expected`, so this reads as what it is: the
+    // implementation this param replaced, run on this fixture, would have
+    // failed the assertion above.
+    expect(positionsOf(out), "the node concatenated instead of keeping order").not.toEqual(
+      concatenated,
+    );
+    // ...and the disagreement is ONLY the order. Same survivors either way,
+    // which is what stops this from passing for a node that culled the
+    // wrong set and happened to emit it in a different arrangement.
+    expect([...concatenated].sort(), "the two orders are not the same survivors").toEqual(
+      [...expected].sort(),
+    );
+  });
+
+  /**
+   * `include` OFF AND THE PUSH PARAMS SAYING "DROP THIS ONE", which is the
+   * pair a reader might take for a contradiction. They are not competing:
+   * `pushMax` 0 and a zero `pushAxis` are both verdicts on a point that WAS
+   * tested and did block, and this point is never tested, so neither is
+   * ever read for it. The cook that proves it is the one beside it, where
+   * the identical point with the gate open is removed by exactly those
+   * params.
+   */
+  it("never reads pushMax or pushAxis for an excluded point", async () => {
+    const fixture = (): Geometry => {
+      const geo = boxesAt([[0, 0.5, 5]], [[2, 2, 2]]);
+      geo.attrs.point.add("tested", "f32", 1, 0);
+      return geo;
+    };
+    const params = { pushMax: 6, pushStep: 1, pushAxis: [0, 0, 0] };
+    const open = await cull(fixture(), denseRun(), params);
+    expect(open.pointCount, "a zero axis did not drop the blocker").toBe(0);
+
+    const shut = await cull(fixture(), denseRun(), {
+      ...params,
+      include: attribute("tested"),
+    });
+    expect(positionsOf(shut)).toEqual([[0, 0.5, 5]]);
+  });
+
+  /**
+   * AN EXCLUDED POINT IS STILL THERE, which is the one thing an exclusion
+   * must not skip. `pushClearance` asks what is standing where a push wants
+   * to land, and "this node was told not to test it" is no answer to that —
+   * a rib nobody tested occupies its space exactly as solidly as a lamp
+   * post that was tested and cleared. The fixture is the clearance case's
+   * own four blockers with the first one gated off: it stays at x = 0, and
+   * the three that are pushed have to clear it. Without it in the settled
+   * set the very first rung, x = 1, is 1.17 away and would be taken.
+   */
+  it("counts an excluded point among the points a push must clear", async () => {
+    const positions = [
+      [0, 0.5, 4],
+      [0, 0.5, 4.6],
+      [0, 0.5, 5.2],
+      [0, 0.5, 5.8],
+    ];
+    const geo = boxesAt(
+      positions,
+      positions.map(() => [2, 2, 2]),
+    );
+    const gate = geo.attrs.point.add("tested", "f32", 1, 1);
+    gate.set(0, 0);
+
+    const out = await cull(geo, denseRun(), {
+      pushMax: 12,
+      pushStep: 1,
+      pushClearance: 2.5,
+      include: attribute("tested"),
+    });
+    expect(out.pointCount).toBe(4);
+    const got = positionsOf(out);
+    expect(got[0], "the excluded point moved").toEqual([0, 0.5, 4]);
+    for (let i = 1; i < got.length; i++) {
+      expect(
+        Math.hypot(got[i][0] - got[0][0], got[i][2] - got[0][2]),
+        `survivor ${i} landed inside the excluded point's clearance`,
+      ).toBeGreaterThanOrEqual(2.5);
+    }
+  });
+
+  /**
+   * THE DEFAULT IS THE PARAM'S ABSENCE, byte for byte. A gate added to a
+   * node is a chance to change what every existing graph does, and the
+   * check that it did not has to compare the whole point record rather
+   * than the count: a param that quietly re-rolled a seed or moved a
+   * position by an ulp would keep the same survivors.
+   */
+  it("all-on is indistinguishable from the param absent", async () => {
+    const positions = [
+      [10, 0.5, 2],
+      [0, 0.5, 4],
+      // Eight wide: three units of push leave it still across the line, so
+      // this is the one the fixture is dropped ON. Without it every blocker
+      // clears at x = 2 and the comparison never sees a removal.
+      [0, 0.5, 8],
+      [10, 0.5, 14],
+      [0, 0.5, 16],
+    ];
+    const fixture = (): Geometry => {
+      const geo = boxesAt(
+        positions,
+        positions.map((_, i) => (i === 2 ? [8, 2, 2] : [2, 2, 2])),
+      );
+      geo.attrs.point.add("tested", "f32", 1, 1);
+      return geo;
+    };
+    const params = { pushMax: 3, pushStep: 1 };
+    const absent = await cull(fixture(), denseRun(), params);
+    const plain = await cull(fixture(), denseRun(), { ...params, include: 1 });
+    const field = await cull(fixture(), denseRun(), {
+      ...params,
+      include: attribute("tested"),
+    });
+    expect(pointRecords(plain)).toEqual(pointRecords(absent));
+    expect(pointRecords(field)).toEqual(pointRecords(absent));
+    // The fixture has to have something to preserve, or all three agree on
+    // an empty answer.
+    expect(absent.pointCount, "nothing survived, so the comparison is vacuous").toBeGreaterThan(0);
+    expect(
+      absent.pointCount,
+      "nothing was culled, so the comparison never exercised a verdict",
+    ).toBeLessThan(positions.length);
+  });
+
+  /**
+   * A NaN gate is a broken expression, not a decision, and this node
+   * refuses it the way it refuses every other non-finite param value —
+   * naming the param, which is the whole of the difference between a
+   * message an author can act on and a cull whose survivors nobody can
+   * account for. Deliberately NOT filterByExpression's reading, where NaN
+   * means drop the point.
+   */
+  it("refuses a non-finite include", async () => {
+    const geo = boxesAt([[0, 0.5, 5]], [[2, 2, 2]]);
+    const gate = geo.attrs.point.add("tested", "f32", 1, 1);
+    gate.set(0, Number.NaN);
+    const message = await refusal(geo, denseRun(), { include: attribute("tested") });
+    expect(message).toContain("include");
+  });
+});
+
 describe("occlusionCull: determinism", () => {
   /**
    * A deterministic scatter through the corridor, thick enough that the
