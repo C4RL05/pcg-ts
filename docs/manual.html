@@ -7,109 +7,147 @@
 <meta name="description" content="The pcg-ts user manual: building worlds by hand, and driving the library programmatically as an agent." />
 <title>pcg-ts manual — real-time PCG for TypeScript</title>
 <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="./site.css" />
 </head>
 <body>
 <style>
-  /* Self-hosted rather than linked from a font CDN: no third-party
-     request, nothing to block, and the page keeps its typography
-     offline. Both files are the latin subset of a VARIABLE font, so one
-     file per family covers every weight used here. OFL licensed. */
-  @font-face {
-    font-family: "Inter";
-    src: url("./fonts/inter-latin.woff2") format("woff2");
-    font-weight: 100 900;
-    font-style: normal;
-    font-display: swap;
-  }
-  @font-face {
-    font-family: "JetBrains Mono";
-    src: url("./fonts/jetbrains-mono-latin.woff2") format("woff2");
-    font-weight: 100 800;
-    font-style: normal;
-    font-display: swap;
-  }
-  :root {
-    /* ONE world, matching docs/index.html — no light theme and no
-       [data-theme] hook. The three primaries cannot survive a light
-       ground (#00ff00 on white is 1.37:1 against a 4.5 AA floor), so the
-       page commits to black rather than carrying accents that only work
-       in one of two schemes. `color-scheme: dark` declares that to the
-       browser, leaving forced/auto dark mode nothing to invert. */
-    color-scheme: dark;
-    /* The thumb, which color-scheme leaves as the platform's mid-grey:
-       a bright bar down a page whose ground is #000. The standard pair,
-       inherited, so the whole page is covered here. */
-    scrollbar-width: thin;
-    scrollbar-color: var(--line-hi) transparent;
-    --bg: #000000;
+  /* THE STYLE RULES ARE `./site.css`, SHARED — linked in the head above,
+     the same file `docs/index.html`, `docs/architecture.html`,
+     `docs/roadmap.html` and the guides under `docs/guides/` link. The
+     palette, the fonts, the link treatment, the code colouring and the
+     footer all come from there now; this page carried its own older copy
+     of them until the two had quietly diverged in twenty places.
+     `docs/guides/racetrack.html` is the shape this follows.
 
-    /* Pure greyscale — R = G = B throughout. Ratios against #000000. */
-    --ink-hi: #ffffff;   /* headings, max emphasis      21.00:1 */
-    --ink: #ededed;      /* body text                   17.94:1 */
-    --muted: #9a9a9a;    /* secondary text               7.46:1 */
-    --faint: #7a7a7a;    /* tertiary text                4.89:1 */
-    --line: #262626;
-    --line-hi: #3a3a3a;
-    --card: #0d0d0d;
-    --plate: #0a0a0a;
-    --code-bg: #0a0a0a;
-    --code-ink: #ededed;
-    --shadow: rgba(0, 0, 0, 0.6);
+     What is left below is what the manual ADDS: the masthead, the sticky
+     table of contents, the part banners, the callouts, the tables, the
+     definition lists and the figure frames, none of which the site
+     stylesheet has a rule for.
 
-    /* Marks only, never body copy. On #000: red 5.25:1, green 15.30:1 —
-       both clear AA as text — but blue is 2.44:1, under even the 3.0
-       large-text floor, so --b is only ever a fill or a stroke. */
-    --r: #ff0000;
-    --g: #00ff00;
-    --b: #0000ff;
+     Ahead of those sit the shared rules the manual OVERRIDES, and each
+     one says why it does. "The manual wanted something else" with no
+     reason attached is how the two copies drifted apart in the first
+     place, so a rule with no reason here should be deleted rather than
+     kept. Everything not in that section is now the site's version,
+     deliberately.
 
-    --accent: #00ff00;
-    --accent-ink: #ededed;
-    --amber: #ff0000;
+     This block sits in <body>, after the link, so a rule here beats the
+     site's on a tie without needing a heavier selector to do it. */
 
-    --mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
-    --sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  /* ---------- overrides of shared rules ---------- */
 
-    /* Syntax carried by LIGHTNESS, not hue: four steps down the same
-       ramp. Code is the most repeated element in a manual, so colouring
-       it would be the opposite of spending the primaries sparingly. */
-    --c-key: #ffffff;
-    --c-str: #9a9a9a;
-    --c-com: #5a5a5a;
-    --c-num: #c8c8c8;
-  }
+  /* WHAT THE MOVE CHANGED ON SIGHT, AND WHY NONE OF IT IS OVERRIDDEN.
+     These are ADOPTIONS, not overrides — there is no rule below for any of
+     them — but each is visible, so each is named here. A reader comparing
+     this page against a screenshot from before the move should find every
+     difference in this list; anything else is a bug.
 
-  * { box-sizing: border-box; }
+     `.eyebrow` --accent-ink -> --faint. The largest of them: sixteen
+     chapter kickers go from near-white to tertiary grey. An eyebrow is a
+     LABEL above a heading, the site spends the same token on the same
+     component on three other pages, and --faint clears AA here at 4.89:1.
+     The headings moved the opposite way at the same time (--ink-hi, pure
+     white), so the label recedes as the title advances rather than the two
+     competing. One line here restores the old look if it reads wrong.
+
+     `h1`/`h2`/`h3` colour #ededed -> #ffffff, across 83 headings. This
+     page set no heading colour at all, so they took body ink; site.css
+     states one.
+
+     `section` padding 38/14 -> 44/20, over sixteen chapters, and `footer`
+     margin-top 40 -> 30 with padding-bottom 48 -> 40. Pure rhythm: the
+     numbers were this page's alone and the site's are now shared with four
+     others. Together with the code leading below they are why the document
+     is ~1700px shorter than it was.
+
+     `.codeblock` padding 16/18 -> 18/20 and its keywords 400 -> 600. The
+     four token COLOURS were already byte-identical; only the weight is
+     new. */
+
+  /* A DOCUMENTATION PAGE, NOT A PROSE PAGE. site.css sets `--page: 960px`
+     for one column of text. This page spends 232px of that on a sticky
+     table of contents and 48px on the gap after it before the prose even
+     starts, so the site's width would leave the content column 632px —
+     narrower than the code blocks and tables it has to carry. 1180 keeps
+     that column at 852. The gutter is site.css's own 24px, unchanged. */
+  .wrap { max-width: 1180px; }
+
+  /* Nothing on the site's own pages is wider than the wrap. Here the
+     tables and the code blocks scroll INSIDE their own boxes, and this is
+     the guard that stops one of them that misbehaves from scrolling the
+     whole document sideways instead. */
+  body { overflow-x: hidden; }
+
+  /* DEEP LINKS. The table of contents addresses every h2 and h3 by id, so
+     a jumped-to heading must not land flush against the top of the
+     viewport. `scroll-padding-top` covers the scrolling box and
+     `scroll-margin-top` covers the targets; both, because the sticky
+     column makes the first one alone read a few pixels short. */
   html { scroll-behavior: smooth; scroll-padding-top: 20px; }
-  @media (prefers-reduced-motion: reduce) {
-    html { scroll-behavior: auto; }
-    * { transition: none !important; }
-  }
-  body {
-    margin: 0;
-    overflow-x: hidden;
-    background: var(--bg);
-    color: var(--ink);
-    font-family: var(--sans);
-    font-size: 16px;
-    line-height: 1.65;
-    -webkit-font-smoothing: antialiased;
-  }
-  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  h2, h3 { scroll-margin-top: 24px; }
 
-  h1, h2, h3, h4 { font-family: var(--mono); letter-spacing: -0.01em; text-wrap: balance; }
-  h2 { font-size: 25px; font-weight: 600; margin: 0 0 10px; scroll-margin-top: 24px; }
-  h3 { font-size: 17px; font-weight: 600; margin: 30px 0 8px; scroll-margin-top: 24px; }
-  h4 { font-size: 14.5px; font-weight: 600; margin: 22px 0 6px; color: var(--muted); }
-  p { margin: 0 0 14px; max-width: 74ch; }
+  /* THE HEADING SCALE IS THIS PAGE'S OWN, and only where it has to be.
+     site.css sizes headings for a landing page: its <h1> is a canvas
+     lockup, so it has no h1 rule at all, and its `h3` is a card title at
+     16px with no space above it. A manual is sixteen chapters of nested
+     prose — the sixty-three h3s are subsection breaks that need the 30px
+     over them to read as breaks rather than as paragraphs in bold. The h2
+     size, the h2 spacing and the heading COLOUR are site.css's, unchanged.
+     The h1 is overridden too, but it stays down in the masthead block with
+     the rest of that component rather than being restated here. */
+  h3 { font-size: 17px; font-weight: 600; margin: 30px 0 8px; }
+  /* site.css's heading group stops at h3, so h4 restates the family and
+     the tracking it would otherwise have inherited from it. */
+  h4 {
+    font-family: var(--mono); letter-spacing: -0.01em; text-wrap: balance;
+    font-size: 14.5px; font-weight: 600; margin: 22px 0 6px; color: var(--muted);
+  }
+
+  /* THE MEASURE IS `74ch`, NOT site.css's `--measure`. That value is nine
+     of the site's twelve tracks — 678px, derived from the 960px page this
+     one does not use. Dropped into an 852px column it would leave 174px of
+     the column empty and re-wrap every paragraph in the document to no
+     end. `.lead` is restated for a mechanical reason rather than a design
+     one: site.css caps it by CLASS, which outranks the element selector
+     above whatever the source order, so without this line the leads alone
+     would take the site's measure and sit narrower than the body copy.
+
+     KNOWN, AND LEFT ALONE ON PURPOSE: `ch` scales with the element's own
+     font-size, so these three land at 747px (16px), 817px (the 17.5px
+     lead) and 630px (the 13.5px caption) — three measures written to look
+     alike that do not line up. It is the same bug site.css fixed for
+     itself by deriving one fixed `--measure`, and fixing it here means
+     choosing a width and re-flowing the whole manual, which is an
+     editorial change rather than a stylesheet extraction. */
+  p { max-width: 74ch; }
+  .lead { max-width: 74ch; }
+
+  /* THE ROUNDED BOXES STAY, AND IT IS ONE DECISION RATHER THAN TWO.
+     site.css is square on purpose and says so. This page is not: the
+     figures are 12px, the callouts 8px, the install chip 6px, inline code
+     4px, and the demo chips are pills — none of which site.css has a rule
+     for. So squaring only the two boxes it does share would leave the page
+     half square and half round, which is worse than either. Squaring the
+     manual is a real change to make deliberately and all at once; until
+     then these two keep the language the rest of the page is drawn in. */
+  .codeblock { border-radius: 10px; }
+  :focus-visible { border-radius: 2px; }
+
+  /* A NAME COLLISION, NOT A DIVERGENCE. site.css's `.caption` labels a
+     diagram plate — 12px mono, letterspaced, no space under it because
+     the plate supplies that. This one is a sentence under a code block:
+     prose, at prose size, with room after it. Both of the properties the
+     site sets have to be undone by name, or the sentence arrives as
+     letterspaced mono. */
+  .caption {
+    font-family: var(--sans); font-size: 13.5px; letter-spacing: normal;
+    color: var(--faint); margin: 4px 0 16px; max-width: 74ch;
+  }
+
+  /* ---------- prose the site stylesheet has no rule for ---------- */
   ul, ol { max-width: 74ch; padding-left: 22px; }
   li { margin: 0 0 7px; }
-  /* Grey at rest, green only on hover: colour marks the interaction, not
-     the text. A manual is dense with links — tinting them all would
-     spend the accent on the most repeated element in the document. */
-  a { color: var(--accent-ink); text-decoration: none; border-bottom: 1px solid var(--line-hi); }
-  a:hover, a:focus-visible { border-bottom-color: var(--accent); }
-  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
   strong { font-weight: 600; }
   code { font-family: var(--mono); font-size: 0.9em; }
   p code, li code, td code, dd code, dt code, figcaption code {
@@ -125,16 +163,6 @@
   /* Table cells live inside .tablewrap, which scrolls — keep them intact. */
   td code, th code { white-space: nowrap; }
 
-  .eyebrow {
-    font-family: var(--mono);
-    font-size: 12px; font-weight: 600;
-    letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--accent-ink);
-    margin: 0 0 10px;
-  }
-  .lead { font-size: 17.5px; color: var(--muted); }
-  .lead strong { color: var(--ink); }
-
   /* ---------- masthead ---------- */
   header.top { border-bottom: 1px solid var(--line); padding: 40px 0 26px; }
   .kicker {
@@ -142,6 +170,12 @@
     text-transform: uppercase; color: var(--faint); margin: 0 0 8px;
   }
   .kicker a { color: var(--faint); border-bottom-color: color-mix(in srgb, var(--faint) 45%, transparent); }
+  /* site.css has no h1 rule of its own — the landing page's h1 is a canvas
+     lockup — so everything but the colour is set here. The tracking is the
+     one value that has to WIN rather than fill a gap: site.css tracks its
+     heading group at -0.01em, tuned for 26px, and at 48 that reads loose.
+     Same specificity, so this block being after the link is what settles
+     it. */
   h1 {
     font-size: clamp(32px, 5.4vw, 48px); font-weight: 700;
     letter-spacing: -0.03em; margin: 0; line-height: 1.08;
@@ -185,8 +219,6 @@
   nav.toc .part:first-child { margin-top: 0; }
 
   main { padding-bottom: 20px; }
-  section { padding: 38px 0 14px; }
-  section + section { border-top: 1px solid var(--line); }
 
   /* ---------- part banners ---------- */
   .part-banner {
@@ -203,26 +235,32 @@
   section.first-of-part { border-top: none; }
 
   /* ---------- code ---------- */
-  .codeblock {
-    background: var(--code-bg); color: var(--code-ink);
-    border-radius: 10px; padding: 16px 18px;
-    overflow-x: auto; margin: 16px 0 8px;
-  }
-  .codeblock pre { margin: 0; }
+  /* The box, the ground, the four token colours AND the 600 weight on
+     keywords are site.css's. What stays here is the one reset this page's
+     markup needs: the `<code>` inside the `<pre>` has to shed the border,
+     plate and 4px radius the inline-code rule above gives every other
+     `code` on the page. (`pre`'s own 1em UA margin is site.css's problem
+     and site.css already zeroes it — a `margin: 0` here would be a second
+     copy of a rule one line of the shared file already carries.)
+
+     THE LEADING IS site.css's NOW, AND IT VISIBLY TIGHTENED. Every block
+     here is `<pre><code>`, so the `code` is an INLINE box and the line
+     boxes belong to the `pre`. This page never sized that `pre`, so it
+     inherited the 16px/1.65 body strut and set code at 26.4px per line —
+     an accident of an unset property rather than a choice. site.css sizes
+     it 13.5px/1.65 and the same listings now set at 22.275px, which is
+     what took ~1770px off the page. The 13px below still governs the
+     GLYPHS; it is deliberately left under site.css's 13.5 because these
+     listings are long and 3.8% wider mono would push more of them into
+     their own horizontal scroll. */
   .codeblock code {
     font-family: var(--mono); font-size: 13px; line-height: 1.62;
     color: var(--code-ink); background: none; border: none; padding: 0; white-space: pre;
   }
-  .codeblock .k { color: var(--c-key); }
-  .codeblock .s { color: var(--c-str); }
-  .codeblock .c { color: var(--c-com); font-style: italic; }
-  .codeblock .n { color: var(--c-num); }
   .code-label {
     font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.1em;
     text-transform: uppercase; color: var(--faint); margin: 18px 0 -8px;
   }
-  .caption { font-size: 13.5px; color: var(--faint); margin: 4px 0 16px; max-width: 74ch; }
-  .caption b { color: var(--muted); font-weight: 600; }
 
   /* ---------- figures ---------- */
   figure {
@@ -257,6 +295,14 @@
   table { border-collapse: collapse; font-size: 14px; min-width: 100%; }
   th, td { text-align: left; padding: 8px 16px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+  /* A column header is a LABEL and gets uppercased; a column header that
+     is an identifier is a NAME and must not be. One table heads its first
+     column with `<code>hash</code>`, which the rule above was rendering as
+     `HASH` — a JSON key the reader could copy wrong. This predates the
+     move to the shared stylesheet; it is the same class of bug the
+     `.demo-links .chip` override exists to stop, so it is fixed here
+     rather than left because it was already there. */
+  th code { text-transform: none; letter-spacing: normal; }
   td code { white-space: nowrap; }
 
   /* ---------- definition-ish lists ---------- */
@@ -267,20 +313,30 @@
   /* ---------- example cards ---------- */
   .demo-links { display: flex; flex-wrap: wrap; gap: 8px 14px; font-family: var(--mono); font-size: 12.5px; margin: 0 0 6px; }
   /* 23 of these across the manual, so they sit in greyscale and take the
-     accent only under the pointer. */
+     accent only under the pointer.
+
+     THE TYPE IS RESTATED BECAUSE `.chip` IS A SHARED NAME. site.css owns
+     a `.chip` too — the roadmap's release marker, which is 11px, 600, and
+     UPPERCASE. That rule loses to this one only on the properties this
+     one sets, so before these five lines existed the shared rule reached
+     straight through and set the rest: it rendered `listNodeTypes` as
+     `LISTNODETYPES`. These chips carry case-sensitive TypeScript
+     identifiers, so that is a wrong page rather than an ugly one. Every
+     property site.css's `.chip` sets is answered here by name. */
   .demo-links .chip {
     display: inline-block; padding: 3px 10px; border-radius: 99px;
+    /* `font-family` is answered even though `.demo-links` above already
+       sets the same mono on the parent: the claim this rule makes is that
+       it is self-contained, and a rule that is only correct because of its
+       container is the kind that breaks silently when the container
+       changes. All nine, by name. */
+    font-family: var(--mono); font-size: inherit; font-weight: 400;
+    letter-spacing: normal; text-transform: none; vertical-align: baseline;
     background: var(--card);
     color: var(--ink); border: 1px solid var(--line);
   }
   .demo-links a.chip:hover, .demo-links a.chip:focus-visible {
     border-color: var(--g); color: var(--g);
-  }
-
-  footer {
-    border-top: 1px solid var(--line); margin-top: 40px; padding: 24px 0 48px;
-    font-family: var(--mono); font-size: 13px; color: var(--muted);
-    display: flex; flex-wrap: wrap; gap: 8px 28px;
   }
 </style>
 

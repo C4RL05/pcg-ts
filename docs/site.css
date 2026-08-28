@@ -1,5 +1,5 @@
 /*
- * THE SITE STYLESHEET — one file, four pages.
+ * THE SITE STYLESHEET — one file, every hand-written page.
  *
  * This block used to live inline in every hand-written page, copied
  * whole, because none of them had a build step to share one through.
@@ -18,12 +18,28 @@
  * question the stylesheet has an opinion about.
  *
  * Consumers: `docs/index.html`, `docs/architecture.html`,
- * `docs/roadmap.html`, `docs/guides/*.html`. `docs/manual.html` and
- * `docs/gallery.html` are NOT consumers — each is generated and carries
- * its own, older stylesheet, and folding them in is a separate job.
+ * `docs/roadmap.html`, `docs/manual.html`, `docs/guides/*.html`.
+ * `docs/gallery.html` is the one page left out, and it is left out for a
+ * reason that still holds: it is GENERATED, by `src/docs/gallery.ts`, and
+ * carries its own older stylesheet inside the renderer — so folding it in
+ * means editing the generator and re-running the docs chain, which is a
+ * separate job from editing a page.
+ *
+ * `docs/manual.html` used to be named in that same sentence, described as
+ * generated too. IT IS NOT, and the claim cost a round of work to
+ * disprove: `scripts/gen-site.mjs` only rewrites the text between the
+ * `<!--pcg:version-->` markers and passes everything else through byte for
+ * byte. It is a stamper, not a generator, and the manual is hand-written
+ * like every other page above.
  *
  * A page may still add a `<style>` of its own AFTER linking this, for
  * components this file does not have. `docs/guides/racetrack.html` does.
+ * `docs/manual.html` does at length, and its block is also where the
+ * handful of rules a manual genuinely has to override — its own page
+ * width, its own heading scale, its own measure — are kept, each stating
+ * the reason it differs. That is the shape to copy: an override with no
+ * reason written beside it is how this file's rules and the manual's
+ * diverged in twenty places while both claimed to be the same design.
  */
 
   /* Self-hosted rather than linked from a font CDN: no third-party
