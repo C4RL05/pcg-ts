@@ -399,7 +399,7 @@ console.<span class="n">log</span>(geo.pointCount, [...P.data.<span class="n">su
 console.<span class="n">log</span>(result.stats);</code></pre></div>
 
     <p class="code-label">Actual output</p>
-    <div class="codeblock"><pre><code>500 [ 33.082, -0.3688, 6.8829 ]
+    <div class="codeblock"><pre><code>500 [ 32.577, -0.057389, 6.8524 ]
 { cooked: 2, cached: 0, elapsedMs: 6.69 }</code></pre></div>
 
     <p>Cook the same graph again and both nodes are served from the memo cache — <code>{ cooked: 0, cached: 2 }</code>. Change one parameter with <code>graph.setParam(scatter, "count", 1000)</code> and only that node and everything downstream of it recooks. Nothing else moves; nothing is deep-hashed.</p>
@@ -1259,15 +1259,19 @@ graph.<span class="n">setParam</span>(inputHandle, <span class="s">"items"</span
 
     <div class="code-label">Unknown node type — the message enumerates the entire registry</div>
     <div class="codeblock"><pre><code>GraphSerializationError: node <span class="s">"a"</span>: unknown node type <span class="s">"pointScatterInBox"</span>;
-registered types: attributeReduce, attributeRemap, connectPoints, copyToPoints,
-dataInput, filterByAttribute, filterByBounds, filterByDensity,
-filterByExpression, filterPrimitivesByBounds, jitterPoints, mergePoints,
-meshPrimitive, orientAlongVector, partitionByAttribute, pathResample, pointGrid,
-pointLine, pointNeighborhood, pointScatterInBounds, pointScatterInWorld,
-pointsToPath, projectToPlane, promoteAttribute, removeAttribute,
+registered types: arcTile, attributeReduce, attributeRemap, connectPoints,
+copyToPoints, dataInput, extrudePolygon, filterByAttribute, filterByBounds,
+filterByDensity, filterByExpression, filterPrimitivesByAttribute,
+filterPrimitivesByBounds, forEach, jitterPoints, mergePoints, mergePrimitives,
+meshPrimitive, occlusionCull, orientAlongVector, partitionByAttribute,
+pathCoverage, pathPointAt, pathResample, pathRuns, pathScan, pathSegments,
+pathShift, pointGrid, pointLine, pointNeighborhood, pointScatterInBounds,
+pointScatterInWorld, pointScatterOnPath, pointsToPath, projectToPlane,
+promoteAttribute, quotaRebalance, removeAttribute, repeatUntil, runFit,
 sampleNearestPoint, selfPrune, setAttribute, setBounds, spawnInstances,
-splineSample, subgraph, surfaceSample, transferAttribute, transformPoints,
-valueConstant, volumeSample, writeTangents</code></pre></div>
+splineSample, subgraph, surfaceSample, sweepProfile, transferAlongPath,
+transferAttribute, transferByIndex, transformPoints, valueConstant,
+volumeSample, writeCurveFrame, writeTangents</code></pre></div>
 
     <div class="code-label">Unknown parameter — the message enumerates that type's parameters</div>
     <div class="codeblock"><pre><code>GraphSerializationError: node <span class="s">"a"</span>: unknown param <span class="s">"counts"</span> for type
