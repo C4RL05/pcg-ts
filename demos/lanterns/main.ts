@@ -360,7 +360,18 @@ function build(field: LanternField): void {
     [ASSET_ID]: { geometry: LANTERN, material: template },
   };
   try {
-    meshes = toInstancedMeshes(field.batches, assets);
+    // `requireChannels` is the one line that keeps this page from going
+    // dark silently. The material below declares `in uint seed;` and
+    // `in float seedWidened;`; a batch arriving without one binds
+    // nothing, three shades the missing attribute as zeros, and the
+    // lanterns render black with no error, no warning and no WebGL
+    // validation message. The graph promises both channels, so this
+    // asserts the promise rather than guarding a branch that can fire
+    // today — and if an edit upstream ever drops one, the page names it
+    // instead of going black.
+    meshes = toInstancedMeshes(field.batches, assets, {
+      requireChannels: [CHANNEL_EXACT, CHANNEL_WIDENED],
+    });
   } finally {
     template.dispose();
   }

@@ -357,6 +357,79 @@ each pixel is identified by its OWN payload rather than by position.
 **Payload-identified assertions cannot read the right answer from the wrong
 place; position-indexed ones can.**
 
+### What the channel expectation left, and the wiring it does NOT get, 2026-08-29
+
+All four items above are closed. The zeros behaviour is pinned
+(`tests/instanceChannelRender.test.ts`: two ordinary cooked cells, one
+material clone each, ONE compiled program, the unchannelled sibling
+shading `[0,0,0,255]`), `requireChannels` ships as the opt-in refusal, and
+item 2's material-clone sentence is now in both the ownership notes and
+`docs/authoring.md` — a pooling host must dispose the clone it displaces
+when it overwrites `mesh.material`, which was derivable before only if you
+already knew to look.
+
+**`WorldThreeBinding` does NOT forward an expectation, and the survey is
+why.** It looked like the obvious next move — the binding is the one call
+site left on the two-argument form, and the streamed world is exactly
+where a cell cooks without a channel its sibling has. The consumer survey
+kills it on two counts:
+
+- **No caller.** Every `WorldThreeBinding` consumer draws batches with no
+  named channels at all: `gpu-world` (one assetId, `spire`),
+  `infinite-world` (`megarock` and `rock`), `racetrack`'s streamed
+  dressing (many assetIds, and `assets3d.ts` says outright that none
+  carries a channel). The only material in the repo that DECLARES an
+  instance attribute is `lanterns`' `ShaderMaterial` (`in uint seed;`,
+  `in float seedWidened;`), and `lanterns` calls `toInstancedMeshes`
+  directly, never the binding. A `requireChannels` on
+  `WorldThreeBindingOptions` would ship with zero callers, which is what
+  this section of the file exists to prevent.
+- **The world-level shape is wrong even when a caller appears.** One list
+  on the binding asserts across EVERY batch the world produces, and a
+  world is heterogeneous by construction — `infinite-world` already draws
+  two assetIds and `racetrack` many. The per-call list is honest because
+  the caller partitions its batches the way it partitions its materials;
+  a binding hands over whatever the cook produced, so the same list
+  becomes all-or-nothing over assets that have nothing to do with each
+  other. The per-assetId map that would fix that is the one rejected in
+  the commit that shipped `requireChannels`, for the reason that still
+  holds: the realistic cause is a stale name map, and keying by id adds a
+  second map whose unnamed ids go silently unchecked.
+
+  So the binding waits for a consumer that can state the mechanism —
+  most plausibly a callback of the shape `DeviceInstanceBinding.bounds`
+  already sets (`levelName, coord, assetId`), which is the one per-asset
+  lever in this file that a real integrator asked for.
+
+**`lanterns` is wired instead**, and it is the honest caller: its material
+declares both channels, its single `spawnInstances` publishes both, and
+the cook confirms one batch of 6000 carrying both. The expectation asserts
+the promise rather than guarding a branch that can fire today — verified
+headless against `dist/`, accepted as cooked, and refused by name with one
+channel stripped.
+
+**And the gap that found itself while wiring it: `ToInstancedMeshesOptions`
+could have vanished from the published surface with a green suite.**
+`publicSurface.test.ts` reads `Object.keys` of the imported namespace, and
+an `interface` leaves nothing there to key, so the three entry's 15
+type-only exports were pinned by nothing — `src/publicTypeSurface.test.ts`
+covers the ROOT entry alone. `src/three/publicTypeSurface.test.ts` closes
+it with the same compiler-API machinery, no new mechanism, one file per
+entry point for the reason the value pins already are (importing the three
+entry's values means importing three, which `noThreeInCore.test.ts`
+forbids outside `src/three/`). Proven by injection both ways: dropping a
+name from the list, and dropping `type ToPointsOptions` from the barrel —
+**the value assertions stayed green through the second, which is the hole
+in one sentence.**
+
+`pcg-ts/gpu` has the identical hole and does not get the identical file
+yet: `src/gpu/publicSurface.test.ts` pins 8 values, its types are
+unpinned, and the fix is a copy of the three one with a different entry
+path. Left undone deliberately — each `it` rebuilds a TS program, so this
+is three more program builds in every run, and unlike the three entry no
+option type of the gpu entry has just been added by hand. Do it the next
+time a gpu type is added or renamed.
+
 ### Stretch: intra-node yielding — MEASURED AND REJECTED, 2026-08-28
 
 An external integrator's cook-cost harness, run headless against `dist/`,
