@@ -2553,15 +2553,39 @@ dispose, as above.
 What you cannot do yet is have the device *compose* those channels
 without a readback.
 
-If your material is **pooled or shared** across meshes, note the second
-clone. `toInstancedMeshes` gives every mesh a per-mesh clone of the
-asset's material whether you keep it or not, so a host that overwrites
-`mesh.material` with its own must dispose what it displaced — after the
-assignment nothing else holds a reference to it. Read the old value
-through `materialListOf` before overwriting: a multi-material asset is
-cloned SLOT BY SLOT, so there are as many clones as slots and disposing
-only the first leaks the rest. Dispose what was displaced, never the
-pooled material that displaced it.
+If your material is **pooled or shared** across meshes, pass
+`materialFor`. It is asked once per batch and the material it returns is
+used AS-IS — no clone is minted, so there is nothing to displace and
+nothing to dispose. Return `undefined` for a batch to take the default
+clone instead, which is the per-asset lever: pool for the assets your
+shader knows and let the rest clone. A multi-material asset must be
+answered slot for slot, and SHAPE binds rather than count — an array is
+what puts three on its per-group path, so a 1-element array is not a
+spelling of a single material and is refused by name.
+
+**What you take on with it.** In three r185 the `dispose` event of a
+mesh's material is the only trigger that releases that mesh's render
+state, so a material you share across meshes never fires it and the
+library will not dispose it for you (`materialFor` marks the mesh, and
+`WorldThreeBinding` honours the mark on evict, recook and teardown).
+Left unmanaged that is a real leak, measured at 1911 → 8821 programs and
++22 MB in six minutes. The way to hold it is to pool the MESHES, not
+only the materials: a fixed ring of `(InstancedMesh, material)` pairs
+sized to your live-cell ceiling, geometry swapped and `.count` set on
+cell-ready, keeps the pair stable so three's per-mesh entry is reused
+instead of accumulating.
+
+Note the clone was never a shader compile. WebGL keys its program cache
+on shader source, and the WebGPU backend already forks per instanced
+mesh, so per-mesh clones add no extra builds — they only add the release
+lever. `materialFor` buys ownership, not compilation.
+
+If you already have meshes and are overwriting `mesh.material` after the
+fact, the old route still works: dispose what you displaced — after the
+assignment nothing else holds a reference to it — reading the old value
+through `materialListOf` first, since a multi-material asset is cloned
+SLOT BY SLOT and disposing only the first leaks the rest. Dispose what
+was displaced, never the pooled material that displaced it.
 
 ## Editing live graphs
 
@@ -4077,9 +4101,19 @@ size 64) splits into chunked dispatches whose output is byte-identical
 to the unchunked one, so the old `dispatch-too-large` reason no longer
 exists.
 
-Those four reasons (`no-spec`, `derived-spec`, `compile-error`,
-`too-many-buffers`) are the complete per-field vocabulary; fused runs
-add two more, below. `derived-spec` is scoped to the **per-field seam**
+4. Every `{"fn":"param"}` reference in the spec resolves to exactly
+   one value per name. A name nothing bound, or two references to one
+   name bound to different VALUES in a single expression, falls back
+   with `param-bindings` — the kernel compiles either way, since a
+   param lowers to a uniform slot that needs only the name, but the
+   values it would write are missing or contradictory. Two references
+   bound at different *arities* are a different failure and report
+   `compile-error`: one slot cannot be both a scalar and a vector, so
+   there is no kernel rather than no value.
+
+Those five reasons (`no-spec`, `derived-spec`, `compile-error`,
+`too-many-buffers`, `param-bindings`) are the complete per-field
+vocabulary; fused runs add two more, below. `derived-spec` is scoped to the **per-field seam**
 only: a node the same setting keeps out of a fused run is not counted
 again at the fusion gate, because its fields still fall back per-field
 and the one cause reported twice would read as two.
@@ -4266,6 +4300,17 @@ That is by design, not a bug; benchmark from cold caches.
   pool bucketing can allocate up to 2×, and the 12-byte per-chunk
   uniforms are not counted. Field temporaries live for the whole run,
   not just their member, so an 8-member run holds 8 columns at once.
+
+**And one per-run reason that is not a fallback**, counted separately
+because it reports a partial success rather than a lost run:
+
+- `run-partially-fused` — a member was rejected, so the planner retried
+  the SUFFIX after it and fused what remained. Counted once per chain
+  per cook; the dropped members cooked per-node. Note the asymmetry:
+  only a suffix is ever retried, never a prefix. Fusing the prefix
+  would compute `P` on the device and hand the drifted bits to the
+  identity-keyed member one node later — the same hazard the rejection
+  exists to prevent, with the boundary moved rather than removed.
 
 **Cost model.** A *constant* param — a plain number or number tuple —
 costs a 16-byte uniform slot and no dispatch; only field-valued params

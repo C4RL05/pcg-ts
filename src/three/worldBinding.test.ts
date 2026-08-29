@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createPointCloud } from "../data/index.js";
 import { makeGeometryItem, makeInstancesItem, makeValueItem } from "../graph/index.js";
 import { buildInstanceBatches } from "../spawn/instances.js";
+import { ownsMaterial } from "./instanced.js";
 import { WorldThreeBinding } from "./worldBinding.js";
 
 function makeAssets() {
@@ -239,5 +240,140 @@ describe("WorldThreeBinding per-mesh material lifecycle", () => {
     expect(disposed).toHaveLength(60);
     expect(new Set(disposed).size).toBe(60);
     expect(new Set(disposed)).toEqual(new Set(minted));
+  });
+});
+
+/**
+ * Host-supplied materials, forwarded (`materialFor`).
+ *
+ * The binding is where the leak the per-mesh clone exists to prevent was
+ * MEASURED, so it is also where the escape hatch has to be honoured: a
+ * host that supplies its own pooled material keeps its lifetime, and a
+ * cell going out of radius must not fire `dispose` on a material every
+ * live cell is still drawing through — that would drop their render
+ * state, not just its own.
+ *
+ * `materialFor` is the ONLY `ToInstancedMeshesOptions` field forwarded
+ * here. `requireChannels` is one all-or-nothing list across every batch,
+ * which a heterogeneous world cannot state; a per-batch callback has the
+ * per-asset lever it is missing.
+ */
+describe("WorldThreeBinding materialFor", () => {
+  /** Asset map recording every clone minted and every dispose those clones took. */
+  function trackedAssets(...ids: string[]) {
+    const map: Record<string, { geometry: BoxGeometry; material: Material }> = {};
+    const minted: Material[] = [];
+    const disposed: Material[] = [];
+    for (const id of ids) {
+      const material = new MeshBasicMaterial();
+      const originalClone = material.clone.bind(material);
+      material.clone = () => {
+        const clone = originalClone();
+        minted.push(clone);
+        clone.addEventListener("dispose", () => disposed.push(clone));
+        return clone;
+      };
+      map[id] = { geometry: new BoxGeometry(), material };
+    }
+    return { assets: map, minted, disposed };
+  }
+
+  function pooledMaterial() {
+    const material = new MeshBasicMaterial();
+    const disposed: Material[] = [];
+    material.addEventListener("dispose", () => disposed.push(material));
+    return { material, disposed };
+  }
+
+  const itemFor = (assetId: string, n = 2) =>
+    makeInstancesItem(buildInstanceBatches(createPointCloud(n), { defaultAssetId: assetId }));
+
+  it("forwards the callback: the cell's mesh draws the host's material and no clone is minted", () => {
+    const { assets, minted } = trackedAssets("tree");
+    const { material: pooled } = pooledMaterial();
+    const root = new Group();
+    const binding = new WorldThreeBinding({ group: root, assets, materialFor: () => pooled });
+    binding.cellReady("ground", [0, 0], { main: [itemFor("tree")] });
+    const mesh = root.children[0].children[0] as InstancedMesh;
+    expect(mesh.material).toBe(pooled);
+    expect(ownsMaterial(mesh)).toBe(false);
+    expect(minted, "the binding minted nothing").toHaveLength(0);
+  });
+
+  it("never disposes it on evict, recook, a failed build or teardown", () => {
+    const { assets, minted } = trackedAssets("tree");
+    const { material: pooled, disposed } = pooledMaterial();
+    const root = new Group();
+    const binding = new WorldThreeBinding({ group: root, assets, materialFor: () => pooled });
+    /**
+     * Every leg below asserts the pooled material was NOT disposed, and
+     * that is only meaningful once this cell is proved to be drawing it:
+     * a binding that forwarded nothing would mint clones, never touch
+     * `pooled`, and pass the same assertions saying nothing at all.
+     */
+    const built = (coord: readonly [number, number]) => {
+      const cell = root.children.find((c) => c.name === `ground|${coord.join(",")}`);
+      const mesh = cell?.children.find((c) => c instanceof InstancedMesh) as InstancedMesh;
+      expect(mesh.material, "the precondition: this mesh really draws the pooled material").toBe(
+        pooled,
+      );
+      expect(ownsMaterial(mesh)).toBe(false);
+      return mesh;
+    };
+
+    // evict
+    binding.cellReady("ground", [0, 0], { main: [itemFor("tree")] });
+    built([0, 0]);
+    binding.cellEvicted("ground", [0, 0]);
+    expect(disposed, "evict").toEqual([]);
+    // recook swap
+    binding.cellReady("ground", [1, 0], { main: [itemFor("tree")] });
+    binding.cellReady("ground", [1, 0], { main: [itemFor("tree")] });
+    built([1, 0]);
+    expect(disposed, "recook swap").toEqual([]);
+    // partial build failure: the first item builds, the second throws,
+    // and the failed cell's teardown runs over a mesh drawing `pooled`.
+    expect(() =>
+      binding.cellReady("ground", [2, 0], { main: [itemFor("tree"), itemFor("missing", 1)] }),
+    ).toThrow(/unknown assetId/);
+    expect(disposed, "partial build failure").toEqual([]);
+    // teardown
+    binding.dispose();
+    expect(disposed, "dispose()").toEqual([]);
+    expect(binding.cellCount).toBe(0);
+    expect(minted, "not one clone was minted along the way").toHaveLength(0);
+  });
+
+  it("still disposes the clones of the batches the callback passed on", () => {
+    // Both behaviours in ONE binding, which is the shape a real host has:
+    // pooled for the assets its shader knows, the default clone for the
+    // rest. Getting this wrong in either direction is silent.
+    const { assets, minted, disposed } = trackedAssets("tree", "rock");
+    const { material: pooled, disposed: pooledDisposed } = pooledMaterial();
+    const root = new Group();
+    const binding = new WorldThreeBinding({
+      group: root,
+      assets,
+      materialFor: (batch) => (batch.assetId === "tree" ? pooled : undefined),
+    });
+    binding.cellReady("ground", [0, 0], { main: [itemFor("tree"), itemFor("rock", 1)] });
+    expect(minted, "one clone, for the rock batch only").toHaveLength(1);
+    const meshes = root.children[0].children.filter(
+      (c): c is InstancedMesh => c instanceof InstancedMesh,
+    );
+    expect(meshes.map((m) => ownsMaterial(m))).toEqual([false, true]);
+
+    binding.cellEvicted("ground", [0, 0]);
+    expect(disposed, "the minted clone is released as it always was").toEqual(minted);
+    expect(pooledDisposed, "the host's material is not").toEqual([]);
+  });
+
+  it("a binding with no materialFor behaves exactly as before", () => {
+    const { assets, minted, disposed } = trackedAssets("tree");
+    const binding = new WorldThreeBinding({ group: new Group(), assets });
+    binding.cellReady("ground", [0, 0], { main: [itemFor("tree")] });
+    expect(minted).toHaveLength(1);
+    binding.dispose();
+    expect(disposed).toEqual(minted);
   });
 });

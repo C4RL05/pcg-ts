@@ -12,23 +12,40 @@ export {
   type ToThreeGeometryOptions,
 } from "./convert.js";
 /**
- * `ownsGeometry` ships beside `toInstancedMeshes` because it is half of
- * that function's disposal contract: a batch carrying named per-instance
- * channels gets a geometry CLONE (a channel is a geometry attribute and
- * cannot be shared), and the caller that disposes the mesh is the only
- * one that can dispose the clone. A caller writing its own teardown
- * instead of using `WorldThreeBinding` needs to ask.
+ * `ownsGeometry`, `ownsMaterial` and `materialListOf` ship beside
+ * `toInstancedMeshes` because together they ARE that function's disposal
+ * contract, and a caller writing its own teardown instead of using
+ * `WorldThreeBinding` has to be able to run it:
  *
- * `ToInstancedMeshesOptions` carries the opt-in channel expectation and
- * nothing else yet: a caller states the channel names its materials
- * declare, and a batch missing one is refused by name instead of drawn as
- * zeros (`toInstancedMeshes` binds what the batch carries and never sees
- * the material, so the two can disagree with nothing malformed on either
- * side). Exported because a host assembles that list beside its asset
- * map, and a list stored in a variable needs a name for its type.
+ * - `ownsGeometry` — a batch carrying named per-instance channels gets a
+ *   geometry CLONE (a channel is a geometry attribute and cannot be
+ *   shared), and the caller that disposes the mesh is the only one that
+ *   can dispose the clone.
+ * - `materialListOf` — `mesh.material` is `Material | Material[]`, and a
+ *   host that casts the union away to call `dispose()` disposes slot 0
+ *   and leaks every other slot of a multi-material asset. The docs have
+ *   told hosts to walk the slots through this function since the
+ *   per-mesh clone shipped; it was never actually exported, which is the
+ *   defect this closes.
+ * - `ownsMaterial` — false exactly for a material the caller supplied
+ *   through `ToInstancedMeshesOptions.materialFor`, which the library
+ *   must never dispose. Absence means owned, so an old teardown keeps
+ *   disposing exactly what it always did.
+ *
+ * `ToInstancedMeshesOptions` carries the two opt-ins. `requireChannels`
+ * states the channel names the caller's materials declare, so a batch
+ * missing one is refused by name instead of drawn as zeros
+ * (`toInstancedMeshes` binds what the batch carries and never sees the
+ * material, so the two can disagree with nothing malformed on either
+ * side). `materialFor` supplies a batch's material directly, suppressing
+ * the per-mesh clone and transferring its lifetime to the caller.
+ * Exported because a host assembles both beside its asset map, and a
+ * value stored in a variable needs a name for its type.
  */
 export {
+  materialListOf,
   ownsGeometry,
+  ownsMaterial,
   toInstancedMeshes,
   type AssetMap,
   type InstancedAsset,

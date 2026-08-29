@@ -36,7 +36,14 @@ import type {
   DeviceInstanceAdapter,
   DeviceInstanceContext,
 } from "./deviceInstances.js";
-import { materialListOf, ownsGeometry, toInstancedMeshes, type AssetMap } from "./instanced.js";
+import {
+  materialListOf,
+  ownsGeometry,
+  ownsMaterial,
+  toInstancedMeshes,
+  type AssetMap,
+  type ToInstancedMeshesOptions,
+} from "./instanced.js";
 import { attempt, type TeardownFailure } from "./teardown.js";
 
 /**
@@ -85,6 +92,31 @@ export interface WorldThreeBindingOptions {
   readonly group: Group;
   /** Asset lookup for instances items (see {@link toInstancedMeshes}). */
   readonly assets: AssetMap;
+  /**
+   * Supply a batch's material instead of taking the per-mesh clone
+   * `toInstancedMeshes` mints. Forwarded to it verbatim, once per batch
+   * of every cell this binding builds — see
+   * {@link ToInstancedMeshesOptions.materialFor} for the ownership the
+   * caller takes on, which is the whole of what this option means.
+   *
+   * The binding honours it on every release path: a material this
+   * callback returned is never disposed by `cellEvicted`, by a recook
+   * swap, by a partial build failure or by `dispose()`, because the mesh
+   * carries the flag {@link ownsMaterial} reads. Everything else about
+   * teardown is unchanged.
+   *
+   * **The only `ToInstancedMeshesOptions` field forwarded here, and the
+   * asymmetry is deliberate.** `requireChannels` is one all-or-nothing
+   * list checked against every batch, which is the wrong shape for a
+   * World: a world is heterogeneous by construction — the ground cover
+   * and the landmark come out of different levels and carry different
+   * channels — so one list across everything the world produces would
+   * refuse the cells it was never about. `materialFor` is a per-BATCH
+   * callback, so it has the per-asset lever a single list is missing: a
+   * host pools for the assets its shader knows, returns `undefined` for
+   * the rest, and takes the default clone there.
+   */
+  readonly materialFor?: ToInstancedMeshesOptions["materialFor"];
   /** Also render geometry items as debug THREE.Points (default false). */
   readonly debugPoints?: boolean;
   /** Debug point size in world units (default 0.1). */
@@ -130,7 +162,12 @@ interface CellEntry {
  * accepts to drop the mesh's cached render state (render object, built
  * shaders, pipeline, uniform buffers; see `cloneAssetMaterial` and
  * `renderStateRelease.test.ts`). Without it a streaming world's renderer
- * caches grow by every mesh ever cooked. The asset GEOMETRY (and any
+ * caches grow by every mesh ever cooked. The ONE material this binding
+ * does not dispose is one the host supplied through `materialFor`:
+ * ownership stayed with the host there, the mesh is flagged, and
+ * `ownsMaterial` is asked on every release path — releasing a pooled
+ * material when one cell evicts would drop the render state of every
+ * live cell still drawing through it. The asset GEOMETRY (and any
  * textures) stays shared across cells and is NOT disposed — it belongs to
  * the caller's asset map, and the clone shares those by reference. The
  * ONE exception is a mesh whose batch carried named per-instance
@@ -173,9 +210,22 @@ export class WorldThreeBinding {
    * docs for why identity (not per-cell ownership) is the right key.
    */
   private readonly handleRefs = new Map<DeviceTransformsHandle, number>();
+  /**
+   * What every `toInstancedMeshes` call of this binding passes, built
+   * once.
+   *
+   * `undefined` when nothing was configured, and not `{}`: absent is the
+   * default and has to stay byte-for-byte the old call, both in what
+   * `toInstancedMeshes` sees and in what a cook allocates — a cell
+   * builds one of these per instances item, and a binding that forwards
+   * nothing should allocate nothing.
+   */
+  private readonly meshOptions: ToInstancedMeshesOptions | undefined;
 
   constructor(opts: WorldThreeBindingOptions) {
     this.opts = opts;
+    this.meshOptions =
+      opts.materialFor === undefined ? undefined : { materialFor: opts.materialFor };
   }
 
   /** Number of live cell groups (diagnostics/tests). */
@@ -250,7 +300,11 @@ export class WorldThreeBinding {
             if (isDeviceResidentInstances(item)) {
               this.buildDeviceBatches(entry, levelName, coord, item.deviceBatches ?? []);
             } else {
-              for (const mesh of toInstancedMeshes(item.batches, this.opts.assets)) {
+              for (const mesh of toInstancedMeshes(
+                item.batches,
+                this.opts.assets,
+                this.meshOptions,
+              )) {
                 entry.instanced.push(mesh);
                 group.add(mesh);
               }
@@ -493,8 +547,17 @@ export class WorldThreeBinding {
     // buffers.
     for (const mesh of entry.instanced) {
       failure = attempt(failure, () => mesh.dispose());
-      for (const material of materialListOf(mesh.material)) {
-        failure = attempt(failure, () => material.dispose());
+      // Unless the HOST supplied it through `materialFor`, in which case
+      // it is very likely pooled across cells and disposing it on evict
+      // would drop the render state of every live cell still drawing
+      // through it — a cell going out of radius, blanking the ones that
+      // stayed. Absence of the flag means the library minted it, so a
+      // binding configured without `materialFor` disposes exactly what it
+      // always did.
+      if (ownsMaterial(mesh)) {
+        for (const material of materialListOf(mesh.material)) {
+          failure = attempt(failure, () => material.dispose());
+        }
       }
       // ONLY a per-batch geometry clone, which `toInstancedMeshes` mints
       // for a batch carrying named per-instance channels because those

@@ -12,9 +12,15 @@ import {
 } from "three";
 import { describe, expect, it } from "vitest";
 import { createPointCloud, type AttrData } from "../data/index.js";
-import type { InstanceAttributes } from "../graph/data.js";
+import type { InstanceAttributes, InstanceBatch } from "../graph/data.js";
 import { buildInstanceBatches } from "../spawn/instances.js";
-import { materialListOf, ownsGeometry, toInstancedMeshes, type AssetMap } from "./instanced.js";
+import {
+  materialListOf,
+  ownsGeometry,
+  ownsMaterial,
+  toInstancedMeshes,
+  type AssetMap,
+} from "./instanced.js";
 
 function assets(...ids: string[]): AssetMap {
   const map: AssetMap = {};
@@ -1127,5 +1133,323 @@ describe("toInstancedMeshes unwind", () => {
     );
     // Both were attempted: an unguarded loop stops at the first throw.
     expect(ThrowingMaterial.disposed).toBe(2);
+  });
+});
+
+/**
+ * Host-supplied materials.
+ *
+ * The default is a per-mesh CLONE, and not for appearance: three's
+ * renderer releases a mesh's cached render state through exactly one
+ * signal, that mesh's material's `dispose` event. A host that pools its
+ * own materials has had to overwrite `mesh.material` and dispose what it
+ * displaced; `materialFor` is the direct route, and the whole of what it
+ * changes is OWNERSHIP — the mesh draws what the callback returned, no
+ * clone is minted at all, and nothing in this library ever disposes it.
+ * Every test here is about one of those two claims.
+ */
+describe("toInstancedMeshes materialFor", () => {
+  /** An asset map whose materials record every clone minted and every dispose taken. */
+  function trackedAssets(...ids: string[]) {
+    const map: AssetMap = {};
+    const minted: Material[] = [];
+    const disposed: Material[] = [];
+    const assetDisposed: Material[] = [];
+    for (const id of ids) {
+      const material = new MeshBasicMaterial();
+      const originalClone = material.clone.bind(material);
+      material.clone = () => {
+        const clone = originalClone();
+        minted.push(clone);
+        clone.addEventListener("dispose", () => disposed.push(clone));
+        return clone;
+      };
+      material.addEventListener("dispose", () => assetDisposed.push(material));
+      map[id] = { geometry: new BoxGeometry(), material };
+    }
+    return { map, minted, disposed, assetDisposed };
+  }
+
+  /** A material the HOST owns, watching for a dispose the library must never fire. */
+  function pooledMaterial() {
+    const material = new MeshBasicMaterial();
+    const disposed: Material[] = [];
+    material.addEventListener("dispose", () => disposed.push(material));
+    return { material, disposed };
+  }
+
+  const batchesOf = (assetId: string, n = 2) =>
+    buildInstanceBatches(createPointCloud(n), { defaultAssetId: assetId });
+
+  it("draws the material the callback returned and mints no clone at all", () => {
+    const { map, minted, assetDisposed } = trackedAssets("tree");
+    const { material: pooled } = pooledMaterial();
+    const [mesh] = toInstancedMeshes(batchesOf("tree"), map, { materialFor: () => pooled });
+    // Identity, not equivalence: the point of the option is that the host
+    // keeps drawing through the object it already has a pipeline for.
+    expect(mesh.material, "the mesh draws the caller's own material").toBe(pooled);
+    // Not "minted and dropped" — not minted. The clone this replaces is a
+    // material allocation per mesh per cook on a streaming path.
+    expect(minted, "no clone was minted for this batch").toHaveLength(0);
+    expect(assetDisposed, "the asset map's material is still the caller's").toHaveLength(0);
+    expect(ownsMaterial(mesh), "flagged, so every teardown path can tell").toBe(false);
+  });
+
+  it("a mesh built without the option is OWNED — absence is the default, not a flag", () => {
+    // The polarity guard. `pcgOwnsMaterial` records the EXCEPTION, so a
+    // mesh from any older build, or from the device adapter, still reads
+    // as the library's to dispose; written the other way round, every one
+    // of them would leak its render state.
+    const [mesh] = toInstancedMeshes(batchesOf("a"), assets("a"));
+    expect(ownsMaterial(mesh)).toBe(true);
+    expect(mesh.userData.pcgOwnsMaterial, "nothing is written for the default").toBeUndefined();
+  });
+
+  it("returning undefined falls back to the per-mesh clone for that batch", () => {
+    // The per-asset lever: a host pools for the assets its own shader
+    // knows and takes the default for the rest. It is supported because
+    // the fallback is otherwise inexpressible — `cloneAssetMaterial` is
+    // not exported, so a caller reproducing it has to rewrite the
+    // slot-by-slot branch too.
+    const { map, minted } = trackedAssets("tree", "rock");
+    const { material: pooled } = pooledMaterial();
+    const meshes = toInstancedMeshes([...batchesOf("tree"), ...batchesOf("rock", 1)], map, {
+      materialFor: (batch) => (batch.assetId === "tree" ? pooled : undefined),
+    });
+    expect(meshes.map((m) => m.name)).toEqual(["tree", "rock"]);
+    expect(meshes[0].material).toBe(pooled);
+    expect(ownsMaterial(meshes[0])).toBe(false);
+    expect(minted, "exactly one clone: the batch the callback passed on").toHaveLength(1);
+    expect(meshes[1].material).toBe(minted[0]);
+    expect(ownsMaterial(meshes[1])).toBe(true);
+  });
+
+  it("a null from an untyped host falls through too, and is not flagged foreign", () => {
+    // The types forbid `null`, so this is only reachable from JS or a cast
+    // — a pool lookup spelled `pool[id] ?? null`. It has to normalise to
+    // the `undefined` fall-through rather than travel on: nullish to the
+    // mint but not `undefined` to the flag would mint a clone and then
+    // mark it host-owned, and nothing would ever dispose it.
+    const { map, minted } = trackedAssets("tree");
+    const meshes = toInstancedMeshes([...batchesOf("tree")], map, {
+      materialFor: () => null as unknown as undefined,
+    });
+    expect(minted, "the clone is still minted").toHaveLength(1);
+    expect(meshes[0].material).toBe(minted[0]);
+    expect(ownsMaterial(meshes[0]), "and the library still owns it").toBe(true);
+  });
+
+  it("is asked once per batch and handed the batch itself", () => {
+    const seen: InstanceBatch[] = [];
+    const { map } = trackedAssets("tree", "rock");
+    const batches = [...batchesOf("tree"), ...batchesOf("rock", 1)];
+    toInstancedMeshes(batches, map, {
+      materialFor: (batch) => {
+        seen.push(batch);
+        return undefined;
+      },
+    });
+    // The batch is the whole argument on purpose: `assetId` keys the
+    // host's own map and `attributes` says which channels this batch
+    // carries — the two questions a pooled-material host asks.
+    expect(seen).toEqual(batches);
+    expect(seen[0]).toBe(batches[0]);
+  });
+
+  it("never disposes a supplied material on the unwind, while a minted clone still is", () => {
+    // THE CLAIM THAT MATTERS. A build that throws half-way disposes what
+    // it minted — but a pooled material is still drawing for every mesh
+    // of every other call, so disposing it here would turn a batch error
+    // into a blank screen somewhere else.
+    const { map, minted, disposed } = trackedAssets("tree", "rock");
+    const { material: pooled, disposed: pooledDisposed } = pooledMaterial();
+    const batches = [...batchesOf("tree"), ...batchesOf("rock", 1), ...batchesOf("missing", 1)];
+    expect(() =>
+      toInstancedMeshes(batches, map, {
+        materialFor: (batch) => (batch.assetId === "tree" ? pooled : undefined),
+      }),
+    ).toThrow(/unknown assetId "missing"/);
+    expect(minted, "only the rock batch took a clone").toHaveLength(1);
+    expect(disposed, "…and that clone must not outlive the failed call").toEqual(minted);
+    expect(pooledDisposed, "the host's material is the host's, failure or not").toEqual([]);
+  });
+
+  it("takes a slot-for-slot array for a multi-material asset", () => {
+    const slots = [new MeshBasicMaterial(), new MeshBasicMaterial()];
+    const map: AssetMap = {
+      tree: {
+        geometry: new BoxGeometry(),
+        material: [new MeshBasicMaterial(), new MeshBasicMaterial()],
+      },
+    };
+    const [mesh] = toInstancedMeshes(batchesOf("tree", 1), map, { materialFor: () => slots });
+    expect(mesh.material, "the array itself, in slot order").toBe(slots);
+    expect(ownsMaterial(mesh)).toBe(false);
+    for (const [i, slot] of materialListOf(mesh.material).entries()) {
+      expect(slot, `slot ${i} is the caller's own`).toBe(slots[i]);
+    }
+  });
+
+  it("refuses a slot mismatch, naming the batch, both shapes and the fix", () => {
+    const twoSlots: AssetMap = {
+      tree: {
+        geometry: new BoxGeometry(),
+        material: [new MeshBasicMaterial(), new MeshBasicMaterial()],
+      },
+    };
+    const single = new MeshBasicMaterial();
+    // three answers a mismatch by DRAWING, and the message has to say
+    // which picture the caller would have got. Verified against
+    // WebGLRenderer.projectObject in three 0.185.1: the array branch
+    // walks `geometry.groups` and takes `material[group.materialIndex]`
+    // behind an `if (groupMaterial && ...)` guard, so an index the array
+    // does not reach is skipped; the non-array branch pushes the whole
+    // geometry once with `group = null`.
+    const tooFew = messageOf(() =>
+      toInstancedMeshes(batchesOf("tree", 1), twoSlots, { materialFor: () => single }),
+    );
+    expect(tooFew).toContain(
+      'materialFor returned a single material for batch "tree", whose asset declares an array of ' +
+        "2 materials",
+    );
+    expect(tooFew, "the mechanism, so the symptom is recognisable").toContain(
+      "material[group.materialIndex]",
+    );
+    expect(tooFew, "what actually happens to an unreached group").toContain("SILENTLY SKIPS");
+    expect(tooFew, "the fix, spelled out").toContain("Return an array of 2 materials");
+    expect(tooFew).toContain("repeat the same pooled material per slot");
+    expect(tooFew).toContain("return undefined for this batch");
+
+    // Too many, from the same check.
+    const tooMany = messageOf(() =>
+      toInstancedMeshes(batchesOf("tree", 1), assets("tree"), {
+        materialFor: () => [single, single],
+      }),
+    );
+    expect(tooMany).toContain(
+      'materialFor returned an array of 2 materials for batch "tree", whose asset declares a ' +
+        "single material",
+    );
+    expect(tooMany).toContain("Return a single material");
+  });
+
+  it("refuses a 1-element ARRAY for a single-material asset — shape binds, not just count", () => {
+    // THE COUNTS MATCH AND IT IS STILL WRONG, which is why the check
+    // cannot be a length comparison. `Array.isArray(mesh.material)` is
+    // what selects three's per-group path, and every asset here draws a
+    // BoxGeometry — six groups, materialIndex 0..5 — so a 1-element array
+    // would draw the +X face and silently drop the other five.
+    const single = new MeshBasicMaterial();
+    const asArray = messageOf(() =>
+      toInstancedMeshes(batchesOf("tree", 1), assets("tree"), { materialFor: () => [single] }),
+    );
+    expect(asArray).toContain(
+      'materialFor returned an array of 1 material for batch "tree", whose asset declares a ' +
+        "single material",
+    );
+    expect(asArray).toContain("match in COUNT and in SHAPE");
+    expect(asArray).toContain("a 1-element array on a six-group box draws one face");
+
+    // And the mirror: a bare material where the asset declares an array
+    // of one, which would draw the whole geometry through slot 0.
+    const oneSlotArray: AssetMap = {
+      tree: { geometry: new BoxGeometry(), material: [new MeshBasicMaterial()] },
+    };
+    const asSingle = messageOf(() =>
+      toInstancedMeshes(batchesOf("tree", 1), oneSlotArray, { materialFor: () => single }),
+    );
+    expect(asSingle).toContain(
+      'materialFor returned a single material for batch "tree", whose asset declares an array of ' +
+        "1 material",
+    );
+    expect(asSingle, "the fix keeps the asset's own shape").toContain("Return an array of 1");
+  });
+
+  it("refuses BEFORE minting: no geometry clone for the refused batch, earlier clones freed", () => {
+    // The ordering claim, pinned where it is observable: the refused
+    // batch carries a CHANNEL, so a check placed after the mint would
+    // have cloned the asset geometry on its way to the error — and that
+    // clone would be unreachable, since the mesh never joins the list the
+    // unwind walks.
+    const { map, minted, disposed } = trackedAssets("rock");
+    const geometry = new BoxGeometry();
+    let geometryClones = 0;
+    const originalClone = geometry.clone.bind(geometry);
+    geometry.clone = () => {
+      geometryClones++;
+      return originalClone();
+    };
+    map.tree = { geometry, material: [new MeshBasicMaterial(), new MeshBasicMaterial()] };
+    const single = new MeshBasicMaterial();
+    const channelled = buildInstanceBatches(createPointCloud(1), {
+      defaultAssetId: "tree",
+      instanceAttrs: ["seed"],
+    });
+    expect(() =>
+      toInstancedMeshes([...batchesOf("rock", 1), ...channelled], map, {
+        materialFor: (batch) => (batch.assetId === "tree" ? single : undefined),
+      }),
+    ).toThrow(/materialFor returned a single material/);
+    expect(geometryClones, "the refusal landed before anything was minted").toBe(0);
+    expect(minted, "the rock batch built first").toHaveLength(1);
+    expect(disposed, "…and its clone did not outlive the refusal").toEqual(minted);
+  });
+
+  it("a callback that THROWS mints nothing for its batch and frees the earlier batches", () => {
+    // The other way arbitrary host code leaves this loop. Same claim as
+    // the refusal above, and it has to hold for an error this library
+    // never authored.
+    const { map, minted, disposed } = trackedAssets("rock");
+    const geometry = new BoxGeometry();
+    let geometryClones = 0;
+    const originalClone = geometry.clone.bind(geometry);
+    geometry.clone = () => {
+      geometryClones++;
+      return originalClone();
+    };
+    map.tree = { geometry, material: new MeshBasicMaterial() };
+    const channelled = buildInstanceBatches(createPointCloud(1), {
+      defaultAssetId: "tree",
+      instanceAttrs: ["seed"],
+    });
+    expect(() =>
+      toInstancedMeshes([...batchesOf("rock", 1), ...channelled], map, {
+        materialFor: (batch) => {
+          if (batch.assetId === "tree") throw new Error("host pool is closed");
+          return undefined;
+        },
+      }),
+    ).toThrow("host pool is closed");
+    expect(geometryClones).toBe(0);
+    expect(minted).toHaveLength(1);
+    expect(disposed, "the host's error is not a reason to leak the earlier clone").toEqual(minted);
+  });
+
+  it("the two ownership flags are independent: a channelled batch still owns its geometry", () => {
+    // A channel is an attribute of the GEOMETRY, so that clone is minted
+    // and owned however the material was obtained. The documented dispose
+    // sequence has to free exactly one of the two.
+    const { material: pooled, disposed: pooledDisposed } = pooledMaterial();
+    const map = assets("a");
+    const [mesh] = toInstancedMeshes(
+      buildInstanceBatches(createPointCloud(2), { defaultAssetId: "a", instanceAttrs: ["seed"] }),
+      map,
+      { materialFor: () => pooled },
+    );
+    expect(ownsGeometry(mesh), "the channel forced a geometry clone").toBe(true);
+    expect(ownsMaterial(mesh), "the material is still the host's").toBe(false);
+    expect(mesh.geometry).not.toBe(map.a.geometry);
+
+    let cloneDisposed = 0;
+    let assetGeoDisposed = 0;
+    mesh.geometry.addEventListener("dispose", () => cloneDisposed++);
+    map.a.geometry.addEventListener("dispose", () => assetGeoDisposed++);
+    // The sequence exactly as `toInstancedMeshes`' docs state it.
+    mesh.dispose();
+    if (ownsMaterial(mesh)) for (const m of materialListOf(mesh.material)) m.dispose();
+    if (ownsGeometry(mesh)) mesh.geometry.dispose();
+    expect(cloneDisposed, "the per-batch clone is freed").toBe(1);
+    expect(assetGeoDisposed, "the asset map's geometry is not").toBe(0);
+    expect(pooledDisposed, "and neither is the host's material").toEqual([]);
   });
 });

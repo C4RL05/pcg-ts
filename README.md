@@ -859,9 +859,10 @@ with byte-identical output.
 
 **Nothing fails silently.** An ineligible field falls back to the CPU and
 is *counted*, with a machine-readable reason — `no-spec`,
-`derived-spec`, `compile-error`, `too-many-buffers` per field, and
-`run-plan-failed`, `run-too-large` per fused run. That is the complete
-vocabulary.
+`derived-spec`, `compile-error`, `too-many-buffers`, `param-bindings`
+per field, and `run-plan-failed`, `run-too-large` per fused run. That is
+the complete fallback vocabulary; `run-partially-fused` is counted
+alongside them but reports a partial success rather than a lost run.
 
 **Fusion.** When the resolver implements the optional
 `planRun`/`executeRun` pair, the executor finds maximal linear chains of

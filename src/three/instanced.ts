@@ -51,7 +51,27 @@ export function cloneAssetMaterial(material: Material | Material[]): Material | 
   return Array.isArray(material) ? material.map((m) => m.clone()) : material.clone();
 }
 
-/** A mesh's material slot as a list, whichever shape it has. */
+/**
+ * A mesh's (or an asset's) material slot as a list, whichever shape it
+ * has — the one-material case as a list of one, the multi-material case
+ * unchanged and in slot order.
+ *
+ * Published because EVERY teardown of a mesh this module builds has to
+ * walk the slots, and `mesh.material` is `Material | Material[]` in
+ * three's own types: a host that writes `mesh.material.dispose()` gets a
+ * type error, and a host that writes `(mesh.material as Material)
+ * .dispose()` to silence it disposes SLOT 0 AND LEAKS THE REST — one
+ * render-state leak per remaining slot, per mesh, per cook (see
+ * {@link cloneAssetMaterial} for what that costs). The list is the fix,
+ * and it is the same list {@link toInstancedMeshes}, `WorldThreeBinding`
+ * and the WebGPU adapter walk internally, so a caller writing its own
+ * teardown is running the library's own loop rather than a lookalike.
+ *
+ * The returned array is the caller's to read, never to mutate: for a
+ * multi-material asset it IS the mesh's own array, not a copy. Pair it
+ * with {@link ownsMaterial}, which answers whether those materials are
+ * this library's to dispose at all.
+ */
 export function materialListOf(material: Material | Material[]): readonly Material[] {
   return Array.isArray(material) ? material : [material];
 }
@@ -85,6 +105,49 @@ const OWNED_GEOMETRY_FLAG = "pcgOwnsGeometry";
  */
 export function ownsGeometry(mesh: Mesh): boolean {
   return mesh.userData[OWNED_GEOMETRY_FLAG] === true;
+}
+
+/**
+ * `userData` flag marking a mesh whose material slots the CALLER supplied
+ * through `ToInstancedMeshesOptions.materialFor`, so they are not this
+ * library's to dispose.
+ *
+ * **Its polarity is the opposite of {@link OWNED_GEOMETRY_FLAG}'s, and
+ * that is deliberate.** Ownership of the material is the DEFAULT here —
+ * every mesh this module has ever built before `materialFor` existed
+ * carries a per-mesh clone that nothing but its teardown can reach — so
+ * the flag records the exception (`false`, host-supplied) and absence
+ * means "the library minted it". Written the other way round, a mesh from
+ * any older build, from the WebGPU adapter, or from a teardown path that
+ * simply forgot to set it would read as host-owned and never be disposed,
+ * which is exactly the measured leak in {@link cloneAssetMaterial}.
+ * Absence has to fail towards disposing.
+ */
+const OWNED_MATERIAL_FLAG = "pcgOwnsMaterial";
+
+/**
+ * Is this mesh's material this library's to dispose?
+ *
+ * TRUE for the ordinary mesh, whose material is the per-mesh clone
+ * {@link cloneAssetMaterial} mints — disposing it is not optional
+ * hygiene, it is the ONLY signal three's renderer accepts to release that
+ * mesh's cached render state. FALSE exactly for a mesh whose material
+ * came from `ToInstancedMeshesOptions.materialFor`: that material is the
+ * caller's, is very likely pooled across meshes, and disposing it would
+ * tear down the render state of every OTHER mesh drawing through it.
+ *
+ * Per MESH, never per slot: `materialFor` returns the whole slot list for
+ * a batch, so a mesh's materials are all host-supplied or all minted here
+ * — there is no mixed mesh for a caller to have to take apart.
+ *
+ * Ask it on every teardown path that disposes materials, and note the
+ * default: an unflagged mesh (one built before this option existed, or by
+ * the device adapter) is OWNED, so a teardown written as
+ * `if (ownsMaterial(mesh)) ...` keeps disposing exactly what it always
+ * did.
+ */
+export function ownsMaterial(mesh: Mesh): boolean {
+  return mesh.userData[OWNED_MATERIAL_FLAG] !== false;
 }
 
 /**
@@ -197,6 +260,68 @@ export interface ToInstancedMeshesOptions {
    * goes stale in the first place.
    */
   readonly requireChannels?: readonly string[];
+
+  /**
+   * Supply a batch's material instead of letting this function clone the
+   * asset's. Called ONCE PER BATCH, before anything is minted for it;
+   * whatever it returns is used AS-IS, with no clone.
+   *
+   * **Why this exists.** The default is a per-mesh clone, and the reason
+   * is three's renderer bookkeeping rather than appearance (see
+   * {@link cloneAssetMaterial}): a mesh's cached render state is released
+   * through exactly one signal, its material's `dispose` event. A host
+   * that draws these meshes through its OWN pooled material has had to
+   * overwrite `mesh.material` after the fact and dispose what it
+   * displaced — the clone was minted whether it kept it or not, and after
+   * the assignment nothing else held a reference to it. That is a mint
+   * and a dispose per mesh per cook to arrive where this callback arrives
+   * directly, and getting it wrong is silent: forget it, or dispose only
+   * slot 0 of a multi-material asset, and three's program count climbs
+   * for the life of the session.
+   *
+   * **What the caller takes on, and it is not small.** Ownership
+   * transfers with the material: nothing in this library disposes what
+   * this callback returned — not the unwind below, not
+   * `WorldThreeBinding` on evict, recook or teardown. The mesh is flagged
+   * (see {@link ownsMaterial}) and every teardown path here asks. So the
+   * release trigger above becomes the HOST'S problem, and it is a real
+   * one: three keys an instanced mesh's render state per `[object,
+   * material]` pair, so a pooled material shared by an unbounded number
+   * of meshes accumulates one cached render object, program set, pipeline
+   * and uniform buffer group per mesh that ever drew with it, and no
+   * `dispose` of that material happens while the pool is alive. Measured
+   * on the shared-material path this option's default exists to avoid:
+   * 1911 -> 8821 programs and +22 MB over six minutes of streaming
+   * (commit `a90bb59`). The realistic way to hold that bounded is to pool
+   * the MESHES as well, so the set of `[object, material]` pairs is
+   * stable and finite; pooling only the material moves the leak rather
+   * than fixing it.
+   *
+   * **Returning `undefined` falls back to the default clone** for that
+   * batch, so a host can pool for the assets its shader knows and leave
+   * the rest alone. Supported because the fallback is otherwise
+   * inexpressible: `cloneAssetMaterial` is deliberately not exported, so
+   * a caller reproducing "what this function would have done" has to
+   * rewrite it — including the SLOT-BY-SLOT branch for a multi-material
+   * asset, which is the half that gets forgotten.
+   *
+   * **The result must match the asset's material slot in COUNT and in
+   * SHAPE**, or the call is refused naming the batch and both. Shape as
+   * well as count because three branches on
+   * `Array.isArray(mesh.material)`: an array is what selects its
+   * per-group path, so a 1-element array is not a spelling of a single
+   * material — handed one, a six-group `BoxGeometry` draws one face and
+   * silently drops the rest. Return an array for a multi-material asset
+   * and a bare material for a single-material one, repeating the pooled
+   * material per slot if that is genuinely what is meant; that says it
+   * out loud.
+   *
+   * The batch is the whole argument, which is enough: `batch.assetId` is
+   * the key into the caller's own asset map, and `batch.attributes` says
+   * which channels this batch actually carries — the two questions a
+   * pooled-material host asks to pick a pipeline.
+   */
+  readonly materialFor?: (batch: InstanceBatch) => Material | Material[] | undefined;
 }
 
 /**
@@ -244,6 +369,69 @@ function nameList(names: readonly string[]): string {
   return names.length === 0 ? "(none)" : names.map((name) => `"${name}"`).join(", ");
 }
 
+/** How a material slot reads in an error: shape AND count, because BOTH bind. */
+function slotShape(material: Material | Material[]): string {
+  if (!Array.isArray(material)) return "a single material";
+  const n = material.length;
+  return `an array of ${n} material${n === 1 ? "" : "s"}`;
+}
+
+/**
+ * What `materialFor` supplied for this batch, or `undefined` to take the
+ * default clone — refusing a result that does not match the asset's own
+ * material slot.
+ *
+ * Deliberately returns the SUPPLIED material rather than resolving the
+ * clone as well, so a caller can run this (arbitrary host code, plus the
+ * refusal) before anything is minted for the batch and still mint the
+ * clone last, next to the mesh. Resolving both here would mean a throwing
+ * `geometry.clone()` stranded a material clone nothing outside this
+ * function could ever reach.
+ *
+ * **SHAPE is checked, not only count**, and that is the half that is easy
+ * to get wrong: `mesh.material` being an ARRAY is what puts three on its
+ * per-group path (`WebGLRenderer.projectObject`, and identically
+ * `Renderer.js` on the WebGPU backend), so a 1-element array is not a
+ * spelling of a single material. Handed one, a `BoxGeometry` — six groups
+ * with `materialIndex` 0..5 — draws its +X face and drops the other five
+ * at three's `if (groupMaterial && ...)`, with nothing logged.
+ */
+function suppliedMaterial(
+  batch: InstanceBatch,
+  asset: InstancedAsset,
+  materialFor: ToInstancedMeshesOptions["materialFor"],
+): Material | Material[] | undefined {
+  const supplied = materialFor?.(batch);
+  // `undefined` is the documented fall-through, not an error: a host may
+  // pool for the assets its shader knows and take the clone for the rest.
+  // `null` normalises to the same fall-through rather than travelling on.
+  // The types forbid it, but an untyped host reaches here through a `??`
+  // or `||` pool lookup that missed, and a `null` that survived would be
+  // nullish to the mint below and non-`undefined` to the ownership flag —
+  // the two would disagree, minting a clone and then marking it foreign,
+  // which is the one leak OWNED_MATERIAL_FLAG's polarity exists to stop.
+  if (supplied == null) return undefined;
+  const slots = materialListOf(asset.material);
+  const given = materialListOf(supplied);
+  if (Array.isArray(supplied) !== Array.isArray(asset.material) || given.length !== slots.length) {
+    throw new Error(
+      `toInstancedMeshes: materialFor returned ${slotShape(supplied)} for batch ` +
+        `"${batch.assetId}", whose asset declares ${slotShape(asset.material)}. The two have to ` +
+        `match in COUNT and in SHAPE, because three branches on Array.isArray(mesh.material): an ` +
+        `ARRAY sends it down the per-group path, where it draws material[group.materialIndex] ` +
+        `for each of the geometry's groups and SILENTLY SKIPS every group whose index the array ` +
+        `does not reach — a 1-element array on a six-group box draws one face, and an array on a ` +
+        `geometry with no groups draws nothing at all (a skipped group also raycasts as a ` +
+        `TypeError, which is often where this actually surfaces). A SINGLE material takes the ` +
+        `other branch and draws the whole geometry once, groups and all. Return ` +
+        `${slotShape(asset.material)} — repeat the same pooled material per slot if that is what ` +
+        `you mean — or return undefined for this batch to take the per-mesh clone ` +
+        `toInstancedMeshes mints by default.`,
+    );
+  }
+  return supplied;
+}
+
 /**
  * Create one `THREE.InstancedMesh` per batch, resolving each batch's
  * `assetId` in `assets` (unknown ids throw, listing the known ids).
@@ -277,14 +465,19 @@ function nameList(names: readonly string[]): string {
  * - Each mesh's MATERIAL is a per-mesh clone of the asset's (see
  *   {@link cloneAssetMaterial} for why: it is the one lever that lets
  *   three's renderer release the mesh's cached render state). **A host
- *   that draws these meshes with its OWN pooled or shared material must
- *   dispose what it displaces when it overwrites `mesh.material`** — the
- *   clone is minted here whether the host keeps it or not, and after the
- *   assignment nothing holds a reference to it. Read the old value
- *   through {@link materialListOf} first: a multi-material asset is
- *   cloned SLOT BY SLOT, so there are as many clones as slots, and
- *   disposing only slot 0 leaks the rest. Dispose what was DISPLACED,
- *   never the pooled material that displaced it.
+ *   that draws these meshes with its OWN pooled or shared material
+ *   should say so through `options.materialFor`**, which supplies the
+ *   material for a batch directly and mints no clone at all — the mesh
+ *   is flagged (see {@link ownsMaterial}) and no teardown path in this
+ *   library disposes it, so the release trigger above becomes the host's
+ *   to manage. A host that instead overwrites `mesh.material` after the
+ *   fact **must dispose what it displaces**: the clone is minted here
+ *   whether the host keeps it or not, and after the assignment nothing
+ *   holds a reference to it. Read the old value through
+ *   {@link materialListOf} first: a multi-material asset is cloned SLOT
+ *   BY SLOT, so there are as many clones as slots, and disposing only
+ *   slot 0 leaks the rest. Dispose what was DISPLACED, never the pooled
+ *   material that displaced it.
  * - **A batch carrying NAMED channels also gets its own GEOMETRY clone,
  *   and that clone is disposed with the mesh.** An
  *   `InstancedBufferAttribute` lives on the geometry, so a mesh that sets
@@ -305,7 +498,8 @@ function nameList(names: readonly string[]): string {
  *
  * ```ts
  * mesh.dispose(); // per-mesh GPU state (the instance-matrix buffer)
- * for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) m.dispose();
+ * // ONLY the clone minted here — never a material `materialFor` supplied
+ * if (ownsMaterial(mesh)) for (const m of materialListOf(mesh.material)) m.dispose();
  * if (ownsGeometry(mesh)) mesh.geometry.dispose(); // ONLY the per-batch clone
  * ```
  *
@@ -316,10 +510,13 @@ function nameList(names: readonly string[]): string {
  *
  * A caller that knows which channels its materials declare can say so
  * through `options.requireChannels` and have a batch missing one refused
- * by name rather than drawn as zeros. Purely opt-in: with no `options`
- * this function binds whatever the batch carries, exactly as it always
- * has, because plenty of callers legitimately draw batches with no
- * channels at all.
+ * by name rather than drawn as zeros, and a caller that owns its own
+ * materials can supply them per batch through `options.materialFor`
+ * instead of receiving a clone. Both are purely opt-in: with no
+ * `options` this function binds whatever the batch carries and clones
+ * the asset's material, exactly as it always has, because plenty of
+ * callers legitimately draw batches with no channels at all and want
+ * nothing to do with material lifetimes.
  */
 export function toInstancedMeshes(
   batches: readonly InstanceBatch[],
@@ -514,13 +711,29 @@ export function toInstancedMeshes(
         }
         custom.push({ name, column, itemSize });
       }
+      // ASKED FIRST, MINTED LAST, and the split is the point. The
+      // callback is the only arbitrary code in this loop and its refusal
+      // is a defect in the CALL, so both have to land while nothing has
+      // been minted for the batch — the same rule the channel validation
+      // above follows. What it returns is only INSTALLED below, next to
+      // the mesh, so the clone in the fall-through case is still minted
+      // after the geometry clone and a throwing `geometry.clone()`
+      // strands nothing either.
+      const supplied = suppliedMaterial(batch, asset, options?.materialFor);
       // A channel is an attribute of the GEOMETRY, so a channelled batch
       // cannot share the asset's — see the ownership notes above. Colour
       // alone still shares: `instanceColor` hangs on the mesh.
       const owned = custom.length > 0;
       const geometry = owned ? asset.geometry.clone() : asset.geometry;
-      const mesh = new InstancedMesh(geometry, cloneAssetMaterial(asset.material), batch.count);
+      // Tests the same predicate as the ownership flag below, so the value
+      // and the flag can never be decided by different questions.
+      const material = supplied === undefined ? cloneAssetMaterial(asset.material) : supplied;
+      const mesh = new InstancedMesh(geometry, material, batch.count);
       if (owned) mesh.userData[OWNED_GEOMETRY_FLAG] = true;
+      // Only the exception is recorded, and absence means owned — see
+      // OWNED_MATERIAL_FLAG for why the polarity is the other way round
+      // from the geometry flag.
+      if (supplied !== undefined) mesh.userData[OWNED_MATERIAL_FLAG] = false;
       // Listed the moment it owns anything, not once it is finished:
       // everything below can still throw (`colors.slice()` on a huge
       // batch, `computeBoundingSphere`), and the unwind below can only
@@ -578,8 +791,16 @@ export function toInstancedMeshes(
     let failure: TeardownFailure = { err };
     for (const mesh of meshes) {
       failure = attempt(failure, () => mesh.dispose());
-      for (const material of materialListOf(mesh.material)) {
-        failure = attempt(failure, () => material.dispose());
+      // NOT a `materialFor` result: that material is the caller's, is
+      // very likely pooled across meshes this call never saw, and
+      // disposing it here would tear down the render state of every mesh
+      // still drawing through it — a build error turned into a blank
+      // screen. Nothing is stranded by skipping it, because the caller
+      // never gave up ownership in the first place.
+      if (ownsMaterial(mesh)) {
+        for (const material of materialListOf(mesh.material)) {
+          failure = attempt(failure, () => material.dispose());
+        }
       }
       if (ownsGeometry(mesh)) failure = attempt(failure, () => mesh.geometry.dispose());
     }

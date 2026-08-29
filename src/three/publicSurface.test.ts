@@ -12,12 +12,15 @@ import { surfaceDiff, surfaceOf } from "../publicSurface.testsupport.js";
 const THREE_SURFACE = [
   "WorldThreeBinding", "checkAdoptionSeam", "createWebGpuInstanceAdapter",
   "fromBufferGeometry", "fromCurve",
-  // Half of `toInstancedMeshes`' disposal contract: a batch carrying
-  // named per-instance channels gets a GEOMETRY CLONE (a channel is a
-  // geometry attribute, so it cannot be shared), and only the caller
-  // disposing the mesh can dispose that clone. A caller writing its own
-  // teardown instead of using WorldThreeBinding has to be able to ask.
-  "ownsGeometry",
+  // `toInstancedMeshes`' disposal contract, which a caller writing its
+  // own teardown instead of using WorldThreeBinding has to be able to
+  // run: which slots a mesh's material occupies (`mesh.material` is a
+  // union, and casting it away disposes slot 0 and leaks the rest),
+  // whether those materials are the library's to dispose at all (false
+  // exactly for a `materialFor` result), and whether the geometry is a
+  // per-batch CLONE (a named channel is a geometry attribute, so it
+  // cannot be shared) rather than the asset map's shared one.
+  "materialListOf", "ownsGeometry", "ownsMaterial",
   "toBufferGeometry", "toDeviceInstanceObjects",
   "toInstancedMeshes", "toLineGeometry", "toPointsObject",
 ] as const;
