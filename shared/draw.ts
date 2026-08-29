@@ -17,7 +17,9 @@
  */
 import { isDeviceResidentInstances, primitiveTypeCounts, type DataItem } from "pcg-ts";
 import {
+  materialListOf,
   ownsGeometry,
+  ownsMaterial,
   toBufferGeometry,
   toInstancedMeshes,
   toLineGeometry,
@@ -226,9 +228,12 @@ export function disposeDrawn(objects: readonly Object3D[]): void {
   for (const obj of objects) {
     if (obj instanceof InstancedMesh) {
       obj.dispose();
-      const instanced = obj.material;
-      if (Array.isArray(instanced)) for (const m of instanced) m.dispose();
-      else instanced.dispose();
+      // Asked for the same reason the geometry is: a page that hands
+      // `toInstancedMeshes` a `materialFor` owns what it supplied, and
+      // freeing it here would dispose a material the host still draws
+      // with elsewhere. No page passes one today, so this is always true
+      // — the guard is here so adopting one is not a silent double free.
+      if (ownsMaterial(obj)) for (const m of materialListOf(obj.material)) m.dispose();
       if (ownsGeometry(obj)) obj.geometry.dispose();
       continue;
     }

@@ -22,7 +22,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { makeInstancesItem, type InstanceBatch } from "pcg-ts";
-import { ownsGeometry } from "pcg-ts/three";
+import { ownsGeometry, toInstancedMeshes } from "pcg-ts/three";
 import {
   InstancedMesh,
   LineBasicMaterial,
@@ -107,6 +107,25 @@ function assetsFor(batch: InstanceBatch): {
 }
 
 describe("disposeDrawn, on an instanced mesh", () => {
+  it("leaves a HOST-SUPPLIED material alone — the page did not mint it", () => {
+    // The mirror of the geometry rule, and the reason `disposeDrawn` asks
+    // rather than assumes. A page that hands `toInstancedMeshes` a
+    // `materialFor` keeps drawing with that material after this cook is
+    // torn down; freeing it here would be a use-after-dispose on the next
+    // one. No page passes one today, so this pins the guard rather than a
+    // behaviour a demo currently relies on.
+    const assets = createPlaceholderAssets();
+    const batch: InstanceBatch = { assetId: "box", count: 2, transforms: identities(2) };
+    const pooled = new MeshStandardMaterial();
+    const [mesh] = toInstancedMeshes([batch], assets.known, { materialFor: () => pooled });
+    expect(mesh.material).toBe(pooled);
+
+    const pooledFreed = watchDispose(pooled);
+    disposeDrawn([mesh] as never);
+
+    expect(pooledFreed(), "the host still draws with it").toBe(false);
+  });
+
   it("frees the per-mesh material clone and leaves the asset's geometry and material alone", () => {
     const batch: InstanceBatch = { assetId: "box", count: 2, transforms: identities(2) };
     const { mesh, objects, geometry, material } = assetsFor(batch);

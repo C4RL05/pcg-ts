@@ -57,7 +57,13 @@ import {
   cook,
   isDeviceResidentInstances,
 } from "pcg-ts";
-import { type InstancedAsset, ownsGeometry, toInstancedMeshes } from "pcg-ts/three";
+import {
+  type InstancedAsset,
+  materialListOf,
+  ownsGeometry,
+  ownsMaterial,
+  toInstancedMeshes,
+} from "pcg-ts/three";
 import {
   Color,
   Fog,
@@ -337,7 +343,9 @@ function disposeMeshes(): void {
   for (const mesh of meshes) {
     scene.remove(mesh);
     mesh.dispose();
-    for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) m.dispose();
+    // Always true here too: this page mints its own material per cook and
+    // passes no `materialFor`, so nothing else holds what it draws with.
+    if (ownsMaterial(mesh)) for (const m of materialListOf(mesh.material)) m.dispose();
     // Always true here, and asked anyway: a batch carrying a
     // non-reserved channel gets its own geometry CLONE, because an
     // instanced attribute lives on the geometry and cannot be shared
