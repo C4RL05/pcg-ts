@@ -360,15 +360,23 @@ function build(field: LanternField): void {
     [ASSET_ID]: { geometry: LANTERN, material: template },
   };
   try {
-    // `requireChannels` is the one line that keeps this page from going
-    // dark silently. The material below declares `in uint seed;` and
-    // `in float seedWidened;`; a batch arriving without one binds
-    // nothing, three shades the missing attribute as zeros, and the
-    // lanterns render black with no error, no warning and no WebGL
-    // validation message. The graph promises both channels, so this
-    // asserts the promise rather than guarding a branch that can fire
-    // today — and if an edit upstream ever drops one, the page names it
-    // instead of going black.
+    // `requireChannels` is the guard, and this page is worth reading for
+    // WHY: its two channels fail as two different pictures, and neither
+    // is the "black instances" the library's message reaches for first.
+    // `seed` is declared `in uint` below, and a missing INTEGER
+    // attribute is not a constant — WebGL2 refuses the draw with
+    // INVALID_OPERATION and the page is simply empty. `seedWidened` is
+    // `in float`, reads the constant 0 in silence, and is sampled only
+    // on the far side of a uniform branch: absent, the default view is
+    // PERFECT, and the damage appears only when someone flips the id
+    // source, where every lantern resolves to id 0 and the whole field
+    // takes one hue at one phase. A page that looks right until a
+    // control is touched is the worst of the three.
+    //
+    // The graph promises both channels, so this asserts a promise rather
+    // than guarding a branch that can fire today — which is the point: an
+    // edit upstream that drops one is named here, at the seam, instead of
+    // being diagnosed later from whichever picture it happened to draw.
     meshes = toInstancedMeshes(field.batches, assets, {
       requireChannels: [CHANNEL_EXACT, CHANNEL_WIDENED],
     });

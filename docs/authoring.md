@@ -2392,9 +2392,12 @@ toInstancedMeshes: batch "tree" does not carry the required per-instance
 channels "gain", "tint"; it carries "seed". requireChannels asked for
 "gain", "tint". Nothing downstream would refuse this: three binds only what
 the batch carries and never sees what the material declares. A material
-declaring "gain" reads it as ZEROS for every instance — the fragments still
-run and write black, every instance draws identical, and a ShaderMaterial
-under WebGL logs nothing at any severity. The usual cause is a stale
+declaring "gain" as a FLOAT reads it as ZEROS for every instance — the
+fragments still run and write black, every instance draws identical, and a
+ShaderMaterial under WebGL logs nothing at any severity. Declared as an
+INTEGER it fails loudly instead, and the symptom looks unrelated: WebGL2
+refuses the draw with INVALID_OPERATION and nothing is drawn at all. The
+usual cause is a stale
 channel-name map: compare the two lists above, then either publish the name
 from the spawn (spawnInstances' instanceAttrs, or colorAttr for the
 reserved "color" channel) or drop it from requireChannels.
@@ -2547,15 +2550,18 @@ complete path today: cook in a worker, receive the channels zero-copy,
 bind them with `toInstancedMeshes`, read them from your own material —
 remembering that each channelled batch gets its own geometry clone to
 dispose, as above.
-
-If that material is **pooled or shared** across meshes, note the second
-clone: `toInstancedMeshes` gives every mesh a per-mesh clone of the
-asset's material whether you keep it or not, so a host that overwrites
-`mesh.material` with its own must dispose the clone it displaces —
-after the assignment nothing else holds a reference to it. Dispose the
-clone, never the pooled material that replaced it.
 What you cannot do yet is have the device *compose* those channels
 without a readback.
+
+If your material is **pooled or shared** across meshes, note the second
+clone. `toInstancedMeshes` gives every mesh a per-mesh clone of the
+asset's material whether you keep it or not, so a host that overwrites
+`mesh.material` with its own must dispose what it displaced — after the
+assignment nothing else holds a reference to it. Read the old value
+through `materialListOf` before overwriting: a multi-material asset is
+cloned SLOT BY SLOT, so there are as many clones as slots and disposing
+only the first leaks the rest. Dispose what was displaced, never the
+pooled material that displaced it.
 
 ## Editing live graphs
 

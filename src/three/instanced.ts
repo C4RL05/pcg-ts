@@ -278,10 +278,13 @@ function nameList(names: readonly string[]): string {
  *   {@link cloneAssetMaterial} for why: it is the one lever that lets
  *   three's renderer release the mesh's cached render state). **A host
  *   that draws these meshes with its OWN pooled or shared material must
- *   dispose the clone as it overwrites `mesh.material`** — the clone is
- *   minted here whether the host keeps it or not, and after the
- *   assignment nothing holds a reference to it. Dispose the CLONE it
- *   replaced, never the pooled material that replaced it.
+ *   dispose what it displaces when it overwrites `mesh.material`** — the
+ *   clone is minted here whether the host keeps it or not, and after the
+ *   assignment nothing holds a reference to it. Read the old value
+ *   through {@link materialListOf} first: a multi-material asset is
+ *   cloned SLOT BY SLOT, so there are as many clones as slots, and
+ *   disposing only slot 0 leaks the rest. Dispose what was DISPLACED,
+ *   never the pooled material that displaced it.
  * - **A batch carrying NAMED channels also gets its own GEOMETRY clone,
  *   and that clone is disposed with the mesh.** An
  *   `InstancedBufferAttribute` lives on the geometry, so a mesh that sets
@@ -411,7 +414,11 @@ export function toInstancedMeshes(
           const empty = keys.filter((name) => channels[name] == null);
           // The two consequences are DIFFERENT pictures, so the message
           // states only the ones that apply. A generic channel reads as
-          // zeros through a geometry attribute that was never bound; the
+          // zeros through a geometry attribute that was never bound —
+          // but only where the declaration is a FLOAT, and the message
+          // has to say both, because an INTEGER declaration is refused
+          // by WebGL2 outright and a host reading "black" would be
+          // hunting a symptom it never saw; the
           // reserved colour is not a geometry attribute at all, and its
           // absence leaves the material's own colour drawing instead. A
           // host told "it reads as zeros" would go looking for black
@@ -429,9 +436,12 @@ export function toInstancedMeshes(
               `${nameList(required)}. Nothing downstream would refuse this: three binds only ` +
               `what the batch carries and never sees what the material declares.` +
               (generic.length > 0
-                ? ` A material declaring ${nameList([generic[0]])} reads it as ZEROS for every ` +
-                  "instance — the fragments still run and write black, every instance draws " +
-                  "identical, and a ShaderMaterial under WebGL logs nothing at any severity."
+                ? ` A material declaring ${nameList([generic[0]])} as a FLOAT reads it as ZEROS ` +
+                  "for every instance — the fragments still run and write black, every instance " +
+                  "draws identical, and a ShaderMaterial under WebGL logs nothing at any " +
+                  "severity. Declared as an INTEGER it fails loudly instead, and the symptom " +
+                  "looks unrelated: WebGL2 refuses the draw with INVALID_OPERATION and nothing " +
+                  "is drawn at all."
                 : "") +
               (missing.includes(INSTANCE_COLOR_CHANNEL)
                 ? ` The reserved "${INSTANCE_COLOR_CHANNEL}" channel is not a geometry attribute ` +

@@ -378,12 +378,18 @@ kills it on two counts:
   named channels at all: `gpu-world` (one assetId, `spire`),
   `infinite-world` (`megarock` and `rock`), `racetrack`'s streamed
   dressing (many assetIds, and `assets3d.ts` says outright that none
-  carries a channel). The only material in the repo that DECLARES an
-  instance attribute is `lanterns`' `ShaderMaterial` (`in uint seed;`,
-  `in float seedWidened;`), and `lanterns` calls `toInstancedMeshes`
-  directly, never the binding. A `requireChannels` on
-  `WorldThreeBindingOptions` would ship with zero callers, which is what
-  this section of the file exists to prevent.
+  carries a channel). The only SHIPPED material that declares an instance
+  attribute is `lanterns`' `ShaderMaterial` (`in uint seed;`, `in float
+  seedWidened;`), and `lanterns` calls `toInstancedMeshes` directly,
+  never the binding. A `requireChannels` on `WorldThreeBindingOptions`
+  would ship with zero callers, which is what this section of the file
+  exists to prevent. (Two in-repo consumers do pair the two, and neither
+  changes the count: `tests/support/instanceChannelPage.ts` declares
+  instance attributes in its own shaders, and
+  `src/three/worldBindingRetainOrder.test.ts` hands a BINDING a batch
+  carrying a `phase` channel. Both are harnesses written to exercise the
+  seam, which is the opposite of a consumer that would set an
+  expectation.)
 - **The world-level shape is wrong even when a caller appears.** One list
   on the binding asserts across EVERY batch the world produces, and a
   world is heterogeneous by construction — `infinite-world` already draws
@@ -423,12 +429,20 @@ name from the list, and dropping `type ToPointsOptions` from the barrel —
 in one sentence.**
 
 `pcg-ts/gpu` has the identical hole and does not get the identical file
-yet: `src/gpu/publicSurface.test.ts` pins 8 values, its types are
-unpinned, and the fix is a copy of the three one with a different entry
-path. Left undone deliberately — each `it` rebuilds a TS program, so this
-is three more program builds in every run, and unlike the three entry no
-option type of the gpu entry has just been added by hand. Do it the next
-time a gpu type is added or renamed.
+yet: `src/gpu/publicSurface.test.ts` pins 8 values, while the ~24
+TYPE-only exports of `src/gpu/index.ts` — the structural WebGPU shims
+(`GpuDeviceLike`, `GpuBufferLike` and their siblings), the kernel
+description (`CompiledFieldKernel`, `FieldKernelLayout`, `KernelInput`,
+`AttrIsSlot`, `GpuScalarType`), `DetachedBuffer`, `GpuPoolStats` and
+`GpuFieldEvaluatorOptions` — are pinned by nothing. The fix is a copy of
+the three one with a different entry path. Left undone deliberately —
+each `it` rebuilds a TS program, so this is three more program builds in
+every run, and unlike the three entry no options interface of the gpu
+entry has just been added by hand. Do it the next time one of those
+exported type NAMES is added or renamed (not when a WGSL scalar type is:
+`GpuScalarType` is a TypeScript type whose subject happens to be one,
+which is exactly the ambiguity that makes "a gpu type" the wrong phrase
+for this).
 
 ### Stretch: intra-node yielding — MEASURED AND REJECTED, 2026-08-28
 

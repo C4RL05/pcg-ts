@@ -55,10 +55,14 @@ const THREE_TYPE_SURFACE = [
  * surface -- it already appears in THREE_TYPE_SURFACE and in the value
  * pin.
  *
- * A single entry is not a reason to assert the count instead. The pin is
- * what catches `WorldThreeBinding` being demoted to an interface, which
- * removes `new WorldThreeBinding()` from the API — the only way a host
- * ever obtains one — while both name lists stay identical.
+ * A single entry is not a reason to assert the count instead. It catches
+ * nothing the other two would miss, and saying so is the honest version:
+ * `dual` is `types ∩ values` and BOTH sides are pinned, so demoting
+ * `WorldThreeBinding` to an interface fails the value pin next door as
+ * well. What this buys is locality — the demotion removes
+ * `new WorldThreeBinding()`, the only way a host ever obtains one, and
+ * that consequence is worth stating where the name is, rather than
+ * inferring it from a name that quietly left another list.
  */
 const DUAL_SURFACE = ["WorldThreeBinding"] as const;
 

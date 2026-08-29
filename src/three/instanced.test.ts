@@ -713,9 +713,11 @@ describe("toInstancedMeshes requireChannels", () => {
       'toInstancedMeshes: batch "tree" does not carry the required per-instance channels ' +
         '"gain", "tint"; it carries "seed". requireChannels asked for "gain", "tint". Nothing ' +
         "downstream would refuse this: three binds only what the batch carries and never sees " +
-        'what the material declares. A material declaring "gain" reads it as ZEROS for every ' +
-        "instance — the fragments still run and write black, every instance draws identical, " +
-        "and a ShaderMaterial under WebGL logs nothing at any severity. The usual cause is a " +
+        'what the material declares. A material declaring "gain" as a FLOAT reads it as ZEROS ' +
+        "for every instance — the fragments still run and write black, every instance draws " +
+        "identical, and a ShaderMaterial under WebGL logs nothing at any severity. Declared as " +
+        "an INTEGER it fails loudly instead, and the symptom looks unrelated: WebGL2 refuses " +
+        "the draw with INVALID_OPERATION and nothing is drawn at all. The usual cause is a " +
         "stale channel-name map: compare the two lists above, then either publish the name from " +
         "the spawn (spawnInstances' instanceAttrs, or colorAttr for the reserved \"color\" " +
         "channel) or drop it from requireChannels.",
@@ -882,7 +884,7 @@ describe("toInstancedMeshes requireChannels", () => {
         { requireChannels: ["color", "tint"] },
       ),
     );
-    expect(mixed).toContain('A material declaring "tint" reads it as ZEROS');
+    expect(mixed).toContain('A material declaring "tint" as a FLOAT reads it as ZEROS');
     expect(mixed).toContain("three leaves `instanceColor` null");
   });
 
