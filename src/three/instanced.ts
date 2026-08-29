@@ -276,7 +276,12 @@ function nameList(names: readonly string[]): string {
  *
  * - Each mesh's MATERIAL is a per-mesh clone of the asset's (see
  *   {@link cloneAssetMaterial} for why: it is the one lever that lets
- *   three's renderer release the mesh's cached render state).
+ *   three's renderer release the mesh's cached render state). **A host
+ *   that draws these meshes with its OWN pooled or shared material must
+ *   dispose the clone as it overwrites `mesh.material`** — the clone is
+ *   minted here whether the host keeps it or not, and after the
+ *   assignment nothing holds a reference to it. Dispose the CLONE it
+ *   replaced, never the pooled material that replaced it.
  * - **A batch carrying NAMED channels also gets its own GEOMETRY clone,
  *   and that clone is disposed with the mesh.** An
  *   `InstancedBufferAttribute` lives on the geometry, so a mesh that sets

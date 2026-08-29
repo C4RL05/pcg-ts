@@ -2547,6 +2547,13 @@ complete path today: cook in a worker, receive the channels zero-copy,
 bind them with `toInstancedMeshes`, read them from your own material —
 remembering that each channelled batch gets its own geometry clone to
 dispose, as above.
+
+If that material is **pooled or shared** across meshes, note the second
+clone: `toInstancedMeshes` gives every mesh a per-mesh clone of the
+asset's material whether you keep it or not, so a host that overwrites
+`mesh.material` with its own must dispose the clone it displaces —
+after the assignment nothing else holds a reference to it. Dispose the
+clone, never the pooled material that replaced it.
 What you cannot do yet is have the device *compose* those channels
 without a readback.
 
