@@ -2323,7 +2323,11 @@ spawner: a channel named after something three already means
 (`position`, `normal`, `uv`, `instanceMatrix` and seven more) is
 refused instead of overwriting the asset's vertex data, and a channel
 wider than 4 components is refused because a vertex attribute cannot
-carry more — split it upstream into several narrower ones.
+carry more — split it upstream into several narrower ones. Both are
+unconditional, because both describe a batch that is wrong on its own
+terms. A third refusal lives on the same seam but is OPT-IN, because
+what it checks is a batch that is wrong only relative to the caller's
+materials — see `requireChannels` below.
 
 **A channel the material declares and no batch carries reads ZERO.** It
 is worth stating plainly because it does not look like a failure: every
@@ -2366,9 +2370,130 @@ pixels back under both renderers. Four things are worth telling apart:
   attributes its geometry has not got. Its instances read zero while its
   sibling's draw correctly, in one scene, from one asset.
 
-This is three's behaviour rather than the library's, and the library
-cannot currently intercept it: `toInstancedMeshes` binds what the batch
+This is three's behaviour rather than the library's, and by default the
+library does not intercept it: `toInstancedMeshes` binds what the batch
 carries and never sees what the material declares.
+
+**`requireChannels` is how you say what your materials declare, and turn
+that silence into a named error.** Pass it as the optional third
+argument and a batch missing one of the names is refused instead of
+drawn:
+
+```ts
+import { toInstancedMeshes } from "pcg-ts/three";
+
+const meshes = toInstancedMeshes(batches, assets, {
+  requireChannels: ["tint", "gain"],
+});
+```
+
+```
+toInstancedMeshes: batch "tree" does not carry the required per-instance
+channels "gain", "tint"; it carries "seed". requireChannels asked for
+"gain", "tint". Nothing downstream would refuse this: three binds only what
+the batch carries and never sees what the material declares. A material
+declaring "gain" reads it as ZEROS for every instance — the fragments still
+run and write black, every instance draws identical, and a ShaderMaterial
+under WebGL logs nothing at any severity. The usual cause is a stale
+channel-name map: compare the two lists above, then either publish the name
+from the spawn (spawnInstances' instanceAttrs, or colorAttr for the
+reserved "color" channel) or drop it from requireChannels.
+```
+
+The two name lists are the point. The realistic cause is the stale map
+above, and a stale map is diagnosed by reading the names the host expects
+beside the names the content actually shipped — so the error carries
+both, and the batch's own list is sorted so you can compare it by eye.
+`(none)` is a common and meaningful value for it.
+
+Four things about the shape are deliberate:
+
+- **Opt-in, with no default.** Omit the argument (or pass `{}`, or an
+  empty list) and nothing changes at all — same meshes, same errors.
+  Plenty of callers legitimately draw batches with no channels, so an
+  expectation the library invented for them would be wrong more often
+  than right.
+- **Per CALL, not per asset id.** One list, checked against every batch.
+  Keying it by asset id would add a second map beside the stale one this
+  exists to catch, and an asset id that map failed to name would be
+  silently unchecked — a hole in the shape of the hole. Checking every
+  batch is also what catches the fourth bullet above, the two batches of
+  one asset id, without the caller having had to think of it. A host
+  whose assets genuinely need different channels partitions its batches
+  and calls the function once per group, which is the same partition it
+  already makes when they need different materials.
+- **The reserved `"color"` is expressible**, and satisfied by either
+  spelling — `attributes.color` or the plain `colors` sugar — because
+  presence is read through `instanceAttributesOf`, where the lift has
+  already happened. Its failure is a DIFFERENT picture and the error
+  states that one instead of the zeros: three leaves `instanceColor`
+  null, `USE_INSTANCING_COLOR` never turns on, and every instance draws
+  the material's own colour rather than black. A host sent looking for
+  black instances by a message that did not separate the two would not
+  find any, and would conclude the error was wrong.
+- **It is not an alias map, deliberately.** There is no option to rename
+  a graph's channel onto a host's attribute name. That mapping is
+  per-content data belonging to the host; a library-level copy of it
+  would be a second home for the one mapping, which is how the entry goes
+  stale in the first place.
+
+**Carrying a name means what BINDING means**, which is narrower than
+having the key. A batch satisfies the expectation only when the name is
+an OWN, ENUMERABLE key of its channel record AND holds an actual column.
+Both halves are load-bearing and both are the stale map's own shapes: a
+name reachable only through a prototype is invisible to the loop that
+binds channels, and a key holding `undefined` is what the ordinary host
+loop writes —
+
+```ts
+for (const name of wanted) attributes[name] = columns[name]; // a miss writes undefined
+```
+
+— which type-checks, because this project does not enable
+`noUncheckedIndexedAccess`. Under a key-presence test both would report
+as satisfied while `toInstancedMeshes` bound nothing, which is a hole
+reported as coverage — strictly worse than no check. For `"color"` in
+particular the consequence is the silent one: `instanceColor` stays null
+and the instances draw the material's own colour, with the expectation
+having said the batch was fine.
+
+The refusal reports the two states apart, so the name it calls missing
+never also appears in the list of what arrived:
+
+```
+… does not carry the required per-instance channel "tint"; it carries
+"phase" ("tint" is present but holds no column). requireChannels asked
+for "tint". …
+```
+
+A present-but-empty key is named rather than dropped, because it is a
+sharper reading of a stale map than the name silently vanishing: it says
+the loop that fills the record ran and found nothing.
+
+**A name three already means something by is refused up front.** Naming
+`position`, `normal`, `instanceMatrix` or the other eight in
+`requireChannels` throws immediately, before any batch is examined,
+because the loop refuses a batch that CARRIES such a channel — so the
+expectation could never be satisfied, and the per-batch refusal would
+otherwise advise publishing the name from the spawn, which is exactly
+what the reserved-name guard rejects. `"color"` is not on that list and
+is requirable: it rides `mesh.instanceColor`, not the geometry. Note the
+ordering: this is a defect in the CALL rather than in a batch, so it is
+reported ahead of per-batch errors that would otherwise come first (an
+unknown asset id, a bad transform length). Callers that pass no
+expectation see the old order untouched.
+
+Zero-instance batches are checked too. One cannot draw a wrong picture
+yet, but exempting it would be another hole of the same shape, and a
+batch missing a channel at count 0 is the batch that will be missing it
+at count 500. A zero-instance batch satisfies the expectation by carrying
+the name with an EMPTY column, which is the only length a channel may
+have at count 0 anyway. A named channel then binds nothing, since there
+is no item size to recover from zero instances; the reserved colour is
+asymmetric here and DOES produce an `instanceColor` attribute, because a
+zero-length `Float32Array` is truthy and colour carries no derived item
+size. Neither matters at 0 instances — nothing draws — and the shape is
+refused as soon as the count is real.
 
 **"CPU-only" is a statement about one of three things, and it is worth
 separating them before you plan around it.** The phrase has been read

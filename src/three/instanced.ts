@@ -10,7 +10,12 @@ import {
   type Mesh,
 } from "three";
 import type { AttrData } from "../data/index.js";
-import { INSTANCE_COLOR_CHANNEL, instanceAttributesOf, type InstanceBatch } from "../graph/data.js";
+import {
+  INSTANCE_COLOR_CHANNEL,
+  instanceAttributesOf,
+  type InstanceAttributes,
+  type InstanceBatch,
+} from "../graph/data.js";
 import { attempt, type TeardownFailure } from "./teardown.js";
 
 /** One renderable asset shared by every instance of an asset id. */
@@ -117,6 +122,129 @@ const RESERVED_GEOMETRY_ATTRS: readonly string[] = [
 const MAX_CHANNEL_ITEM_SIZE = 4;
 
 /**
+ * Opt-in expectations for {@link toInstancedMeshes}. Every field is
+ * optional and every default is "behave exactly as this function always
+ * has": a caller that passes nothing, or passes `{}`, gets the identical
+ * meshes and the identical errors.
+ */
+export interface ToInstancedMeshesOptions {
+  /**
+   * Per-instance channel names the caller's materials DECLARE, and which
+   * every batch in this call must therefore carry. A batch missing one is
+   * refused by name instead of drawn.
+   *
+   * **Why this exists.** `toInstancedMeshes` binds the channels a batch
+   * carries and never learns what the material declares, so the two can
+   * disagree with nothing malformed on either side. Measured in
+   * `tests/instanceChannelRender.test.ts`: a declared-but-unbound FLOAT
+   * attribute reads `(0, 0, 0, 1)` for every instance, every fragment
+   * runs and writes black, no GL error is queued, and a `ShaderMaterial`
+   * under WebGL logs nothing at any severity. On screen that is "every
+   * instance identical", which reads as a content mistake rather than a
+   * binding one. (A `NodeMaterial` under WebGPU does warn by name, and an
+   * INTEGER declaration is refused outright with `INVALID_OPERATION` —
+   * the silent case is narrowly a float declaration in a
+   * `ShaderMaterial`, which is most of them.) The realistic cause is a
+   * stale name map: a host's shader attribute names are compiled into its
+   * pipeline and cannot vary per clip, so the content carries a map from
+   * the graph's channel names onto the host's, and a map entry can go
+   * stale with nothing else changing.
+   *
+   * **PER CALL, not per asset id** — one list, checked against every
+   * batch. Three reasons, and the second is the load-bearing one:
+   *
+   * - The failure is per BATCH. Two batches of ONE asset id where only
+   *   one carries the channel is the shape that reaches ordinary
+   *   consumers (two cooked cells, nothing misspelled) — and it is
+   *   invisible from the outside, because three's `WebGLPrograms` keys
+   *   its program cache on SHADER SOURCE, so the per-mesh material clones
+   *   share one compiled program and the unchannelled mesh shades zeros
+   *   through the pipeline its sibling compiled. A per-call list is
+   *   checked once per batch, so that second batch is refused by
+   *   construction rather than by the caller having remembered it.
+   * - A per-asset-id map would carry the defect it is meant to catch. The
+   *   realistic cause here IS a stale map; keying the expectation by
+   *   asset id adds a second map, and an asset id it does not name is
+   *   silently unchecked. A hole in the check that closes a hole is worse
+   *   than no check, because it reads as coverage.
+   * - The expectation states what the HOST'S PIPELINE needs, and those
+   *   names are compiled into it. One pipeline, one set of names, one
+   *   list. A host whose assets genuinely need different channels
+   *   partitions its batches and calls this function once per group —
+   *   which is the same partition it already makes when the assets need
+   *   different materials. That composes; a map does not compose back
+   *   into a list.
+   *
+   * Presence is read through `instanceAttributesOf`, so the reserved
+   * `"color"` channel IS expressible and a batch satisfies it under
+   * either spelling (`attributes.color` or the plain `colors` sugar).
+   * It is admitted rather than excluded because a material that
+   * multiplies by instance colour has the same silent failure — three
+   * leaves `instanceColor` null, `USE_INSTANCING_COLOR` never turns on,
+   * and every instance draws the material's own colour — and excluding
+   * it would mean a host with one colour expectation and one channel
+   * expectation needs two mechanisms for one question.
+   *
+   * Checked for EVERY batch including a zero-instance one, which cannot
+   * draw a wrong picture yet. An exception there would be a hole in the
+   * same shape as the one above, and a batch missing a channel at count 0
+   * is the batch that will be missing it at count 500.
+   *
+   * NOT an alias or rename map, deliberately. The mapping from a graph's
+   * channel names onto a host's shader attribute names is per-content
+   * data that lives on the host side; a library-level alias map would be
+   * a second home for it, and two homes for one mapping is how the entry
+   * goes stale in the first place.
+   */
+  readonly requireChannels?: readonly string[];
+}
+
+/**
+ * The names in `expected` that `channels` does not carry, deduplicated,
+ * in the order the caller named them.
+ *
+ * Presence has to mean what BINDING means, or this check reports coverage
+ * over the exact silent zeros it exists to refuse. Binding needs two
+ * things, so this tests both:
+ *
+ * - **Own and enumerable.** The channel loop below reads
+ *   `Object.entries(channels)`, which sees own enumerable keys and
+ *   nothing else, so a `tint` reachable only through a prototype (a host
+ *   layering its channels over a defaults object) binds nothing at all.
+ *   This is also the test `instanceAttributesOf` uses for the colour
+ *   channel, for the same reason.
+ * - **A value.** A key present with `undefined` (or `null`) is the shape
+ *   a stale name map produces on the host side — `for (const n of wanted)
+ *   attributes[n] = columns[n]`, where a lookup miss writes `undefined`
+ *   and type-checks, because this project does not enable
+ *   `noUncheckedIndexedAccess`. The colour path binds on the VALUE
+ *   (`if (colors)`), so such a key leaves `instanceColor` null and every
+ *   instance drawing the material's own colour, with the expectation
+ *   having said it was satisfied. That is the worst failure available
+ *   here — a hole reported as coverage — and it is what this clause
+ *   closes. A named channel with the same shape would instead die on
+ *   `column.length`, naming neither the batch nor the channel; requiring
+ *   a value turns that into the refusal below.
+ */
+function missingChannels(expected: readonly string[], channels: InstanceAttributes): string[] {
+  const missing: string[] = [];
+  for (const name of expected) {
+    // `!= null` on purpose: `undefined` and `null` both reach here from a
+    // stale map, and both bind nothing.
+    const carried =
+      Object.prototype.propertyIsEnumerable.call(channels, name) && channels[name] != null;
+    // Deduplicated so a caller's repeated name is not reported twice.
+    if (!carried && !missing.includes(name)) missing.push(name);
+  }
+  return missing;
+}
+
+/** A channel-name list for an error: quoted, comma-joined, `(none)` when empty. */
+function nameList(names: readonly string[]): string {
+  return names.length === 0 ? "(none)" : names.map((name) => `"${name}"`).join(", ");
+}
+
+/**
  * Create one `THREE.InstancedMesh` per batch, resolving each batch's
  * `assetId` in `assets` (unknown ids throw, listing the known ids).
  * Batch transforms are already in `Matrix4.elements` layout, so they are
@@ -177,11 +305,57 @@ const MAX_CHANNEL_ITEM_SIZE = 4;
  * mid-list fails validation, the materials and geometry clones already
  * minted for earlier batches are disposed before the error propagates, so
  * a throwing build mints nothing that outlives it.
+ *
+ * A caller that knows which channels its materials declare can say so
+ * through `options.requireChannels` and have a batch missing one refused
+ * by name rather than drawn as zeros. Purely opt-in: with no `options`
+ * this function binds whatever the batch carries, exactly as it always
+ * has, because plenty of callers legitimately draw batches with no
+ * channels at all.
  */
 export function toInstancedMeshes(
   batches: readonly InstanceBatch[],
   assets: AssetMap,
+  options?: ToInstancedMeshesOptions,
 ): InstancedMesh[] {
+  // Read once, outside the loop: absent is the default and must cost
+  // nothing per batch.
+  const required = options?.requireChannels;
+  if (required !== undefined) {
+    for (const name of required) {
+      // An expectation naming one of these can NEVER be satisfied: the
+      // loop below refuses a batch that carries such a channel. Left
+      // unchecked, the per-batch refusal would tell the caller to publish
+      // the name from the spawn — the one action the next guard rejects —
+      // so the expectation is validated once, up front, instead of
+      // handing out advice that cannot be taken. Before any mesh is
+      // minted, so there is nothing to unwind.
+      //
+      // THIS IS AN ORDERING CHANGE and it is worth finding here rather
+      // than being surprised by it: because the expectation is validated
+      // before the batch loop, an unsatisfiable `requireChannels` is
+      // reported ahead of per-batch errors that used to come first
+      // (unknown assetId, a bad transform length). Deliberate — the
+      // expectation is a defect in the CALL, so it holds for every batch
+      // and would be reported for whichever batch happened to be examined
+      // first; reporting it once, before any of them, is the same finding
+      // without the false attribution to a batch. Callers with NO
+      // expectation see the old order untouched, since this block does
+      // not run for them.
+      if (RESERVED_GEOMETRY_ATTRS.includes(name)) {
+        throw new Error(
+          `toInstancedMeshes: requireChannels names "${name}", which is a geometry attribute ` +
+            `three already means something by — a batch carrying a channel of that name is ` +
+            `refused, so this expectation can never be satisfied by any batch. Rename the point ` +
+            `attribute upstream (setAttribute), name the new one in spawnInstances' ` +
+            `instanceAttrs, and require THAT name here. Reserved: ` +
+            `${[...RESERVED_GEOMETRY_ATTRS].sort().join(", ")}. (The reserved ` +
+            `"${INSTANCE_COLOR_CHANNEL}" channel is not on that list and IS requirable — it ` +
+            `rides mesh.instanceColor rather than the geometry.)`,
+        );
+      }
+    }
+  }
   const meshes: InstancedMesh[] = [];
   try {
     for (const batch of batches) {
@@ -203,6 +377,70 @@ export function toInstancedMeshes(
       // `colors` is lifted into the reserved channel, so it takes this
       // exact path with nothing special-cased for it.
       const channels = instanceAttributesOf(batch);
+      // The caller's own contract, answered before anything else about
+      // the channels: it is the only check here that knows what the
+      // material expects, so its message is the one that can name the
+      // stale entry. After `instanceAttributesOf`, never before — the
+      // reserved colour channel is only present in that record.
+      if (required !== undefined) {
+        const missing = missingChannels(required, channels);
+        if (missing.length > 0) {
+          // Sorted, like the known-asset list above: the caller compares
+          // it against its own name map by eye, and insertion order is
+          // whatever the spawn happened to write.
+          //
+          // SPLIT BY WHETHER THE KEY HOLDS ANYTHING, which is the same
+          // line `missingChannels` draws and has to be, or the message
+          // contradicts itself in the one shape it was written for. A
+          // stale host map leaves the key with no value, so a bare
+          // `Object.keys` would print the missing name on BOTH sides —
+          // "does not carry "tint" … it carries "phase", "tint"" — and
+          // then tell the reader to compare the two lists. The empty ones
+          // are reported separately rather than dropped, because "present
+          // but holds no column" is a sharper diagnosis of a stale map
+          // than the name silently vanishing: it says the loop that fills
+          // the record ran and found nothing, not that the name was never
+          // asked for.
+          const keys = Object.keys(channels).sort();
+          const carried = keys.filter((name) => channels[name] != null);
+          const empty = keys.filter((name) => channels[name] == null);
+          // The two consequences are DIFFERENT pictures, so the message
+          // states only the ones that apply. A generic channel reads as
+          // zeros through a geometry attribute that was never bound; the
+          // reserved colour is not a geometry attribute at all, and its
+          // absence leaves the material's own colour drawing instead. A
+          // host told "it reads as zeros" would go looking for black
+          // instances and not find any.
+          const generic = missing.filter((name) => name !== INSTANCE_COLOR_CHANNEL);
+          throw new Error(
+            `toInstancedMeshes: batch "${batch.assetId}" does not carry the required ` +
+              `per-instance ${missing.length === 1 ? "channel" : "channels"} ` +
+              `${nameList(missing)}; it carries ${nameList(carried)}` +
+              (empty.length > 0
+                ? ` (${nameList(empty)} ${empty.length === 1 ? "is" : "are"} present but ` +
+                  `${empty.length === 1 ? "holds" : "hold"} no column)`
+                : "") +
+              `. requireChannels asked for ` +
+              `${nameList(required)}. Nothing downstream would refuse this: three binds only ` +
+              `what the batch carries and never sees what the material declares.` +
+              (generic.length > 0
+                ? ` A material declaring ${nameList([generic[0]])} reads it as ZEROS for every ` +
+                  "instance — the fragments still run and write black, every instance draws " +
+                  "identical, and a ShaderMaterial under WebGL logs nothing at any severity."
+                : "") +
+              (missing.includes(INSTANCE_COLOR_CHANNEL)
+                ? ` The reserved "${INSTANCE_COLOR_CHANNEL}" channel is not a geometry attribute ` +
+                  "and fails as a different picture: three leaves `instanceColor` null, the " +
+                  "USE_INSTANCING_COLOR shader variant never turns on, and every instance draws " +
+                  "the material's own colour rather than black."
+                : "") +
+              ` The usual cause is a stale channel-name map: compare the two lists above, then ` +
+              `either publish the name from the spawn (spawnInstances' instanceAttrs, or ` +
+              `colorAttr for the reserved "${INSTANCE_COLOR_CHANNEL}" channel) or drop it from ` +
+              `requireChannels.`,
+          );
+        }
+      }
       const colors = channels[INSTANCE_COLOR_CHANNEL];
       if (colors && colors.length !== batch.count * 3) {
         throw new Error(

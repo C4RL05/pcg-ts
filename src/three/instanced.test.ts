@@ -11,7 +11,8 @@ import {
   type Material,
 } from "three";
 import { describe, expect, it } from "vitest";
-import { createPointCloud } from "../data/index.js";
+import { createPointCloud, type AttrData } from "../data/index.js";
+import type { InstanceAttributes } from "../graph/data.js";
 import { buildInstanceBatches } from "../spawn/instances.js";
 import { materialListOf, ownsGeometry, toInstancedMeshes, type AssetMap } from "./instanced.js";
 
@@ -629,6 +630,466 @@ describe("toInstancedMeshes per-instance channels", () => {
     // …and the named channel still lands on the geometry clone.
     expect(Array.from(channelAttr(mesh.geometry, "phase").array)).toEqual([0.25, 0.75]);
     expect(ownsGeometry(mesh)).toBe(true);
+  });
+});
+
+/**
+ * THE OPT-IN CHANNEL EXPECTATION.
+ *
+ * `toInstancedMeshes` binds what the batch carries and never learns what
+ * the material declares, so the two can disagree with nothing malformed on
+ * either side — and `tests/instanceChannelRender.test.ts` draws what
+ * happens then: the declared-but-unbound float attribute reads zero for
+ * every instance, every fragment runs and writes black, no GL error is
+ * queued, and a `ShaderMaterial` under WebGL prints nothing at any
+ * severity. `requireChannels` is how a caller that DOES know its material's
+ * attribute names turns that picture into a named error.
+ *
+ * The names below (`tint`, `gain`) are the render suite's, so the two files
+ * read as one story.
+ */
+describe("toInstancedMeshes requireChannels", () => {
+  /** Cloud of `n` points carrying a `tint` (f32x3) and a `gain` (f32). */
+  function tintedCloud(n: number) {
+    const geo = createPointCloud(n);
+    const tint = geo.attrs.point.add("tint", "f32", 3, [0, 0, 0]);
+    const gain = geo.attrs.point.add("gain", "f32", 1, 0);
+    for (let i = 0; i < n; i++) {
+      tint.setTuple(i, [i / 4, 0.5, 1 - i / 4]);
+      gain.set(i, 0.25 + i / 8);
+    }
+    return geo;
+  }
+
+  it("changes nothing for a caller that does not ask", () => {
+    // The whole feature's first constraint: a host that passes nothing —
+    // or an empty options object, or an empty list — must get the meshes
+    // it always got. Plenty of callers legitimately draw batches with no
+    // channels at all, and this is the batch shape that would break first.
+    const bare = buildInstanceBatches(createPointCloud(3), { defaultAssetId: "a" });
+    for (const options of [undefined, {}, { requireChannels: [] }]) {
+      const [mesh] = toInstancedMeshes(bare, assets("a"), options);
+      expect(mesh.count, `options ${JSON.stringify(options)}`).toBe(3);
+      expect(mesh.geometry.hasAttribute("tint")).toBe(false);
+      expect(ownsGeometry(mesh)).toBe(false);
+    }
+  });
+
+  it("passes a batch that carries everything asked for, and does not mind extras", () => {
+    // The other half of "no false positive": the check must be satisfiable,
+    // and a batch carrying MORE than was asked for is not a violation —
+    // the expectation is what the material needs, not an exact inventory.
+    const batches = buildInstanceBatches(tintedCloud(3), {
+      defaultAssetId: "a",
+      instanceAttrs: ["tint", "gain"],
+    });
+    const [both] = toInstancedMeshes(batches, assets("a"), {
+      requireChannels: ["tint", "gain"],
+    });
+    expect(both.count).toBe(3);
+    const gain = both.geometry.getAttribute("gain").array as Float32Array;
+    expect(Array.from(gain), "the required channel really was bound").toEqual([0.25, 0.375, 0.5]);
+    // A subset of what the batch carries: still fine.
+    const [subset] = toInstancedMeshes(batches, assets("a"), { requireChannels: ["gain"] });
+    expect(subset.geometry.hasAttribute("tint"), "the extra channel is still bound").toBe(true);
+  });
+
+  it("refuses a batch missing a required channel, naming it, the batch and what it DID carry", () => {
+    // A batch that carries a real channel, just not the ones asked for —
+    // the stale-map shape, where nothing is malformed and the two name
+    // lists are the whole diagnosis.
+    const batches = buildInstanceBatches(createPointCloud(2), {
+      defaultAssetId: "tree",
+      instanceAttrs: ["seed"],
+    });
+    const message = messageOf(() =>
+      toInstancedMeshes(batches, assets("tree"), { requireChannels: ["gain", "tint"] }),
+    );
+    // The three things a host can act on: which batch, which names are
+    // missing, and which names the batch actually has — because the
+    // realistic cause is a stale map and the fix is visible only when the
+    // two lists sit side by side.
+    expect(message).toBe(
+      'toInstancedMeshes: batch "tree" does not carry the required per-instance channels ' +
+        '"gain", "tint"; it carries "seed". requireChannels asked for "gain", "tint". Nothing ' +
+        "downstream would refuse this: three binds only what the batch carries and never sees " +
+        'what the material declares. A material declaring "gain" reads it as ZEROS for every ' +
+        "instance — the fragments still run and write black, every instance draws identical, " +
+        "and a ShaderMaterial under WebGL logs nothing at any severity. The usual cause is a " +
+        "stale channel-name map: compare the two lists above, then either publish the name from " +
+        "the spawn (spawnInstances' instanceAttrs, or colorAttr for the reserved \"color\" " +
+        "channel) or drop it from requireChannels.",
+    );
+    // ZEROS is in there on purpose: a host that has been staring at black
+    // instances greps for the word before it greps for anything else.
+    expect(message).toContain("ZEROS");
+  });
+
+  it("says channel, singular, for one missing name, and reports a channel-less batch as (none)", () => {
+    const message = messageOf(() =>
+      toInstancedMeshes(
+        buildInstanceBatches(createPointCloud(2), { defaultAssetId: "a" }),
+        assets("a"),
+        { requireChannels: ["tint"] },
+      ),
+    );
+    expect(message).toContain(
+      'batch "a" does not carry the required per-instance channel "tint"; it carries (none).',
+    );
+    // The plural branch must not fire for one name. Asserted on the exact
+    // phrase rather than the bare word, which `requireChannels` would
+    // satisfy by accident and which would then never fail.
+    expect(message).not.toContain("per-instance channels");
+  });
+
+  /**
+   * THE CASE THAT REACHES ORDINARY CONSUMERS, and the reason the
+   * expectation is checked per BATCH rather than once per call or once per
+   * asset id.
+   *
+   * Two `buildInstanceBatches` calls for one asset id — two cooked cells,
+   * nothing misspelled — where only the first carries the channel. Measured
+   * in `tests/instanceChannelRender.test.ts`: two meshes, ONE compiled
+   * program (three's `WebGLPrograms` keys its cache on shader source, so
+   * the per-mesh material clones share it), and the unchannelled mesh
+   * shades zeros through the pipeline its sibling compiled. Nothing about
+   * the second batch is malformed, so no other check here can see it.
+   */
+  it("catches the second batch of one asset id that carries no channel", () => {
+    const channelled = buildInstanceBatches(tintedCloud(2), {
+      defaultAssetId: "a",
+      instanceAttrs: ["tint"],
+    });
+    const unchannelled = buildInstanceBatches(createPointCloud(2), { defaultAssetId: "a" });
+    // The channelled batch ALONE is accepted, so the refusal below is the
+    // second batch's doing and not the expectation refusing everything.
+    expect(
+      toInstancedMeshes(channelled, assets("a"), { requireChannels: ["tint"] }),
+    ).toHaveLength(1);
+    const message = messageOf(() =>
+      toInstancedMeshes([...channelled, ...unchannelled], assets("a"), {
+        requireChannels: ["tint"],
+      }),
+    );
+    // Same asset id in both, so the carried list is what tells them apart —
+    // and it is the empty one that was refused.
+    expect(message).toContain('batch "a" does not carry the required per-instance channel "tint"');
+    expect(message).toContain("it carries (none)");
+  });
+
+  it("disposes the earlier batches' clones when a later one is refused", () => {
+    // The refusal is a build error like any other, so the unwind has to
+    // reclaim what the accepted batches already minted — otherwise turning
+    // the expectation on would trade a wrong picture for a leak.
+    const geometry = new BoxGeometry();
+    const material = new MeshBasicMaterial();
+    const mintedGeoms: BufferGeometry[] = [];
+    const disposedGeoms: BufferGeometry[] = [];
+    const cloneGeom = geometry.clone.bind(geometry);
+    geometry.clone = () => {
+      const clone = cloneGeom();
+      mintedGeoms.push(clone);
+      clone.addEventListener("dispose", () => disposedGeoms.push(clone));
+      return clone;
+    };
+    const mintedMats: Material[] = [];
+    const disposedMats: Material[] = [];
+    const cloneMat = material.clone.bind(material);
+    material.clone = () => {
+      const clone = cloneMat();
+      mintedMats.push(clone);
+      clone.addEventListener("dispose", () => disposedMats.push(clone));
+      return clone;
+    };
+    const map: AssetMap = { a: { geometry, material } };
+    const good = buildInstanceBatches(tintedCloud(2), {
+      defaultAssetId: "a",
+      instanceAttrs: ["tint"],
+    });
+    const bad = buildInstanceBatches(createPointCloud(2), { defaultAssetId: "a" });
+    expect(() =>
+      toInstancedMeshes([...good, ...bad], map, { requireChannels: ["tint"] }),
+    ).toThrow(/does not carry the required per-instance channel "tint"/);
+    expect(mintedGeoms, "the accepted batch cloned the asset geometry").toHaveLength(1);
+    expect(disposedGeoms, "…and it was disposed on the way out").toEqual(mintedGeoms);
+    expect(mintedMats).toHaveLength(1);
+    expect(disposedMats).toEqual(mintedMats);
+  });
+
+  /**
+   * THE RESERVED CHANNEL IS EXPRESSIBLE, under either spelling.
+   *
+   * `colors` is sugar for the reserved `"color"` entry and
+   * `instanceAttributesOf` returns ONE record with the lift already done,
+   * so reading presence there costs nothing and admits both spellings for
+   * free. It is admitted rather than excluded because a material that
+   * multiplies by instance colour has the same silent failure — three
+   * leaves `instanceColor` null, so every instance draws the material's own
+   * colour — and excluding it would give a host two mechanisms for one
+   * question.
+   */
+  it('accepts "color" from either spelling and refuses a batch with neither', () => {
+    const map = assets("a");
+    const painted = createPointCloud(2);
+    painted.attrs.point.require("color").setTuple(0, [0.5, 0.25, 0.125, 1]);
+    // Spelling one: the spawner's own `colors`.
+    const [sugar] = toInstancedMeshes(
+      buildInstanceBatches(painted, { defaultAssetId: "a", colorAttr: "color" }),
+      map,
+      { requireChannels: ["color"] },
+    );
+    expect(sugar.instanceColor).not.toBeNull();
+    // Spelling two: a hand-built batch naming the reserved channel.
+    const [named] = toInstancedMeshes(
+      [
+        {
+          assetId: "a",
+          count: 2,
+          transforms: new Float32Array(32),
+          attributes: { color: new Float32Array([0.5, 0.25, 0.125, 1, 0, 0]) },
+        },
+      ],
+      map,
+      { requireChannels: ["color"] },
+    );
+    expect(named.instanceColor?.count).toBe(2);
+    // And neither: refused, with the consequence that is NOT zeros spelled
+    // out, because a host told "it reads as zeros" would look for black
+    // instances and find the material's own colour instead.
+    const message = messageOf(() =>
+      toInstancedMeshes(
+        buildInstanceBatches(createPointCloud(2), { defaultAssetId: "a" }),
+        map,
+        { requireChannels: ["color"] },
+      ),
+    );
+    expect(message).toContain('does not carry the required per-instance channel "color"');
+    expect(message).toContain("three leaves `instanceColor` null");
+    expect(message).toContain("USE_INSTANCING_COLOR shader variant never turns on");
+    expect(message).toContain("draws the material's own colour rather than black");
+    // And the zeros sentence is ABSENT, which is the whole reason the two
+    // consequences are written separately: a host sent looking for black
+    // instances would not find any, and would conclude the error was wrong.
+    expect(message, "colour does not read as zeros; it draws the material's colour").not.toContain(
+      "ZEROS",
+    );
+    // Both sentences appear when both kinds are missing, so neither is a
+    // fixed string this message always carries.
+    const mixed = messageOf(() =>
+      toInstancedMeshes(
+        buildInstanceBatches(createPointCloud(2), { defaultAssetId: "a" }),
+        map,
+        { requireChannels: ["color", "tint"] },
+      ),
+    );
+    expect(mixed).toContain('A material declaring "tint" reads it as ZEROS');
+    expect(mixed).toContain("three leaves `instanceColor` null");
+  });
+
+  it("checks a zero-instance batch too, and an empty column satisfies it", () => {
+    // No exception for count 0, deliberately. It cannot draw a wrong
+    // picture yet, but an exception would be a hole in exactly the shape
+    // this check exists to close, and a batch missing a channel at count 0
+    // is the batch that will be missing it at count 500.
+    const message = messageOf(() =>
+      toInstancedMeshes(
+        [{ assetId: "a", count: 0, transforms: new Float32Array(0) }],
+        assets("a"),
+        { requireChannels: ["tint"] },
+      ),
+    );
+    expect(message).toContain('does not carry the required per-instance channel "tint"');
+    // A zero-instance batch's channels must be EMPTY columns (there is no
+    // item size to recover), and an empty column is still the channel
+    // being carried — so this one passes, binds nothing and clones nothing.
+    const map = assets("a");
+    const [mesh] = toInstancedMeshes(
+      [
+        {
+          assetId: "a",
+          count: 0,
+          transforms: new Float32Array(0),
+          attributes: { tint: new Float32Array(0) },
+        },
+      ],
+      map,
+      { requireChannels: ["tint"] },
+    );
+    expect(mesh.count).toBe(0);
+    expect(mesh.geometry).toBe(map.a.geometry);
+    expect(ownsGeometry(mesh)).toBe(false);
+  });
+
+  /**
+   * A host's own channel-filling loop, written the ordinary way, with a
+   * name its column map has not got.
+   *
+   * This is the STALE MAP as source code rather than as a description, and
+   * it type-checks: the project does not enable `noUncheckedIndexedAccess`,
+   * so `columns[name]` is `AttrData` to the compiler and `undefined` at
+   * runtime. A key present with no value is therefore the shape the
+   * realistic cause actually produces, and it must not read as coverage.
+   */
+  function hostFilled(names: readonly string[], columns: Record<string, AttrData>): InstanceAttributes {
+    const out: Record<string, AttrData> = {};
+    for (const name of names) out[name] = columns[name];
+    return out;
+  }
+
+  it("a key present with NO VALUE is missing — the stale map's own shape", () => {
+    // Found by verification, and it is the worst failure this check could
+    // have: an own enumerable "color" key holding nothing passes a naive
+    // presence test, `toInstancedMeshes` binds nothing, `instanceColor`
+    // stays null, USE_INSTANCING_COLOR never turns on, and every instance
+    // draws the material's own colour — while the expectation reports the
+    // batch as satisfying it. A hole reported as coverage.
+    const attributes = hostFilled(["color"], {});
+    expect(
+      Object.prototype.propertyIsEnumerable.call(attributes, "color"),
+      "the key really is own and enumerable — only the value is missing",
+    ).toBe(true);
+    const batch = { assetId: "a", count: 2, transforms: new Float32Array(32), attributes };
+    // Unasked, this is exactly the silent wrong picture: a mesh is built
+    // and nothing is bound. Shown first, so the refusal below is not a
+    // matter of taste.
+    const [drawn] = toInstancedMeshes([batch], assets("a"));
+    expect(drawn.instanceColor, "nothing was bound: the silent case").toBeNull();
+    expect(messageOf(() => toInstancedMeshes([batch], assets("a"), { requireChannels: ["color"] })))
+      .toContain('does not carry the required per-instance channel "color"');
+    // The same hole one name over. Here the unchecked build does not go
+    // quiet, it dies inside three with a message naming neither the batch
+    // nor the channel — so the refusal is an upgrade either way.
+    const named = {
+      assetId: "a",
+      count: 2,
+      transforms: new Float32Array(32),
+      attributes: hostFilled(["tint"], {}),
+    };
+    expect(messageOf(() => toInstancedMeshes([named], assets("a")))).not.toContain("tint");
+    expect(messageOf(() => toInstancedMeshes([named], assets("a"), { requireChannels: ["tint"] })))
+      .toContain('batch "a" does not carry the required per-instance channel "tint"');
+  });
+
+  it("never lists a missing name as carried: a present-but-empty key is reported as its own state", () => {
+    // The message's one job is to let a host compare what it asked for
+    // against what arrived. `Object.keys` alone puts a present-but-empty
+    // name on BOTH sides — "does not carry \"tint\" … it carries
+    // \"phase\", \"tint\"" — and then tells the reader to compare the two
+    // lists, which is unusable in exactly the stale-map shape this whole
+    // check exists for. So the two states are separated by name.
+    const attributes = hostFilled(["phase", "tint"], { phase: new Float32Array([0.25, 0.75]) });
+    expect(Object.keys(attributes), "the key IS there — only its value is not").toEqual([
+      "phase",
+      "tint",
+    ]);
+    const message = messageOf(() =>
+      toInstancedMeshes(
+        [{ assetId: "a", count: 2, transforms: new Float32Array(32), attributes }],
+        assets("a"),
+        { requireChannels: ["tint"] },
+      ),
+    );
+    expect(message).toContain(
+      'batch "a" does not carry the required per-instance channel "tint"; it carries "phase" ' +
+        '("tint" is present but holds no column). requireChannels asked for "tint".',
+    );
+    // The contradiction, asserted as its own claim: the missing name must
+    // never appear inside the carried list.
+    const carried = /it carries ([^(.]*)/.exec(message)?.[1] ?? "";
+    expect(carried, "the carried list must not contain the name reported missing").not.toContain(
+      "tint",
+    );
+    // Plural, and with nothing left to carry: the sentence still reads.
+    const twoEmpty = messageOf(() =>
+      toInstancedMeshes(
+        [
+          {
+            assetId: "a",
+            count: 2,
+            transforms: new Float32Array(32),
+            attributes: hostFilled(["tint", "gain"], {}),
+          },
+        ],
+        assets("a"),
+        { requireChannels: ["tint", "gain"] },
+      ),
+    );
+    expect(twoEmpty).toContain(
+      'it carries (none) ("gain", "tint" are present but hold no column).',
+    );
+  });
+
+  it("refuses an expectation that names a reserved geometry attribute, before any batch", () => {
+    // Such a name can never be satisfied — the loop refuses a batch that
+    // CARRIES it — so without this the per-batch refusal would advise
+    // publishing the name from the spawn, which is the one action the
+    // reserved-name guard rejects. An error that recommends a refused fix
+    // is worse than no error.
+    const message = messageOf(() =>
+      toInstancedMeshes(
+        buildInstanceBatches(createPointCloud(2), { defaultAssetId: "a" }),
+        assets("a"),
+        { requireChannels: ["normal"] },
+      ),
+    );
+    expect(message).toContain(
+      'toInstancedMeshes: requireChannels names "normal", which is a geometry attribute three ' +
+        "already means something by",
+    );
+    expect(message).toContain("can never be satisfied by any batch");
+    expect(message).toContain(
+      "Reserved: instanceColor, instanceMatrix, normal, position, skinIndex, skinWeight, " +
+        "tangent, uv, uv1, uv2, uv3.",
+    );
+    // …and it says the reserved COLOUR is the exception, because that is
+    // the next question anyone reading this sentence has.
+    expect(message).toContain('The reserved "color" channel is not on that list and IS requirable');
+    // Raised before a batch is even looked at: an empty batch list still
+    // reports it, so the caller learns on the first call rather than on
+    // the first cook that happens to spawn something.
+    expect(messageOf(() => toInstancedMeshes([], {}, { requireChannels: ["position"] }))).toContain(
+      'requireChannels names "position"',
+    );
+  });
+
+  it("reports a repeated name once", () => {
+    const message = messageOf(() =>
+      toInstancedMeshes(
+        buildInstanceBatches(createPointCloud(2), { defaultAssetId: "a" }),
+        assets("a"),
+        { requireChannels: ["tint", "tint"] },
+      ),
+    );
+    // Singular, and the name once — the caller's own list is echoed back
+    // verbatim further along, which is where a duplicate is informative.
+    expect(message).toContain('required per-instance channel "tint"; it carries (none)');
+    expect(message).toContain('requireChannels asked for "tint", "tint"');
+  });
+
+  it("an inherited channel does not satisfy it — the same key set the binding loop sees", () => {
+    // The one way this check could report a false PASS. The binding loop
+    // reads `Object.entries(channels)`, which sees own enumerable keys and
+    // nothing else, so a `tint` reachable only through a prototype binds
+    // nothing at all. A plain `channels.tint !== undefined` presence test
+    // would find it and wave the batch through to the identical silent
+    // zeros — so presence is read own-and-enumerable, exactly as
+    // `instanceAttributesOf` reads the colour channel.
+    const inherited = Object.create({ tint: new Float32Array([1, 2, 3, 4, 5, 6]) }) as Record<
+      string,
+      Float32Array
+    >;
+    expect(inherited.tint, "the prototype really does carry it").toBeInstanceOf(Float32Array);
+    const batch = { assetId: "a", count: 2, transforms: new Float32Array(32), attributes: inherited };
+    // Unasked, the batch builds and binds NOTHING — which is the wrong
+    // picture this refuses, shown first so the refusal is not a matter of
+    // opinion.
+    const [drawn] = toInstancedMeshes([batch], assets("a"));
+    expect(drawn.geometry.hasAttribute("tint"), "nothing was bound from the prototype").toBe(false);
+    const message = messageOf(() =>
+      toInstancedMeshes([batch], assets("a"), { requireChannels: ["tint"] }),
+    );
+    expect(message).toContain('does not carry the required per-instance channel "tint"');
+    expect(message).toContain("it carries (none)");
   });
 });
 

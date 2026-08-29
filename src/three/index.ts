@@ -18,8 +18,22 @@ export {
  * cannot be shared), and the caller that disposes the mesh is the only
  * one that can dispose the clone. A caller writing its own teardown
  * instead of using `WorldThreeBinding` needs to ask.
+ *
+ * `ToInstancedMeshesOptions` carries the opt-in channel expectation and
+ * nothing else yet: a caller states the channel names its materials
+ * declare, and a batch missing one is refused by name instead of drawn as
+ * zeros (`toInstancedMeshes` binds what the batch carries and never sees
+ * the material, so the two can disagree with nothing malformed on either
+ * side). Exported because a host assembles that list beside its asset
+ * map, and a list stored in a variable needs a name for its type.
  */
-export { ownsGeometry, toInstancedMeshes, type AssetMap, type InstancedAsset } from "./instanced.js";
+export {
+  ownsGeometry,
+  toInstancedMeshes,
+  type AssetMap,
+  type InstancedAsset,
+  type ToInstancedMeshesOptions,
+} from "./instanced.js";
 export { toPointsObject, type ToPointsOptions } from "./debug.js";
 /**
  * The device-instancing seam, published from the module that defines it
