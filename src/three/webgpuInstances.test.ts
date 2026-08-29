@@ -1213,7 +1213,7 @@ async function makeCloneTrackingAdapter() {
 }
 
 describe("createWebGpuInstanceAdapter and named per-instance channels", () => {
-  it("refuses a non-reserved channel, naming its WGSL type, its stride and both ways out", async () => {
+  it("refuses a non-reserved channel, naming its WGSL type, its stride and every way out", async () => {
     const { adapter, minted } = await makeCloneTrackingAdapter();
     const batch = channelledBatch("spire", 4, { seed: deviceChannel(4, "u32", 1) });
 

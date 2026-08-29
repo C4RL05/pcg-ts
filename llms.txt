@@ -1709,8 +1709,9 @@ Surface:
     compiled into the pipeline (unknown resident kind, field compile
     error, tuple/layout mismatch, missing standard attribute, buffer
     limit, a spawn over the instance budget or naming a bad
-    `assetAttr`/`colorAttr`, a spawn naming ANY `instanceAttrs` channel
-    (the one entry here that is not a mistake — a binding budget, see
+    `assetAttr`/`colorAttr`, a spawn naming `instanceAttrs` channels without the
+    evaluator's `deviceInstanceAttrs`
+    (the one entry here that is not a mistake — a capability gate, see
     the device-resident instancing section),
     or an `attributeIs`/`byAttribute` anywhere in the run —
     its kernel compiles and dispatches fine on the per-node path, but
@@ -1911,35 +1912,47 @@ multi-asset since v0.8.0:
   leaving it undefined. Anyone extending the device path must respect
   that stride — it is the one place the two layouts legitimately
   differ.
-- NAMED CHANNELS ARE NOT COMPOSED BY THIS KERNEL. Read that as a limit
-  on device PRODUCTION and nothing else — it is NOT a statement that a
-  channel cannot reach a GPU, and it is NOT a statement that the cook
-  runs on your frame. See the two scoping notes at the end of this
-  bullet before planning around it. `instanceAttrs` is the ONE
-  `spawnInstances` param that is not device-resident, and it is the one
-  spawner condition in this section that is NOT about a mistake. A spawn
-  naming any channel REJECTS the whole resident run as
-  `run-plan-failed`; the CPU spawner then serves the ENTIRE terminal —
-  the transforms it composes there, its colour AND its channels — so
-  nothing is dropped and nothing is silent, and the rejection is counted
-  in `CookStats.gpu.fallbacks` like every other. The counter key is ALL
-  a caller observes: the planner's rejection words a sentence
-  (`instanceAttrs names N per-instance channel(s); the device spawner
-  composes transforms and colour only`) but `PlanRejection` carries only
-  the reason, so that wording never leaves `planResidentRun` — assert on
-  the counter, not on a message. The reason is a BINDING BUDGET, not a
-  difficulty: the compose kernel's widest form already binds seven
-  storage buffers (P, rot, scale, transforms, the permutation, the
-  colour source, the colour output) against the baseline
-  `maxStorageBuffersPerShaderStage` of 8, so an ARBITRARY number of
-  gather channels does not fit in it. The node declares no `eligible`
-  gate for this — a gate would keep `spawnInstances` off every resident
-  run in the graph, where the planner rejects only the run that actually
-  names channels. `DeviceInstanceBatch` has the device twin of the
-  channel for a host composing its own buffers; this library's resident
-  spawner does not fill it yet. Consequence for parity: such a spawn has
-  NO parity class at all — there is no device output to compare,
-  transforms included.
+- NAMED CHANNELS ARE NOT COMPOSED BY THIS KERNEL, and their device
+  production is OPT-IN. Read that as a statement about who binds the
+  buffers and nothing else — it is NOT a statement that a channel cannot
+  reach a GPU, and it is NOT a statement that the cook runs on your
+  frame. See the two scoping notes at the end of this bullet before
+  planning around it. `instanceAttrs` is the ONE `spawnInstances` param
+  whose device production is opt-in, and it is the one spawner condition
+  in this section that is NOT about a mistake.
+  DEFAULT OFF, which is what it always was: a spawn naming any channel
+  REJECTS the whole resident run as `run-plan-failed`; the CPU spawner
+  then serves the ENTIRE terminal — the transforms it composes there, its
+  colour AND its channels — so nothing is dropped and nothing is silent,
+  and the rejection is counted in `CookStats.gpu.fallbacks` like every
+  other. The counter key is ALL a caller observes: the planner words a
+  sentence but `PlanRejection` carries only the reason, so that wording
+  never leaves `planResidentRun` — assert on the counter, not on a
+  message.
+  WITH `deviceInstanceAttrs: true` on the `GpuFieldEvaluator` (which
+  requires `deviceInstances` and throws if passed alone), each channel is
+  gathered into its own retained device buffer beside the transforms, by
+  its OWN kernel rather than more bindings on the compose one — whose
+  widest form already binds seven storage buffers (P, rot, scale,
+  transforms, the permutation, the colour source, the colour output)
+  against the baseline `maxStorageBuffersPerShaderStage` of 8, so folding
+  channels in would have bought exactly one. The gather binds both sides
+  as `array<u32>` and moves raw words, so every COMPONENT matches the CPU
+  column bit for bit; an itemSize-3 channel additionally carries a pad
+  slot the CPU column has no room for, per WGSL's 16-byte vec3 stride.
+  WHY IT IS A SEPARATE FLAG, and this is the whole of it: it moves an
+  OBLIGATION. `pcg-ts/three`'s device adapter binds the instance matrix
+  and the reserved colour and refuses every other channel by name, so a
+  graph that names channels and renders through that adapter works today
+  only because the planner rejects. Turn the flag on and you bind the
+  buffers yourself from `batch.attributes[name].handle.resource`. The
+  node declares no `eligible` gate either way — a gate would keep
+  `spawnInstances` off every resident run in the graph, where the planner
+  rejects only the run that actually names channels.
+  Consequence for parity: with the flag off such a spawn has NO parity
+  class at all, there being no device output to compare, transforms
+  included; with it on, the channels are a bit-exact gather rather than a
+  tolerance class, while the transforms keep their documented one.
   SCOPING NOTE 1 — RENDERING IS SUPPORTED. The CPU batch this fallback
   produces carries every channel, and `toInstancedMeshes` binds each as
   an `InstancedBufferAttribute` of its own name; it is renderer-agnostic,

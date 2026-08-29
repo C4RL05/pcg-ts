@@ -842,8 +842,9 @@ export function makeComposeInstancesApply(
  * compose kernel's widest form already binds seven of the baseline
  * `maxStorageBuffersPerShaderStage` of 8 (see
  * {@link makeComposeInstancesApply}), so folding channels into it would
- * buy exactly ONE and then fail on the second. This binds three
- * (source, output, permutation) whatever the channel is, so the number of
+ * buy exactly ONE and then fail on the second. This binds the source and
+ * the output always and the permutation when `indexed` (two or three, and
+ * never more) whatever the channel is, so the number of
  * channels a spawn may carry is bounded by nothing here — it costs one
  * dispatch and one buffer each, and no binding budget.
  *
