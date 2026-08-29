@@ -1,0 +1,1020 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
+<title>pcg-ts — lanterns</title>
+<link rel="icon" href="../icon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="../site.css" />
+</head>
+<body>
+<!--
+  THE LANTERNS GUIDE — one whole number per lantern, and what happens
+  when it is put in the wrong kind of box.
+
+  The demo at `/demos/lanterns/` shows a field of coloured lights and a
+  picker labelled "id source". This is the page that says what that
+  picker does: where the number comes from, which slices of it the little
+  shader program reads, why a float cannot hold it, and why the half of
+  the picture that still LOOKS right is the dangerous half.
+
+  IT IS NOT A COPY OF THE DEMO. Every figure here is drawn on this page.
+  The field at the top hashes its own ids and stores them through a real
+  `Math.fround`, so switching the source collapses the colour strip live
+  rather than showing a screenshot of it having collapsed. The numbers in
+  the stat row are the DEMO's, measured by cooking its graph in Node at
+  the default seed — four of the five are quantities the demo's own panel
+  prints, so those can be checked against each other. Nothing here is a
+  screenshot, so nothing goes stale the way one does; what it CAN do is
+  disagree with the demo if the shader's bit fields change and this page
+  does not, which is the maintenance this page costs.
+
+  THE STYLE RULES ARE `../site.css`, SHARED. The block below is the same
+  set `guides/racetrack.html` adds — the stage frame, the drawing ink,
+  the token aliases — kept deliberately identical so the two guides read
+  as one series. What this page adds that that one does not is `.hues`:
+  the 256-cell strip under the field. That strip IS the measurement, so
+  it is painted in true colour and does not follow the site palette.
+-->
+<style>
+  /* The aliases. These sit on :root and not on a wrapper because the
+     live field reads them off document.documentElement when it draws.
+     Same set as the racetrack guide, minus `--road`, which was the one
+     value that page genuinely invented and this one has no use for. */
+  :root {
+    --ink-3: var(--faint);
+    --rule: var(--line-hi);
+    --rule-2: var(--line);
+    --panel: var(--card);
+    --sunk: var(--plate);
+    --signal: var(--amber);
+    --accent-soft: rgba(0, 255, 0, 0.12);
+    --signal-soft: rgba(255, 0, 0, 0.12);
+    --f-mono: var(--mono);
+  }
+
+  /* Section rhythm. site.css spaces the sections and rules between them;
+     the two wrappers below only group what is inside one. */
+  .sec-head { display: flex; flex-direction: column; gap: 10px; margin-bottom: 22px; }
+  .sec-body { display: flex; flex-direction: column; gap: 16px; }
+
+  /* ── the live field ──────────────────────────────────────────────
+     A canvas, not a video and not a GIF. It hashes its own ids and puts
+     them through a real 32-bit float, so the collapse you see when the
+     source is switched is the arithmetic happening in front of you. */
+  .stage {
+    position: relative;
+    border: 1px solid var(--line);
+    background: var(--plate);
+    border-radius: 0;
+    overflow: hidden;
+    margin: 22px 0 0;
+  }
+  .stage canvas { display: block; width: 100%; height: auto; }
+  .stage-tag {
+    position: absolute; left: 12px; top: 10px;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--faint);
+  }
+  .stage-key {
+    position: absolute; right: 12px; top: 10px;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--faint);
+  }
+  .stage-key b { color: var(--ink); font-weight: 600; }
+
+  /* The colour strip. 256 cells, one per possible low byte, lit if any
+     lantern in the field above is currently using it. This is the whole
+     measurement in one row, which is why it shares the field's frame. */
+  .hues {
+    border: 1px solid var(--line); border-top: 0;
+    background: var(--plate); padding: 12px;
+    display: flex; flex-direction: column; gap: 8px;
+    margin: 0 0 12px;
+  }
+  .hues canvas { display: block; width: 100%; height: auto; }
+  .hues .cap {
+    display: flex; justify-content: space-between; gap: 12px; margin: 0;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--faint);
+  }
+  .hues .cap b { color: var(--ink); font-weight: 600; }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 6px; }
+  .replay {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em;
+    text-transform: uppercase;
+    background: var(--card); color: var(--muted);
+    border: 1px solid var(--line); border-radius: 0;
+    padding: 7px 12px; cursor: pointer;
+  }
+  .replay:hover { color: var(--ink); border-color: var(--line-hi); }
+  .replay:focus-visible { outline: 2px solid var(--g); outline-offset: 2px; }
+  .replay[aria-pressed="true"] { color: var(--ink); border-color: var(--g); }
+  .replay#widen[aria-pressed="true"] { color: var(--amber); border-color: var(--amber); }
+
+  /* ── hand-drawn figures ──────────────────────────────────────────
+     They reuse site.css's .plate for the frame, so this page follows if
+     the site's figure frame ever moves. What .plate does NOT fit is the
+     ink: its rules are there to theme MERMAID output, and one of them —
+     a blanket `.plate svg text` — would flatten the label weights these
+     drawings are built on. The rules below put the hierarchy back, and
+     they have to carry !important to outrank it. Which also means a
+     `fill=` attribute on a <text> here is dead markup: paint through a
+     class or it will silently come out the wrong colour. */
+  figure { margin: 0; }
+  figure .plate svg { display: block; width: 100%; height: auto; min-width: 520px; }
+  figcaption {
+    font-family: var(--mono); font-size: 12px; line-height: 1.5;
+    color: var(--faint); letter-spacing: 0.04em; margin: 8px 0 0;
+  }
+  figcaption b { color: var(--muted); font-weight: 600; }
+
+  .s-ink2  { fill: var(--muted); }
+  .s-dim   { stroke: var(--muted); stroke-width: 1.1; fill: none; }
+  .s-hair  { stroke: var(--line-hi); stroke-width: 1.1; fill: none; }
+  .s-lbl   { font-family: var(--mono); font-size: 11px; fill: var(--muted); }
+  .s-lbl-s { font-family: var(--mono); font-size: 9.5px; fill: var(--faint); }
+  .s-name  { font-family: var(--mono); font-size: 11px; fill: var(--ink); }
+  .s-ok    { font-family: var(--mono); font-size: 11px; font-weight: 600; fill: var(--g); }
+  .s-bad   { font-family: var(--mono); font-size: 11px; font-weight: 600; fill: var(--amber); }
+  .s-big   { font-family: var(--mono); font-size: 15px; font-weight: 600; fill: var(--ink); }
+  .plate svg .s-lbl,   .plate svg .s-lbl text   { fill: var(--muted) !important; }
+  .plate svg .s-lbl-s, .plate svg .s-lbl-s text { fill: var(--faint) !important; }
+  .plate svg .s-name,  .plate svg .s-name text  { fill: var(--ink) !important; }
+  .plate svg .s-ink2,  .plate svg .s-ink2 text  { fill: var(--muted) !important; }
+  .plate svg .s-ok,    .plate svg .s-ok text    { fill: var(--g) !important; }
+  .plate svg .s-bad,   .plate svg .s-bad text   { fill: var(--amber) !important; }
+  .plate svg .s-big,   .plate svg .s-big text   { fill: var(--ink) !important; }
+  .plate svg .np, .plate svg .np text { fill: var(--faint) !important; }
+  .plate svg .nt, .plate svg .nt text { fill: var(--ink) !important; }
+  .plate svg .gl, .plate svg .gl text { fill: var(--faint) !important; }
+
+  /* Node boxes. Same ink as the racetrack guide's graph figure, so a
+     pcg-ts graph is drawn the same way on both pages. */
+  .nb { fill: var(--card); stroke: var(--line-hi); stroke-width: 1.1; }
+  .nb-out { stroke: var(--g); }
+  .nb-bad { fill: var(--signal-soft); stroke: var(--amber); stroke-width: 1.1; }
+  .nt { font-family: var(--mono); font-size: 12.5px; font-weight: 600; fill: var(--ink); }
+  .np { font-family: var(--mono); font-size: 10.5px; fill: var(--faint); }
+  .gl { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.14em; fill: var(--faint); }
+  .w  { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+
+  /* ── the bit ruler ───────────────────────────────────────────────
+     The figure the whole guide turns on, so it gets ink of its own. The
+     three fills are one colour at three strengths, because they are
+     three slices of ONE number and must not read as three things. */
+  .bit       { fill: var(--card); stroke: var(--line-hi); stroke-width: 0.8; }
+  .bit-rate  { fill: rgba(0, 255, 0, 0.10); stroke: var(--line-hi); stroke-width: 0.8; }
+  .bit-phase { fill: rgba(0, 255, 0, 0.16); stroke: var(--line-hi); stroke-width: 0.8; }
+  .bit-hue   { fill: rgba(0, 255, 0, 0.30); stroke: var(--g); stroke-width: 0.9; }
+  .bit-lost  { fill: var(--signal-soft); stroke: var(--amber); stroke-width: 0.9; }
+
+  /* ── the ladder ──────────────────────────────────────────────────
+     A list where the ORDER is the argument, so it is set as rows with a
+     number column rather than as cards. One row is marked: the step
+     where the id stops being the id. */
+  .spine { display: flex; flex-direction: column; border-top: 1px solid var(--line); margin: 20px 0 6px; }
+  .step {
+    display: grid; grid-template-columns: 52px 190px 1fr;
+    gap: 16px; align-items: baseline;
+    padding: 13px 0; border-bottom: 1px solid var(--rule-2);
+  }
+  .step .n { font-family: var(--mono); font-size: 13px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .step .t { font-family: var(--mono); font-weight: 600; font-size: 15px; color: var(--ink); }
+  .step .d { font-size: 14.5px; color: var(--muted); }
+  .step .d em { font-style: normal; color: var(--g); }
+  .step.pivot { background: var(--signal-soft); margin: 0 -12px; padding-left: 12px; padding-right: 12px; }
+  .step.pivot .t { color: var(--amber); }
+  @media (max-width: 720px) {
+    .step { grid-template-columns: 40px 1fr; }
+    .step .d { grid-column: 2; }
+  }
+
+  /* ── the pair ────────────────────────────────────────────────────
+     What the float destroys and what it spares, side by side, in the
+     same frame, because the whole trap is that the second column exists
+     at all. */
+  .keeps { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 18px 0 6px; }
+  @media (max-width: 780px) { .keeps { grid-template-columns: 1fr; } }
+  .keep { border: 1px solid var(--line); border-radius: 0; padding: 16px 17px; background: var(--card); }
+  .keep h3 { margin: 0 0 8px; font-size: 15px; }
+  .keep ul { margin: 0; padding-left: 18px; }
+  .keep li { font-size: 14.5px; color: var(--muted); margin: 5px 0; }
+  .keep .tick { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; margin: 0 0 6px; }
+  .keep .tick.in  { color: var(--g); }
+  .keep .tick.out { color: var(--amber); }
+
+  /* One sentence per section allowed to be louder than the paragraphs
+     around it. Mono, like every other heading on this site. */
+  .pull {
+    border-left: 2px solid var(--g);
+    padding: 4px 0 4px 20px;
+    font-family: var(--mono); font-weight: 600;
+    font-size: 19px; line-height: 1.35;
+    letter-spacing: -0.01em; max-width: 34ch; text-wrap: balance;
+  }
+  .pull.warn { border-left-color: var(--amber); }
+
+  .note { font-size: 14.5px; color: var(--muted); }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+</style>
+
+<main class="wrap">
+  <p class="eyebrow"><a href="../index.html">pcg-ts</a> &middot; guides &middot; lanterns</p>
+  <h1 class="page-title">One number per lantern</h1>
+  <p class="lead">The <a href="../demos/lanterns/">lanterns demo</a> hangs six thousand lights over
+  a landscape. Every colour, every flicker, every bob comes from <strong>one whole number</strong>
+  that each lantern carries. This page is about that number: where it comes from, what the graphics
+  card asks of it, and what breaks when it is kept in the wrong kind of box.</p>
+
+  <div class="stage">
+    <span class="stage-tag">generated live &middot; drawn in your browser</span>
+    <span class="stage-key" id="key">&nbsp;</span>
+    <canvas id="field" width="1600" height="600" role="img"
+      aria-label="A field of small glowing lights hanging over a dark landscape, seen from above. Each light has its own colour, taken from one whole number. When the id source is switched to the float copy, almost all of the lights turn the same few colours."></canvas>
+  </div>
+  <div class="hues">
+    <canvas id="hues" width="1600" height="64" role="img"
+      aria-label="A strip of 256 cells, one for every colour a lantern could be. A cell is lit if some lantern in the field above is using it, and left dark if none is."></canvas>
+    <p class="cap"><span>every colour a lantern could be &rarr;</span><span id="huecount">&nbsp;</span></p>
+  </div>
+  <p class="controls">
+    <button class="replay" id="exact" type="button" aria-pressed="true">keep the whole number</button>
+    <button class="replay" id="widen" type="button" aria-pressed="false">squeeze it into a float</button>
+    <button class="replay" id="reseed" type="button">new field</button>
+  </p>
+
+  <!-- ══ 1. THE IDEA ═══════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">The idea</p>
+      <h2>A lantern is one number wearing a costume.</h2>
+    </div>
+    <div class="sec-body">
+      <p>Hand a lantern the number <span class="mono">3&thinsp;274&thinsp;118&thinsp;905</span> and
+      it becomes a particular shade of orange, pulsing at a particular speed, slightly out of step
+      with the lantern next to it. Hand it a different number and it becomes a different lantern.</p>
+      <p>Nothing is stored about the colour. Nothing is stored about the flicker. There is only the
+      number, and a rule for reading it — and that is a very good deal, because a number is tiny.
+      Six thousand lanterns is six thousand numbers, twenty-four kilobytes, and the graphics card
+      works out everything else while it draws.</p>
+      <p class="pull">The library never picks a colour. It picks a number, and the number picks the colour.</p>
+    </div>
+  </section>
+
+  <!-- ══ 2. THE SPLIT ══════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Two halves</p>
+      <h2>One half says <em>where</em>. The other says <em>when</em>.</h2>
+    </div>
+    <div class="sec-body">
+      <p>pcg-ts builds the field. It works out where each lantern hangs, how big it is, and which
+      number it carries — and then it stops. It has <strong>no clock at all</strong>, on purpose, so
+      nothing it produces can move. The same seed lays out exactly the same field on any machine,
+      today or next year.</p>
+      <p>The web page picks it up from there. The page owns the clock, and the page owns the little
+      program that runs on the graphics card. Between the two halves there is one wire, and the only
+      thing travelling down it is that one number per lantern.</p>
+
+      <figure>
+        <div class="plate">
+          <svg viewBox="0 0 1000 296" role="img" aria-label="Two panels joined by a single wire. The left panel, the graph, settles where each lantern hangs, how big it is, and which number it carries, and has no clock. The single wire between them carries one 32-bit whole number per lantern. The right panel, the page, turns that number into colour, brightness and bob, sixty times a second.">
+            <rect class="nb" x="20" y="44" width="330" height="216"/>
+            <text class="s-name" x="44" y="76">the graph</text>
+            <text class="s-lbl-s" x="44" y="94">cooked once &nbsp;·&nbsp; no clock</text>
+            <line class="s-hair" x1="44" y1="108" x2="326" y2="108"/>
+            <text class="s-lbl" x="44" y="136">where it hangs</text>
+            <text class="s-lbl" x="44" y="162">how big it is</text>
+            <text class="s-lbl" x="44" y="188">which number it carries</text>
+            <text class="s-lbl-s" x="44" y="222">same seed &rarr; same field,</text>
+            <text class="s-lbl-s" x="44" y="238">on every machine, for ever</text>
+
+            <text class="gl" x="500" y="120" text-anchor="middle">THE ONLY WIRE</text>
+            <path class="w" d="M354,152 H646" marker-end="url(#lar)"/>
+            <rect x="454" y="138" width="92" height="28" fill="var(--plate)"/>
+            <text class="s-ok" x="500" y="157" text-anchor="middle">seed</text>
+            <text class="s-lbl-s" x="500" y="188" text-anchor="middle">one 32-bit whole number</text>
+            <text class="s-lbl-s" x="500" y="204" text-anchor="middle">per lantern. that is all.</text>
+
+            <rect class="nb nb-out" x="650" y="44" width="330" height="216"/>
+            <text class="s-name" x="674" y="76">the page</text>
+            <text class="s-lbl-s" x="674" y="94">sixty times a second &nbsp;·&nbsp; owns the clock</text>
+            <line class="s-hair" x1="674" y1="108" x2="956" y2="108"/>
+            <text class="s-lbl" x="674" y="136">what colour it is</text>
+            <text class="s-lbl" x="674" y="162">how brightly it is lit right now</text>
+            <text class="s-lbl" x="674" y="188">how far it has bobbed</text>
+            <text class="s-lbl-s" x="674" y="222">knows nothing about where</text>
+            <text class="s-lbl-s" x="674" y="238">anything is, or why</text>
+
+            <defs>
+              <marker id="lar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                <path d="M0,1 L9,5 L0,9 z" fill="var(--muted)"/>
+              </marker>
+            </defs>
+          </svg>
+        </div>
+        <figcaption><b>The split.</b> The library ships the data, not the shader. It does emit a
+        shading language, but only compute kernels: there is nothing in pcg-ts that draws an
+        instance. That is exactly why this demo needs a web page,
+        and why the wire between the halves has to be an agreement rather than a convenience.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ══ 3. WHERE THE NUMBER COMES FROM ════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">The number</p>
+      <h2>Nobody invents it. Every point already had one.</h2>
+    </div>
+    <div class="sec-body">
+      <p>A pile of points in pcg-ts is not just positions. Every point carries a little row of named
+      values, and one of them is called <code>seed</code> — the point's <strong>name badge</strong>.
+      It is a scramble of where the point came from: which node made it, which number it was in the
+      queue, and &mdash; in a streamed world &mdash; which patch of ground it fell on. Scramble the
+      same things on another machine and you get the same badge, which is the currency the library's whole determinism claim is
+      paid in.</p>
+
+      <figure>
+        <div class="plate">
+          <svg viewBox="0 0 1000 208" role="img" aria-label="One point's row of named values: position, scale, colour, density, and seed. The seed is highlighted and holds a ten-digit whole number between zero and about four and a quarter billion.">
+            <text class="gl" x="20" y="28">ONE POINT, AND WHAT IT ALREADY CARRIES</text>
+
+            <rect class="nb" x="20" y="48" width="150" height="60"/>
+            <text class="s-name" x="36" y="74">P</text>
+            <text class="s-lbl-s" x="36" y="94">where it is</text>
+
+            <rect class="nb" x="186" y="48" width="150" height="60"/>
+            <text class="s-name" x="202" y="74">scale</text>
+            <text class="s-lbl-s" x="202" y="94">how big</text>
+
+            <rect class="nb" x="352" y="48" width="150" height="60"/>
+            <text class="s-name" x="368" y="74">color</text>
+            <text class="s-lbl-s" x="368" y="94">not used here</text>
+
+            <rect class="nb" x="518" y="48" width="150" height="60"/>
+            <text class="s-name" x="534" y="74">density</text>
+            <text class="s-lbl-s" x="534" y="94">not used here</text>
+
+            <rect class="nb nb-out" x="684" y="48" width="296" height="60"/>
+            <text class="s-ok" x="700" y="74">seed</text>
+            <text class="s-lbl-s" x="700" y="94">its name badge</text>
+            <text class="s-big" x="964" y="76" text-anchor="end">3274118905</text>
+            <text class="s-lbl-s" x="964" y="94" text-anchor="end">0 &hellip; 4 294 967 295</text>
+
+            <line class="s-hair" x1="20" y1="140" x2="980" y2="140"/>
+            <text class="s-lbl-s" x="20" y="164">The demo reads the badge and adds nothing. It could not add one even if it wanted to:</text>
+            <text class="s-lbl-s" x="20" y="180">the arithmetic that builds attributes runs in floats, and a float cannot count past</text>
+            <text class="s-lbl-s" x="20" y="196">about 16.7 million one at a time. The badge has to ARRIVE whole. That is the next section.</text>
+          </svg>
+        </div>
+        <figcaption><b>Carried, not computed.</b> <span class="mono">seed</span> is already on every
+        point cloud the library makes. The demo's only job is to get it out to the graphics card
+        with its type intact.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ══ 4. WHAT THE GRAPHICS CARD READS ═══════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Reading the badge</p>
+      <h2>Three questions, asked of three slices of the same number.</h2>
+    </div>
+    <div class="sec-body">
+      <p>A 32-bit number is thirty-two yes-or-no switches in a row. The little program on the
+      graphics card does not use it as a quantity at all — it reaches in and reads <strong>slices</strong>,
+      the way you would read a phone number as an area code and a line.</p>
+
+      <figure>
+        <div class="plate">
+          <svg viewBox="0 0 1000 268" role="img" aria-label="A ruler of the number's 32 switches. The lowest 8 are labelled colour, the next 10 when it pulses, the next 7 how fast it pulses, and the top 7 are unused.">
+            <text class="gl" x="20" y="26">THE BIG END &nbsp;·&nbsp; SWITCH 31</text>
+            <text class="gl" x="980" y="26" text-anchor="end">SWITCH 0 &nbsp;·&nbsp; THE SMALL END</text>
+
+            <rect class="bit"       x="20"  y="40" width="210" height="48"/>
+            <text class="s-lbl-s" x="125" y="70" text-anchor="middle">not used</text>
+
+            <rect class="bit-rate"  x="230" y="40" width="210" height="48"/>
+            <text class="s-lbl"   x="335" y="64" text-anchor="middle">switches 24&hellip;18</text>
+            <text class="s-lbl-s" x="335" y="80" text-anchor="middle">7 of them</text>
+
+            <rect class="bit-phase" x="440" y="40" width="300" height="48"/>
+            <text class="s-lbl"   x="590" y="64" text-anchor="middle">switches 17&hellip;8</text>
+            <text class="s-lbl-s" x="590" y="80" text-anchor="middle">10 of them</text>
+
+            <rect class="bit-hue"   x="740" y="40" width="240" height="48"/>
+            <text class="s-lbl"   x="860" y="64" text-anchor="middle">switches 7&hellip;0</text>
+            <text class="s-lbl-s" x="860" y="80" text-anchor="middle">the ones, twos and fours</text>
+
+            <line class="s-dim" x1="335" y1="94" x2="335" y2="126" marker-end="url(#dar)"/>
+            <line class="s-dim" x1="590" y1="94" x2="590" y2="126" marker-end="url(#dar)"/>
+            <line class="s-dim" x1="860" y1="94" x2="860" y2="126" marker-end="url(#dar)"/>
+
+            <text class="s-name"  x="335" y="148" text-anchor="middle">how fast it pulses</text>
+            <text class="s-lbl-s" x="335" y="164" text-anchor="middle">128 speeds</text>
+
+            <text class="s-name"  x="590" y="148" text-anchor="middle">when it pulses</text>
+            <text class="s-lbl-s" x="590" y="164" text-anchor="middle">1024 offsets, so no two beat together</text>
+
+            <text class="s-name"  x="860" y="148" text-anchor="middle">what colour it is</text>
+            <text class="s-lbl-s" x="860" y="164" text-anchor="middle">256 hues around the wheel</text>
+
+            <line class="s-hair" x1="20" y1="198" x2="980" y2="198"/>
+            <text class="s-lbl-s" x="20" y="222">Note which end is which, because everything after this follows from it.</text>
+            <text class="s-lbl-s" x="20" y="238">The COLOUR is at the small end — the ones and twos and fours.</text>
+            <text class="s-lbl-s" x="20" y="254">The SPEED is far higher up, from a quarter of a million to sixteen million.</text>
+
+            <defs>
+              <marker id="dar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M0,1 L9,5 L0,9 z" fill="var(--muted)"/>
+              </marker>
+            </defs>
+          </svg>
+        </div>
+        <figcaption><b>The three slices.</b> Chosen to make the next section legible rather than to
+        hide it: the colour sits where the damage lands first, the speed sits where it lands last.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ══ 5. THE CATCH ══════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">The catch</p>
+      <h2>A float cannot count that high one at a time.</h2>
+    </div>
+    <div class="sec-body">
+      <p>Almost every number a graphics card handles is a <strong>float</strong> — the kind that can
+      be 0.5 or 3.14. A float buys that flexibility by keeping only about seven digits' worth of
+      detail and then remembering separately how big the number is. Small numbers get counted
+      exactly. Big ones get <strong>rounded to the nearest step</strong>, and the step keeps
+      doubling as the numbers grow.</p>
+
+      <figure>
+        <div class="plate">
+          <svg viewBox="0 0 1000 250" role="img" aria-label="A line showing how far apart the whole numbers a float can hold become. Below 16.7 million it can hold every one of them. Past that the gap is 2, then 4, then 8, doubling until above 2.1 billion the nearest float is 256 apart. A lantern id landing between two of them snaps to whichever is nearer.">
+            <text class="gl" x="20" y="26">WHOLE NUMBERS A FLOAT CAN ACTUALLY HOLD</text>
+
+            <line class="s-hair" x1="20" y1="96" x2="980" y2="96"/>
+
+            <rect class="bit-hue" x="20" y="76" width="300" height="40"/>
+            <text class="s-lbl"   x="170" y="66" text-anchor="middle">up to 16 777 216</text>
+            <text class="s-ok"    x="170" y="101" text-anchor="middle">every one of them</text>
+
+            <rect class="bit" x="320" y="76" width="150" height="40"/>
+            <text class="s-lbl-s" x="395" y="66" text-anchor="middle">to 33 million</text>
+            <text class="s-lbl"   x="395" y="101" text-anchor="middle">every 2nd</text>
+
+            <rect class="bit" x="470" y="76" width="150" height="40"/>
+            <text class="s-lbl-s" x="545" y="66" text-anchor="middle">to 67 million</text>
+            <text class="s-lbl"   x="545" y="101" text-anchor="middle">every 4th</text>
+
+            <rect class="bit" x="620" y="76" width="130" height="40"/>
+            <text class="s-lbl-s" x="685" y="66" text-anchor="middle">&hellip; doubling &hellip;</text>
+            <text class="s-lbl"   x="685" y="101" text-anchor="middle">every 8th, 16th</text>
+
+            <rect class="bit-lost" x="750" y="76" width="230" height="40"/>
+            <text class="s-lbl-s" x="865" y="66" text-anchor="middle">above 2 147 483 648</text>
+            <text class="s-bad"   x="865" y="101" text-anchor="middle">every 256th</text>
+
+            <line class="s-hair" x1="20" y1="140" x2="980" y2="140" stroke-dasharray="2 4"/>
+
+            <text class="s-lbl-s" x="20" y="166">A lantern's badge is spread over that whole line, and 3 274 118 905 lands in the red.</text>
+            <text class="s-lbl-s" x="20" y="182">Store it in a float and it moves to the nearest number the float CAN hold:</text>
+
+            <text class="s-name" x="20"  y="214">3274118905</text>
+            <text class="s-lbl"  x="200" y="214">&rarr;</text>
+            <text class="s-bad"  x="240" y="214">3274118912</text>
+            <text class="s-lbl-s" x="400" y="214">seven higher. The SPEED switches are untouched &mdash;</text>
+            <text class="s-lbl-s" x="400" y="230">but the last eight, the whole COLOUR, are gone.</text>
+          </svg>
+        </div>
+        <figcaption><b>Where the damage lands.</b> Rounding always eats the small end first, and the
+        small end is exactly where the colour was kept. The speed sits far higher up, and almost always survives.</figcaption>
+      </figure>
+
+      <p class="pull">The badges are not small numbers. At the demo's default seed, 5&thinsp;894 of the 6&thinsp;000 come back from a float changed.</p>
+    </div>
+  </section>
+
+  <!-- ══ 6. THE GRAPH ══════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">How the demo shows it</p>
+      <h2>Five nodes, and the fourth one is deliberate damage.</h2>
+    </div>
+    <div class="sec-body">
+      <p>pcg-ts is a <strong>node graph</strong>: little boxes that each do one thing to a pile of
+      points, wired nose to tail. The lantern graph is five of them, and it would be four if it were
+      not trying to prove something.</p>
+
+      <figure>
+        <div class="plate">
+          <svg viewBox="0 0 1000 264" role="img" aria-label="Five nodes wired in a line: scatter lays out a flat sheet of points, lift pushes them up into hills, size varies how big each is, widen copies the badge into a float column, and spawn hands both columns to the renderer. The widen node is marked in red as deliberate damage.">
+            <text class="gl" x="20" y="26">THE WHOLE GRAPH</text>
+
+            <rect class="nb" x="20" y="52" width="168" height="56"/>
+            <text class="nt" x="34" y="74">scatter</text>
+            <text class="np" x="34" y="92">6000 points, flat</text>
+
+            <rect class="nb" x="216" y="52" width="168" height="56"/>
+            <text class="nt" x="230" y="74">lift</text>
+            <text class="np" x="230" y="92">push them into hills</text>
+
+            <rect class="nb" x="412" y="52" width="168" height="56"/>
+            <text class="nt" x="426" y="74">size</text>
+            <text class="np" x="426" y="92">vary how big</text>
+
+            <rect class="nb nb-bad" x="608" y="52" width="168" height="56"/>
+            <text class="nt" x="622" y="74">widen</text>
+            <text class="np" x="622" y="92">the badge, in a float</text>
+
+            <rect class="nb nb-out" x="804" y="52" width="176" height="56"/>
+            <text class="nt" x="818" y="74">spawn</text>
+            <text class="np" x="818" y="92">hand over both</text>
+
+            <path class="w" d="M188,80 H210" marker-end="url(#gar)"/>
+            <path class="w" d="M384,80 H406" marker-end="url(#gar)"/>
+            <path class="w" d="M580,80 H602" marker-end="url(#gar)"/>
+            <path class="w" d="M776,80 H798" marker-end="url(#gar)"/>
+
+            <line class="s-dim" x1="692" y1="112" x2="692" y2="140" marker-end="url(#gar)"/>
+            <text class="s-bad" x="692" y="160" text-anchor="middle">the only node here that is a mistake on purpose</text>
+            <text class="s-lbl-s" x="692" y="178" text-anchor="middle">it copies each badge into a second column that is made of floats,</text>
+            <text class="s-lbl-s" x="692" y="194" text-anchor="middle">which is what a renderer would do to ALL of them if it did not keep types</text>
+
+            <line class="s-hair" x1="20" y1="216" x2="980" y2="216" stroke-dasharray="2 4"/>
+            <text class="s-lbl-s" x="20" y="236">Both columns ride out on the same spawn, onto the same lanterns, in the same order.</text>
+            <text class="s-lbl-s" x="20" y="252">The picker in the demo just chooses which one the shader reads. Nothing is re-generated.</text>
+
+            <defs>
+              <marker id="gar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M0,1 L9,5 L0,9 z" fill="var(--muted)"/>
+              </marker>
+            </defs>
+          </svg>
+        </div>
+        <figcaption><b>Two columns, one order.</b> Lantern <i>k</i>'s exact badge, lantern <i>k</i>'s
+        float copy and lantern <i>k</i>'s position are the same lantern. That is what lets the page
+        draw one against the other without matching anything up.</figcaption>
+      </figure>
+
+      <div class="spine">
+        <div class="step"><span class="n">1</span><span class="t">scatter</span><span class="d">Lay 6&thinsp;000 points on a flat square. Evenly &mdash; nothing about the final shape is smuggled in here.</span></div>
+        <div class="step"><span class="n">2</span><span class="t">lift</span><span class="d">Push each point up by a noise value, plus a little hover, so the sheet becomes a <em>cloud over hills</em> rather than a surface.</span></div>
+        <div class="step"><span class="n">3</span><span class="t">size</span><span class="d">Give each lantern its own size. Size belongs to the graph: a lantern that changed size with the clock would be the page animating <em>structure</em>, which the split forbids.</span></div>
+        <div class="step pivot"><span class="n">4</span><span class="t">widen</span><span class="d">Copy the badge into a float. This is the damage, done on purpose and in one place, so it can be drawn instead of argued about.</span></div>
+        <div class="step"><span class="n">5</span><span class="t">spawn</span><span class="d">Hand the renderer the positions and <em>both</em> badge columns, by name.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 7. THE READOUT ════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">What you are looking at</p>
+      <h2>The colour is the measurement, not the decoration.</h2>
+    </div>
+    <div class="sec-body">
+      <p>Because the hue comes straight off the small end of the badge, the spread of colour in the
+      field is a <strong>readout of how much of the badge survived the trip</strong>. Switch the
+      demo's picker to the float column and the field falls in on itself. Four of the five numbers below are
+      the ones the demo's own panel prints, cooked at its default seed. The fifth is counted
+      the same way, off the same two columns:</p>
+
+      <div class="stats">
+        <div class="stat"><b>6,000</b><span>lanterns</span></div>
+        <div class="stat"><b>5,894</b><span>badges changed by the float</span></div>
+        <div class="stat"><b>&plusmn;128</b><span>worst drift</span></div>
+        <div class="stat"><b>256 &rarr; 72</b><span>colours still in use</span></div>
+        <div class="stat"><b>4,029</b><span>lanterns that end up one colour</span></div>
+      </div>
+
+      <p>Two thirds of the field lands on a single hue. Three hues take nearly nine in ten. The
+      strip at the top of this page is that collapse drawn live &mdash; and it is not a contrived
+      worst case, it is the ordinary case for a name badge. Try another seed: the numbers barely
+      move.</p>
+
+      <div class="keeps">
+        <div class="keep">
+          <p class="tick out mono">Destroyed</p>
+          <h3>The colour</h3>
+          <ul>
+            <li>Lives in the last 8 switches &mdash; the ones the rounding eats first</li>
+            <li>256 hues in use become about 70</li>
+            <li>You can see this happen. That is the point of the demo</li>
+          </ul>
+        </div>
+        <div class="keep">
+          <p class="tick in mono">Spared</p>
+          <h3>The pulse</h3>
+          <ul>
+            <li>Lives far higher up, where the rounding only reaches by carrying &mdash; 3 lanterns in 6,000</li>
+            <li>Every lantern still blinks at its own speed, out of step with its neighbours</li>
+            <li>Which is the trap</li>
+          </ul>
+        </div>
+      </div>
+
+      <p class="pull warn">It still twinkles. It is still wrong.</p>
+
+      <p>That second column is the reason this demo exists rather than a note in the docs. If the
+      page had scrambled the badge again in the shader instead of reading its switches directly, the
+      broken field would have looked <em>exactly</em> as random as the good one &mdash; different,
+      but not <strong>visibly</strong> different, which is worse. Half of a wrong answer looking
+      right is how a bug like this survives review.</p>
+      <p class="note">And in this case the same value has to come back tomorrow, on someone else's
+      machine. &ldquo;Looks right&rdquo; is not the test. The claim is about the number.</p>
+    </div>
+  </section>
+
+  <!-- ══ 8. WHAT THE HOST HAS TO DO ════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">If you are wiring this up yourself</p>
+      <h2>The type has to match at both ends, and it will not fail quietly.</h2>
+    </div>
+    <div class="sec-body">
+      <p>The library hands each named column to the renderer as an attribute of its own, keeping the
+      whole-number type. The page declares it on the other side as a whole number too, and if those
+      two disagree the graphics driver simply refuses to draw &mdash; it does not round the badge
+      for you behind your back.</p>
+      <p>The one thing worth knowing is that the two columns fail in <em>different</em> ways if a
+      graph stops producing them. A missing whole-number column is a hard stop: the page comes up
+      empty. A missing float column reads as zero in silence, and because it is only looked at on
+      the far side of the picker, the demo would look <strong>perfect</strong> until someone flipped
+      the switch. So the demo names both columns as requirements when it builds the meshes, and gets
+      told which one went missing rather than diagnosing it from whichever picture it happened to
+      draw.</p>
+      <p class="note">The demo's own source is worth reading for one more reason: the long comment
+      explaining a line that is <em>not</em> there. Common advice says to flag this kind of channel
+      as an integer for the renderer. Measured on this path, the channel is already an integer without
+      the flag, so the flag does nothing &mdash; while on a float column that same flag makes the
+      driver reject the draw. It is not dead everywhere: on a yes-or-no channel, which is stored
+      as single bytes, it is the thing that picks the integer path at all. A line that is a no-op
+      in a file people copy is worse than no line.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Next</p>
+    <h2>Where to go from here</h2>
+    <p>The demo itself is at <a href="../demos/lanterns/">demos/lanterns</a> &mdash; the picker is
+    in the panel on the left, under &ldquo;id source&rdquo;, and the panel prints most of the numbers
+    this page quotes. <a href="racetrack.html">Dressing a roadside</a> is the other guide, about a
+    demo that decides <em>what stands where</em> rather than what colour it is.
+    <a href="../architecture.html">Architecture</a> is how the library underneath is put together,
+    and the <a href="../gallery.html">corpus gallery</a> is every graph in the repository, cooked
+    and shot.</p>
+    <p><a href="../index.html">&larr; back to the landing page</a></p>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
+    <span>pcg-ts <!--pcg:version-->v0.17.0<!--/pcg:version--></span>
+    <span>MIT license</span>
+    <a href="../manual.html">user manual</a>
+    <a href="../architecture.html">architecture</a>
+    <a href="../roadmap.html">roadmap</a>
+    <a href="../gallery.html">corpus gallery</a>
+    <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>
+    <span>ESM · TypeScript strict · three.js optional</span>
+  </div>
+</footer>
+
+<!-- The twelve tracks, drawn over the page, for checking that a new
+     figure lines up with the column the prose is set in. Hidden until
+     the script below is asked for it by `?grid` or the `g` key. -->
+<div class="grid-guide" aria-hidden="true"><div class="wrap"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div></div>
+
+<script>
+(() => {
+  // `g` toggles the grid; `?grid` opens with it up. Ignored while a field
+  // has focus, for the same reason the racetrack guide ignores it.
+  const root = document.documentElement;
+  let note = null;
+  function show(on) {
+    root.classList.toggle("show-grid", on);
+    if (on && note === null) {
+      note = document.createElement("div");
+      note.className = "grid-note";
+      // MEASURED off a track, not read off the property: a custom
+      // property returns the token it was written as, so reading --track
+      // hands back the calc() rather than the px it comes to.
+      const cell = document.querySelector(".grid-guide span");
+      const track = Math.round(cell.getBoundingClientRect().width * 10) / 10;
+      const gutter = getComputedStyle(document.querySelector(".grid-guide .wrap")).columnGap;
+      note.textContent = `12 x ${track}px · gutter ${gutter} · prose 9 · g to hide`;
+      document.body.appendChild(note);
+    }
+    if (note !== null) note.style.display = on ? "" : "none";
+  }
+  if (new URLSearchParams(location.search).has("grid")) show(true);
+  addEventListener("keydown", (e) => {
+    const t = e.target;
+    const typing = t instanceof HTMLElement &&
+      (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "g" || e.key === "G") show(!root.classList.contains("show-grid"));
+  });
+})();
+</script>
+
+<script>
+/*
+  THE LIVE FIELD.
+
+  This is not a picture of the demo and it does not import pcg-ts. It is
+  the same ARITHMETIC, redone here so the collapse can be WATCHED: hash an
+  id per lantern, read the same three slices the demo's shader reads, and
+  — on the widened path — put the id through a genuine 32-bit float first.
+  `Math.fround` IS that float store, exactly. Nothing is faked and no
+  number is chosen to make the point.
+
+  IT IS DRAWN THE DEMO'S WAY ON PURPOSE. Same camera (from (0,86,168)
+  looking at (0,20,0)), same lantern silhouette, same palette, same fog
+  distances, same filmic curve — because the FIRST version of this figure
+  drew the lanterns as additive glows, and the overlapping haloes summed
+  to white exactly where the field was densest. That is a legibility bug
+  in a figure whose whole job is to show a spread of hues: it destroyed
+  the colours the same way the float does, for a completely different
+  reason, and on screen the two were indistinguishable. Solid facets,
+  painted back to front, keep every hue its own.
+
+  The strip below the field is the measurement, recounted from the ids
+  whenever the source or the seed changes. It is why the field carries
+  2000 lanterns and not 200: with too few, the exact path would not fill
+  all 256 cells either, and the strip would be lying about what it is
+  comparing.
+*/
+(function () {
+  "use strict";
+
+  var cv = document.getElementById("field");
+  var ctx = cv.getContext("2d");
+  var hv = document.getElementById("hues");
+  var hx = hv.getContext("2d");
+  var keyEl = document.getElementById("key");
+  var countEl = document.getElementById("huecount");
+  var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  var W = cv.width, H = cv.height;
+  var N = 2000;
+  var TAU = 6.2831853;
+  var EXTENT = 90;      // the graph's own half-width
+  var RELIEF = 30;      // and its own peak-to-trough
+  var FOG_NEAR = 90, FOG_FAR = 420;
+  var BG = [5, 7, 11];
+  /* The largest float below 2^32. The demo's shader clamps to it for the
+     same reason: an id in the top 128 values rounds UP to exactly 2^32,
+     and turning that back into a whole number is undefined there. */
+  var FMAX = 4294967040;
+
+  /* Deterministic RNG — the library's own house rule: no Math.random. */
+  function rng(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      var t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /* A full-range 32-bit scramble, standing in for the library's own hash.
+     What matters is only that it fills the range — which is what puts
+     almost every id out of a float's reach, the property this page is
+     about. */
+  function mix(h) {
+    h = Math.imul(h ^ (h >>> 16), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    return (h ^ (h >>> 16)) >>> 0;
+  }
+  function badge(seed, i) { return mix(mix(seed + 0x9E3779B9) ^ mix(i + 1)); }
+
+  /* The demo's palette and its tone curve, line for line. */
+  function palette(t, out) {
+    out[0] = 0.5 + 0.5 * Math.cos(TAU * (t + 0.0));
+    out[1] = 0.5 + 0.5 * Math.cos(TAU * (t + 0.33));
+    out[2] = 0.5 + 0.5 * Math.cos(TAU * (t + 0.67));
+  }
+  function filmic(x) {
+    var v = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
+    return v < 0 ? 0 : v > 1 ? 1 : v;
+  }
+
+  /* Rolling ground for the lanterns to hang along. Sines rather than real
+     fBm: this is scenery for the measurement, not a claim about the
+     demo's noise. */
+  function relief(x, z) {
+    var n = 0.55 * Math.sin(x * 0.031 + 0.6) * Math.cos(z * 0.024 - 0.4)
+          + 0.30 * Math.sin(x * 0.071 - 1.1) * Math.cos(z * 0.049 + 0.9)
+          + 0.15 * Math.sin(x * 0.133 + 2.2) * Math.cos(z * 0.101 - 1.7);
+    return (n * 0.5 + 0.5) * RELIEF;
+  }
+
+  /* The demo's camera, resolved once. Position (0,86,168), target
+     (0,20,0) — high enough to look ALONG the relief rather than through
+     it, which is the note the demo's own source leaves there. */
+  var CAM = [0, 86, 168];
+  var FWD, UPV;
+  (function () {
+    var d = [0 - CAM[0], 20 - CAM[1], 0 - CAM[2]];
+    var l = Math.hypot(d[0], d[1], d[2]);
+    FWD = [d[0] / l, d[1] / l, d[2] / l];
+    /* `right` is (1,0,0) for this pose, so `up` is right x forward. */
+    var u = [0, -FWD[2], FWD[1]];
+    var ul = Math.hypot(u[0], u[1], u[2]);
+    UPV = [u[0] / ul, u[1] / ul, u[2] / ul];
+  })();
+  /* Chosen so the near edge of the field lands at the frame edge. The
+     demo picks its focal length from a 50-degree VERTICAL field of view;
+     this canvas is far wider and far shallower than the demo's window, so
+     matching the angle would push the whole field into the middle third.
+     Matching the FRAME is the honest translation. */
+  var F = W * 0.52;
+  var CY = H * 0.30;
+
+  var state = { seed: 7, widened: false, items: [] };
+
+  function build() {
+    var r = rng(state.seed * 2654435761);
+    var items = [];
+    for (var i = 0; i < N; i++) {
+      var x = (r() * 2 - 1) * EXTENT;
+      var z = (r() * 2 - 1) * EXTENT;
+      items.push({
+        id: badge(state.seed, i),
+        x: x,
+        z: z,
+        y: relief(x, z) + r() * 9,
+        size: 0.55 + r() * 0.95
+      });
+    }
+    /* Back to front, so near lanterns paint over far ones. Depth here
+       depends only on y and z, so this order never changes. */
+    items.sort(function (a, b) {
+      return (FWD[1] * (b.y - CAM[1]) + FWD[2] * (b.z - CAM[2]))
+           - (FWD[1] * (a.y - CAM[1]) + FWD[2] * (a.z - CAM[2]));
+    });
+    state.items = items;
+    recount();
+  }
+
+  /* The id the shader actually receives, on whichever path is selected.
+     `Math.fround` IS the f32 store the `widen` node performs. */
+  function readId(id) {
+    if (!state.widened) return id;
+    return Math.min(Math.fround(id), FMAX) >>> 0;
+  }
+
+  var used = new Uint8Array(256);
+  var distinct = 0;
+  function recount() {
+    used.fill(0);
+    distinct = 0;
+    for (var i = 0; i < state.items.length; i++) {
+      var b = readId(state.items[i].id) & 255;
+      if (!used[b]) { used[b] = 1; distinct++; }
+    }
+    countEl.innerHTML = "<b>" + distinct + "</b> of 256 in use";
+    keyEl.innerHTML = N.toLocaleString() + " lanterns &nbsp;&middot;&nbsp; <b>" + distinct + "</b> colours";
+    drawHues();
+  }
+
+  var tmp = [0, 0, 0];
+  function drawHues() {
+    var cw = hv.width / 256;
+    hx.clearRect(0, 0, hv.width, hv.height);
+    for (var b = 0; b < 256; b++) {
+      if (used[b]) {
+        palette(b / 255, tmp);
+        hx.fillStyle = "rgb(" + Math.round(tmp[0] * 255) + "," +
+          Math.round(tmp[1] * 255) + "," + Math.round(tmp[2] * 255) + ")";
+      } else {
+        hx.fillStyle = "#141414";
+      }
+      hx.fillRect(b * cw, 0, Math.max(1, cw - 1), hv.height);
+    }
+  }
+
+  /* World to screen, the demo's pose with a focal length of this page's
+     choosing. */
+  function project(x, y, z, out) {
+    var vx = x - CAM[0], vy = y - CAM[1], vz = z - CAM[2];
+    var zv = FWD[1] * vy + FWD[2] * vz;
+    if (zv <= 1) return false;
+    var yv = UPV[1] * vy + UPV[2] * vz;
+    out[0] = W / 2 + F * vx / zv;
+    out[1] = CY - F * yv / zv;
+    out[2] = zv;
+    return true;
+  }
+
+  var p = [0, 0, 0], q = [0, 0, 0], col = [0, 0, 0];
+  var t0 = performance.now();
+
+  function grid() {
+    /* The demo's floor is a grid and not a surface, for the reason its
+       source gives: there is no light in the scene, so a solid plane
+       would be one flat colour pretending to be ground. */
+    ctx.lineWidth = 1;
+    for (var k = -11; k <= 11; k++) {
+      var u = k * 10;
+      ctx.strokeStyle = k === 0 ? "#1b2836" : "#101820";
+      if (project(u, 0, -110, p) && project(u, 0, 110, q)) {
+        ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke();
+      }
+      if (project(-110, 0, u, p) && project(110, 0, u, q)) {
+        ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke();
+      }
+    }
+  }
+
+  function draw() {
+    var t = reduced ? 3.4 : (performance.now() - t0) / 1000;
+
+    ctx.fillStyle = "rgb(" + BG[0] + "," + BG[1] + "," + BG[2] + ")";
+    ctx.fillRect(0, 0, W, H);
+    grid();
+
+    for (var i = 0; i < state.items.length; i++) {
+      var it = state.items[i];
+      var id = readId(it.id);
+
+      /* The same three slices the demo's shader reads, at the same
+         offsets and the same widths. */
+      var hue = (id & 0xFF) / 255;
+      var phase = ((id >>> 8) & 0x3FF) / 1023;
+      var rate = 0.45 + ((id >>> 18) & 0x7F) / 127 * 1.15;
+
+      var bob = Math.sin(t * rate * 0.5 + phase * TAU) * 1.4;
+      if (!project(it.x, it.y + bob, it.z, p)) continue;
+      if (p[0] < -30 || p[0] > W + 30 || p[1] < -30 || p[1] > H + 30) continue;
+
+      var glow = 0.22 + 0.78 * (0.5 + 0.5 * Math.sin(t * rate + phase * TAU));
+      var fog = (p[2] - FOG_NEAR) / (FOG_FAR - FOG_NEAR);
+      fog = fog < 0 ? 0 : fog > 1 ? 1 : fog;
+      fog = fog * fog * (3 - 2 * fog);                     // smoothstep
+
+      /* Half the lantern's width on screen. The body is about 1.03 across
+         and 1.98 tall before its own scale — the demo's octahedron,
+         squashed the way the demo squashes it. */
+      var wpx = 0.52 * it.size * F / p[2];
+      if (wpx < 0.45) continue;
+      var hpx = wpx * 1.92;
+
+      palette(hue, col);
+      /* Two facets, because a flat silhouette reads as a coloured dot and
+         a lit object is what makes the hue legible. */
+      for (var f = 0; f < 2; f++) {
+        var shade = f === 0 ? 0.88 : 0.40;
+        var k = shade * 0.5 + glow * 1.45;
+        var r = filmic(col[0] * k), g = filmic(col[1] * k), b = filmic(col[2] * k);
+        r = r + (BG[0] / 255 - r) * fog;
+        g = g + (BG[1] / 255 - g) * fog;
+        b = b + (BG[2] / 255 - b) * fog;
+        ctx.fillStyle = "rgb(" + Math.round(r * 255) + "," +
+          Math.round(g * 255) + "," + Math.round(b * 255) + ")";
+        ctx.beginPath();
+        ctx.moveTo(p[0], p[1] - hpx);
+        if (f === 0) ctx.lineTo(p[0] + wpx, p[1]); else ctx.lineTo(p[0] - wpx, p[1]);
+        ctx.lineTo(p[0], p[1] + hpx);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    requestAnimationFrame(draw);
+  }
+
+  var bExact = document.getElementById("exact");
+  var bWiden = document.getElementById("widen");
+
+  function setSource(widened) {
+    state.widened = widened;
+    bExact.setAttribute("aria-pressed", String(!widened));
+    bWiden.setAttribute("aria-pressed", String(widened));
+    /* No rebuild. Same ids, same lanterns, same order — exactly as in the
+       demo, where the picker moves one uniform and nothing is cooked
+       again. */
+    recount();
+  }
+
+  bExact.addEventListener("click", function () { setSource(false); });
+  bWiden.addEventListener("click", function () { setSource(true); });
+  document.getElementById("reseed").addEventListener("click", function () {
+    state.seed = (state.seed * 1664525 + 1013904223) >>> 8;
+    build();
+  });
+
+  build();
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>
