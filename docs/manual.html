@@ -3,11 +3,12 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="color-scheme" content="light dark" />
+<meta name="color-scheme" content="dark" />
 <meta name="description" content="The pcg-ts user manual: building worlds by hand, and driving the library programmatically as an agent." />
 <title>pcg-ts manual — real-time PCG for TypeScript</title>
 <link rel="icon" href="./icon.svg" type="image/svg+xml" />
 <link rel="stylesheet" href="./site.css" />
+<link rel="stylesheet" href="./chrome.css" />
 </head>
 <body>
 <style>
@@ -19,10 +20,17 @@
      of them until the two had quietly diverged in twenty places.
      `docs/guides/racetrack.html` is the shape this follows.
 
-     What is left below is what the manual ADDS: the masthead, the sticky
-     table of contents, the part banners, the callouts, the tables, the
-     definition lists and the figure frames, none of which the site
-     stylesheet has a rule for.
+     `docs/chrome.css` is the second sheet, and it is GENERATED — the
+     shared header bar and the site index (the rail, and its sticky
+     two-column shell) come from `src/docs/chrome.ts` through the two
+     marked holes below, filled by `scripts/gen-site.mjs`. The masthead
+     and the sticky table of contents this page used to draw for itself
+     are gone; what the rail cannot carry is named where it is lost, in
+     the comment on the title block.
+
+     What is left below is what the manual ADDS: the title block, the part
+     banners, the callouts, the tables, the definition lists and the figure
+     frames, none of which either shared stylesheet has a rule for.
 
      Ahead of those sit the shared rules the manual OVERRIDES, and each
      one says why it does. "The manual wanted something else" with no
@@ -31,8 +39,9 @@
      kept. Everything not in that section is now the site's version,
      deliberately.
 
-     This block sits in <body>, after the link, so a rule here beats the
-     site's on a tie without needing a heavier selector to do it. */
+     This block sits in <body>, after both links, so a rule here beats the
+     site's or the chrome's on a tie without needing a heavier selector to
+     do it. */
 
   /* ---------- overrides of shared rules ---------- */
 
@@ -64,28 +73,33 @@
      four token COLOURS were already byte-identical; only the weight is
      new. */
 
-  /* A DOCUMENTATION PAGE, NOT A PROSE PAGE. site.css sets `--page: 960px`
-     for one column of text. This page spends 232px of that on a sticky
-     table of contents and 48px on the gap after it before the prose even
-     starts, so the site's width would leave the content column 632px —
-     narrower than the code blocks and tables it has to carry. 1180 keeps
-     that column at 852. The gutter is site.css's own 24px, unchanged. */
-  .wrap { max-width: 1180px; }
+  /* THE PAGE WIDTH IS NO LONGER THIS PAGE'S TO SET. It used to override
+     `.wrap` to 1180px, because site.css's 960 minus a 232px table of
+     contents and the 48px after it left the prose 632 — narrower than the
+     code blocks and tables it has to carry. `.shell` in chrome.css is now
+     1180 with the same 24px gutter and holds the rail beside the article,
+     so that override said nothing the shared rule did not, and the only
+     `.wrap` left on the page is the footer's — which every other page
+     draws at the site's 960. Deleted rather than kept for the footer
+     alone: this page has no reason to have a wider footer than the site. */
 
-  /* Nothing on the site's own pages is wider than the wrap. Here the
+  /* Nothing on the site's own pages is wider than the shell. Here the
      tables and the code blocks scroll INSIDE their own boxes, and this is
      the guard that stops one of them that misbehaves from scrolling the
      whole document sideways instead. */
   body { overflow-x: hidden; }
 
-  /* DEEP LINKS. The table of contents addresses every h2 and h3 by id, so
-     a jumped-to heading must not land flush against the top of the
-     viewport. `scroll-padding-top` covers the scrolling box and
-     `scroll-margin-top` covers the targets; both, because the sticky
-     column makes the first one alone read a few pixels short. */
-  html { scroll-behavior: smooth; scroll-padding-top: 20px; }
+  /* DEEP LINKS. The rail addresses every h2 by id and the prose addresses
+     several h3s, and site.css sets no scroll behaviour at all, so the
+     smooth jump is this page's to declare. The OFFSET is not: chrome.css
+     ends on `:target { scroll-margin-top: 64px }`, which clears the sticky
+     header bar and beats an element selector on specificity whatever the
+     source order. The pair that used to live here — a 20px
+     `scroll-padding-top` and a 24px `scroll-margin-top` on h2/h3 — was cut
+     for the sticky TOC COLUMN this page no longer has; kept, the padding
+     would still apply and land every target 84px down instead of 64. */
+  html { scroll-behavior: smooth; }
   @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
-  h2, h3 { scroll-margin-top: 24px; }
 
   /* THE HEADING SCALE IS THIS PAGE'S OWN, and only where it has to be.
      site.css sizes headings for a landing page: its <h1> is a canvas
@@ -94,7 +108,7 @@
      prose — the sixty-three h3s are subsection breaks that need the 30px
      over them to read as breaks rather than as paragraphs in bold. The h2
      size, the h2 spacing and the heading COLOUR are site.css's, unchanged.
-     The h1 is overridden too, but it stays down in the masthead block with
+     The h1 is overridden too, but it stays down in the title block with
      the rest of that component rather than being restated here. */
   h3 { font-size: 17px; font-weight: 600; margin: 30px 0 8px; }
   /* site.css's heading group stops at h3, so h4 restates the family and
@@ -163,20 +177,43 @@
   /* Table cells live inside .tablewrap, which scrolls — keep them intact. */
   td code, th code { white-space: nowrap; }
 
-  /* ---------- masthead ---------- */
-  header.top { border-bottom: 1px solid var(--line); padding: 40px 0 26px; }
-  .kicker {
-    font-family: var(--mono); font-size: 12.5px; letter-spacing: 0.12em;
-    text-transform: uppercase; color: var(--faint); margin: 0 0 8px;
-  }
-  .kicker a { color: var(--faint); border-bottom-color: color-mix(in srgb, var(--faint) 45%, transparent); }
-  /* site.css has no h1 rule of its own — the landing page's h1 is a canvas
-     lockup — so everything but the colour is set here. The tracking is the
-     one value that has to WIN rather than fill a gap: site.css tracks its
-     heading group at -0.01em, tuned for 26px, and at 48 that reads loose.
-     Same specificity, so this block being after the link is what settles
-     it. */
-  h1 {
+  /* ---------- title block ---------- */
+  /* WHAT WAS A MASTHEAD IS NOW THE TOP OF THE ARTICLE. The chrome part of
+     it — the `pcg-ts · user manual · <version>` kicker, the rule under the
+     whole thing, and the sticky table of contents that followed it — is
+     the shared header bar and rail now, so `header.top`, `.kicker` and
+     every `nav.toc` rule went with them. (The version went with the kicker
+     and did not go missing: the bar stamps it, which is why the page is
+     down to the footer's version stamp alone rather than two of them. The
+     marker itself is not written out here — gen-site scans the file for
+     that literal and would read a mention of it as a third, unclosed
+     stamp.) The title, the subtitle and the metabar are NOT chrome: they
+     say what THIS document is, which a bar shared with every page cannot.
+     They moved into `<main>` as they were, one relativised editor link
+     aside.
+
+     WHAT THE RAIL CANNOT CARRY, stated once here rather than discovered:
+     its "On this page" group is a flat scrape of `<h2 id>`, so the three
+     parts the old contents column grouped the chapters under — Part I ·
+     By hand, Part II · By machine, Reference — are gone from the
+     navigation, as are the chapter NUMBERS, which live in each chapter's
+     `.eyebrow` rather than in its heading. The two part banners still
+     carry an h2 each, so "Building a world by hand" and "Driving the
+     library as an agent" still appear in the rail, in place, and are the
+     only thing left marking the halves. */
+
+  /* THE TITLE IS THE SITE'S `.page-title`, DELIBERATELY BIGGER. Carrying
+     the shared class keeps the markup comparable with the other pages
+     (architecture, roadmap and the guides all lead with one); the size is
+     where this page differs on purpose. site.css draws `.page-title` at
+     30px for a page that is one section of the site — this is the site's
+     longest document, sixteen chapters of it, and its title is the one
+     place it says so. `h1.page-title` wins on specificity rather than on
+     source order, so the shared rule cannot take the size back by being
+     moved. The tracking is the one value that has to win rather than fill
+     a gap: site.css tracks its heading group at -0.01em, tuned for 26px,
+     and at 48 that reads loose. */
+  h1.page-title {
     font-size: clamp(32px, 5.4vw, 48px); font-weight: 700;
     letter-spacing: -0.03em; margin: 0; line-height: 1.08;
   }
@@ -192,32 +229,12 @@
   }
   .metabar .install::before { content: "$ "; color: var(--faint); }
 
-  /* ---------- layout: sidebar + content ---------- */
-  .layout { display: block; }
-  @media (min-width: 1000px) {
-    .layout { display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 48px; align-items: start; }
-    nav.toc { position: sticky; top: 20px; max-height: calc(100vh - 40px); overflow-y: auto; }
-  }
-  nav.toc {
-    padding: 34px 0 10px;
-    font-size: 13.5px;
-  }
-  nav.toc h2 { font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); margin-bottom: 12px; }
-  nav.toc ol { list-style: none; margin: 0 0 18px; padding: 0; }
-  nav.toc li { margin: 0; }
-  nav.toc a {
-    display: block; padding: 4px 0 4px 10px;
-    border-bottom: none; border-left: 2px solid var(--line);
-    color: var(--muted); line-height: 1.4;
-  }
-  nav.toc a:hover, nav.toc a:focus-visible { color: var(--accent-ink); border-left-color: var(--accent); }
-  nav.toc .part {
-    font-family: var(--mono); font-size: 11.5px; font-weight: 600;
-    letter-spacing: 0.12em; text-transform: uppercase;
-    color: var(--accent-ink); margin: 20px 0 8px; padding-left: 10px;
-  }
-  nav.toc .part:first-child { margin-top: 0; }
-
+  /* ---------- the article column ---------- */
+  /* The two-column layout is chrome.css's `.shell` now, and the column
+     itself is `.shell > main`, which sets the space ABOVE the article and
+     nothing below it. This is the space below: the last chapter ends on a
+     section's own 20px and the footer rule would otherwise sit close
+     against it. */
   main { padding-bottom: 20px; }
 
   /* ---------- part banners ---------- */
@@ -340,56 +357,123 @@
   }
 </style>
 
-<header class="top">
-  <div class="wrap">
-    <p class="kicker"><a href="./index.html">pcg-ts</a> · user manual · <!--pcg:version-->v0.17.0<!--/pcg:version--></p>
-    <h1>The pcg<span class="dot">-</span>ts manual</h1>
-    <p class="subtitle">How to build worlds with a deterministic node-graph PCG library — by hand, and by machine.</p>
-    <div class="metabar">
-      <span class="install">npm install pcg-ts</span>
-      <span>MIT · ESM · TypeScript strict</span>
-      <span>zero required dependencies</span>
-      <a href="https://c4rl05.github.io/pcg-ts/editor/">open the editor</a>
-      <a href="https://github.com/C4RL05/pcg-ts">source on GitHub</a>
+<!--
+  THE SHARED CHROME GOES IN THE TWO HOLES BELOW, and it is GENERATED:
+  `src/docs/chrome.ts` holds the model, `scripts/gen-site.mjs` fills the
+  markers, `docs/chrome.css` is written out beside it. Do not write chrome
+  markup between the markers by hand — `npm run docs` rewrites it, and CI
+  diffs `docs` afterwards. The rail's "On this page" group is scraped from
+  this page's `<h2 id>`, so every h2 in `<main>` carries the id its section
+  used to; renaming one breaks an inbound link and drops it from the rail.
+-->
+
+<!--pcg:chrome-header-->
+<header class="sitehdr">
+  <div class="sitehdr-row">
+    <a class="sitehdr-home" href="./index.html" aria-label="pcg-ts — home"><svg class="sitehdr-mark" viewBox="0 0 1055 128" aria-hidden="true" focusable="false"><g fill-rule="nonzero" transform="translate(-9.14,127.96)"><path d="M147.76,-95.97L147.76,-127.96L9.14,-127.96L9.14,-95.97L147.76,-95.97ZM147.762,-95.97L147.762,-63.98L41.13,-63.98L9.14,-31.99L9.14,0L41.13,0L41.13,-31.99L147.762,-31.99L179.752,-63.98L179.752,-95.97L147.762,-95.97Z"/><path d="M368.768,-95.97L368.768,-127.96L230.145,-127.96L198.155,-95.97L198.155,-31.99L230.139,-31.99L230.139,0L368.768,0L368.768,-31.99L230.145,-31.99L230.145,-95.97L368.768,-95.97Z"/><path d="M557.783,-95.97L557.783,-127.96L419.16,-127.96L387.17,-95.97L387.17,-31.99L419.16,-31.99L419.16,-95.97L557.783,-95.97ZM478.925,0L510.917,-31.99L525.793,-31.99L525.793,0L557.783,0L557.783,-63.98L497.696,-63.98L465.706,-31.99L419.16,-31.99L419.16,0L478.925,0Z"/><rect x="576.186" y="-63.98" width="127.96" height="31.99"/><g transform="translate(-18.4628,0)"><path d="M823.908,0L823.908,-95.97L791.918,-95.97L791.918,0L823.908,0ZM893.218,-95.97L893.218,-127.96L823.911,-127.96L823.911,-95.97L893.218,-95.97ZM791.912,-95.97L791.912,-127.96L722.608,-127.96L722.608,-95.97L791.912,-95.97Z"/></g><g transform="translate(884.017944,0)"><path d="M41.13,-95.97L147.762,-95.97L147.762,-127.96L41.13,-127.96L9.14,-95.97L9.14,-63.98L179.752,0L179.752,-34.149L41.13,-86.156L41.13,-95.97ZM41.13,0L41.13,-31.99L9.14,-31.99L9.14,0L41.13,0ZM179.755,-63.986L179.755,-95.97L147.765,-95.97L147.765,-63.986L179.755,-63.986Z"/></g></g></svg></a>
+    <nav class="sitehdr-crumb" aria-label="Breadcrumb"><span class="sep">/</span><span>Docs</span><span class="sep">/</span><span aria-current="page">User manual</span></nav>
+    <nav class="sitehdr-sections" aria-label="Sections">
+      <a href="./manual.html" class="here" aria-current="true">Docs</a>
+      <a href="./guides/racetrack.html">Guides</a>
+      <a href="./demos/infinite-world/">Demos</a>
+      <a href="./gallery.html">Reference</a>
+      <a href="./editor/">Tool</a>
+    </nav>
+    <div class="sitehdr-meta">
+      <span class="sitehdr-ver">v0.17.0</span>
+      <a href="https://www.npmjs.com/package/pcg-ts">npm</a>
+      <a href="https://github.com/C4RL05/pcg-ts" aria-label="Source on GitHub"><svg class="sitehdr-gh" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg></a>
     </div>
   </div>
 </header>
+<!--/pcg:chrome-header-->
 
-<div class="wrap layout">
-
-<nav class="toc" aria-label="Table of contents">
-  <h2>Contents</h2>
-  <p class="part">Part I · By hand</p>
-  <ol>
-    <li><a href="#install">1 · Install and first cook</a></li>
-    <li><a href="#model">2 · The mental model</a></li>
-    <li><a href="#three">3 · three.js interop</a></li>
-    <li><a href="#examples">4 · The examples tour</a></li>
-    <li><a href="#editor">5 · Authoring in the editor</a></li>
-    <li><a href="#gpu">6 · GPU cooking</a></li>
-    <li><a href="#debugging">7 · Debugging</a></li>
-  </ol>
-  <p class="part">Part II · By machine</p>
-  <ol>
-    <li><a href="#discovery">8 · Capability discovery</a></li>
-    <li><a href="#json">9 · Graphs as JSON</a></li>
-    <li><a href="#grammar">10 · The field grammar</a></li>
-    <li><a href="#errors">11 · Errors as an API</a></li>
-    <li><a href="#introspection">12 · Introspection &amp; mutation</a></li>
-    <li><a href="#contract">13 · Determinism as a contract</a></li>
-    <li><a href="#loop">14 · A worked agent loop</a></li>
-  </ol>
-  <p class="part">Reference</p>
-  <ol>
-    <li><a href="#reference">Where to look next</a></li>
-  </ol>
+<div class="shell">
+<!--pcg:chrome-rail-->
+<nav class="rail" aria-label="Site index">
+  <div class="rail-grp">
+    <h2>Docs</h2>
+    <ul>
+      <li><a href="./manual.html" class="here" aria-current="page">User manual</a></li>
+      <li><a href="./architecture.html">Architecture</a></li>
+      <li><a href="./roadmap.html">Roadmap</a></li>
+    </ul>
+  </div>
+  <div class="rail-grp">
+    <h2>Guides</h2>
+    <ul>
+      <li><a href="./guides/racetrack.html">Dressing a roadside</a></li>
+      <li><a href="./guides/lanterns.html">One number per lantern</a></li>
+    </ul>
+  </div>
+  <div class="rail-grp">
+    <h2>Demos</h2>
+    <ul>
+      <li><a href="./demos/infinite-world/">Infinite world</a></li>
+      <li><a href="./demos/galaxy/">Galaxy</a></li>
+      <li><a href="./demos/gpu-world/">GPU world</a></li>
+      <li><a href="./demos/racetrack/">Racetrack</a></li>
+      <li><a href="./demos/road/">Road</a></li>
+      <li><a href="./demos/lanterns/">Lanterns</a></li>
+    </ul>
+  </div>
+  <div class="rail-grp">
+    <h2>Reference</h2>
+    <ul>
+      <li><a href="./gallery.html">Corpus gallery</a></li>
+      <li><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">Node reference<span class="md">md</span></a></li>
+      <li><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.md">Primitives<span class="md">md</span></a></li>
+      <li><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/graphs.md">Graph corpus<span class="md">md</span></a></li>
+      <li><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">Authoring &amp; parity<span class="md">md</span></a></li>
+      <li><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/design.md">Design notes<span class="md">md</span></a></li>
+    </ul>
+  </div>
+  <div class="rail-grp">
+    <h2>Tool</h2>
+    <ul>
+      <li><a href="./editor/">Editor</a></li>
+    </ul>
+  </div>
+  <div class="rail-grp rail-toc">
+    <h2>On this page</h2>
+    <ul>
+      <li><a href="#intro">What this manual is</a></li>
+      <li><a href="#part-1">Building a world by hand</a></li>
+      <li><a href="#install">Install and the first cook</a></li>
+      <li><a href="#model">The mental model</a></li>
+      <li><a href="#three">three.js interop</a></li>
+      <li><a href="#examples">The examples tour</a></li>
+      <li><a href="#editor">Using the graph editor as an authoring tool</a></li>
+      <li><a href="#gpu">GPU cooking</a></li>
+      <li><a href="#debugging">Debugging a graph</a></li>
+      <li><a href="#part-2">Driving the library as an agent</a></li>
+      <li><a href="#discovery">Runtime capability discovery</a></li>
+      <li><a href="#json">Authoring graphs as JSON, end to end</a></li>
+      <li><a href="#grammar">The field grammar as a generation target</a></li>
+      <li><a href="#errors">Errors as an API</a></li>
+      <li><a href="#introspection">Introspection and mutation for closed-loop editing</a></li>
+      <li><a href="#contract">Determinism as a contract</a></li>
+      <li><a href="#loop">A worked end-to-end agent loop</a></li>
+      <li><a href="#reference">Where to look next</a></li>
+    </ul>
+  </div>
 </nav>
-
+<!--/pcg:chrome-rail-->
 <main>
 
-  <section id="intro">
+  <h1 class="page-title">The pcg<span class="dot">-</span>ts manual</h1>
+  <p class="subtitle">How to build worlds with a deterministic node-graph PCG library — by hand, and by machine.</p>
+  <div class="metabar">
+    <span class="install">npm install pcg-ts</span>
+    <span>MIT · ESM · TypeScript strict</span>
+    <span>zero required dependencies</span>
+    <a href="./editor/">open the editor</a>
+    <a href="https://github.com/C4RL05/pcg-ts">source on GitHub</a>
+  </div>
+
+  <section>
     <p class="eyebrow">Orientation</p>
-    <h2>What this manual is</h2>
+    <h2 id="intro">What this manual is</h2>
     <p class="lead">pcg-ts turns <strong>seeded node graphs</strong> into content: scattered points, filtered sets, instanced geometry, streamed worlds. It runs in the browser and in Node, has no required dependencies, and is deterministic by construction — the same graph and the same seed produce byte-identical output across runs, platforms, cook orders, and streaming paths.</p>
     <p>The manual has two genuine halves, and they are meant to be read separately. <strong>Part I</strong> is for a person building a world: install, the mental model, the renderer adapter, a tour of the editor and the three live demos, authoring in the editor, the GPU path, and how to debug a graph that is not doing what you meant. <strong>Part II</strong> is for an LLM or agent driving the library programmatically: discovering what exists at runtime, emitting graphs as JSON, treating error strings as an API, and closing the loop with introspection and mutation.</p>
     <p>Every API name, signature, parameter and code sample below was executed against the published build before it was written down. Numbers quoted from a run (survivor counts, cook stats, hashes, error strings) are real output, not illustrations — with the exception of wall-clock timings, which vary by machine.</p>
@@ -399,15 +483,15 @@
     </div>
   </section>
 
-  <div class="part-banner" id="part-1">
+  <div class="part-banner">
     <p class="num">Part I</p>
-    <h2>Building a world by hand</h2>
+    <h2 id="part-1">Building a world by hand</h2>
     <p>For the person holding the mouse: from an empty file to a streaming world on screen.</p>
   </div>
 
-  <section id="install" class="first-of-part">
+  <section class="first-of-part">
     <p class="eyebrow">Chapter 1</p>
-    <h2>Install and the first cook</h2>
+    <h2 id="install">Install and the first cook</h2>
     <p>The core package has zero dependencies. The renderer adapter needs three.js as an optional peer dependency; the WebGPU path needs nothing extra in a browser, and Dawn bindings in Node.</p>
 
     <div class="codeblock"><pre><code><span class="c"># the library</span>
@@ -463,9 +547,9 @@ console.<span class="n">log</span>(result.stats);</code></pre></div>
     <p>Two details worth internalising immediately. First, the second argument to <code>graph.add</code> is a partial parameter object — anything you omit takes its schema default, and the defaults are published in the registry, not hidden in the source. Second, <code>result.outputs.points</code> is a <em>collection</em> of data items, not a single geometry: <code>firstGeometry</code> is the convenience accessor for the common case where you know there is exactly one. That "exactly one" is load-bearing inside the graph too — a node that processes a single geometry <em>errors</em> when a pin hands it several (as <code>partitionByAttribute</code> and a multi-item subgraph both can), rather than quietly taking the first and discarding the rest. The error names the three ways out; <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">docs/authoring.md</a> ("One pin, many geometries") works through them.</p>
   </section>
 
-  <section id="model">
+  <section>
     <p class="eyebrow">Chapter 2</p>
-    <h2>The mental model</h2>
+    <h2 id="model">The mental model</h2>
     <p class="lead">Five ideas carry the whole library. If you hold these, the rest of the API reads as consequences rather than vocabulary.</p>
 
     <h3>2.1 · Domains and attributes</h3>
@@ -633,9 +717,9 @@ batch.colors           <span class="c">// undefined — no colorAttr was named</
     <p>One cook may spawn at most <strong>1 048 576 instances</strong>, one per input point — 64 MiB of transforms — checked before anything is allocated, so a density typo comes back as a diagnostic naming the count and the fix rather than an allocation failure. The ceiling is per <em>cook</em>, never per world. A limit on instances <em>alive</em> would depend on which cells happened to be resident, so the same world would fail or not depending on the order it streamed in — exactly the order-dependence chapter 13's determinism contract forbids. A streamed <code>World</code> may hold many times the budget across its live cells, and that is correct.</p>
   </section>
 
-  <section id="three">
+  <section>
     <p class="eyebrow">Chapter 3</p>
-    <h2>three.js interop</h2>
+    <h2 id="three">three.js interop</h2>
     <p><code>pcg-ts/three</code> is the only module that imports three.js, which is an optional peer dependency — a guard test enforces that the core never reaches for it. The adapter is small on purpose: a handful of conversion helpers, the two instancing entry points (<code>toInstancedMeshes</code> and its device counterpart <code>toDeviceInstanceObjects</code>) with <code>ownsGeometry</code> as half of the first one's disposal contract, the WebGPU adapter factory and its seam guard, and one binding class — covering the two directions data actually flows. The table below lists the ones you reach for; <code>src/three/index.ts</code> is the full surface.</p>
 
     <div class="tablewrap">
@@ -681,11 +765,11 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
     <p>For a streaming world, <code>WorldThreeBinding</code> removes the bookkeeping entirely: hand its <code>cellReady</code> and <code>cellEvicted</code> methods to the <code>World</code>'s <code>onCellReady</code> / <code>onCellEvicted</code> callbacks and it maintains one group per live cell, adding and disposing meshes as cells come and go.</p>
   </section>
 
-  <section id="examples">
+  <section>
     <p class="eyebrow">Chapter 4</p>
-    <h2>The examples tour</h2>
-    <p class="lead">Six demos ship in <code>demos/</code> and the editor in <code>editor/</code>, each a real cook of a real graph rather than a recording. Every screenshot below was captured from the running demo. Run them all locally with <code>npm run examples</code>, or click through to the hosted build. The tour stops at three of the six; the other three are <a href="https://c4rl05.github.io/pcg-ts/demos/racetrack/">racetrack</a> and <a href="https://c4rl05.github.io/pcg-ts/demos/road/">road</a>, which have <a href="./guides/racetrack.html">a guide of their own</a>, and <a href="https://c4rl05.github.io/pcg-ts/demos/lanterns/">lanterns</a>, which has <a href="./guides/lanterns.html">a guide of its own</a> and is the worked example behind <a href="#ex-04">the per-instance channel note below</a>.</p>
-    <p>Each one needs a host to exist — a streamed world, a renderer that draws from device buffers, a rig whose topology is a function of its params, a material to read a per-instance channel with. The recipes that were only a graph are not demos any more: they are files in <code>graphs/</code>, opened and edited in the editor. The scatter is <a href="https://c4rl05.github.io/pcg-ts/editor/?graph=basics-compose-primitives">basics-compose-primitives</a>, the fence is <a href="https://c4rl05.github.io/pcg-ts/editor/?graph=basics-props-along-a-path">basics-props-along-a-path</a>, the field playground is <a href="https://c4rl05.github.io/pcg-ts/editor/?graph=basics-attribute-from-noise">basics-attribute-from-noise</a>, the forest is <a href="https://c4rl05.github.io/pcg-ts/editor/?graph=examples-forest">examples-forest</a> — the same recipe, now tunable, because its terrain comes from a primitive instead of host code — the three-way GPU comparison that had its own page is <a href="https://c4rl05.github.io/pcg-ts/editor/?graph=examples-gpu-fields">examples-gpu-fields</a>, since what that demo varied was never the graph, and the rig is <a href="https://c4rl05.github.io/pcg-ts/editor/?graph=examples-rig">examples-rig</a> — the last one to move, because until <code>forEach</code> its cable branch needed one hand-built node pair per cable and its node count was a param.</p>
+    <h2 id="examples">The examples tour</h2>
+    <p class="lead">Six demos ship in <code>demos/</code> and the editor in <code>editor/</code>, each a real cook of a real graph rather than a recording. Every screenshot below was captured from the running demo. Run them all locally with <code>npm run examples</code>, or click through to the hosted build. The tour stops at three of the six; the other three are <a href="./demos/racetrack/">racetrack</a> and <a href="./demos/road/">road</a>, which have <a href="./guides/racetrack.html">a guide of their own</a>, and <a href="./demos/lanterns/">lanterns</a>, which has <a href="./guides/lanterns.html">a guide of its own</a> and is the worked example behind <a href="#ex-04">the per-instance channel note below</a>.</p>
+    <p>Each one needs a host to exist — a streamed world, a renderer that draws from device buffers, a rig whose topology is a function of its params, a material to read a per-instance channel with. The recipes that were only a graph are not demos any more: they are files in <code>graphs/</code>, opened and edited in the editor. The scatter is <a href="./editor/?graph=basics-compose-primitives">basics-compose-primitives</a>, the fence is <a href="./editor/?graph=basics-props-along-a-path">basics-props-along-a-path</a>, the field playground is <a href="./editor/?graph=basics-attribute-from-noise">basics-attribute-from-noise</a>, the forest is <a href="./editor/?graph=examples-forest">examples-forest</a> — the same recipe, now tunable, because its terrain comes from a primitive instead of host code — the three-way GPU comparison that had its own page is <a href="./editor/?graph=examples-gpu-fields">examples-gpu-fields</a>, since what that demo varied was never the graph, and the rig is <a href="./editor/?graph=examples-rig">examples-rig</a> — the last one to move, because until <code>forEach</code> its cable branch needed one hand-built node pair per cable and its node count was a param.</p>
 
     <h3 id="ex-01">Editor — the registry as a user interface</h3>
     <figure>
@@ -722,8 +806,8 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
       <span class="chip">serializeGraph · deserializeGraph · fieldFromJson · fieldToJson</span>
       <span class="chip">mutation API: add · connect · disconnect · removeNode</span>
       <span class="chip">gpu: GpuFieldEvaluator · CookOptions.gpu · CookStats.gpu</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/editor/">run it →</a>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/editor/?graph=examples-gpu-fields">the fusable chain →</a>
+      <a class="chip" href="./editor/">run it →</a>
+      <a class="chip" href="./editor/?graph=examples-gpu-fields">the fusable chain →</a>
     </p>
 
     <h3 id="ex-02">Infinite world — hierarchical streaming</h3>
@@ -743,7 +827,7 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
       <span class="chip">pointNeighborhood · setAttribute · filterByDensity · spawnInstances</span>
       <span class="chip">gpu: GpuFieldEvaluator · acceptDerivedSpecs · CookStats.gpu</span>
       <span class="chip">three: WorldThreeBinding</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/demos/infinite-world/">run it →</a>
+      <a class="chip" href="./demos/infinite-world/">run it →</a>
     </p>
 
     <h3 id="ex-03">Galaxy — determinism at scale</h3>
@@ -758,7 +842,7 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
       <span class="chip">World · unbounded + bounded levels · per-cell seeding</span>
       <span class="chip">fields: atan2 · ramp · length · cos · clamp · gt · component · simplexNoise</span>
       <span class="chip">Pcg32 · hashCombine · transformPoints</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/demos/galaxy/">run it →</a>
+      <a class="chip" href="./demos/galaxy/">run it →</a>
     </p>
 
     <h3 id="ex-04">GPU world — matrices that never reach the CPU</h3>
@@ -777,13 +861,13 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
     <div class="note">
       <span class="tag">What that limit is not</span>
       <p>The sentence above is about <strong>producing</strong> channels on the GPU device, and it is regularly misread as two other things it does not say. <strong>Rendering a custom channel under a <code>WebGPURenderer</code> is supported</strong>: the CPU batch carries every channel, and <code>toInstancedMeshes</code> binds each one as an <code>InstancedBufferAttribute</code> of its own name, with the column's dtype and derived item size intact. That function imports only <code>three</code> and branches on nothing renderer-shaped, so a WebGPU material reads the attribute exactly as a WebGL one does — it is the supported route for per-instance data in your shaders. The library ships the data and not the shader: nothing in it imports <code>three/tsl</code> or writes a material, and <code>normalized</code>/<code>gpuType</code> are left at three's defaults, so declaring the attribute (a TSL <code>attribute()</code> node, a <code>ShaderMaterial</code>, an <code>onBeforeCompile</code> patch) is yours to do. Only the <em>device-resident</em> adapter is narrower — it binds just the instance matrix and the reserved colour, and refuses a hand-built device batch carrying anything else rather than drawing without it. The cost to budget for is ownership, not throughput: an <code>InstancedBufferAttribute</code> lives on the geometry, so every batch carrying a named channel gets its own <strong>geometry clone</strong> — flagged by <code>ownsGeometry(mesh)</code> and yours to dispose with the mesh. Colour alone does not clone, since <code>instanceColor</code> hangs on the mesh instead.</p>
-      <p><strong>Do not set <code>gpuType</code> on an integer channel.</strong> The advice going around — and two earlier versions of this claim in <code>docs/authoring.md</code> — says to, on the grounds that three defaults an attribute to <code>FloatType</code>. Measured instead, on a real draw call with a pixel readback (<code>tests/instanceChannelRender.test.ts</code>, in a browser — the u32 case under both renderers, the f32-column one under WebGL): a <code>Uint32Array</code> channel arrives <em>exact</em> with the flag untouched. <code>WebGLAttributes</code> maps it to <code>gl.UNSIGNED_INT</code>, and <code>WebGLBindingStates</code> chooses the integer pointer call as <code>type === gl.INT || type === gl.UNSIGNED_INT || gpuType === IntType</code> — the flag is the third disjunct, short-circuited before it is ever read — and the same ids come back byte for byte identical with it set and unset. It <em>is</em> load-bearing for an integer array narrower than 32 bits — <code>Uint8Array</code>, which is how a <code>bool</code> channel is stored, among them: <code>gl.UNSIGNED_BYTE</code> fails both type tests, so without the flag the pointer call succeeds and the <em>draw</em> fails, and such a channel wants declaring <code>in uint</code> rather than <code>in int</code>. And it is actively harmful on a <code>Float32Array</code>, where it makes three call <code>vertexAttribIPointer</code> with <code>gl.FLOAT</code> — not an accepted type there — and the driver answers <code>INVALID_ENUM</code> at the pointer call, which then does nothing. (Those last two are read out of three’s source and the WebGL2 rules; nothing in this repo binds them, so unlike the measured claims above they are not proven here — and note that three’s own JSDoc denies the second, calling <code>gpuType</code> “not configurable for float arrays” where the code has no such guard.) Nor does a mismatched shader declaration round quietly: a u32 channel declared <code>in float</code> gets the draw rejected loudly — a GL error, or no fragment at all, rather than a quietly wrong number, which is the pair the test pins rather than a code. The 2^24 collision is real, but it belongs to an <strong>f32 column</strong> and not to a missing flag — the same four ids carried through one read back <code>[0, 0, 80, 160]</code>, two of them collapsed into one. That is what preserving the dtype across the spawner is for, and <a href="https://c4rl05.github.io/pcg-ts/demos/lanterns/">lanterns</a> draws both columns of the same ids side by side.</p>
+      <p><strong>Do not set <code>gpuType</code> on an integer channel.</strong> The advice going around — and two earlier versions of this claim in <code>docs/authoring.md</code> — says to, on the grounds that three defaults an attribute to <code>FloatType</code>. Measured instead, on a real draw call with a pixel readback (<code>tests/instanceChannelRender.test.ts</code>, in a browser — the u32 case under both renderers, the f32-column one under WebGL): a <code>Uint32Array</code> channel arrives <em>exact</em> with the flag untouched. <code>WebGLAttributes</code> maps it to <code>gl.UNSIGNED_INT</code>, and <code>WebGLBindingStates</code> chooses the integer pointer call as <code>type === gl.INT || type === gl.UNSIGNED_INT || gpuType === IntType</code> — the flag is the third disjunct, short-circuited before it is ever read — and the same ids come back byte for byte identical with it set and unset. It <em>is</em> load-bearing for an integer array narrower than 32 bits — <code>Uint8Array</code>, which is how a <code>bool</code> channel is stored, among them: <code>gl.UNSIGNED_BYTE</code> fails both type tests, so without the flag the pointer call succeeds and the <em>draw</em> fails, and such a channel wants declaring <code>in uint</code> rather than <code>in int</code>. And it is actively harmful on a <code>Float32Array</code>, where it makes three call <code>vertexAttribIPointer</code> with <code>gl.FLOAT</code> — not an accepted type there — and the driver answers <code>INVALID_ENUM</code> at the pointer call, which then does nothing. (Those last two are read out of three’s source and the WebGL2 rules; nothing in this repo binds them, so unlike the measured claims above they are not proven here — and note that three’s own JSDoc denies the second, calling <code>gpuType</code> “not configurable for float arrays” where the code has no such guard.) Nor does a mismatched shader declaration round quietly: a u32 channel declared <code>in float</code> gets the draw rejected loudly — a GL error, or no fragment at all, rather than a quietly wrong number, which is the pair the test pins rather than a code. The 2^24 collision is real, but it belongs to an <strong>f32 column</strong> and not to a missing flag — the same four ids carried through one read back <code>[0, 0, 80, 160]</code>, two of them collapsed into one. That is what preserving the dtype across the spawner is for, and <a href="./demos/lanterns/">lanterns</a> draws both columns of the same ids side by side.</p>
       <p><strong>And a CPU cook is not necessarily a main-thread cook.</strong> <code>pcg-ts/worker</code> cooks off-thread, and the encoded batch carries every named channel — colour among them, since <code>colors</code> is an accessor over the reserved entry rather than a second buffer. Every column rides the structured-clone <em>transfer list</em>, so the batch arrives on the main thread as buffer ownership rather than as a copy; the worker pays one slice per column on its own thread, because a cook's arrays alias live memo caches and must not be detached. A spawn that loses the device path therefore need not cost you a frame.</p>
     </div>
     <p class="demo-links">
       <span class="chip">three: createWebGpuInstanceAdapter · WorldThreeBinding · DeviceInstanceAdapter</span>
       <span class="chip">gpu: GpuFieldEvaluator · deviceInstances · deviceTransformsBuffer</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/demos/gpu-world/">run it →</a>
+      <a class="chip" href="./demos/gpu-world/">run it →</a>
     </p>
 
     <h3 id="ex-rig">The rig — the curve vocabulary, end to end</h3>
@@ -801,14 +885,14 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
       <span class="chip">nodes: pathSegments · writeCurveFrame · pathPointAt · orientAlongVector · connectPoints</span>
       <span class="chip">primitives: place/radial-on-curve · transform/gather-on-path · write/curve-frame</span>
       <span class="chip">forEach: one body per cable, seeded on its carrier</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/editor/?graph=examples-rig">open it →</a>
+      <a class="chip" href="./editor/?graph=examples-rig">open it →</a>
     </p>
   </section>
 
-  <section id="editor">
+  <section>
     <p class="eyebrow">Chapter 5</p>
-    <h2>Using the graph editor as an authoring tool</h2>
-    <p class="lead">The editor is a <strong>tool, not a demo</strong>: it opens any graph in <code>graphs/</code> and edits it live, and what it exports is the same JSON your application loads. <a href="https://c4rl05.github.io/pcg-ts/editor/">Open it hosted</a> — it takes <code>?graph=&lt;name&gt;</code> — or run it locally with <code>npm run examples</code>. It carried a <code>01-</code> prefix once, which is exactly what made it read as the first demo.</p>
+    <h2 id="editor">Using the graph editor as an authoring tool</h2>
+    <p class="lead">The editor is a <strong>tool, not a demo</strong>: it opens any graph in <code>graphs/</code> and edits it live, and what it exports is the same JSON your application loads. <a href="./editor/">Open it hosted</a> — it takes <code>?graph=&lt;name&gt;</code> — or run it locally with <code>npm run examples</code>. It carried a <code>01-</code> prefix once, which is exactly what made it read as the first demo.</p>
     <p>Everything <a href="#ex-01">chapter 4</a> says about it being built on the public API this manual documents is also the reason it is worth authoring in: there is no second implementation of anything here, so a graph that behaves in the editor behaves in your application.</p>
 
     <h3 id="editor-screen">What is on screen</h3>
@@ -866,9 +950,9 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
     <p>The canvas itself pans with the right button and zooms on the wheel; a graph opens at 100% whenever it fits there and fitted otherwise.</p>
   </section>
 
-  <section id="gpu">
+  <section>
     <p class="eyebrow">Chapter 6</p>
-    <h2>GPU cooking</h2>
+    <h2 id="gpu">GPU cooking</h2>
     <p class="lead">The GPU path is opt-in, additive, and honest about being an approximation. Nothing changes unless you pass a resolver into <code>cook</code>.</p>
 
     <h3>Turning it on</h3>
@@ -915,9 +999,9 @@ console.<span class="n">log</span>(result.stats.gpu);
     </div>
   </section>
 
-  <section id="debugging">
+  <section>
     <p class="eyebrow">Chapter 7</p>
-    <h2>Debugging a graph</h2>
+    <h2 id="debugging">Debugging a graph</h2>
 
     <h3>Cook stats are the first thing to read</h3>
     <p>Every cook returns <code>stats: { cooked, cached, elapsedMs }</code>, and the ratio answers most "why is this slow" questions immediately. A graph that recooks everything on every frame has a cache-invalidation problem, not a performance problem. Common causes, in rough order of frequency: a parameter is being set to a freshly constructed array or field every frame, so its structural hash changes; a <code>dataInput</code> node is being rebound with a new items array when the data has not changed; or a field is being rebuilt from JSON per frame instead of once.</p>
@@ -949,15 +1033,15 @@ graph.<span class="n">setParam</span>(density, <span class="s">"value"</span>, <
     </ul>
   </section>
 
-  <div class="part-banner" id="part-2">
+  <div class="part-banner">
     <p class="num">Part II</p>
-    <h2>Driving the library as an agent</h2>
+    <h2 id="part-2">Driving the library as an agent</h2>
     <p>For an LLM or a program: everything needed to author, cook, inspect and edit a graph without reading the source — the runtime registries, the JSON format, the <code>pcg</code> CLI, and the loop that ties them together.</p>
   </div>
 
-  <section id="discovery" class="first-of-part">
+  <section class="first-of-part">
     <p class="eyebrow">Chapter 8</p>
-    <h2>Runtime capability discovery</h2>
+    <h2 id="discovery">Runtime capability discovery</h2>
     <p class="lead">The registry is the truth. Node types are not a list in the documentation that the code happens to match — the documentation is generated from the registry, so anything you can read in <code>docs/nodes.md</code> you can also ask for at runtime.</p>
     <p>There are three registries, and an agent should know all three before emitting anything: <code>listNodeTypes()</code> for node types, <code>listFieldFns()</code> for the field-expression vocabulary, and <code>listSubgraphs()</code> for the named primitives — the ready-made recipes a graph can reference by name instead of rebuilding. Each has a generated twin on disk and a <code>pcg</code> subcommand that prints the same thing from a shell.</p>
 
@@ -1089,9 +1173,9 @@ pcg nodes pointGrid --json</code></pre></div>
     </div>
   </section>
 
-  <section id="json">
+  <section>
     <p class="eyebrow">Chapter 9</p>
-    <h2>Authoring graphs as JSON, end to end</h2>
+    <h2 id="json">Authoring graphs as JSON, end to end</h2>
 
     <h3>The format</h3>
     <p><code>SerializedGraph</code>, format version 1. Field names exactly as written:</p>
@@ -1240,9 +1324,9 @@ params:  12 addresses, 1 declared worth turning (*)
 graph.<span class="n">setParam</span>(inputHandle, <span class="s">"items"</span>, [<span class="n">makeGeometryItem</span>(surface)]);</code></pre></div>
   </section>
 
-  <section id="grammar">
+  <section>
     <p class="eyebrow">Chapter 10</p>
-    <h2>The field grammar as a generation target</h2>
+    <h2 id="grammar">The field grammar as a generation target</h2>
     <p class="lead">A field spec is <code>{ "fn": &lt;name&gt;, ...args }</code>. Entries inside <code>args</code> may be nested specs, finite numbers, or number arrays — plain values wrap into <code>constant</code> automatically, so you never emit a <code>constant</code> node by hand unless you want to.</p>
     <p>The vocabulary below is printed here to be read whole; to look one entry up while working, <code>pcg fields &lt;fn&gt;</code> gives that function's allowed keys and its usage line, and <code>pcg fields</code> gives the closed set — the same answer <code>listFieldFns()</code> returns in process.</p>
 
@@ -1313,9 +1397,9 @@ graph.<span class="n">setParam</span>(inputHandle, <span class="s">"items"</span
     </div>
   </section>
 
-  <section id="errors">
+  <section>
     <p class="eyebrow">Chapter 11</p>
-    <h2>Errors as an API</h2>
+    <h2 id="errors">Errors as an API</h2>
     <p class="lead">Validation messages name the offending node, pin or parameter and list the valid alternatives. That is a deliberate design commitment, not a courtesy — it means a failed emission carries the information needed to fix itself, and a correction loop does not need to consult external documentation.</p>
 
     <p>Every string below is real output, produced by feeding the named mistake to the published build.</p>
@@ -1406,9 +1490,9 @@ WorldValidationError: level 0 (<span class="s">"a"</span>): cookOutputs names un
     <p>The registry errors get the same enumerate-the-alternatives treatment for primitives that they get for node types: <code>pcg run fill/scatter-uneven</code> exits <code>1</code> with <code>unknown subgraph "fill/scatter-uneven"; registered subgraphs:</code> followed by every registered name. And <code>pcg validate</code> is the cheapest error surface there is — it deserializes and reports structure without cooking anything, so it catches unknown types, unknown params, bad pins, unknown keys and cycles before any work happens. Run it after every edit.</p>
   </section>
 
-  <section id="introspection">
+  <section>
     <p class="eyebrow">Chapter 12</p>
-    <h2>Introspection and mutation for closed-loop editing</h2>
+    <h2 id="introspection">Introspection and mutation for closed-loop editing</h2>
     <p class="lead">JSON is the interchange format, not the only way to change a graph. A tool that keeps one live graph edits it in place and reads it back — preserving the caches a rebuild would discard.</p>
 
     <h3>Reading: describe() and getParams()</h3>
@@ -1504,9 +1588,9 @@ g.<span class="n">describe</span>().outputs;   <span class="c">// [ { id: "keep"
     <p>Mutate while a live graph is being edited and warm caches matter — tweaking one branch of an expensive graph must not recook its siblings. Rebuild through <code>deserializeGraph</code> when loading a document or handing a graph across a boundary: a rebuilt graph is fully validated but starts with cold caches. The two views stay consistent, so this is a performance decision rather than a correctness one — after any mutation, <code>serializeGraph(graph)</code> reflects the current structure and round-trips.</p>
   </section>
 
-  <section id="contract">
+  <section>
     <p class="eyebrow">Chapter 13</p>
-    <h2>Determinism as a contract</h2>
+    <h2 id="contract">Determinism as a contract</h2>
     <p class="lead">Same seed, identical bytes. This is the property everything else is built to preserve, and for an agent it is the difference between generation that can be verified and generation that can only be looked at.</p>
 
     <h3>What is promised</h3>
@@ -1564,9 +1648,9 @@ cmp a.json b.json</code></pre></div>
     </ul>
   </section>
 
-  <section id="loop">
+  <section>
     <p class="eyebrow">Chapter 14</p>
-    <h2>A worked end-to-end agent loop</h2>
+    <h2 id="loop">A worked end-to-end agent loop</h2>
     <p class="lead">The loop is <strong>validate → cook → inspect → render</strong>, run from a shell against a file on disk. It is the loop the <code>graph-authoring</code> skill teaches, and the four steps are four different questions: is this a graph, does it run, are the numbers right, does it look like the thing. Every value shown below is real output from running exactly this sequence.</p>
 
     <h3>1 · Discover</h3>
@@ -1713,9 +1797,9 @@ graph.<span class="n">describe</span>().outputs;          <span class="c">// [ {
     <p>The loop in one sentence: <em>discovery gives you the legal moves, validation rejects the illegal ones with the fix attached, cook stats tell you what actually happened, inspect and render tell you whether it was what you meant, mutation applies the next edit without discarding warm caches, and serialization hands back a canonical document.</em> No step requires reading the library's source, and no step requires guessing.</p>
   </section>
 
-  <section id="reference">
+  <section>
     <p class="eyebrow">Reference</p>
-    <h2>Where to look next</h2>
+    <h2 id="reference">Where to look next</h2>
     <div class="tablewrap">
     <table>
       <thead><tr><th>Document</th><th>What it is</th><th>Best for</th></tr></thead>
@@ -1728,8 +1812,8 @@ graph.<span class="n">describe</span>().outputs;          <span class="c">// [ {
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">docs/authoring.md</a></td><td>Graph JSON spec, the full field grammar, named subgraphs and hash pinning, recipes, transfer mappings, GPU eligibility rules.</td><td>The precise format, and worked recipes.</td></tr>
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/README.md">README.md</a></td><td>The human API tour.</td><td>A second angle on anything in Part I.</td></tr>
         <tr><td><a href="./index.html">Project overview</a></td><td>Architecture and pipeline diagrams, roadmap.</td><td>How the modules layer, and what shipped when.</td></tr>
-        <tr><td><a href="https://c4rl05.github.io/pcg-ts/editor/">Graph editor</a></td><td>The authoring tool, hosted. Opens any corpus graph with <code>?graph=&lt;name&gt;</code>, edits it live, and exports the JSON your application loads. <a href="#editor">Chapter 5</a> drives it.</td><td>Building or tuning a graph without writing code.</td></tr>
-        <tr><td><a href="https://c4rl05.github.io/pcg-ts/#demos">Live demos</a></td><td>The editor and the six demos, running.</td><td>Seeing it before reading about it.</td></tr>
+        <tr><td><a href="./editor/">Graph editor</a></td><td>The authoring tool, hosted. Opens any corpus graph with <code>?graph=&lt;name&gt;</code>, edits it live, and exports the JSON your application loads. <a href="#editor">Chapter 5</a> drives it.</td><td>Building or tuning a graph without writing code.</td></tr>
+        <tr><td><a href="./index.html#demos">Live demos</a></td><td>The editor and the six demos, running.</td><td>Seeing it before reading about it.</td></tr>
       </tbody>
     </table>
     </div>

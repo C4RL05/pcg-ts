@@ -56,6 +56,8 @@ export interface GalleryStat {
   readonly instances: number;
 }
 
+import { CHROME_CSS, renderChromeHeader } from "./chrome.js";
+
 export interface GalleryOptions {
   /** package.json's version, for the footer. */
   readonly version: string;
@@ -324,6 +326,10 @@ export function renderGallery(
     --accent-ink: #ededed;
     --mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
     --sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+    /* The shared chrome inlined below is written against site.css's grid
+       tokens; this page's palette copy predates them and had only the
+       colours. */
+    --gutter: 24px;
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
@@ -338,7 +344,10 @@ export function renderGallery(
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
   code { font-family: var(--mono); font-size: 0.92em; }
 
-  header { border-bottom: 1px solid var(--line); padding: 40px 0 26px; }
+  /* Scoped: a bare "header" selector would also match the shared
+     <header class="sitehdr"> inlined from src/docs/chrome.ts and give the
+     bar 40px of padding. */
+  header.page-head { border-bottom: 1px solid var(--line); padding: 40px 0 26px; }
   h1 {
     font-family: var(--mono); font-size: 27px; font-weight: 600;
     letter-spacing: -0.01em; color: var(--ink-hi); margin: 0 0 10px;
@@ -361,7 +370,9 @@ export function renderGallery(
      parent is exactly as tall as it is — scrolls it away immediately.
      The rail's parent is the document body, which is the whole page. */
   .controls-rail {
-    position: sticky; top: 0; z-index: 5;
+    /* 48px, the shared header's row height: two sticky bars, stacked, not
+       overlapping. */
+    position: sticky; top: 48px; z-index: 5;
     border-bottom: 1px solid var(--line);
     background: color-mix(in srgb, var(--bg) 88%, transparent);
     backdrop-filter: blur(8px);
@@ -447,9 +458,18 @@ export function renderGallery(
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
   }
+
+/* ---------- the shared chrome ---------- *
+   Inlined from src/docs/chrome.ts rather than linked, because this page is
+   generated with its own stylesheet and has never linked site.css. One
+   source, two consumers: the hand-authored pages get the same string as
+   the generated docs/chrome.css. */
+${CHROME_CSS}
 </style>
 
-<header>
+${renderChromeHeader("gallery.html", options.version)}
+
+<header class="page-head">
   <div class="wrap">
     <p class="eyebrow">Corpus</p>
     <h1>${entries.length} graphs, every one a file you can cook</h1>

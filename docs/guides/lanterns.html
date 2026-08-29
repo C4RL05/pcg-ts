@@ -3,10 +3,11 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="color-scheme" content="light dark" />
+<meta name="color-scheme" content="dark" />
 <title>pcg-ts — lanterns</title>
 <link rel="icon" href="../icon.svg" type="image/svg+xml" />
 <link rel="stylesheet" href="../site.css" />
+<link rel="stylesheet" href="../chrome.css" />
 </head>
 <body>
 <!--
@@ -36,6 +37,16 @@
   as one series. What this page adds that that one does not is `.hues`:
   the 256-cell strip under the field. That strip IS the measurement, so
   it is painted in true colour and does not follow the site palette.
+
+  THE PAGE WIDTH IS NOW `.shell`'s, NOT `.wrap`'s, on both guides. <main>
+  carried `class="wrap"` and its 960px until the shared chrome landed; it
+  now sits in the shell beside the rail, which is 1180px less the 228px
+  rail and the 44px gap — an 860px article column, a little NARROWER than
+  the 912px these figures were drawn against, so none of them needed a
+  width of its own and this block adds none. The prose is unaffected
+  either way: site.css caps every <p> and .lead at --measure, which is a
+  token on the element and not something `.wrap` was supplying. The 1600
+  x 600 field canvas is `width: 100%` and scales, so it follows too.
 -->
 <style>
   /* The aliases. These sit on :root and not on a wrapper because the
@@ -221,8 +232,90 @@
   .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 </style>
 
-<main class="wrap">
-  <p class="eyebrow"><a href="../index.html">pcg-ts</a> &middot; guides &middot; lanterns</p>
+<!--pcg:chrome-header-->
+<header class="sitehdr">
+  <div class="sitehdr-row">
+    <a class="sitehdr-home" href="../index.html" aria-label="pcg-ts — home"><svg class="sitehdr-mark" viewBox="0 0 1055 128" aria-hidden="true" focusable="false"><g fill-rule="nonzero" transform="translate(-9.14,127.96)"><path d="M147.76,-95.97L147.76,-127.96L9.14,-127.96L9.14,-95.97L147.76,-95.97ZM147.762,-95.97L147.762,-63.98L41.13,-63.98L9.14,-31.99L9.14,0L41.13,0L41.13,-31.99L147.762,-31.99L179.752,-63.98L179.752,-95.97L147.762,-95.97Z"/><path d="M368.768,-95.97L368.768,-127.96L230.145,-127.96L198.155,-95.97L198.155,-31.99L230.139,-31.99L230.139,0L368.768,0L368.768,-31.99L230.145,-31.99L230.145,-95.97L368.768,-95.97Z"/><path d="M557.783,-95.97L557.783,-127.96L419.16,-127.96L387.17,-95.97L387.17,-31.99L419.16,-31.99L419.16,-95.97L557.783,-95.97ZM478.925,0L510.917,-31.99L525.793,-31.99L525.793,0L557.783,0L557.783,-63.98L497.696,-63.98L465.706,-31.99L419.16,-31.99L419.16,0L478.925,0Z"/><rect x="576.186" y="-63.98" width="127.96" height="31.99"/><g transform="translate(-18.4628,0)"><path d="M823.908,0L823.908,-95.97L791.918,-95.97L791.918,0L823.908,0ZM893.218,-95.97L893.218,-127.96L823.911,-127.96L823.911,-95.97L893.218,-95.97ZM791.912,-95.97L791.912,-127.96L722.608,-127.96L722.608,-95.97L791.912,-95.97Z"/></g><g transform="translate(884.017944,0)"><path d="M41.13,-95.97L147.762,-95.97L147.762,-127.96L41.13,-127.96L9.14,-95.97L9.14,-63.98L179.752,0L179.752,-34.149L41.13,-86.156L41.13,-95.97ZM41.13,0L41.13,-31.99L9.14,-31.99L9.14,0L41.13,0ZM179.755,-63.986L179.755,-95.97L147.765,-95.97L147.765,-63.986L179.755,-63.986Z"/></g></g></svg></a>
+    <nav class="sitehdr-crumb" aria-label="Breadcrumb"><span class="sep">/</span><span>Guides</span><span class="sep">/</span><span aria-current="page">One number per lantern</span></nav>
+    <nav class="sitehdr-sections" aria-label="Sections">
+      <a href="../manual.html">Docs</a>
+      <a href="../guides/racetrack.html" class="here" aria-current="true">Guides</a>
+      <a href="../demos/infinite-world/">Demos</a>
+      <a href="../gallery.html">Reference</a>
+      <a href="../editor/">Tool</a>
+    </nav>
+    <div class="sitehdr-meta">
+      <span class="sitehdr-ver">v0.17.0</span>
+      <a href="https://www.npmjs.com/package/pcg-ts">npm</a>
+      <a href="https://github.com/C4RL05/pcg-ts" aria-label="Source on GitHub"><svg class="sitehdr-gh" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg></a>
+    </div>
+  </div>
+</header>
+<!--/pcg:chrome-header-->
+
+<div class="shell">
+<!--pcg:chrome-rail-->
+<nav class="rail" aria-label="Site index">
+  <div class="rail-grp">
+    <h2>Docs</h2>
+    <ul>
+      <li><a href="../manual.html">User manual</a></li>
+      <li><a href="../architecture.html">Architecture</a></li>
+      <li><a href="../roadmap.html">Roadmap</a></li>
+    </ul>
+  </div>
+  <div class="rail-grp">
+    <h2>Guides</h2>
+    <ul>
+      <li><a href="../guides/racetrack.html">Dressing a roadside</a></li>
+      <li><a href="../guides/lanterns.html" class="here" aria-current="page">One number per lantern</a></li>
+    </ul>
+  </div>
+  <div class="rail-grp">
+    <h2>Demos</h2>
+    <ul>
+      <li><a href="../demos/infinite-world/">Infinite world</a></li>
+      <li><a href="../demos/galaxy/">Galaxy</a></li>
+      <li><a href="../demos/gpu-world/">GPU world</a></li>
+      <li><a href="../demos/racetrack/">Racetrack</a></li>
+      <li><a href="../demos/road/">Road</a></li>
+      <li><a href="../demos/lanterns/">Lanterns</a></li>
+    </ul>
+  </div>
+  <div class="rail-grp">
+    <h2>Reference</h2>
+    <ul>
+      <li><a href="../gallery.html">Corpus gallery</a></li>
+      <li><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">Node reference<span class="md">md</span></a></li>
+      <li><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.md">Primitives<span class="md">md</span></a></li>
+      <li><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/graphs.md">Graph corpus<span class="md">md</span></a></li>
+      <li><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">Authoring &amp; parity<span class="md">md</span></a></li>
+      <li><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/design.md">Design notes<span class="md">md</span></a></li>
+    </ul>
+  </div>
+  <div class="rail-grp">
+    <h2>Tool</h2>
+    <ul>
+      <li><a href="../editor/">Editor</a></li>
+    </ul>
+  </div>
+  <div class="rail-grp rail-toc">
+    <h2>On this page</h2>
+    <ul>
+      <li><a href="#a-lantern-is-a-number">The idea</a></li>
+      <li><a href="#where-and-when">Two halves</a></li>
+      <li><a href="#nobody-invents-it">The number</a></li>
+      <li><a href="#three-slices">Reading the badge</a></li>
+      <li><a href="#a-float-cannot-count">The catch</a></li>
+      <li><a href="#five-nodes">The graph</a></li>
+      <li><a href="#colour-is-the-measurement">The readout</a></li>
+      <li><a href="#types-at-both-ends">Types at both ends</a></li>
+      <li><a href="#where-to-go-from-here">Next</a></li>
+    </ul>
+  </div>
+</nav>
+<!--/pcg:chrome-rail-->
+<main>
   <h1 class="page-title">One number per lantern</h1>
   <p class="lead">The <a href="../demos/lanterns/">lanterns demo</a> hangs six thousand lights over
   a landscape. Every colour, every flicker, every bob comes from <strong>one whole number</strong>
@@ -250,7 +343,7 @@
   <section>
     <div class="sec-head">
       <p class="eyebrow">The idea</p>
-      <h2>A lantern is one number wearing a costume.</h2>
+      <h2 id="a-lantern-is-a-number" data-toc="The idea">A lantern is one number wearing a costume.</h2>
     </div>
     <div class="sec-body">
       <p>Hand a lantern the number <span class="mono">3&thinsp;274&thinsp;118&thinsp;905</span> and
@@ -268,7 +361,7 @@
   <section>
     <div class="sec-head">
       <p class="eyebrow">Two halves</p>
-      <h2>One half says <em>where</em>. The other says <em>when</em>.</h2>
+      <h2 id="where-and-when" data-toc="Two halves">One half says <em>where</em>. The other says <em>when</em>.</h2>
     </div>
     <div class="sec-body">
       <p>pcg-ts builds the field. It works out where each lantern hangs, how big it is, and which
@@ -328,7 +421,7 @@
   <section>
     <div class="sec-head">
       <p class="eyebrow">The number</p>
-      <h2>Nobody invents it. Every point already had one.</h2>
+      <h2 id="nobody-invents-it" data-toc="The number">Nobody invents it. Every point already had one.</h2>
     </div>
     <div class="sec-body">
       <p>A pile of points in pcg-ts is not just positions. Every point carries a little row of named
@@ -382,7 +475,7 @@
   <section>
     <div class="sec-head">
       <p class="eyebrow">Reading the badge</p>
-      <h2>Three questions, asked of three slices of the same number.</h2>
+      <h2 id="three-slices" data-toc="Reading the badge">Three questions, asked of three slices of the same number.</h2>
     </div>
     <div class="sec-body">
       <p>A 32-bit number is thirty-two yes-or-no switches in a row. The little program on the
@@ -445,7 +538,7 @@
   <section>
     <div class="sec-head">
       <p class="eyebrow">The catch</p>
-      <h2>A float cannot count that high one at a time.</h2>
+      <h2 id="a-float-cannot-count" data-toc="The catch">A float cannot count that high one at a time.</h2>
     </div>
     <div class="sec-body">
       <p>Almost every number a graphics card handles is a <strong>float</strong> — the kind that can
@@ -505,7 +598,7 @@
   <section>
     <div class="sec-head">
       <p class="eyebrow">How the demo shows it</p>
-      <h2>Five nodes, and the fourth one is deliberate damage.</h2>
+      <h2 id="five-nodes" data-toc="The graph">Five nodes, and the fourth one is deliberate damage.</h2>
     </div>
     <div class="sec-body">
       <p>pcg-ts is a <strong>node graph</strong>: little boxes that each do one thing to a pile of
@@ -577,7 +670,7 @@
   <section>
     <div class="sec-head">
       <p class="eyebrow">What you are looking at</p>
-      <h2>The colour is the measurement, not the decoration.</h2>
+      <h2 id="colour-is-the-measurement" data-toc="The readout">The colour is the measurement, not the decoration.</h2>
     </div>
     <div class="sec-body">
       <p>Because the hue comes straight off the small end of the badge, the spread of colour in the
@@ -636,7 +729,7 @@
   <section>
     <div class="sec-head">
       <p class="eyebrow">If you are wiring this up yourself</p>
-      <h2>The type has to match at both ends, and it will not fail quietly.</h2>
+      <h2 id="types-at-both-ends" data-toc="Types at both ends">The type has to match at both ends, and it will not fail quietly.</h2>
     </div>
     <div class="sec-body">
       <p>The library hands each named column to the renderer as an attribute of its own, keeping the
@@ -662,7 +755,7 @@
 
   <section>
     <p class="eyebrow">Next</p>
-    <h2>Where to go from here</h2>
+    <h2 id="where-to-go-from-here" data-toc="Next">Where to go from here</h2>
     <p>The demo itself is at <a href="../demos/lanterns/">demos/lanterns</a> &mdash; the picker is
     in the panel on the left, under &ldquo;id source&rdquo;, and the panel prints most of the numbers
     this page quotes. <a href="racetrack.html">Dressing a roadside</a> is the other guide, about a
@@ -673,6 +766,7 @@
     <p><a href="../index.html">&larr; back to the landing page</a></p>
   </section>
 </main>
+</div>
 
 <footer>
   <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">

@@ -68,7 +68,7 @@ const STAMP_KIND_NAMES = Object.keys(STAMP_KINDS).sort();
  * unnested, then leaves it to its own renderer — `renderSiteLede` is the
  * one that exists.
  */
-const BLOCK_KINDS = new Set(["lede"]);
+const BLOCK_KINDS = new Set(["lede", "chrome-header", "chrome-rail"]);
 
 /**
  * Every `pcg:` marker in the document, opening or closing, in order.
@@ -334,6 +334,49 @@ export function renderSiteLede(html: string, ledeHtml: string, file: string): Si
   const out = html.slice(0, open + LEDE_OPEN.length) + `
 ${ledeHtml}
     ` + html.slice(close);
+  return { html: out, stamps: 1 };
+}
+
+/* ------------------------------------------------------------------ *
+ * Generated blocks
+ * ------------------------------------------------------------------ */
+
+/**
+ * Replace the body of a paired `<!--pcg:KIND-->` block with `body`.
+ *
+ * The same reachability argument `renderSiteLede` makes, factored out so
+ * the chrome can borrow it: a non-greedy span between two literal
+ * markers, rejected if it contains a second marker of the same kind. The
+ * body IS markup here, so the stamp rules do not apply and cannot.
+ *
+ * Absence is an error, not a no-op. A page whose chrome silently stopped
+ * being written looks exactly like a page that is up to date, which is
+ * the whole failure this module exists to prevent.
+ */
+export function renderSiteBlock(
+  html: string,
+  kind: string,
+  body: string,
+  file: string,
+): SiteRenderResult {
+  const openTag = `<!--pcg:${kind}-->`;
+  const closeTag = `<!--/pcg:${kind}-->`;
+  const open = html.indexOf(openTag);
+  const close = html.indexOf(closeTag);
+  if (open < 0 || close < 0 || close < open) {
+    throw new Error(
+      [
+        `${file}: no ${openTag} … ${closeTag} hole, so the generated block would silently stop reaching it.`,
+        `Put the markers where the block belongs, e.g.`,
+        `  ${openTag}${closeTag}`,
+      ].join("\n"),
+    );
+  }
+  const inner = html.slice(open + openTag.length, close);
+  if (inner.includes(openTag) || inner.includes(closeTag)) {
+    throw new Error(`${file}: nested ${openTag} markers — the hole must be one span.`);
+  }
+  const out = html.slice(0, open + openTag.length) + `\n${body}\n` + html.slice(close);
   return { html: out, stamps: 1 };
 }
 

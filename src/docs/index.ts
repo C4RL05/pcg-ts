@@ -14,6 +14,7 @@
 export * from "./node-reference.js";
 export * from "./primitives.js";
 export * from "./graphIndex.js";
+export * from "./chrome.js";
 export * from "./gallery.js";
 export * from "./graphGolden.js";
 export * from "./site.js";
