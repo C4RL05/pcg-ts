@@ -2502,15 +2502,22 @@ refused as soon as the count is real.
 separating them before you plan around it.** The phrase has been read
 here as "this stalls your frame", which is the opposite of what is true.
 
-- **Producing** a channel on the GPU device: **not built.** A spawn
-  naming any `instanceAttrs` channel rejects the resident run as
-  `run-plan-failed` and the CPU spawner serves the whole terminal. The
-  reason is a binding budget, not a difficulty — see
+- **Producing** a channel on the GPU device: **opt-in.** The evaluator's
+  `deviceInstanceAttrs` (which requires `deviceInstances`) gathers each
+  named channel into its own device buffer beside the transforms; with
+  it off — the default — a spawn naming any `instanceAttrs` channel
+  rejects the resident run as `run-plan-failed` and the CPU spawner
+  serves the whole terminal. The flag exists because production hands
+  the host an OBLIGATION rather than because the gather is hard: a named
+  channel is bound by the host, not by the renderer, and the
+  device-resident adapter this library ships refuses every channel but
+  the reserved colour — so turning it on unconditionally would break a
+  graph that renders through it today. See
   [Device-resident instancing](#device-resident-instancing-drawing-without-a-readback).
   Note what this does *not* cover: the reserved `color` channel IS
-  composed on the device (that is what `colorAttr` does), so "no gather
-  channels on the device" would be wrong. It is the open-ended list that
-  does not fit.
+  composed on the device unconditionally (that is what `colorAttr`
+  does), so "no gather channels on the device" would be wrong either
+  way.
 - **Rendering** a channel under a `WebGPURenderer`: **supported, and the
   device-production limit does not touch it.** `toInstancedMeshes`
   imports only `three` and branches on nothing renderer-shaped; an
@@ -2550,8 +2557,9 @@ complete path today: cook in a worker, receive the channels zero-copy,
 bind them with `toInstancedMeshes`, read them from your own material —
 remembering that each channelled batch gets its own geometry clone to
 dispose, as above.
-What you cannot do yet is have the device *compose* those channels
-without a readback.
+Having the device *produce* those channels without a readback is the
+other route, and it is the one that asks you to bind the buffers
+yourself: `deviceInstanceAttrs`, above.
 
 If your material is **pooled or shared** across meshes, pass
 `materialFor`. It is asked once per batch and the material it returns is
@@ -4228,7 +4236,7 @@ geometry input and one geometry output, plus one *terminal* kind:
 | `transformPoints` | always |
 | `jitterPoints` | always |
 | `orientAlongVector` | always |
-| `spawnInstances` | the resolver advertises the kind UNCONDITIONALLY — with or without `assetAttr` (since v0.8.0), with or without `colorAttr`, and whatever `instanceAttrs` says; the RUN then fuses only with an EMPTY `instanceAttrs`; terminal only, and it declares no `eligible` gate (the channel case is rejected by the run planner instead, so it keeps the node off only the run that names one); see [Device-resident instancing](#device-resident-instancing-drawing-without-a-readback) |
+| `spawnInstances` | the resolver advertises the kind UNCONDITIONALLY — with or without `assetAttr` (since v0.8.0), with or without `colorAttr`, and whatever `instanceAttrs` says; the RUN then fuses a non-empty `instanceAttrs` only when the evaluator sets `deviceInstanceAttrs: true`, and otherwise only an empty one; terminal only, and it declares no `eligible` gate (the channel case is decided by the run planner instead, so a rejection keeps the node off only the run that names one); see [Device-resident instancing](#device-resident-instancing-drawing-without-a-readback) |
 
 plus, for every member: every `Field` in its param tree carries a spec
 *this resolver accepts* — authored always, derived only under
@@ -4277,15 +4285,16 @@ That is by design, not a bug; benchmark from cold caches.
   pipeline: unknown resident kind, field compile error, tuple-size or
   layout mismatch, a missing standard attribute, over the
   storage-buffer limit, or a `spawnInstances` over the instance budget,
-  naming an `assetAttr`/`colorAttr` it cannot use, or naming any
-  per-instance channel in `instanceAttrs`. Genuinely invalid params
-  still surface the identical CPU error from the per-node path, which is
-  why none of those spawner conditions needed a reason of its own — with
-  one exception worth stating, because it is the only one of those
-  spawner conditions that is not a mistake: `instanceAttrs` is a
-  perfectly valid param that the CPU path executes fine, so there is no
-  CPU error to surface. It rejects because the device spawner cannot
-  *produce* those channels (below), not because the graph is wrong.
+  naming an `assetAttr`/`colorAttr` it cannot use, or naming per-instance
+  channels in `instanceAttrs` without `deviceInstanceAttrs: true`.
+  Genuinely invalid params still surface the identical CPU error from the
+  per-node path, which is why none of those spawner conditions needed a
+  reason of its own — with one exception worth stating, because it is a
+  capability gate rather than a mistake: `instanceAttrs` is a perfectly
+  valid param that the CPU path executes fine, so there is no CPU error
+  to surface. It rejects because you did not opt in to device production
+  of those channels (`deviceInstanceAttrs`, below), not because the graph
+  is wrong.
   An `attributeIs` or `byAttribute` anywhere in the run declines here
   too, and for
   a reason worth separating from the rest: its kernel compiles and
@@ -4504,7 +4513,13 @@ layout, then transfers the composed buffers out of the evaluator's pool
 points. With `colorAttr` set, that same kernel also gathers RGB into a
 second buffer per asset, from inside the same loop over the same index
 expression that writes the matrix — there is no second traversal, so
-the two orderings cannot fall out of step. If
+the two orderings cannot fall out of step. Under
+`deviceInstanceAttrs: true`, each name in `instanceAttrs` adds one
+gather kernel and one retained buffer per asset on top of that,
+dispatched after the compose and reading through the same index
+expression — so the per-asset buffer count is 1 + (colour ? 1 : 0) +
+channels, and an instance's channel value can never come from a
+different point than its matrix. If
 nothing in the cook reads the terminal's `points` pin — it is neither
 connected nor a declared graph output — the run performs *no readback
 at all*: no `mapAsync`, no staging buffer, no CPU copy of
@@ -4561,8 +4576,24 @@ is missing or is not f32 with `tupleSize >= 3`, rejects the run as
 device path words no message of its own, so the two paths cannot word
 it differently.
 
-**`instanceAttrs` is not device-*produced*, and it is the one spawner
-condition here that is not about a mistake.** A spawn naming any
+**`instanceAttrs` is device-*produced* only if you ask for it, and that
+opt-in is the one spawner condition here that is not about a mistake.**
+Two flags, and the narrow one requires the broad one:
+
+```ts
+const gpu = new GpuFieldEvaluator(device, {
+  deviceInstances: true,      // spawner terminals compose on the device
+  deviceInstanceAttrs: true,  // …and gather their named channels too
+});
+gpu.deviceInstanceAttrs;      // true — the flag reads back off the evaluator
+```
+
+`deviceInstanceAttrs` without `deviceInstances` throws from the
+constructor, naming both fixes: without a device-resident terminal there
+is no batch for a channel to ride on, so the flag would read as on while
+every channel still came from the CPU.
+
+**Default off, and off is byte for byte what it was.** A spawn naming any
 [per-instance channel](#the-per-instance-channel-the-abi-between-a-graph-and-its-host)
 rejects the whole run as `run-plan-failed`, and the CPU spawner then
 serves the *entire* terminal — the transforms it composes there, its
@@ -4571,27 +4602,87 @@ rejection is counted in `CookStats.gpu.fallbacks` like every other.
 
 What a caller observes is the counter key and nothing more. The
 planner's own rejection carries a sentence — `instanceAttrs names N
-per-instance channel(s); the device spawner composes transforms and
-colour only` — but `PlanRejection` carries only the reason, so that
-wording never leaves `planResidentRun`. Quoted here because it is what
-you will find in the source, not because a cook will hand it to you.
+per-instance channel(s) and this resolver did not opt in to device
+channels (deviceInstanceAttrs)` — but `PlanRejection` carries only the
+reason, so that wording never leaves `planResidentRun`. Quoted here
+because it is what you will find in the source, not because a cook will
+hand it to you.
 
-The reason is a binding budget rather than a difficulty. The compose
-kernel's widest form already binds **seven** storage buffers — `P`,
-`rot`, `scale`, `transforms`, the permutation, the colour source and the
-colour output — against the baseline `maxStorageBuffersPerShaderStage`
-of 8 (`MAX_STORAGE_BUFFERS`). One slot is left, so an *arbitrary* number
-of gather channels does not fit in that kernel at all. Colour is not
-what the budget cut — it is one known channel the kernel was built
-with, not an open-ended list — so a spawn that names *no* channel keeps
-its colour on the device exactly as before. Read that narrowly: a spawn
-that does name one loses the device path for the whole terminal, and
-composes its colour on the CPU along with everything else. The channel
-check runs before the `colorAttr` one, so there is no partial device
-spawn.
+**Why this is opt-in when `colorAttr` is not.** Colour is one channel a
+renderer binds *structurally* — three has a place for it — so composing
+it on the device changes nothing a host has to do. A named channel is an
+open-ended list that only the HOST can bind, and the device-resident
+adapter this library ships binds the instance matrix and the reserved
+`"color"` and refuses every other channel by name. Produce channels on
+the device unconditionally and a graph that names one and renders
+through that adapter goes from working to throwing — a working graph
+broken by an optimisation. So the flag defaults off, every existing
+assertion holds, and turning it on is a statement that you bind the
+buffers yourself.
 
-**Read that as a limit on PRODUCTION and nothing else.** Two things it
-is regularly misread as forbidding, both of which are supported:
+**What it costs, and what bounds it.** One gather kernel and one
+retained buffer per channel per asset batch:
+`out[i] = src[perm[base + i]]` in multi-asset mode and `out[i] = src[i]`
+in constant-`assetId` mode, dispatched after the compose that wrote the
+matrices and reading through the *same* index expression it used — so an
+instance's channel value and its transform can never come from different
+points. Its own kernel rather than more bindings on the compose one,
+and that is arithmetic rather than taste: compose's widest form already
+binds **seven** storage buffers — `P`, `rot`, `scale`, `transforms`, the
+permutation, the colour source and the colour output — against the
+baseline `maxStorageBuffersPerShaderStage` of 8 (`MAX_STORAGE_BUFFERS`),
+so folding channels into it would have bought exactly ONE and then
+failed on the second. A gather binds three at most — source, output, and
+the permutation in multi-asset mode — whatever the channel's dtype and
+width are, so the number of channels a spawn may carry is bounded by
+memory rather than by a binding budget: the bytes count against
+`maxResidentBytes` like every other allocation, and `run-too-large`
+applies to them.
+
+**The device buffer differs from the CPU column in exactly two ways**,
+both `deviceInstanceAttributeLayout`'s. An `itemSize`-3 channel spends
+**four** f32 slots per instance — WGSL's `array<vec3<T>>` pads to a
+16-byte stride — and the kernel writes that pad as an explicit zero
+rather than leaving it undefined, the same rule the colour buffer
+follows. A `bool` channel is stored as u32 words. Nothing else is
+widened: a `u32` column stays `u32`, which is the whole point of the
+ABI.
+
+**Bit-exact, and structurally rather than luckily so.** Both sides bind
+as `array<u32>`, so the kernel moves raw 4-byte words and never a
+value: no conversion to round, no arithmetic to contract, one pipeline
+for `f32x2` and `u32x2` alike. Every component equals the CPU batch's
+bit for bit — the only thing the CPU column does not also hold is the
+vec3 pad slot, and that is a written zero, not a value.
+Contrast the composed *transforms* on the same batch, which are a
+documented tolerance class (an f32 kernel against `composeTRS`'s f64
+interior — see the parity table below): the channels beside them carry
+no such deviation.
+
+**The handles are yours.** Each channel arrives as
+`batch.attributes[name]`, whose `handle.resource` is the `GPUBuffer`,
+holding the batch's instances in the same order as its transforms.
+Enumerate them with `deviceInstanceAttributesOf(batch)` — never
+alongside `batch.colors`, per the ownership rules above — and dispose
+each exactly once: a handle you fail to enumerate is a buffer nothing
+will ever free.
+
+**One device-only narrowing.** A channel wider than **4 components**
+rejects the run, because WGSL has no vector wider than 4 and carrying
+one would be a different binding convention on every renderer rather
+than a bigger buffer. The CPU spawner carries it happily, so this is a
+fallback and not an error — split it upstream into narrower channels if
+you want it resident. Every other shape the planner cannot carry (an
+empty or duplicate name, the reserved `"color"`, a name missing from the
+point domain, a string column) *rejects* rather than throws for the same
+reason `assetAttr` does: `resolveInstanceAttrs` stays the single voice
+that names the node, the param, the offending channel and the way out.
+The channel check runs before the `colorAttr` one, so there is no
+partial device spawn either way.
+
+**With the flag off, read the rejection as a limit on PRODUCTION and
+nothing else.** Two things it is regularly misread as forbidding, both
+of which are supported:
 
 - **Rendering the channel under a `WebGPURenderer`.** The CPU batch this
   fallback produces carries every channel, and `toInstancedMeshes` binds
@@ -4600,27 +4691,28 @@ is regularly misread as forbidding, both of which are supported:
   That is the supported route for per-instance data in a shader and it
   is untouched by anything on this page. (The `deviceInstances` adapter
   is the exception: it binds only the instance matrix and the reserved
-  colour, and refuses a hand-built device batch carrying anything else,
-  naming both ways out.)
+  colour, and refuses a device batch carrying anything else — hand-built
+  or spawner-produced — naming its ways out.)
 - **Keeping the cook off your frame.** The fallback is a CPU cook, not a
   main-thread one. Run it through `pcg-ts/worker` and the channels cross
   on the transfer list with the transforms — buffer ownership, not a
   copy — so a spawn that loses the device path does not thereby cost you
   a frame hitch.
 
-This is a gate on device *production* only. The device batch type
-carries the channel shape (`DeviceInstanceBatch.attributes`,
-`DeviceInstanceAttribute`, and `deviceInstanceAttributeLayout` for what
-WGSL makes of a dtype and an item size) so that a host composing its own
-buffers has the vocabulary — but this library's resident spawner only
-ever fills the reserved colour entry, never a named one, and the WebGPU
-adapter refuses a batch carrying a named one rather than drawing without
-it. That refusal is a thrown error naming the
-batch, the channel and its layout, with the two ways out: drop
-`deviceInstances: true` to cook CPU batches, or bind the buffer yourself
-from `batch.attributes[name].handle.resource`. Unlike the planner's, it
-is a hard error and not a counted fallback — by then there is no CPU
-path left to fall back to.
+The device batch type carries the channel shape
+(`DeviceInstanceBatch.attributes`, `DeviceInstanceAttribute`, and
+`deviceInstanceAttributeLayout` for what WGSL makes of a dtype and an
+item size), and with the opt-in the resident spawner fills it — but the
+WebGPU adapter that ships here still refuses a batch carrying a named
+channel rather than drawing without it, whether a spawner produced that
+batch or a host built it by hand. That refusal is a thrown error naming
+the batch, the channel and its layout, with three ways out: drop
+`deviceInstances: true` to cook CPU batches, drop just
+`deviceInstanceAttrs: true` to send the spawns that name channels back
+to the CPU spawner and leave the rest of the graph resident, or bind the
+buffer yourself from `batch.attributes[name].handle.resource`. Unlike
+the planner's, it is a hard error and not a counted fallback — by then
+there is no CPU path left to fall back to.
 
 The rejection did not widen the fallback vocabulary, for the same reason
 the budget and `colorAttr` did not: `run-plan-failed` already says a
@@ -4770,15 +4862,21 @@ pad slot at `4k+3` is asserted zero over that same sample, since a kernel
 that wrote the source's *alpha* there instead of a literal `0f` would
 leak a component the CPU path drops.
 
-**The other per-instance channels have no parity class at all, because
-they never run here.** A spawn naming anything in `instanceAttrs`
-rejects the resident run as `run-plan-failed` and the CPU spawner serves
-the whole terminal — so for such a spawn there is no device output to
-compare, transforms included, and the numbers in the table above simply
-do not apply to it. That is a CPU-only fallback like any other in this
-document: counted under `run-plan-failed`, never silent. See
+**The other per-instance channels have no parity class either, and for
+one of two reasons depending on the flag.** With `deviceInstanceAttrs`
+off — the default — a spawn naming anything in `instanceAttrs` rejects
+the resident run as `run-plan-failed` and the CPU spawner serves the
+whole terminal, so there is no device output to compare, transforms
+included, and the numbers in the table above do not apply to it at all.
+That is a CPU-only fallback like any other in this document: counted
+under `run-plan-failed`, never silent. With the flag on, each channel is
+a word gather — both sides bind `array<u32>`, so nothing is converted
+and nothing rounds — and every component equals the CPU column's bit for
+bit (the vec3 pad slot aside, as for colour), which is the colour
+argument above generalized to any dtype. The transforms beside
+them stay in the tolerance class; the channels never enter one. See
 [Device-resident instancing](#device-resident-instancing-drawing-without-a-readback)
-for the binding budget behind it.
+for the opt-in and what it hands the host.
 
 What this does **not** weaken: everything else. The determinism suites
 pin the CPU path, the CPU spawner's `composeTRS` goldens are unchanged,

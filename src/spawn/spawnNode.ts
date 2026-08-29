@@ -126,8 +126,12 @@ export const spawnInstances = standardNode<SpawnInstancesParams>({
         "(position, normal, uv, instanceMatrix and more), which would overwrite the asset's " +
         "vertex data, and a channel wider than 4 components, which a vertex attribute cannot " +
         "carry — split it upstream into several narrower ones. " +
-        "Not device-resident: a spawn naming any channel falls back to the CPU spawner for the " +
-        "whole terminal, with the transforms it composes there.",
+        "Device production is OPT-IN: the GPU evaluator's `deviceInstanceAttrs` (which requires " +
+        "`deviceInstances`) gathers each channel into its own device buffer beside the " +
+        "transforms, for a host that binds them itself from " +
+        "batch.attributes[name].handle.resource. Default off, and off is what it always was: a " +
+        "spawn naming any channel falls back to the CPU spawner for the whole terminal, with the " +
+        "transforms it composes there.",
     },
   },
   /**
@@ -143,19 +147,24 @@ export const spawnInstances = standardNode<SpawnInstancesParams>({
    * `deviceInstances`), so the default cook — CPU or GPU — is
    * byte-for-byte what it has always been.
    *
-   * `instanceAttrs` is the ONE param that is not device-resident, and it
-   * is rejected by the run planner rather than gated here (an `eligible`
-   * predicate would keep the node off every resident run in the graph,
-   * where the planner rejects only the run that actually names channels).
-   * The compose kernel's widest form already binds seven storage buffers
-   * against the baseline `maxStorageBuffersPerShaderStage` of 8 (see
-   * `makeComposeInstancesApply`), so an arbitrary number of extra gather
-   * channels does not fit in it — the device twin of the channel exists
-   * on `DeviceInstanceBatch` for a host composing its own buffers, but
-   * this library's resident spawner does not fill it yet. Rejecting is
-   * what keeps that honest: the terminal falls back per-node and the CPU
-   * spawner produces the channels, rather than a device run silently
-   * dropping data a host is about to bind.
+   * `instanceAttrs` is the ONE param whose device production is OPT-IN,
+   * and it is decided by the run planner rather than gated here (an
+   * `eligible` predicate would keep the node off every resident run in
+   * the graph, where the planner rejects only the run that actually names
+   * channels). Without the resolver's `deviceInstanceAttrs` the planner
+   * rejects such a run, the terminal falls back per-node and the CPU
+   * spawner composes the transforms AND the channels together — never a
+   * device run silently dropping data a host is about to bind. With it,
+   * each channel is gathered into its own retained buffer beside the
+   * transforms, by its own kernel rather than more bindings on the
+   * compose one (whose widest form already binds seven storage buffers
+   * against the baseline `maxStorageBuffersPerShaderStage` of 8, so
+   * folding channels in would have bought exactly one). It is a separate
+   * flag because it moves an obligation: `pcg-ts/three`'s device adapter
+   * binds the matrix and the reserved colour and refuses every other
+   * channel by name, so a graph rendering through it works only while
+   * the flag is off, and the host that turns it on binds the buffers
+   * itself from `batch.attributes[name].handle.resource`.
    *
    * No `eligible` gate, and none of the other three params earns one. Both
    * `assetId` and `assetAttr` spawns are device-resident: a multi-asset

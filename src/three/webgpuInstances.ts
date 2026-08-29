@@ -452,10 +452,12 @@ export async function createWebGpuInstanceAdapter(
         // so binding one here would publish this cell's values to every
         // other cell drawing the same asset. Drawing without it is worse
         // still: the host bound a shader to that name and would animate
-        // from whatever was left there. The device spawner does not
-        // produce these today either (the run planner rejects a
-        // `spawnInstances` naming any), so reaching this means a
-        // hand-built batch.
+        // from whatever was left there. Two ways to arrive here, and the
+        // message below answers both: a hand-built batch, or one a
+        // device-resident spawner PRODUCED under the evaluator's opt-in
+        // `deviceInstanceAttrs` (without it the run planner rejects a
+        // `spawnInstances` naming any channel, which is exactly why that
+        // flag is opt-in and not part of `deviceInstances`).
         // The layout is only for the DESCRIPTION here, so a channel whose
         // item size has no WGSL layout at all must still report as an
         // unbindable channel of this adapter's rather than as a layout
@@ -468,7 +470,10 @@ export async function createWebGpuInstanceAdapter(
             "structurally: the instance matrix and the reserved " +
             `"${INSTANCE_COLOR_CHANNEL}". Drop \`deviceInstances: true\` from the ` +
             "GpuFieldEvaluator to cook CPU batches, which carry every channel and render through " +
-            "toInstancedMeshes; or bind the channel's buffer yourself from " +
+            "toInstancedMeshes; or, if a device-resident spawner produced this batch, drop just " +
+            "`deviceInstanceAttrs: true` to send the spawns that name channels back to the CPU " +
+            "spawner and leave the rest of the graph resident; or bind the channel's buffer " +
+            "yourself from " +
             "`batch.attributes[name].handle.resource`, which is a GPUBuffer holding the batch's " +
             "instances in the same order as its transforms.",
         );
