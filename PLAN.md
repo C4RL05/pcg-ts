@@ -528,6 +528,40 @@ an equality check can report "different" before trusting "same"; this
 is the allocator's version, and the way to run it is a RECYCLED object,
 not a new one.
 
+**5. CORRECTION, 2026-08-29, and it came back from the integrator: "the
+clone is not a compile" is true and "mesh churn is not a compile" is
+FALSE, and we shipped the second by implication.** `docs/authoring.md`
+said WebGL keys on source and "the WebGPU backend already forks per
+instanced mesh, so per-mesh clones add no extra builds". The premise is
+right and the inference runs backwards. `RenderObject.js:833-837` folds
+`object.uuid` for any instanced object, and `NodeManager` caches node
+BUILDERS on that key — so a distinct key does not mean a shared program,
+it means a fresh build per mesh. Whether that build yields a new program
+is then decided by the generated WGSL, which `Pipelines.js:186` looks up
+by SOURCE.
+For a stock node material the source is per-mesh unique, and the
+threshold is the part nobody would guess: `createInstanceMatrixNode`
+binds `instanceMatrix` as a UNIFORM BUFFER while `count x 64` fits
+`maxUniformBufferBindingSize` (65536 default, so under ~1024 instances),
+and that node is named `NodeBuffer_<id>` from a GLOBAL counter.
+Past that count three falls to four interleaved instanced `vec4`
+attributes named from a PER-BUILDER counter, and the source matches
+again. So a SMALL instanced mesh shares programs worse than a large one.
+Integrator's numbers on r185, `renderer.info.memory.programs`: 12 fresh
+meshes on one shared stock material +12; 12 geometry swaps on one reused
+mesh +0; 30 fresh meshes on materials reading their own instanced
+attributes +0.
+**The suite could not have caught this, and that is the reusable part.**
+`renderStateRelease.test.ts` instantiates NO renderer: it greps three's
+source text and drives `RenderObject` with stubs, so it counts no
+programs and never could. The cache-key assertions in it are correct and
+the PROSE CONCLUSION ATTACHED TO THEM was not — a comment inferring a
+program-sharing outcome from a cache-key fact, sitting on a green test
+that does not measure the outcome. Same family as finding 4 above: the
+assertion is fine, the sentence next to it is what shipped wrong. When a
+test's comment states a CONSEQUENCE the test does not observe, the
+consequence is unverified prose wearing a passing test's authority.
+
 **And one decision deliberately not taken.** The panel format now has a
 key (`visibleWhen`) that older parsers hard-reject, and still no
 `formatVersion`. Pre-alpha makes that acceptable and the design should

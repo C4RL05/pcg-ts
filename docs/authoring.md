@@ -2583,10 +2583,42 @@ sized to your live-cell ceiling, geometry swapped and `.count` set on
 cell-ready, keeps the pair stable so three's per-mesh entry is reused
 instead of accumulating.
 
-Note the clone was never a shader compile. WebGL keys its program cache
-on shader source, and the WebGPU backend already forks per instanced
-mesh, so per-mesh clones add no extra builds — they only add the release
-lever. `materialFor` buys ownership, not compilation.
+**The clone is not the compile, but a fresh MESH can be** — and the two
+are worth keeping apart, because reading the first as the second invites
+churning meshes freely. Cloning a material costs no extra program: WebGL
+keys its cache on shader source, and WebGPU's `getMaterialCacheKey` skips
+`uuid`, `name` and `version`, so clones with identical parameters resolve
+to one program. Creating a fresh `InstancedMesh` is the other question.
+`RenderObject.js` folds `object.uuid` into the cache key for any
+instanced object, which forces a fresh node-builder build per mesh; the
+program is then looked up by generated WGSL SOURCE
+(`Pipelines.js:186`), so whether that build yields a NEW program depends
+on whether the source came out identical.
+
+For a stock node material it does not, and the threshold is the
+surprising part. `NodeMaterial` routes an `InstancedMesh` through
+`createInstanceMatrixNode`, which binds `instanceMatrix` as a UNIFORM
+BUFFER while `count × 64` bytes fit `maxUniformBufferBindingSize`
+(65536 by default, so under about 1024 instances). That buffer node is
+named `NodeBuffer_<id>` from a GLOBAL counter, so its WGSL is unique per
+mesh and every new mesh is a new program. Past that count three falls to
+four interleaved instanced `vec4` attributes, whose names come from a
+per-builder counter, and the source is identical across meshes again.
+So small instanced meshes share programs WORSE than large ones, and a
+material that reads its own instanced attributes rather than
+`instanceMatrix` shares them regardless of count.
+
+Measured by an integrator on r185 through `renderer.info.memory.programs`:
+12 fresh meshes against one shared stock `MeshBasicNodeMaterial`, +12
+programs; 12 geometry swaps on one REUSED mesh, +0; 30 fresh meshes
+against pooled materials reading their own instanced attributes, +0.
+Which is the same conclusion from the other side: pool the meshes.
+
+And do not reach for geometry disposal to release any of this.
+`onGeometryDispose` only clears the attribute cache; `onMaterialDispose`
+is the one that deletes pipelines, bindings, nodes and the chainMap
+entry. Material dispose is the only release trigger there is, which is
+exactly what `materialFor` hands you.
 
 If you already have meshes and are overwriting `mesh.material` after the
 fact, the old route still works: dispose what you displaced — after the

@@ -263,8 +263,20 @@ describe("material dispose is the release lever (driven against the real RenderO
 
   it("two instanced meshes sharing one material still get DISTINCT cache keys (per-mesh state)", async () => {
     // The premise of the whole design: instanced render state is per
-    // mesh no matter what the material is, so per-mesh clones add no
-    // extra shader builds — they only add the release lever.
+    // mesh no matter what the material is, which is what makes the
+    // per-mesh clone a RELEASE LEVER rather than a cost.
+    //
+    // Do NOT read this as "so mesh churn is free" — this assertion was
+    // once commented that way and the inference runs backwards. A
+    // distinct cache key is what forces a fresh node-builder build per
+    // mesh (`NodeManager` caches builders on this very key), and for a
+    // stock node material under ~1024 instances that build emits a
+    // `NodeBuffer_<id>` named from a GLOBAL counter, so the WGSL differs
+    // and the program cache misses. Measured by an integrator on r185:
+    // 12 fresh instanced meshes on ONE shared material, +12 programs.
+    // What costs no extra build is CLONING a material (`uuid`, `name`
+    // and `version` are all skipped by getMaterialCacheKey); creating a
+    // fresh mesh is a different question with a different answer.
     const RenderObject = await loadRenderObject();
     const geometry = new BoxGeometry();
     const material = new MeshBasicMaterial();
