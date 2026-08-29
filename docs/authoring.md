@@ -2625,7 +2625,13 @@ four fresh meshes per row against one shared stock `MeshBasicNodeMaterial`:
 and `WGSLNodeBuilder` collects uniforms per stage, so the fragment source
 is identical across meshes and shared. That is why four meshes cost five
 and not eight: four unique vertex programs plus one fragment they all
-share.
+share — measured directly by reading `_pipelines.programs.vertex.size`
+and `.fragment.size` apart rather than the combined counter, which gives
+vertex +4 and fragment +1 at both 4 and 1024 instances, and zero of each
+at 1025. So the ceiling is one vertex program per mesh HOWEVER expensive
+the shading is: a fragment-heavy material does not multiply this, and the
+effort belongs in not churning small meshes rather than in simplifying
+shaders.
 
 The same integrator measured 12 geometry swaps on one REUSED mesh at +0,
 and 30 fresh meshes at +0 — the latter because those meshes were ABOVE

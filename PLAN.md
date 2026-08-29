@@ -597,6 +597,32 @@ FAILS when the value becomes usual. Distinguishing written-zero from
 never-written needs the recycled-object probe in finding 4, not a
 cleverer default.
 
+**5d. THE HAZARD HAS THREE COSTUMES, and the integrator found the third.**
+Worth stating once, because the three findings above are one thing and
+filing them separately is how it gets rediscovered a fourth time.
+
+- The ALLOCATOR agrees with the bug: an assertion that a slot is zero is
+  vacuous on a fresh allocation (finding 4, the pad write). Run it on a
+  recycled object.
+- The COMMENT borrows the test's authority: a sentence stating a
+  consequence the assertion beside it does not observe (finding 5, the
+  program-sharing inference). Say what the test measures, not what you
+  concluded from it.
+- The GUARD is itself unverified: a trip-wire nobody has deliberately
+  tripped is an unverified consequence wearing a passing suite's
+  authority. Their words, and they are right that it is the same shape —
+  they deleted the `.fill(1)` their defence rests on, watched exactly one
+  test fail naming the site, and restored it byte-identical. WE HAVE THIS
+  DISCIPLINE ALREADY and inconsistently: the device channel work
+  mutation-proved ten guards, the panel cycle check was proved to fail
+  before it was trusted, and plenty of older assertions have never been
+  tripped once.
+
+The unifying rule, and it is cheap: EVERY GUARD SHOULD HAVE BEEN SEEN TO
+FAIL AT LEAST ONCE, ON PURPOSE, BY THE PERSON WHO WROTE IT. All three
+costumes are that rule going unenforced in a different place — the
+allocator, the prose, or the guard itself.
+
 **And one decision deliberately not taken.** The panel format now has a
 key (`visibleWhen`) that older parsers hard-reject, and still no
 `formatVersion`. Pre-alpha makes that acceptable and the design should
