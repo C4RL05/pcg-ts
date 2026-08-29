@@ -444,6 +444,98 @@ exported type NAMES is added or renamed (not when a WGSL scalar type is:
 which is exactly the ambiguity that makes "a gpu type" the wrong phrase
 for this).
 
+### What the Fantasynth integration asked for, and what it found, 2026-08-29
+
+Six ranked change requests from the VJ host adopting the library. Three
+needed no library change at all, which is the part worth keeping: the
+survey that answers "you already have this" is the cheapest outcome
+available and it only happens if the survey runs BEFORE the build.
+
+Four shipped this cycle (`d397c14`..`74c292d`): `materialFor` and the
+`materialListOf`/`ownsMaterial` exports, opt-in device production of
+named channels behind `deviceInstanceAttrs`, panel `visibleWhen`, and
+the two undocumented fallback reasons. The three that needed nothing
+were transform decomposition (`instanceAttrs: ["P","rot","scale"]`
+already publishes exactly the pack's inputs), the panel control TYPE
+(`describeGraphParams` is keyed identically to `PanelControlSpec.param`,
+so the join is the host's ~40 lines), and the World rebuild pattern
+(two Worlds sequenced by the host is the only shape, and it is the one
+they had already planned).
+
+**FOUR THINGS THIS TURNED UP THAT NOBODY IS BUILDING, each waiting for a
+caller in the sense this section means.**
+
+**1. The matrix pack falls back silently where the channel path
+refuses.** There is ONE attribute namespace, so a user attribute named
+`scale` IS the standard one. Measured: `scale` written as `u32x2`
+produces a channel that faithfully carries `Uint32Array` tuple 2, while
+`composeTRS` — which needs f32x3 — falls back to identity scale and says
+nothing. `resolveInstanceAttrs` throws a message naming the node, the
+param and the fix for a MISSING attribute; the pack is mute for a
+MIS-SHAPED one, and the render just looks wrong. That is the one place
+in the spawner where "nothing fails silently" is not true.
+The shape of a fix is not obvious, which is why this is an entry and not
+a commit: a refusal is a behaviour change for any graph relying on the
+fallback (`instances.ts:247-253` documents it as deliberate for the
+ABSENT case, where identity is the right answer), and the two cases want
+different treatment — absent is a default, mis-shaped is a mistake. Wait
+for a graph that trips it.
+
+**2. `color` is unrepresentable as a param type.** `ParamSchema` has 11
+types (`f32 i32 u32 bool string vec3 vec4 enum items stringList
+numberList`) and none of them is `color`, so a host deriving a typed UI
+cannot tell a colour from any other `vec3`. This came from the panel
+request and is the half of it that is genuinely ours: the panel
+correctly carries no type, and the schema correctly carries no
+presentation, but "this vec3 is a colour" is a node-type FACT that has
+nowhere to live. Note the shape of the trap: `color` as a 12th type
+widens every switch over `ParamType` in the library and in every host,
+to say something a `vec3` plus one bit would say. Commit `9656a8f`
+declined `step`/`label`/`group` on `ParamSchema` for a related reason
+and that decision still holds; this is not a re-run of it.
+
+**3. `llms.txt` has no generator, and it was the staleest thing here.**
+It still gave the binding budget as the reason channels were not device
+produced, still said the resident spawner "does not fill it yet", and
+still ended "such a spawn has NO parity class at all" — so an agent
+reading the agent-form docs would have concluded device residency and
+named channels are mutually exclusive, which is the exact conclusion the
+opt-in retires. `docs/nodes.json` and `docs/nodes.md` were stale the
+same way and `npm run docs` fixed those; nothing fixes `llms.txt`.
+The generated catalogs cannot absorb it — it is prose about mechanisms,
+not a listing — so the realistic move is a test that fails when a
+phrase it quotes leaves the source, rather than a generator. Cheap
+version: pin the handful of sentences it quotes verbatim from a JSDoc.
+
+**4. AN ASSERTION THAT CANNOT FAIL, and it is a hazard class rather than
+one bug.** The device gather test found that deleting the explicit
+pad-zero write left all 41 tests green — and that the PRE-EXISTING
+colour pad assertion had been unable to fail since the day it was
+written. WebGPU zero-initializes a new buffer, and a retained buffer is
+always created fresh (detached at production, never returned to the
+pool), so a missing write reads as zero and the test agrees with a bug.
+Both are now pinned through a probe that cancels a channelled cook at
+its last cancellation check, so the run's `finally` reclaims 56 dirty
+buffers and the next cook reuses every one; an itemSize-4 channel shares
+a (usage, bucket) with an itemSize-3 one, so the pad lands exactly where
+a live component of the previous tenant sat. Without the write, 899 of
+1024 pad slots read dirty.
+The generalisation, and it is the entry: ANY assertion that a buffer
+slot is zero is vacuous on a fresh allocation. The same is true of any
+"is cleared", "is reset" or "is absent" check that runs on a
+first-use object. `measurement-harness-false-passes` already says prove
+an equality check can report "different" before trusting "same"; this
+is the allocator's version, and the way to run it is a RECYCLED object,
+not a new one.
+
+**And one decision deliberately not taken.** The panel format now has a
+key (`visibleWhen`) that older parsers hard-reject, and still no
+`formatVersion`. Pre-alpha makes that acceptable and the design should
+not be bent to avoid it, but a versioning story for the panel format is
+a decision someone should take on purpose rather than by accumulation.
+Related: `smoke-dist.mjs` never imports `pcg-ts/panels`, so the subpath's
+six exported names are pinned in source and unchecked across the build.
+
 ### Stretch: intra-node yielding — MEASURED AND REJECTED, 2026-08-28
 
 An external integrator's cook-cost harness, run headless against `dist/`,
