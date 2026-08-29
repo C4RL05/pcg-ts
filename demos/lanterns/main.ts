@@ -486,8 +486,8 @@ overlay.addSlider("relief", { min: 0, max: 60, step: 1, value: state.relief }, (
 overlay.addSelect(
   "id source",
   [
-    { value: "exact", label: "seed — u32 channel" },
-    { value: "widened", label: "seedWidened — f32 channel" },
+    { value: "exact", label: "seed — u32" },
+    { value: "widened", label: "seedWidened — f32" },
   ],
   "exact",
   (v) => {

@@ -97,8 +97,23 @@ import{$ as e,A as t,At as n,B as r,C as i,Dt as a,J as o,Mt as s,N as c,Nt as l
    fill arrives under the pointer, where it says which one you will hit. */
 .pcg-overlay .pcg-steps button:hover { background: var(--ed-raised-hi); color: var(--ed-ink-hi); }
 .pcg-overlay .pcg-steps button:active { background: var(--ed-edge); }
+/* min-width: 0 is the load-bearing half of this rule, and the reason the
+   panel had a horizontal scrollbar until 2026-08-29. A flex item's
+   automatic minimum is its MIN-CONTENT width, and a select's min-content
+   is its longest OPTION — not its selected one — so one long option in a
+   list the row never shows at rest pushes the select past the panel's
+   inner edge. The panel scrolls vertically, and per the overflow spec a
+   visible overflow-x beside a non-visible overflow-y computes to auto:
+   the bar appears with nothing visibly out of place to explain it. Its
+   Svelte twin in shared/Controls.svelte carries the same declaration for
+   the same reason; keep the two in step — this bug WAS the two drifting
+   apart. This bounds the damage but does not do the caller's job: a
+   label wider than the row now CLIPS instead of overflowing. At the
+   300px width the row leaves the select 162px, and an option's padding,
+   border and arrow eat ~34 of that, so the text itself has about 129px
+   — roughly 20 characters of the 12px UI font. */
 .pcg-overlay select {
-  flex: 1; padding: 3px 6px; background: var(--ed-well); color: var(--ed-ink);
+  flex: 1; min-width: 0; padding: 3px 6px; background: var(--ed-well); color: var(--ed-ink);
   border: 1px solid var(--ed-edge); border-radius: var(--ed-radius); font: 12px system-ui, sans-serif;
 }
 .pcg-overlay input[type="checkbox"] { accent-color: var(--ed-accent); }
