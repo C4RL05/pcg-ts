@@ -27,13 +27,15 @@ it can run inside a frame, and the field grammar compiles to WGSL to run
 on a GPU device when one is there.
 <!--/pcg:lede-->
 
-<img alt="The pcg-ts editor showing a five-node graph laid out left to right across the bottom of the frame, floating over the scene it just produced: a few hundred small conifers standing on a dark ground grid, thinned into soft clumps rather than spread evenly. The nodes read fill/scatter-even (count 6000, minDistance 2.5), filter/mask-by-noise (threshold 0.45, frequency 0.03), write/random-yaw (axis +z), write/random-scale (min 0.8, max 1.6) and spawnInstances. A panel down the left titled compose several primitives into a scatter offers tabs for scatter, mask and size with sliders for points, spacing and seed, and a copy link button. The status line along the top reads 60 fps, cook 17.8 ms, 5 of 5 cooked and cached, 2 out, 523 points, 523 instances, drawn as instances and points." src="./docs/manual-assets/editor.jpg" width="100%">
+<img alt="The pcg-ts editor showing a four-node graph laid out left to right across the middle of the frame, floating over the scene it just produced: a few hundred conifers standing on a dark ground grid, gathered into clumps with open clearings between them rather than spread evenly. The nodes read fill/scatter-even (count 700, minDistance 0.8), filter/mask-by-noise (threshold 0.45, frequency 0.03), write/random-scale (min 2, max 5) and spawnInstances. A panel down the left titled compose several primitives into a scatter offers tabs for scatter, mask and size with sliders for points at 700, spacing at 0.8 m and seed, and a copy link button. The status line along the top reads 60 fps, cook 11.5 ms, 4 of 4 cooked and cached, 2 out, 541 points, 541 instances, drawn as instances and points." src="./docs/manual-assets/editor.jpg" width="100%">
 
-*Five nodes and a forest. `scatter-even` fills a square with evenly
-spaced points, `mask-by-noise` deletes the ones that land in the quiet
-parts of a noise field, `random-yaw` and `random-scale` vary whatever is
-left, and `spawnInstances` puts a pine on each. Four of those five are
-shipped [primitives](#the-primitive-library) — small graphs themselves,
+*Four nodes and a forest. `scatter-even` fills a square with points
+under a minimum spacing so light it barely prunes, which leaves the
+underlying random scatter visible as clumps and clearings, `mask-by-noise`
+deletes the ones that land in the quiet parts of a noise field,
+`random-scale` varies the size of whatever is left, and `spawnInstances`
+puts a pine on each. Three of those four are shipped
+[primitives](#the-primitive-library) — small graphs themselves,
 dropped in as one node. The graph floats over the thing it just made;
 the panel on the left drives it.
 ([Open it live.](https://c4rl05.github.io/pcg-ts/editor/?graph=basics-compose-primitives))*
