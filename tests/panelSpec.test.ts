@@ -1,5 +1,6 @@
 /**
- * The panel spec format, checked from both ends.
+ * The panel spec format, checked from both ends — and, since `visibleWhen`,
+ * from the renderer's too.
  *
  * TWO HALVES, AND NEITHER IS ENOUGH ALONE.
  *
@@ -21,6 +22,12 @@
  *
  * The mutations are grouped by the class of error they belong to, and every
  * class the validator claims to catch has at least one.
+ *
+ * A THIRD BLOCK, at the bottom, exists because `visibleWhen` is the first
+ * key whose whole point is what a PANEL does with it. Every other key can be
+ * checked as data — a label is a string or it is not. A gate is only real if
+ * a row disappears, so that block runs an authored spec through the panel
+ * builder and the visibility predicate the Svelte renderer uses.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -32,6 +39,8 @@ import {
   type ParsePanelSpecOptions,
   parsePanelSpec,
 } from "../src/panels/index.js";
+import { visibleControls } from "../shared/controls.js";
+import { buildKnobPanel, type Knob, type KnobPanel } from "../shared/graphUi.js";
 
 const PANELS_DIR = fileURLToPath(new URL("../graphs/panels", import.meta.url));
 
@@ -83,7 +92,7 @@ describe("the shipped panel corpus conforms to the published format", () => {
 
   it("would reject a real corpus file that drifted", () => {
     // The control for the sweep above, run on the sweep's OWN inputs. The
-    // 44 mutations further down prove the validator detects, but they run
+    // mutations further down prove the validator detects, but they run
     // on a synthetic fixture; this proves the thing that reads the actual
     // files would notice if one of them changed shape. Every shipped panel
     // is corrupted four ways, and every corruption must be caught — a
@@ -111,6 +120,42 @@ describe("the shipped panel corpus conforms to the published format", () => {
     expect(caught).toBe(panelFiles.length * drifts.length);
   });
 
+  it("actually uses visibleWhen somewhere, and every corpus gate names a row", () => {
+    // A format nothing in the corpus exercises is a format nothing tests
+    // end to end. This asserts the gate is REACHED by the shipped panels.
+    //
+    // The second half is a CORPUS POLICY, and deliberately stricter than
+    // the format: `PanelControlSpec.visibleWhen` permits a gate on any
+    // address, including one no row shows and one this host does not have,
+    // because a host's mode may live in an inspector or in another panel
+    // entirely. These files are teaching material opened in an editor, so
+    // they hold to the tighter rule — every gate names a row of the same
+    // panel — which is what makes each of them drivable from the panel
+    // alone. An author following the TSDoc and failing here is reading a
+    // rule about this directory, not about the format.
+    const gated: string[] = [];
+    for (const file of panelFiles) {
+      const raw: unknown = JSON.parse(readFileSync(join(PANELS_DIR, file), "utf8"));
+      const spec = parsePanelSpec(raw, { source: file });
+      const rows = spec.sections.flatMap((s) => s.controls);
+      const shown = new Set(rows.map((c) => c.param));
+      for (const row of rows) {
+        if (row.visibleWhen === undefined) continue;
+        gated.push(`${file}:${row.param}`);
+        for (const address of Object.keys(row.visibleWhen)) {
+          expect(
+            shown.has(address),
+            `${file}: ${row.param} gates on ${address}, which this panel gives no row. The ` +
+              "FORMAT allows that; graphs/panels/ does not, because a corpus panel must be " +
+              "drivable from the panel alone — otherwise the graph can open with a row hidden " +
+              "and nothing on screen to unhide it. Add a row for the gate, or gate on one.",
+          ).toBe(true);
+        }
+      }
+    }
+    expect(gated.length, "no corpus panel uses visibleWhen").toBeGreaterThan(3);
+  });
+
   it("keeps every authored row, in order, through the parse", () => {
     // The parser rebuilds its result rather than returning what it was
     // given, so "it validated" has to also mean "it did not drop anything".
@@ -130,6 +175,8 @@ describe("the shipped panel corpus conforms to the published format", () => {
  *
  * `also` is here and in no corpus file — 0 of 261 shipped rows use it — so
  * without this fixture the mirror rules would be reachable by nothing.
+ * `visibleWhen` IS in the corpus (see the sweep below), but only in its
+ * simplest forms; the AND-across-two-keys shape lives only here.
  */
 function validSpec(): Record<string, unknown> {
   return {
@@ -152,6 +199,16 @@ function validSpec(): Record<string, unknown> {
             also: ["ridges.translate.amplitude", "$duneEcho"],
             step: 0.25,
             _comment: "controls may be annotated too",
+          },
+          {
+            // Every shape a gate has, in one row: two keys (which must BOTH
+            // hold), a scalar on one and a list on the other, and a
+            // graph-scoped address beside a node one. `visibleWhen` is on
+            // this row and no other, so a mutation to it stays a one-change
+            // diff of a spec this file asserts is valid.
+            param: "dunes.translate.frequency",
+            label: "ridge frequency",
+            visibleWhen: { $mode: "dunes", "grid.cellSize": [10, 20, 30] },
           },
         ],
       },
@@ -234,8 +291,17 @@ const CASES: readonly Case[] = [
     expect: [
       "sections[0].controls[1]",
       'unknown key "enumLabels"',
-      "allowed keys: param, also, label, description, min, max, step, unit, _comment",
+      "allowed keys: param, also, visibleWhen, label, description, min, max, step, unit, _comment",
     ],
+  },
+  {
+    // The near-miss the new key invites: every other conditional-visibility
+    // format in circulation spells it something else.
+    why: "a near-miss spelling of visibleWhen",
+    spec: mutated((s) => {
+      controlsOf(s, 1)[1].showIf = { $mode: "dunes" };
+    }),
+    expect: ['unknown key "showIf"', "visibleWhen"],
   },
   {
     why: "a near-miss spelling of a real key",
@@ -388,6 +454,181 @@ const CASES: readonly Case[] = [
       controlsOf(s, 1)[0].also = ["ridges.translate.amplitude", "ridges.translate.amplitude"];
     }),
     expect: ["sections[1].controls[0].also[1]", "listed twice"],
+  },
+
+  // ---- the gate ----------------------------------------------------------
+  {
+    why: "visibleWhen is not an object",
+    spec: mutated((s) => {
+      controlsOf(s, 1)[1].visibleWhen = ["$mode"];
+    }),
+    expect: [
+      "sections[1].controls[1].visibleWhen",
+      "expected an object mapping a knob address",
+      "got an array",
+    ],
+  },
+  {
+    why: "visibleWhen is empty",
+    spec: mutated((s) => {
+      controlsOf(s, 1)[1].visibleWhen = {};
+    }),
+    expect: [
+      "sections[1].controls[1].visibleWhen",
+      "at least one condition",
+      "always shown",
+      "Omit the key",
+    ],
+  },
+  {
+    // The realistic slip, and the same one `param` already refuses: naming
+    // the knob without its node.
+    why: "a gate key is not an address",
+    spec: mutated((s) => {
+      controlsOf(s, 1)[1].visibleWhen = { mode: "dunes" };
+    }),
+    expect: [
+      'sections[1].controls[1].visibleWhen["mode"]',
+      '"mode" is not a knob address',
+      "$<name>",
+    ],
+  },
+  {
+    why: "a gate key is an empty string",
+    spec: mutated((s) => {
+      controlsOf(s, 1)[1].visibleWhen = { "": "dunes" };
+    }),
+    expect: ['sections[1].controls[1].visibleWhen[""]', "empty string", "<nodeId>.<paramName>"],
+  },
+  {
+    // The trap the format exists to close: hide the row by turning it, and
+    // there is nothing left on screen to turn it back with.
+    why: "a row gates on its own param",
+    spec: mutated((s) => {
+      controlsOf(s, 1)[1].visibleWhen = { "dunes.translate.frequency": 2 };
+    }),
+    expect: [
+      'sections[1].controls[1].visibleWhen["dunes.translate.frequency"]',
+      "this row's own param",
+      "gate on another knob",
+    ],
+  },
+  {
+    // The same trap one step removed: a mirror holds whatever the row last
+    // wrote, so gating on it is gating on the row itself.
+    why: "a row gates on a knob its own `also` mirrors",
+    spec: mutated((s) => {
+      controlsOf(s, 1)[0].visibleWhen = { "$duneEcho": 3 };
+    }),
+    expect: [
+      'sections[1].controls[0].visibleWhen["$duneEcho"]',
+      "mirrored by this row's `also`",
+      "no way back",
+    ],
+  },
+  {
+    why: "a gate value is null",
+    spec: mutated((s) => {
+      controlsOf(s, 1)[1].visibleWhen = { $mode: null };
+    }),
+    expect: [
+      'sections[1].controls[1].visibleWhen["$mode"]',
+      "expected a number, string or boolean",
+      "got null",
+    ],
+  },
+  {
+    why: "a gate value is an object",
+    spec: mutated((s) => {
+      controlsOf(s, 1)[1].visibleWhen = { $mode: { equals: "dunes" } };
+    }),
+    expect: [
+      'sections[1].controls[1].visibleWhen["$mode"]',
+      "expected a number, string or boolean",
+      "got a object",
+    ],
+  },
+  {
+    why: "a gate value is not finite",
+    spec: mutated((s) => {
+      controlsOf(s, 1)[1].visibleWhen = { "grid.cellSize": Number.NaN };
+    }),
+    expect: [
+      'sections[1].controls[1].visibleWhen["grid.cellSize"]',
+      "finite number",
+      "NaN",
+      "never be shown",
+    ],
+  },
+  {
+    why: "a gate list is empty",
+    spec: mutated((s) => {
+      controlsOf(s, 1)[1].visibleWhen = { "grid.cellSize": [] };
+    }),
+    expect: [
+      'sections[1].controls[1].visibleWhen["grid.cellSize"]',
+      "at least one value",
+      "matches nothing",
+    ],
+  },
+  {
+    why: "a gate list holds a non-scalar",
+    spec: mutated((s) => {
+      controlsOf(s, 1)[1].visibleWhen = { "grid.cellSize": [10, [20]] };
+    }),
+    expect: [
+      'sections[1].controls[1].visibleWhen["grid.cellSize"][1]',
+      "expected a number, string or boolean",
+      "got an array",
+    ],
+  },
+  {
+    // A sparse array reaches the parser from a host building a spec in JS.
+    // `forEach` would skip the hole and normalize `[1, , 2]` to a dense
+    // two-entry list — a silent edit of what the author wrote.
+    why: "a gate list has a hole in it",
+    spec: mutated((s) => {
+      const sparse = [1, 2];
+      delete sparse[0];
+      controlsOf(s, 1)[1].visibleWhen = { "grid.cellSize": sparse };
+    }),
+    expect: [
+      'sections[1].controls[1].visibleWhen["grid.cellSize"][0]',
+      "expected a number, string or boolean",
+      "got a undefined",
+    ],
+  },
+  {
+    // The two-step form of the self-gate trap: turn A out of B's range,
+    // then B out of A's, and neither row is on screen to undo either.
+    why: "two rows gate each other",
+    spec: mutated((s) => {
+      controlsOf(s, 0)[0].visibleWhen = { $density: 1 };
+      controlsOf(s, 0)[1].visibleWhen = { "grid.cellSize": 2 };
+    }),
+    expect: [
+      "visibleWhen",
+      "closes a loop",
+      '"grid.cellSize"',
+      '"$density"',
+      "none of them is drawn",
+    ],
+  },
+  {
+    why: "three rows gate each other round a longer ring",
+    spec: mutated((s) => {
+      controlsOf(s, 0)[0].visibleWhen = { $density: 1 };
+      controlsOf(s, 0)[1].visibleWhen = { "dunes.translate.frequency": 2 };
+      controlsOf(s, 1)[1].visibleWhen = { "grid.cellSize": 3 };
+    }),
+    expect: ["closes a loop", "Gate the chain on a knob no row in it writes"],
+  },
+  {
+    why: "a gate list repeats a value",
+    spec: mutated((s) => {
+      controlsOf(s, 1)[1].visibleWhen = { $mode: ["dunes", "ridges", "dunes"] };
+    }),
+    expect: ['sections[1].controls[1].visibleWhen["$mode"][2]', '"dunes" is listed twice'],
   },
 
   // ---- text fields -------------------------------------------------------
@@ -604,13 +845,25 @@ const CASES: readonly Case[] = [
 describe("the validator rejects a malformed panel, and says where", () => {
   it("accepts the fixture every case below is a one-change edit of", () => {
     // The positive control. Without it a validator that threw on
-    // EVERYTHING would pass all 44 cases below and look thorough.
+    // EVERYTHING would pass every case below and look thorough.
     const spec = parsePanelSpec(validSpec(), { source: "fixture" });
     expect(spec.sections).toHaveLength(2);
     expect(spec.sections[1].controls[0].also).toEqual([
       "ridges.translate.amplitude",
       "$duneEcho",
     ]);
+    // The gate survives the rebuild with both keys, the list intact and in
+    // the order it was written — and as a COPY, so a caller mutating what
+    // it handed in cannot reach into the parsed spec afterwards.
+    const gated = spec.sections[1].controls[1];
+    expect(gated.visibleWhen).toEqual({ $mode: "dunes", "grid.cellSize": [10, 20, 30] });
+    expect(Object.keys(gated.visibleWhen ?? {})).toEqual(["$mode", "grid.cellSize"]);
+    const source = validSpec();
+    const raw = (source.sections as Sections)[1].controls as Record<string, unknown>[];
+    expect(gated.visibleWhen).not.toBe(raw[1].visibleWhen);
+    expect(gated.visibleWhen?.["grid.cellSize"]).not.toBe(
+      (raw[1].visibleWhen as Record<string, unknown>)["grid.cellSize"],
+    );
     expect(spec._comment).toContain("authoring note");
     expect(spec.sections[0].controls[0]).toEqual({
       param: "grid.cellSize",
@@ -628,7 +881,7 @@ describe("the validator rejects a malformed panel, and says where", () => {
   it("has a case for every class of error the format defines", () => {
     // A case list that shrinks by accident is a quieter pass, not a
     // failure. This is the number that has to be edited deliberately.
-    expect(CASES.length).toBe(55);
+    expect(CASES.length).toBe(71);
     expect(new Set(CASES.map((c) => c.why)).size, "two cases share a `why`").toBe(CASES.length);
   });
 
@@ -684,5 +937,235 @@ describe("the validator rejects a malformed panel, and says where", () => {
       ],
     });
     expect(spec.sections[0].controls[0].param).toBe("outer.inner.node.cellSize.amplitude");
+  });
+});
+
+/**
+ * THE THIRD HALF: the gate has to REACH A ROW, or the format is decoration.
+ *
+ * The two halves above prove `visibleWhen` parses and that a malformed one
+ * is refused. Neither proves a row ever disappears. This one runs the
+ * authored spec through the panel builder the editor uses and then through
+ * the same predicate `Controls.svelte` renders with, so "the format carries
+ * it" and "the panel obeys it" are separate assertions — the first passed
+ * for a while before the second existed, and that is exactly the state this
+ * block exists to make impossible to return to.
+ *
+ * Knobs are hand-built rather than cooked out of a graph: what is under test
+ * is the gate, and a `sweepProfile` standing in for it would only add a
+ * second thing that can break.
+ */
+describe("a gate reaches the rendered row", () => {
+  const enumKnob = (key: string, value: string, choices: readonly string[]): Knob => ({
+    scope: "node",
+    node: key.split(".")[0],
+    name: key.split(".")[1],
+    key,
+    nodeLabel: "sweepProfile",
+    schema: { type: "enum", default: choices[0], description: "", enum: choices },
+    value,
+    isField: false,
+    exposed: false,
+  });
+
+  const numberKnob = (key: string, value: number): Knob => ({
+    scope: "node",
+    node: key.split(".")[0],
+    name: key.split(".")[1],
+    key,
+    nodeLabel: "sweepProfile",
+    schema: { type: "i32", default: value, description: "", min: 3, max: 64 },
+    value,
+    isField: false,
+    exposed: false,
+  });
+
+  /** The shipped `basics-sweep-profile` shape, reduced to what gates it. */
+  const knobs = (profile: string, joint: string): readonly Knob[] => [
+    enumKnob("skin.profile", profile, ["circle", "square", "ribbon"]),
+    enumKnob("skin.joint", joint, ["miter", "perpendicular"]),
+    numberKnob("skin.sides", 10),
+    numberKnob("skin.miterLimit", 4),
+    numberKnob("skin.width", 1),
+  ];
+
+  const SPEC = (): GraphPanelSpec =>
+    parsePanelSpec(
+      JSON.parse(readFileSync(join(PANELS_DIR, "basics-sweep-profile.json"), "utf8")),
+      { source: "basics-sweep-profile.json" },
+    );
+
+  /** The rows a panel would actually draw, in order, for these knob values. */
+  const drawn = (profile: string, joint: string): string[] => {
+    const spec = SPEC();
+    const panel = buildKnobPanel(knobs(profile, joint), spec);
+    return panel.sections.flatMap((section) =>
+      visibleControls(section, panel.values).map((c) => ("key" in c ? c.key : c.items[0].key)),
+    );
+  };
+
+  it("draws only the rows the current mode applies to", () => {
+    // A circle has sides and no width; a mitred joint has a limit.
+    expect(drawn("circle", "miter")).toEqual([
+      "skin.profile",
+      "skin.sides",
+      "skin.joint",
+      "skin.miterLimit",
+    ]);
+    // A ribbon swaps `sides` for `width`; a perpendicular joint drops the
+    // limit. Nothing else moved, and no knob lost its value.
+    // The authored order is kept — `width` sits where the spec puts it,
+    // above `joint`, rather than being appended where the gate opened.
+    expect(drawn("ribbon", "perpendicular")).toEqual([
+      "skin.profile",
+      "skin.width",
+      "skin.joint",
+    ]);
+  });
+
+  it("re-reads the gate from the live values, not from the cooked graph", () => {
+    // The behaviour a host depends on: `Controls.svelte` renders the panel's
+    // own record, and a select writes that record before the graph hears
+    // about it. So editing the record alone must move the rows — if the gate
+    // were resolved when the panel was BUILT, this would still show `sides`.
+    const spec = SPEC();
+    const panel = buildKnobPanel(knobs("circle", "miter"), spec);
+    const surface = panel.sections[panel.sections.length - 1];
+    expect(visibleControls(surface, panel.values).map((c) => ("key" in c ? c.key : ""))).toContain(
+      "skin.sides",
+    );
+
+    const edited = { ...panel.values, "skin.profile": "ribbon" };
+    const keys = visibleControls(surface, edited).map((c) => ("key" in c ? c.key : ""));
+    expect(keys).not.toContain("skin.sides");
+    expect(keys).toContain("skin.width");
+    // And the hidden row's VALUE is untouched: hiding is presentation, and
+    // the graph still cooks with whatever `sides` holds.
+    expect(panel.values["skin.sides"]).toBe(10);
+  });
+
+  it("keeps the knob a gate READS readable even when no row shows it", () => {
+    // The gate may name a knob the spec chose not to surface. Its value has
+    // to reach the panel's record anyway, or the gate resolves to nothing
+    // and the row hangs permanently open.
+    const spec: GraphPanelSpec = {
+      sections: [
+        {
+          title: "surface",
+          controls: [{ param: "skin.sides", visibleWhen: { "skin.profile": "circle" } }],
+        },
+      ],
+    };
+    const panel = buildKnobPanel(knobs("ribbon", "miter"), spec);
+    expect(panel.values["skin.profile"]).toBe("ribbon");
+    expect(visibleControls(panel.sections[0], panel.values)).toEqual([]);
+  });
+
+  it("shows the row, and SAYS SO, when a gate names a knob the graph lacks", () => {
+    // The safe way round. A silently-hidden row leaves an author looking for
+    // a knob that is not there; an inert gate leaves the row on screen and
+    // the reason beside the panel.
+    const spec: GraphPanelSpec = {
+      sections: [
+        {
+          title: "surface",
+          controls: [{ param: "skin.sides", visibleWhen: { "skin.shape": "circle" } }],
+        },
+      ],
+    };
+    const panel = buildKnobPanel(knobs("ribbon", "miter"), spec);
+    expect(panel.unknown).toEqual(["skin.shape"]);
+    expect(visibleControls(panel.sections[0], panel.values).map((c) => ("key" in c ? c.key : ""))
+    ).toEqual(["skin.sides"]);
+  });
+
+  it("reports a gate on a knob no widget can read, once", () => {
+    // `Overview.svelte` renders `skipped` as a keyed {#each}, and a repeated
+    // key is a RUNTIME error there — reachable the moment two rows gate on
+    // the same unreadable knob, which is the normal way to write a mode.
+    const fielded: Knob = { ...numberKnob("skin.roll", 0), isField: true };
+    const spec: GraphPanelSpec = {
+      sections: [
+        {
+          title: "surface",
+          controls: [
+            { param: "skin.sides", visibleWhen: { "skin.roll": 0 } },
+            { param: "skin.width", visibleWhen: { "skin.roll": 0 } },
+          ],
+        },
+      ],
+    };
+    const panel = buildKnobPanel([...knobs("circle", "miter"), fielded], spec);
+    expect(panel.skipped.filter((s) => s.key === "skin.roll")).toHaveLength(1);
+    expect(panel.skipped[0].reason).toContain("holds a field");
+    // Unreadable means inert, not hidden.
+    expect(visibleControls(panel.sections[0], panel.values)).toHaveLength(2);
+  });
+
+  it("leaves a gate on a value no gate can read INERT, in either row order", () => {
+    // A gate's vocabulary is the three scalars. The knob it names may hold
+    // something else — a `numberList` is the reachable case — and then the
+    // gate is UNANSWERABLE, which the format says leaves the row shown. Two
+    // ways to get that wrong, and this covers both: registering the array
+    // as a value would make the gate FAIL and hide the row for a reason
+    // nothing explains, and registering it in only one of the two possible
+    // row orders would make it an ordering fact.
+    const weights: Knob = {
+      scope: "node",
+      node: "skin",
+      name: "weights",
+      key: "skin.weights",
+      nodeLabel: "sweepProfile",
+      schema: { type: "numberList", default: [1, 2], description: "" },
+      value: [1, 2],
+      isField: false,
+      exposed: false,
+    };
+    const rows = [
+      { param: "skin.sides", visibleWhen: { "skin.weights": 1 } },
+      { param: "skin.weights" },
+    ];
+    const panelFor = (controls: typeof rows): KnobPanel => {
+      const spec: GraphPanelSpec = { sections: [{ title: "surface", controls }] };
+      return buildKnobPanel([...knobs("circle", "miter"), weights], spec);
+    };
+    const shownFor = (controls: typeof rows): string[] => {
+      const panel = panelFor(controls);
+      return visibleControls(panel.sections[0], panel.values).map((c) =>
+        "key" in c ? c.key : "",
+      );
+    };
+    // `skin.weights` has no widget either way, so only `skin.sides` is ever
+    // a row — and it is shown, because its gate cannot be answered.
+    expect(shownFor(rows)).toEqual(["skin.sides"]);
+    expect(shownFor([...rows].reverse())).toEqual(["skin.sides"]);
+    // Said out loud rather than left to be discovered, and said ONCE.
+    for (const controls of [rows, [...rows].reverse()]) {
+      const panel = panelFor(controls);
+      const notes = panel.skipped.filter((s) => s.key === "skin.weights");
+      expect(notes).toHaveLength(1);
+      expect(panel.values).not.toHaveProperty("skin.weights");
+    }
+  });
+
+  it("drops a section whose every row is gated off", () => {
+    // A titled group with no rows under it is a heading that leads nowhere,
+    // and in a tabbed panel a tab that opens on blank space. The section
+    // still EXISTS in the built panel — the values behind it are live and
+    // one flip brings it back — so the drop is the renderer's.
+    const spec: GraphPanelSpec = {
+      sections: [
+        { title: "profile", controls: [{ param: "skin.profile" }] },
+        {
+          title: "ribbon",
+          controls: [{ param: "skin.width", visibleWhen: { "skin.profile": "ribbon" } }],
+        },
+      ],
+    };
+    const panel = buildKnobPanel(knobs("circle", "miter"), spec);
+    expect(panel.sections.map((s) => s.title)).toEqual(["profile", "ribbon"]);
+    expect(
+      panel.sections.filter((s) => visibleControls(s, panel.values).length > 0).map((s) => s.title),
+    ).toEqual(["profile"]);
   });
 });

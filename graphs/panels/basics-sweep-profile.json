@@ -11,15 +11,42 @@
     },
     {
       "title": "surface",
+      "_comment": "The gated rows are the ones sweepProfile's own schema documents as ignored in some mode — 'sides' means nothing to a ribbon, 'miterLimit' nothing to a perpendicular joint. A gate moves that sentence out of the hover text and onto the panel. Hiding changes nothing the graph cooks: a hidden row still holds its value.",
       "controls": [
         { "param": "skin.profile", "label": "profile" },
-        { "param": "skin.sides", "label": "sides", "min": 3, "max": 64, "step": 1 },
-        { "param": "skin.width", "label": "ribbon width", "min": 0.1, "max": 8, "step": 0.1 },
+        {
+          "param": "skin.sides",
+          "label": "sides",
+          "min": 3,
+          "max": 64,
+          "step": 1,
+          "visibleWhen": { "skin.profile": "circle" }
+        },
+        {
+          "param": "skin.width",
+          "label": "ribbon width",
+          "min": 0.1,
+          "max": 8,
+          "step": 0.1,
+          "visibleWhen": { "skin.profile": "ribbon" }
+        },
         { "param": "skin.roll", "label": "roll", "min": -1, "max": 1, "step": 0.01, "unit": "turns" },
         { "param": "skin.frame", "label": "frame" },
         { "param": "skin.joint", "label": "joint" },
-        { "param": "skin.miterLimit", "label": "miter limit", "min": 1, "max": 16, "step": 0.1 },
-        { "param": "skin.caps", "label": "caps" }
+        {
+          "param": "skin.miterLimit",
+          "label": "miter limit",
+          "min": 1,
+          "max": 16,
+          "step": 0.1,
+          "visibleWhen": { "skin.joint": "miter" }
+        },
+        {
+          "param": "skin.caps",
+          "label": "caps",
+          "_comment": "The list form: caps close a hole, and only the two CLOSED profiles have one.",
+          "visibleWhen": { "skin.profile": ["circle", "square"] }
+        }
       ]
     }
   ]

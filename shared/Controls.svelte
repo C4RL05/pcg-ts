@@ -23,6 +23,7 @@
   import {
     clampToRange,
     formatNumber,
+    visibleSections,
     type Control,
     type ControlCommit,
     type ControlSection,
@@ -67,6 +68,29 @@
     /** Extra content for a section, rendered above its controls. */
     extra?: Snippet<[string]>;
   } = $props();
+
+  /**
+   * The panel as it stands: every section paired with the rows whose gates
+   * hold, and the sections left with none dropped outright.
+   *
+   * DERIVED FROM `values`, which is what makes a gate live. `values` is the
+   * panel's own reactive record and every commit writes it before the host
+   * hears about it, so changing a mode re-runs this in the same frame — the
+   * row disappears with the click rather than after whatever the host does
+   * next. Computing it from the SPEC instead would have been a frame behind
+   * at best, and in a panel whose host does not recook at all, never.
+   */
+  const shown = $derived(visibleSections(sections, values));
+
+  /**
+   * A gate can hide the section the tab bar is currently showing. Without
+   * this the panel goes blank and the only way back is a tab the bar no
+   * longer draws.
+   */
+  $effect(() => {
+    const titles = shown.map((group) => group.section.title);
+    if (titles.length > 0 && !titles.includes(tab)) tab = titles[0];
+  });
 
   const isRecord = (v: unknown): v is Record<string, unknown> =>
     typeof v === "object" && v !== null && !Array.isArray(v);
@@ -178,9 +202,12 @@
   }
 </script>
 
+<!-- `shown` rather than `sections` throughout: a section every one of whose
+     rows is gated off has nothing to show, so it gets neither a tab nor a
+     heading. -->
 {#if tabbed}
   <div class="tabs" role="tablist" aria-label="controls">
-    {#each sections as section (section.title)}
+    {#each shown as { section } (section.title)}
       <button
         class="tab"
         class:on={tab === section.title}
@@ -191,7 +218,7 @@
   </div>
 {/if}
 
-{#each sections as section (section.title)}
+{#each shown as { section, controls } (section.title)}
   <div class="group" hidden={tabbed && tab !== section.title}>
     <!-- Untabbed, the title has nowhere else to go: the tab bar is what
          normally carries it, so without one a section would be an
@@ -202,7 +229,10 @@
     {/if}
     {@render extra?.(section.title)}
 
-    {#each section.controls as control, index (idOf(control, index))}
+    <!-- Keyed by the row's place in the UNFILTERED section, so a `flags`
+         row — the one kind with no key of its own — keeps its identity when
+         a gate above it hides a sibling and every index below shifts up. -->
+    {#each controls as control (idOf(control, section.controls.indexOf(control)))}
       {#if control.kind === "slider"}
         <label class="row" title={control.description}>
           <span>{control.label}</span>

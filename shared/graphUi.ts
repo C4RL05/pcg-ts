@@ -259,7 +259,15 @@ function controlFor(knob: Knob, spec?: PanelControlSpec): Control<KnobValues> | 
   // — and a panel is one presentation of it, so a panel that says nothing
   // must not erase what the graph says.
   const described = spec?.description ?? schema.description;
-  const note = described !== undefined ? { description: described } : {};
+  const note = {
+    ...(described !== undefined ? { description: described } : {}),
+    // Carried onto the widget rather than resolved here. Whether a gate
+    // holds is a question about the values the panel is CURRENTLY showing,
+    // and this function runs once per graph revision — resolving it here
+    // would leave a row on screen until the next recook. `Controls.svelte`
+    // re-reads it against its live record instead.
+    ...(spec?.visibleWhen !== undefined ? { visibleWhen: spec.visibleWhen } : {}),
+  };
 
   switch (schema.type) {
     case "f32":
@@ -396,12 +404,12 @@ export function buildKnobPanel(knobs: readonly Knob[], spec?: GraphPanelSpec): K
   /** Register one knob's value; false when it cannot be shown. */
   const admit = (knob: Knob): boolean => {
     if (knob.isField) {
-      skipped.push({ key: knob.key, reason: "holds a field — edit it in the node inspector" });
+      noteOnce(skipped, knob.key, "holds a field — edit it in the node inspector");
       return false;
     }
     const value = valueOf(knob);
     if (value === undefined) {
-      skipped.push({ key: knob.key, reason: `no widget for ${knob.schema.type}` });
+      noteOnce(skipped, knob.key, `no widget for ${knob.schema.type}`);
       return false;
     }
     values[knob.key] = value;
@@ -415,20 +423,26 @@ export function buildKnobPanel(knobs: readonly Knob[], spec?: GraphPanelSpec): K
       for (const row of section.controls) {
         const knob = byKey.get(row.param);
         if (knob === undefined) {
-          unknown.push(row.param);
+          noteUnknown(unknown, row.param);
           continue;
         }
         if (!admit(knob)) continue;
         const control = controlFor(knob, row);
         if (control === undefined) {
-          skipped.push({ key: knob.key, reason: `no widget for ${knob.schema.type}` });
+          noteOnce(skipped, knob.key, `no widget for ${knob.schema.type}`);
           delete values[knob.key];
           continue;
         }
         const also = mirrorsFor(row, knob, byKey, skipped, unknown);
         if (also.length > 0) mirrors[knob.key] = also;
+        admitGates(row, knob, byKey, values, skipped, unknown);
         controls.push(control);
       }
+      // Gated rows are still rows: a section is dropped here only when the
+      // spec named nothing this graph HAS. Whether a gate holds changes
+      // between one click and the next, and a section that vanished from
+      // this list would take its values with it — so hiding is the
+      // renderer's, over the same live record the rows are drawn from.
       if (controls.length > 0) sections.push({ title: section.title, controls });
     }
     return { sections, values, mirrors, skipped, unknown, authored: true };
@@ -443,7 +457,7 @@ export function buildKnobPanel(knobs: readonly Knob[], spec?: GraphPanelSpec): K
     if (!admit(knob)) continue;
     const control = controlFor(knob);
     if (control === undefined) {
-      skipped.push({ key: knob.key, reason: `no widget for ${knob.schema.type}` });
+      noteOnce(skipped, knob.key, `no widget for ${knob.schema.type}`);
       delete values[knob.key];
       continue;
     }
@@ -481,6 +495,89 @@ export function buildKnobPanel(knobs: readonly Knob[], spec?: GraphPanelSpec): K
 }
 
 /**
+ * Add a skip once. `Overview.svelte` renders the list KEYED BY `key`, and a
+ * keyed `{#each}` over a repeated key is a runtime error — which is
+ * reachable the moment two rows gate on the same unreadable knob.
+ */
+function noteOnce(list: { key: string; reason: string }[], key: string, reason: string): void {
+  if (!list.some((entry) => entry.key === key)) list.push({ key, reason });
+}
+
+/**
+ * The same, for the flat list of addresses the spec named and the graph does
+ * not have. Joined into one sentence rather than keyed, so a repeat is only
+ * ugly — but a `param` and a gate can now name the same missing address, and
+ * "skin.shape, skin.shape" reads as two faults.
+ */
+function noteUnknown(list: string[], address: string): void {
+  if (!list.includes(address)) list.push(address);
+}
+
+/**
+ * A knob's value when it is one a GATE can be compared against.
+ *
+ * {@link valueOf} answers with anything a widget can edit, vectors included.
+ * A gate's vocabulary is narrower — the three scalars — so this is the
+ * narrower question, asked where the wider answer would be wrong.
+ */
+function scalarOf(knob: Knob): ControlValue | undefined {
+  const v = knob.value;
+  return typeof v === "number" || typeof v === "string" || typeof v === "boolean" ? v : undefined;
+}
+
+/**
+ * The knobs a row's `visibleWhen` READS, made readable.
+ *
+ * A gate names an address that need not be a row of this panel — the mode a
+ * row hangs off may be edited in the node inspector, or hoisted to the graph
+ * — so its value has to be put into the panel's record deliberately, or the
+ * gate would resolve to nothing and the row would hang permanently open. The
+ * value is registered and nothing else: no widget is built for it, and no
+ * commit ever writes it, because the row that owns it is the one that does.
+ *
+ * A gate the graph cannot answer is REPORTED AND LEFT INERT rather than
+ * hiding its row — see `panelRowVisible`. A typo in a gate that silently
+ * removed a knob from the panel would leave the author looking for a row
+ * that is not there.
+ */
+function admitGates(
+  row: PanelControlSpec,
+  gated: Knob,
+  byKey: ReadonlyMap<string, Knob>,
+  values: KnobValues,
+  skipped: { key: string; reason: string }[],
+  unknown: string[],
+): void {
+  for (const address of Object.keys(row.visibleWhen ?? {})) {
+    // Already readable — its own row admitted it, or an earlier gate did.
+    if (address in values) continue;
+    const knob = byKey.get(address);
+    if (knob === undefined) {
+      noteUnknown(unknown, address);
+      continue;
+    }
+    // SCALARS ONLY, because only a scalar can answer a gate. Registering a
+    // vec3 or a numberList would put a value in the record that
+    // `panelConditionHolds` can never match, so the row would come out
+    // HIDDEN where the format says an unanswerable gate leaves it shown —
+    // and hidden for a reason nothing on screen explains. Left out, it takes
+    // the documented path: reported here, inert there.
+    const value = knob.isField ? undefined : scalarOf(knob);
+    if (value === undefined) {
+      noteOnce(
+        skipped,
+        address,
+        knob.isField
+          ? `gates ${gated.key}, but holds a field — the gate is ignored and the row stays shown`
+          : `gates ${gated.key}, but a gate cannot read ${knob.schema.type} — the gate is ignored`,
+      );
+      continue;
+    }
+    values[address] = value;
+  }
+}
+
+/**
  * The keys a row writes besides its own, checked against the graph.
  *
  * A mirror that does not exist, holds a field, or is a different type is
@@ -500,18 +597,19 @@ function mirrorsFor(
   for (const key of row.also ?? []) {
     const knob = byKey.get(key);
     if (knob === undefined) {
-      unknown.push(key);
+      noteUnknown(unknown, key);
       continue;
     }
     if (knob.isField) {
-      skipped.push({ key, reason: `mirrored by ${primary.key}, but holds a field` });
+      noteOnce(skipped, key, `mirrored by ${primary.key}, but holds a field`);
       continue;
     }
     if (knob.schema.type !== primary.schema.type) {
-      skipped.push({
+      noteOnce(
+        skipped,
         key,
-        reason: `mirrored by ${primary.key}, which is ${primary.schema.type}, not ${knob.schema.type}`,
-      });
+        `mirrored by ${primary.key}, which is ${primary.schema.type}, not ${knob.schema.type}`,
+      );
       continue;
     }
     also.push(key);

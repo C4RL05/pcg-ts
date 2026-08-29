@@ -28,6 +28,7 @@
     adoptChanged,
     applyCommit,
     snapshotValues,
+    visibleSections,
     type ControlCommit,
   } from "../shared/controls.js";
   import {
@@ -125,6 +126,20 @@
     return ka.length === Object.keys(b).length && ka.every((k) => k in b);
   };
 
+  /**
+   * The sections that have a row left after this panel's gates are applied.
+   *
+   * `Controls` filters internally, but this component has its own questions
+   * to answer about the same list — whether to raise a tab bar, and what to
+   * say when there is nothing to draw — and reading `panel.sections.length`
+   * for those was reading a count a gate can change. It got both wrong the
+   * same way: a two-section panel with one section gated off drew a
+   * one-entry tab bar, and a panel with every row gated off drew its
+   * "curated for this graph" preamble and the share buttons above no
+   * widgets at all, with nothing on screen saying why.
+   */
+  const shown = $derived(visibleSections(panel.sections, values));
+
   let tab = $state("");
   $effect(() => {
     const titles = panel.sections.map((s) => s.title);
@@ -200,13 +215,24 @@
       {/if}
       Every edit is a <code>setParam</code> on the node that holds it, then a recook.
     </p>
+    {#if shown.length === 0}
+      <!-- Every row this panel carries is gated off by the values the graph
+           currently holds. Without this the pane is a heading, a paragraph
+           and three buttons over blank space — the one state where the
+           panel cannot explain itself, because the knob that would bring a
+           row back is a row too. -->
+      <p class="note">
+        Every row in this panel is hidden by the values the graph currently holds. Change one on the
+        canvas — select a node and edit it in the inspector — to bring the rows back.
+      </p>
+    {/if}
     <Controls
       sections={panel.sections}
       {values}
       onInput={input}
       onCommit={commit}
       bind:tab
-      tabbed={panel.sections.length > 1} />
+      tabbed={shown.length > 1} />
   {/if}
 
   {#if panel.sections.length > 0}

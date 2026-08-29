@@ -42,6 +42,29 @@ export class PanelSpecError extends Error {
 }
 
 /**
+ * One value a gate may require a knob to hold.
+ *
+ * The three scalars and no more, because these are exactly what a knob can
+ * hold AND a widget can produce: `f32`/`i32`/`u32` give a number, `bool` a
+ * boolean, `enum` and `string` a string. A `vec3` is an array, and "this row
+ * appears when that vector equals [0, 1, 0]" is not a question a panel has
+ * ever wanted to ask — leaving it out costs nothing and un-leaving it later
+ * is free, where taking it back would not be.
+ */
+export type PanelConditionValue = number | string | boolean;
+
+/**
+ * What one address must hold for a gated row to be shown: a value, or a
+ * NON-EMPTY list meaning "any of these".
+ *
+ * The list is not sugar for repeating the key — a JSON object cannot hold
+ * one key twice — and it is the shape most gates actually want: `caps`
+ * applies to the two CLOSED profiles, which is one condition over a set, not
+ * two rows or two panels.
+ */
+export type PanelCondition = PanelConditionValue | readonly PanelConditionValue[];
+
+/**
  * One authored row. `param` names the knob; everything else is
  * presentation.
  */
@@ -76,6 +99,41 @@ export interface PanelControlSpec {
    * as the graph's until this row is next turned.
    */
   readonly also?: readonly string[];
+  /**
+   * When this row is shown at all: knob address → the value that knob must
+   * currently hold. Absent means always.
+   *
+   * EVERY ENTRY MUST HOLD (and), and a list value means ANY OF (or). So
+   * `{"skin.profile": ["circle", "square"], "skin.joint": "miter"}` reads
+   * "a closed profile, mitred". One key is the common case; the object is
+   * what makes two independent conditions expressible without inventing a
+   * grammar.
+   *
+   * WHAT IT IS FOR, AND WHAT IT IS NOT. Several shipped params document
+   * themselves as ignored in some mode — `sides` means nothing to a ribbon,
+   * `miterLimit` means nothing to a perpendicular joint. That fact is in the
+   * schema's prose, where a reader finds it only after turning a knob that
+   * does nothing. A gate moves it into the panel. It is PRESENTATION and
+   * nothing else: a hidden row still holds its value, the graph still cooks
+   * with it, and hiding a row never changes what the graph produces. A
+   * param that must not be SET in some mode is a validation rule and belongs
+   * on the node, not here.
+   *
+   * The addresses are the same three forms {@link PanelControlSpec.param}
+   * takes, and they need not be rows of this panel — a gate may read a knob
+   * the spec chose not to surface, or one this host does not have at all. A
+   * host that cannot resolve one SHOWS the row: a mistyped gate must never
+   * silently swallow a knob. (The shipped corpus holds itself to the
+   * stricter rule that a gate names a row of the same panel, so every
+   * shipped panel can be driven from the panel alone — that is a policy of
+   * `graphs/panels/`, enforced by `tests/panelSpec.test.ts`, not a rule of
+   * the format.)
+   *
+   * A row may not gate on its own `param` or on anything in its own `also`.
+   * Both drive the value they would be reading, so turning the row hides the
+   * row, with nothing left on screen to turn it back.
+   */
+  readonly visibleWhen?: Readonly<Record<string, PanelCondition>>;
   /** The row's name on screen. Defaults to the param name. */
   readonly label?: string;
   /**
@@ -101,7 +159,23 @@ export interface PanelControlSpec {
   readonly _comment?: string;
 }
 
-/** One titled group of rows, in the order they should be shown. */
+/**
+ * One titled group of rows, in the order they should be shown.
+ *
+ * NO `visibleWhen` HERE, deliberately. A section is its rows: gate them all
+ * and the section has nothing left to show, so "hide this whole group"
+ * already has a spelling. Giving the section its own gate would add a second
+ * one that can DISAGREE with the first — a shown row inside a hidden section
+ * — and the format would then owe every author a precedence rule to
+ * remember. One place decides whether a row is on screen, and a host
+ * implements the rule once.
+ *
+ * The cost is real and is the trade: a five-row section that all turns on
+ * one mode repeats that gate five times. Should that repetition start
+ * showing up across the corpus, a section gate can be added then — adding a
+ * key is free where taking one back is breaking, which is the same stance
+ * `src/spatial` takes about being exported.
+ */
 export interface PanelSectionSpec {
   readonly title: string;
   readonly controls: readonly PanelControlSpec[];
@@ -132,6 +206,7 @@ const SECTION_KEYS = ["title", "controls", "_comment"] as const;
 const CONTROL_KEYS = [
   "param",
   "also",
+  "visibleWhen",
   "label",
   "description",
   "min",
@@ -308,6 +383,132 @@ function requireAddress(ctx: Ctx, v: unknown, path: string): string {
   return v;
 }
 
+/**
+ * One scalar a gate may require, or a stated reason it is not one.
+ *
+ * Non-finite is refused for the reason a bound is: `NaN` and `Infinity`
+ * survive no JSON round trip, and no knob in a cooked graph holds one — so a
+ * gate on either could never be satisfied and the row would be gone for
+ * good, which is a spelling of "delete the row" nobody means.
+ */
+function parseConditionValue(ctx: Ctx, v: unknown, path: string): PanelConditionValue {
+  if (typeof v === "number") {
+    if (!Number.isFinite(v)) {
+      fail(
+        ctx,
+        path,
+        `expected a finite number, got ${String(v)}. No knob holds ${String(v)}, so this gate ` +
+          "could never hold and the row would never be shown.",
+      );
+    }
+    return v;
+  }
+  if (typeof v === "string" || typeof v === "boolean") return v;
+  fail(
+    ctx,
+    path,
+    `expected a number, string or boolean, got ${describeValue(v)}. A gate names ONE value the ` +
+      "knob must hold, or a list of the values any of which will do.",
+  );
+}
+
+/** A gate's right-hand side: one value, or a non-empty list of them. */
+function parseCondition(ctx: Ctx, raw: unknown, at: string): PanelCondition {
+  if (!Array.isArray(raw)) return parseConditionValue(ctx, raw, at);
+  if (raw.length === 0) {
+    fail(
+      ctx,
+      at,
+      "expected at least one value; an empty list matches nothing, so the row could never be " +
+        "shown. Name the value the knob must hold, or delete the row.",
+    );
+  }
+  const values: PanelConditionValue[] = [];
+  // An INDEX loop, not `forEach`, which skips holes. A sparse array reaches
+  // here from a host building a spec in JS rather than parsing one, and
+  // `forEach` would drop the holes silently: `[ , ]` would normalize to the
+  // empty list this function has just refused, and the row it gates would
+  // then be hidden for good. Read as `undefined` instead, and rejected by
+  // the same rule that rejects a null.
+  for (let i = 0; i < raw.length; i++) {
+    const value = parseConditionValue(ctx, raw[i], `${at}[${i}]`);
+    // Harmless to match twice, but it is the shape of a half-finished edit
+    // — and `also` already refuses the same slip for the same reason.
+    if (values.includes(value)) {
+      fail(ctx, `${at}[${i}]`, `${JSON.stringify(value)} is listed twice; list it once.`);
+    }
+    values.push(value);
+  }
+  return values;
+}
+
+/**
+ * The row's gate, checked against the row itself.
+ *
+ * `param` and `also` are passed in because the two rules worth enforcing are
+ * about THIS row: a gate on a knob the row writes is a row that hides itself
+ * the moment it is turned. Everything else about a gate — whether the graph
+ * has such a knob at all — the parser cannot know: it resolves no addresses
+ * and imports nothing that could.
+ */
+function parseVisibleWhen(
+  ctx: Ctx,
+  obj: Record<string, unknown>,
+  path: string,
+  param: string,
+  also: readonly string[],
+): Record<string, PanelCondition> | undefined {
+  const raw = obj.visibleWhen;
+  if (raw === undefined) return undefined;
+  const at = child(path, "visibleWhen");
+  if (!isPlainObject(raw)) {
+    fail(
+      ctx,
+      at,
+      "expected an object mapping a knob address to the value it must hold, got " +
+        describeValue(raw),
+    );
+  }
+  const keys = Object.keys(raw);
+  if (keys.length === 0) {
+    fail(
+      ctx,
+      at,
+      "expected at least one condition; a `visibleWhen` with none gates on nothing, so the row " +
+        "is always shown. Omit the key.",
+    );
+  }
+
+  const gates: Record<string, PanelCondition> = {};
+  for (const key of keys) {
+    // Bracketed and quoted rather than dotted, because an address holds dots
+    // of its own: `visibleWhen.skin.profile` cannot be read back apart, and
+    // the path is the half of the message a reader acts on.
+    const keyAt = `${at}[${JSON.stringify(key)}]`;
+    requireAddress(ctx, key, keyAt);
+    if (key === param) {
+      fail(
+        ctx,
+        keyAt,
+        `${JSON.stringify(key)} is this row's own param. A row that gates on its own value hides ` +
+          "itself the moment it is turned, and nothing is left on screen to turn it back; gate " +
+          "on another knob.",
+      );
+    }
+    if (also.includes(key)) {
+      fail(
+        ctx,
+        keyAt,
+        `${JSON.stringify(key)} is mirrored by this row's \`also\`, so it holds whatever this ` +
+          "row last wrote — gating on it is gating on this row's own value, which hides the row " +
+          "with no way back; gate on another knob.",
+      );
+    }
+    gates[key] = parseCondition(ctx, raw[key], keyAt);
+  }
+  return gates;
+}
+
 function parseControl(ctx: Ctx, raw: unknown, path: string): PanelControlSpec {
   const obj = requireObject(ctx, raw, path, 'a control object with a "param"');
   checkKeys(ctx, obj, CONTROL_KEYS, path);
@@ -352,6 +553,9 @@ function parseControl(ctx: Ctx, raw: unknown, path: string): PanelControlSpec {
       ctx.mirrors.push({ key, path: at });
     });
   }
+
+  // After `param` and `also`, both of which it is checked against.
+  const visibleWhen = parseVisibleWhen(ctx, obj, path, param, also);
 
   const label = optionalText(ctx, obj, "label", path);
   const description = optionalText(ctx, obj, "description", path);
@@ -401,6 +605,7 @@ function parseControl(ctx: Ctx, raw: unknown, path: string): PanelControlSpec {
   return {
     param,
     ...(also.length > 0 ? { also } : {}),
+    ...(visibleWhen !== undefined ? { visibleWhen } : {}),
     ...(label !== undefined ? { label } : {}),
     ...(description !== undefined ? { description } : {}),
     ...(min !== undefined ? { min } : {}),
@@ -459,6 +664,65 @@ function parseSection(ctx: Ctx, raw: unknown, path: string): PanelSectionSpec {
  * written in one of the two orders. Both failures are the same one: a knob
  * written from two places, with nothing saying which write wins.
  */
+/**
+ * A row may not depend, through any chain of gates, on itself.
+ *
+ * The self-gate rule refuses the one-step case with "nothing is left on
+ * screen to turn it back". That reason does not stop at one step: two rows
+ * gating each other reach a state — turn A out of B's range, then B out of
+ * A's — where neither is drawn and neither can be reached to undo it. The
+ * one-step rule alone would have refused the obvious spelling of the trap
+ * and accepted the spelling an author is more likely to write by accident.
+ *
+ * ONLY ROWS PARTICIPATE. A gate naming an address this panel gives no row
+ * is driven from somewhere else — the node inspector, another panel, the
+ * graph — so it is never part of a cycle this file can create, and it is
+ * exactly the case that makes an otherwise-cyclic pair recoverable.
+ *
+ * Settled after the walk for the same reason `also` is: the row a gate
+ * names may be later in the file than the gate.
+ */
+function settleGates(ctx: Ctx, sections: readonly PanelSectionSpec[]): void {
+  /** Row param → the row params its gates read, with where each was written. */
+  const edges = new Map<string, { readonly to: string; readonly path: string }[]>();
+  sections.forEach((section, s) => {
+    section.controls.forEach((control, c) => {
+      if (control.visibleWhen === undefined) return;
+      const from = control.param;
+      const at = `sections[${s}].controls[${c}].visibleWhen`;
+      for (const address of Object.keys(control.visibleWhen)) {
+        if (!ctx.params.has(address)) continue;
+        const list = edges.get(from);
+        const edge = { to: address, path: `${at}[${JSON.stringify(address)}]` };
+        if (list) list.push(edge);
+        else edges.set(from, [edge]);
+      }
+    });
+  });
+
+  const done = new Set<string>();
+  const stack: string[] = [];
+  const walk = (node: string, via: string): void => {
+    if (done.has(node)) return;
+    const at = stack.indexOf(node);
+    if (at >= 0) {
+      const loop = [...stack.slice(at), node].map((p) => JSON.stringify(p)).join(" → ");
+      fail(
+        ctx,
+        via,
+        `this gate closes a loop: ${loop}. Every row in it is hidden by another row in it, so ` +
+          "the panel can reach a state where none of them is drawn and none can be turned to " +
+          "bring the others back. Gate the chain on a knob no row in it writes.",
+      );
+    }
+    stack.push(node);
+    for (const edge of edges.get(node) ?? []) walk(edge.to, edge.path);
+    stack.pop();
+    done.add(node);
+  };
+  for (const from of edges.keys()) walk(from, "");
+}
+
 function settleClaims(ctx: Ctx, sections: readonly PanelSectionSpec[]): void {
   const titles = new Map<string, number>();
   sections.forEach((section, i) => {
@@ -474,6 +738,8 @@ function settleClaims(ctx: Ctx, sections: readonly PanelSectionSpec[]): void {
     }
     titles.set(section.title, i);
   });
+
+  settleGates(ctx, sections);
 
   const mirrored = new Map<string, string>();
   for (const { key, path } of ctx.mirrors) {
@@ -538,4 +804,88 @@ export function parsePanelSpec(value: unknown, opts?: ParsePanelSpecOptions): Gr
   );
   settleClaims(ctx, sections);
   return { sections, ...(comment !== undefined ? { _comment: comment } : {}) };
+}
+
+/**
+ * Whether one knob value satisfies one {@link PanelCondition}: equal to it,
+ * or to any member of a list.
+ *
+ * STRICTLY, WITH NO COERCION. `1` does not satisfy `"1"` and `1` does not
+ * satisfy `true`. A mode is an enum and a count is a number, so a gate that
+ * matched across types would be gating on something other than what it says
+ * — and the failure would be a row that appears in the wrong mode, which
+ * looks like a bug in the graph rather than a typo in the panel.
+ *
+ * Exported because matching is the FORMAT, not the presentation. A host that
+ * reads `pcg-ts/panels` for the shape of a gate must not have to guess what
+ * satisfying it means, or an authored panel would hide different rows in
+ * every host that renders it.
+ */
+export function panelConditionHolds(condition: PanelCondition, value: unknown): boolean {
+  return Array.isArray(condition)
+    ? condition.some((c) => c === value)
+    : condition === (value as PanelConditionValue);
+}
+
+/**
+ * Whether a value is one a gate could be compared against at all.
+ *
+ * The three scalars, and nothing else — a vector, a list, a `null`, an
+ * absent knob. Exported because it is half the rule: a host that treated
+ * "the knob holds a vec3" as a gate that FAILED would hide the row, where
+ * the format says an unanswerable gate leaves it shown.
+ */
+export function isPanelConditionValue(value: unknown): value is PanelConditionValue {
+  const t = typeof value;
+  return t === "number" || t === "string" || t === "boolean";
+}
+
+/**
+ * Whether a `visibleWhen` record is satisfied. `undefined` gates — a row
+ * that declares none — are always satisfied.
+ *
+ * The whole rule in one place, so {@link panelRowVisible} and any host that
+ * keys its values differently (a renderer holding `Control` specs rather
+ * than `PanelControlSpec`s, say) cannot end up with two answers.
+ */
+export function panelGateHolds(
+  gates: Readonly<Record<string, PanelCondition>> | undefined,
+  valueAt: (address: string) => unknown,
+): boolean {
+  if (gates === undefined) return true;
+  for (const [address, condition] of Object.entries(gates)) {
+    const value = valueAt(address);
+    // UNANSWERABLE, not false. `undefined` is a host with no such knob;
+    // anything that is not a scalar is a knob whose value a gate cannot be
+    // compared against — a vector, a list, a param holding a field. Reading
+    // either as a failed gate would hide the row, and the whole point of the
+    // shown-by-default rule is that a gate nobody can answer must not
+    // silently remove a knob from the panel.
+    if (!isPanelConditionValue(value)) continue;
+    if (!panelConditionHolds(condition, value)) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether a row should be on screen right now.
+ *
+ * `valueAt` answers with the knob's current value, or `undefined` when this
+ * host has no such knob — which is not only a mistyped address: a knob
+ * holding a field has no constant value to compare, and a knob of a type no
+ * widget represents was never read.
+ *
+ * AN UNANSWERABLE GATE LEAVES THE ROW SHOWN. The alternative silently
+ * removes a knob from the panel because of a typo somewhere else in the
+ * file, and the author's evidence is a row that is not there. Shown, the
+ * gate is merely inert, and the host is free to say so out loud beside the
+ * panel — which is what this repo's editor does.
+ *
+ * Every entry must hold; a row with no `visibleWhen` is always shown.
+ */
+export function panelRowVisible(
+  control: PanelControlSpec,
+  valueAt: (address: string) => unknown,
+): boolean {
+  return panelGateHolds(control.visibleWhen, valueAt);
 }

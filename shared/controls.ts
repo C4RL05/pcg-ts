@@ -21,6 +21,18 @@
  * at a string param fails to compile rather than silently binding to
  * nothing.
  */
+import { panelGateHolds, type PanelCondition } from "pcg-ts/panels";
+
+/**
+ * What a gated row requires of another key: one value, or any of a list.
+ *
+ * The library's own {@link PanelCondition}, aliased rather than declared
+ * again. A panel spec's `visibleWhen` arrives here verbatim, so the two must
+ * agree on what a gate MEANS — a second declaration would be a second set of
+ * matching rules waiting to drift, and the rows that appear would depend on
+ * which of them ran.
+ */
+export type ControlCondition = PanelCondition;
 
 /** Everything a control can hold. Records back the grid controls. */
 export type ControlValue =
@@ -63,6 +75,21 @@ export type FlagMapKey<P> = KeysOfType<P, Record<string, boolean>>;
  */
 export interface ControlNote {
   description?: string;
+  /**
+   * When this row is on screen at all: another key in the same params
+   * record → the value it must currently hold. Every entry must hold, and
+   * a list value means any of. Absent means always.
+   *
+   * STILL PLAIN DATA, which is the reason it is a record of values rather
+   * than the predicate it would obviously be in a hand-written panel: a
+   * panel spec carries these through a JSON file, and a function could not
+   * survive the trip. {@link controlVisible} is what evaluates one.
+   *
+   * The keys are read out of the values record the renderer already has, so
+   * a gate follows an edit within the same frame — the row that vanishes is
+   * the one whose mode you just changed, not the one you change next.
+   */
+  visibleWhen?: Readonly<Record<string, ControlCondition>>;
 }
 
 export interface SliderControl<P> extends ControlNote {
@@ -176,6 +203,64 @@ export type Control<P> =
 export interface ControlSection<P> {
   title: string;
   controls: readonly Control<P>[];
+}
+
+/**
+ * Whether a control's gate holds against the values record as it stands.
+ *
+ * The rule is the LIBRARY's, called rather than reimplemented: an authored
+ * panel and a hand-written one must hide the same rows, and two copies of
+ * "what satisfies a gate" is two answers waiting to disagree. A key the
+ * record cannot answer leaves the row SHOWN — a gate naming a key nothing
+ * writes is inert, rather than a knob that quietly went missing.
+ *
+ * `hasOwn` rather than a bare index, so a gate can never be answered by
+ * something off `Object.prototype`. No legal address is spelled like a
+ * prototype member, which makes this belt to the format's braces.
+ */
+export function controlVisible<P extends Record<string, unknown>>(
+  control: Control<P>,
+  values: P,
+): boolean {
+  const record = values as Record<string, unknown>;
+  return panelGateHolds(control.visibleWhen, (key) =>
+    Object.hasOwn(record, key) ? record[key] : undefined,
+  );
+}
+
+/**
+ * The rows of `section` whose gates hold right now, in order.
+ *
+ * A section that comes back EMPTY renders nothing at all — no heading and no
+ * tab. A titled group with no rows under it is a heading that leads
+ * nowhere, and in a tabbed panel it is worse than that: a tab that opens on
+ * blank space.
+ */
+export function visibleControls<P extends Record<string, unknown>>(
+  section: ControlSection<P>,
+  values: P,
+): readonly Control<P>[] {
+  return section.controls.filter((control) => controlVisible(control, values));
+}
+
+/**
+ * The panel as it stands: each section paired with the rows whose gates
+ * hold, sections with none left dropped.
+ *
+ * Here rather than in the component, because two things need the same
+ * answer: the renderer, to draw it, and the panel around it, to decide
+ * whether there is anything to draw AT ALL — whether to raise a tab bar,
+ * and what to say when a gate has emptied the whole panel. Those read
+ * `sections.length` once and were a section behind the moment a gate could
+ * change it.
+ */
+export function visibleSections<P extends Record<string, unknown>>(
+  sections: readonly ControlSection<P>[],
+  values: P,
+): { readonly section: ControlSection<P>; readonly controls: readonly Control<P>[] }[] {
+  return sections
+    .map((section) => ({ section, controls: visibleControls(section, values) }))
+    .filter((group) => group.controls.length > 0);
 }
 
 /**

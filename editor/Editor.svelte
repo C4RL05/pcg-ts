@@ -419,13 +419,28 @@
       return;
     }
     let text: string;
-    let spec: GraphPanelSpec | undefined;
     try {
       text = await loadPresetText(name);
-      spec = await loadPanelSpec(name);
     } catch (err) {
       showToast(err instanceof Error ? err.message : String(err), "error");
       return;
+    }
+    // The PANEL is loaded separately, and its failure is not the graph's.
+    // Both used to sit in one `try` that returned before `applyImport`, so a
+    // hand-edited sidecar the validator refused took the whole graph down
+    // with it — a presentation file deciding whether generation happens,
+    // which is the one thing the sidecar split exists to prevent. A refused
+    // spec now says so and leaves the graph open with the panel derived
+    // from its schemas, which is what a graph with no sidecar at all gets.
+    let spec: GraphPanelSpec | undefined;
+    try {
+      spec = await loadPanelSpec(name);
+    } catch (err) {
+      spec = undefined;
+      showToast(
+        `${err instanceof Error ? err.message : String(err)} — showing the panel derived from the graph's own params instead.`,
+        "error",
+      );
     }
     const err = applyImport(text, findPreset(name)?.title ?? name);
     if (err !== null) {
