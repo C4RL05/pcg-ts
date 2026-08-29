@@ -562,6 +562,41 @@ assertion is fine, the sentence next to it is what shipped wrong. When a
 test's comment states a CONSEQUENCE the test does not observe, the
 consequence is unverified prose wearing a passing test's authority.
 
+**5b. The threshold, MEASURED, 2026-08-29.** The integrator ran the
+prediction back at us and it lands on the instance: four fresh meshes
+per row, one shared stock `MeshBasicNodeMaterial`, 65536-byte limit —
+4 instances +5 programs, 1024 +5, 1025 zero, 4096 zero. So the
+comparison is `<=` and 1024 sits ON the limit still taking the
+uniform-buffer path. They pinned it as a standing test rather than a
+one-off, on the correct ground that a three bump could move it silently.
+The `+5` for four meshes is the detail that confirms the mechanism
+rather than merely the number: `Pipelines.js:186,200` keys vertex and
+fragment separately and `Info.js:420` counts each, `instanceMatrixNode`
+drives `positionLocal`/`normalLocal`/`positionPrevious` (all vertex
+stage), and `WGSLNodeBuilder` collects uniforms per stage — so the
+unique `NodeBuffer_<id>` lands in the VERTEX shader only. Four unique
+vertex programs plus one shared fragment. The cost is vertex programs,
+and a fragment-heavy material does not multiply it.
+Their 30-fresh-meshes-at-zero case was ABOVE the limit, not
+better-behaved materials — they corrected "material-dependent" to
+"binding-dependent" themselves, which is the accurate framing and the
+one the docs now carry.
+
+**5c. A DEFENCE THAT WORKS AND WILL STOP WORKING, worth stealing and
+worth guarding.** Their instanced attributes default `aInstScale` to 1
+rather than 0, specifically so a missing channel renders visibly wrong
+instead of plausibly. That is the right instinct against the same
+unobservability as finding 4: a zero default makes "never written" and
+"written zero" indistinguishable, so an assertion that a channel
+ARRIVED can pass for the wrong reason. But the defence lives in a
+default value with nothing pinning it, so it ends the day someone tidies
+the default to 0 for consistency — and the test that was passing for the
+right reason starts passing for the wrong one, silently. The general
+rule: a defence that consists of a value being unusual needs a test that
+FAILS when the value becomes usual. Distinguishing written-zero from
+never-written needs the recycled-object probe in finding 4, not a
+cleverer default.
+
 **And one decision deliberately not taken.** The panel format now has a
 key (`visibleWhen`) that older parsers hard-reject, and still no
 `formatVersion`. Pre-alpha makes that acceptable and the design should

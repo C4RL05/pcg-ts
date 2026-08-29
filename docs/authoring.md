@@ -2598,21 +2598,40 @@ on whether the source came out identical.
 For a stock node material it does not, and the threshold is the
 surprising part. `NodeMaterial` routes an `InstancedMesh` through
 `createInstanceMatrixNode`, which binds `instanceMatrix` as a UNIFORM
-BUFFER while `count × 64` bytes fit `maxUniformBufferBindingSize`
-(65536 by default, so under about 1024 instances). That buffer node is
-named `NodeBuffer_<id>` from a GLOBAL counter, so its WGSL is unique per
-mesh and every new mesh is a new program. Past that count three falls to
-four interleaved instanced `vec4` attributes, whose names come from a
-per-builder counter, and the source is identical across meshes again.
-So small instanced meshes share programs WORSE than large ones, and a
-material that reads its own instanced attributes rather than
+BUFFER while `count × 64` bytes fit `maxUniformBufferBindingSize`. That
+buffer node is named `NodeBuffer_<id>` from a GLOBAL counter, so its WGSL
+is unique per mesh and every new mesh is a new program. Past that count
+three falls to four interleaved instanced `vec4` attributes, whose names
+come from a per-builder counter, and the source is identical across
+meshes again. So small instanced meshes share programs WORSE than large
+ones, and a material that reads its own instanced attributes rather than
 `instanceMatrix` shares them regardless of count.
 
-Measured by an integrator on r185 through `renderer.info.memory.programs`:
-12 fresh meshes against one shared stock `MeshBasicNodeMaterial`, +12
-programs; 12 geometry swaps on one REUSED mesh, +0; 30 fresh meshes
-against pooled materials reading their own instanced attributes, +0.
-Which is the same conclusion from the other side: pool the meshes.
+**The crossover is a hard edge, and the comparison is `<=`.** With the
+default 65536-byte limit it falls between 1024 instances and 1025.
+Measured by an integrator on r185 through `renderer.info.memory.programs`,
+four fresh meshes per row against one shared stock `MeshBasicNodeMaterial`:
+
+| instances | `count × 64` | programs |
+| --- | --- | --- |
+| 4 | 256 | +5 |
+| 1024 | 65536 | +5 |
+| 1025 | 65600 | 0 |
+| 4096 | 262144 | 0 |
+
+1024 sits exactly ON the limit and still takes the uniform-buffer path.
+**The cost is VERTEX programs only** — `instanceMatrixNode` drives
+`positionLocal`, `normalLocal` and `positionPrevious`, all vertex stage,
+and `WGSLNodeBuilder` collects uniforms per stage, so the fragment source
+is identical across meshes and shared. That is why four meshes cost five
+and not eight: four unique vertex programs plus one fragment they all
+share.
+
+The same integrator measured 12 geometry swaps on one REUSED mesh at +0,
+and 30 fresh meshes at +0 — the latter because those meshes were ABOVE
+the limit, not because the materials were better behaved. Which is the
+same conclusion from the other side: pool the meshes, and know which side
+of the edge your content sits on.
 
 And do not reach for geometry disposal to release any of this.
 `onGeometryDispose` only clears the attribute cache; `onMaterialDispose`
