@@ -26,8 +26,13 @@
  */
 import { create } from "webgpu";
 import { Geometry } from "../data/index.js";
+import type { AttrData } from "../data/index.js";
 import { CookCancelledError, Graph, cook, makeGeometryItem } from "../graph/index.js";
 import type { CookResult, InstancesItem } from "../graph/index.js";
+import {
+  deviceInstanceAttributeLayout,
+  deviceInstanceAttributesOf,
+} from "../fields/index.js";
 import type { DeviceInstanceBatch, DeviceTransformsHandle } from "../fields/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 import { dataInput } from "../runtime/dataInput.js";
@@ -132,6 +137,7 @@ function spawnRig(
     chain?: boolean;
     assetAttr?: string;
     colorAttr?: string;
+    instanceAttrs?: readonly string[];
     declarePoints?: boolean;
   } = {},
 ): SpawnRig {
@@ -153,6 +159,7 @@ function spawnRig(
     assetId: "tree",
     ...(opts.assetAttr !== undefined ? { assetAttr: opts.assetAttr } : {}),
     ...(opts.colorAttr !== undefined ? { colorAttr: opts.colorAttr } : {}),
+    ...(opts.instanceAttrs !== undefined ? { instanceAttrs: opts.instanceAttrs } : {}),
   });
   g.connect(tail, "out", sp, "in");
   g.output(sp, "instances", "instances");
@@ -187,6 +194,25 @@ async function readHandle(
   staging.unmap();
   staging.destroy();
   return new Float32Array(copy);
+}
+
+/**
+ * The same readback as {@link readHandle}, reinterpreted as raw 32-bit
+ * WORDS.
+ *
+ * A per-instance channel gather binds `array<u32>` on both sides and
+ * moves words, never values, so words are the unit its claim is made in.
+ * Comparing them is also what makes `-0` vs `+0`, a changed NaN payload
+ * and a `u32` past 2^24 ONE comparison instead of three dtype-specific
+ * ones — every difference a float compare would forgive is visible here.
+ * Free: `readHandle` already copied into a fresh `ArrayBuffer`.
+ */
+async function readHandleWords(
+  device: GpuDeviceLike,
+  handle: DeviceTransformsHandle,
+): Promise<Uint32Array> {
+  const f = await readHandle(device, handle);
+  return new Uint32Array(f.buffer);
 }
 
 // ---------------------------------------------------------------------------
@@ -1131,6 +1157,866 @@ async function instanceColour(
   return { cases };
 }
 
+// ---------------------------------------------------------------------------
+// named per-instance channels (phase 46)
+
+/** One channel of the matrix: an attribute name, its dtype and its width. */
+interface ChannelSpec {
+  readonly name: string;
+  readonly type: "f32" | "i32" | "u32" | "bool";
+  readonly tupleSize: number;
+}
+
+/**
+ * EVERY dtype at EVERY width, not a sample.
+ *
+ * The gather claims to be dtype-agnostic because both sides bind
+ * `array<u32>` and it moves raw words — one kernel and one pipeline for
+ * `f32x2` and `u32x2` alike, with the dtype absent from the
+ * specialization key. A claim of that shape is only worth what its
+ * coverage is: if a dtype were quietly converted somewhere, testing three
+ * of four would find it three times in four. So all sixteen ride one
+ * spawn, which also means one cook exercises all four `components`
+ * variants (1, 2, 4 and the padded 4 of an itemSize-3 channel) in both
+ * indexed and non-indexed mode.
+ */
+const CHANNEL_MATRIX: readonly ChannelSpec[] = (["f32", "i32", "u32", "bool"] as const).flatMap(
+  (type) => [1, 2, 3, 4].map((tupleSize) => ({ name: `${type}x${tupleSize}`, type, tupleSize })),
+);
+
+/**
+ * The matrix plus `pid`, which carries each point's own index.
+ *
+ * `pid` is not a dtype case; it is the ORDERING oracle. Read back beside
+ * the transform buffer it lets slot `k`'s channel value and slot `k`'s
+ * matrix be checked against each other with no reference to the CPU
+ * batch at all: `transforms[k]`'s translation column is a straight copy
+ * of `P`, so it must equal `P[pid[k]]` exactly. A gather that walked
+ * point order while the compose walked the grouping permutation would
+ * disagree on almost every instance.
+ */
+const CHANNELS: readonly ChannelSpec[] = [
+  { name: "pid", type: "u32", tupleSize: 1 },
+  ...CHANNEL_MATRIX,
+];
+
+const CHANNEL_NAMES: readonly string[] = CHANNELS.map((c) => c.name);
+
+/** Points 0..19 carry the pinned edge words; the rest carry hash fill. */
+const CHANNEL_EDGE_ROWS = 20;
+
+/**
+ * Values a WORD copy must carry through and a value copy would destroy.
+ *
+ * These are the rows that separate "the bytes are equal" from "the
+ * numbers are close", and each dtype's table is walked component by
+ * component across the first {@link CHANNEL_EDGE_ROWS} points, so a
+ * tupleSize-1 channel sees all twenty and a wider one sees them
+ * interleaved across its components.
+ *
+ * f32: signed zero (a sign bit only a genuine copy keeps), NaN (whose
+ * payload a float path may canonicalize), both infinities, the smallest
+ * SUBNORMALS — the one class a device could plausibly flush to zero —
+ * both f32 extremes, and 2^24+1, which an f32 cannot hold and which is
+ * therefore stored as 16777216 on BOTH sides: the test is that the two
+ * agree, not that the value survives a width it never had.
+ *
+ * i32/u32: the values that make the dtype worth preserving at all.
+ * INT32_MIN and -1 have their top bit set, so an i32 read as f32 is a
+ * huge negative and an i32 read as u32 is a huge positive; 2^24+1 and
+ * 2^24 straddle the first integer f32 cannot represent; 0xFFFFFFFF is
+ * the u32 an f32 round trip returns as 4294967296.
+ *
+ * bool: 0/1 only. The dtype's contract is that its column holds 0/1
+ * bytes, and a byte outside it is not a value this ABI carries — what is
+ * under test here is the 1-byte-to-4-byte WIDENING, which every row
+ * exercises.
+ */
+const F32_EDGES: readonly number[] = [
+  0, -0, Number.NaN, Number.POSITIVE_INFINITY,
+  Number.NEGATIVE_INFINITY, 1.401298464324817e-45, -1.401298464324817e-45, 5.877471754111438e-39,
+  3.4028234663852886e38, -3.4028234663852886e38, 1.1754943508222875e-38, -1.1754943508222875e-38,
+  0.1, -0.1, 16777217, -16777217,
+  1e-7, 65504, 123456.78, -0.000123456,
+];
+const I32_EDGES: readonly number[] = [
+  0, -1, -2147483648, 2147483647,
+  -16777217, 16777217, -16777216, 16777216,
+  -2147483647, 1, -1000000003, 1000000003,
+  -33554433, 33554433, -7, 7,
+  -65537, 65537, -123456789, 123456789,
+];
+const U32_EDGES: readonly number[] = [
+  0, 1, 4294967295, 16777217,
+  16777216, 2147483648, 2147483647, 4294967294,
+  3735928559, 2863311530, 1431655765, 4278255360,
+  33554433, 4026531840, 65537, 4294901760,
+  2, 16777218, 3221225472, 2147483649,
+];
+const BOOL_EDGES: readonly number[] = [
+  0, 1, 1, 0,
+  1, 0, 0, 1,
+  0, 1, 0, 1,
+  1, 1, 0, 0,
+  1, 0, 1, 0,
+];
+
+const CHANNEL_EDGES: Readonly<Record<ChannelSpec["type"], readonly number[]>> = {
+  f32: F32_EDGES,
+  i32: I32_EDGES,
+  u32: U32_EDGES,
+  bool: BOOL_EDGES,
+};
+
+/**
+ * The value of channel `ch`, component `k`, at point `i`. Distinct per
+ * point by construction, which is what makes a SHUFFLE detectable: a
+ * constant column would agree with any permutation of itself.
+ */
+function channelValue(ch: ChannelSpec, i: number, k: number): number {
+  const table = CHANNEL_EDGES[ch.type];
+  const slot = i * ch.tupleSize + k;
+  if (i < CHANNEL_EDGE_ROWS) return table[slot % table.length];
+  const salt = ch.type === "f32" ? 700 : ch.type === "i32" ? 800 : ch.type === "u32" ? 900 : 1000;
+  const h = hashCombine(salt + ch.tupleSize, i, k);
+  // `hashCombine` spreads over the whole 32-bit range, so most of the u32
+  // fill is ALSO past 2^24 and most of the i32 fill is negative — the
+  // edge rows pin those cases, the fill keeps them from being the only
+  // ones.
+  if (ch.type === "f32") return (hashFloat(h) - 0.5) * 1e4;
+  if (ch.type === "i32") return h | 0;
+  if (ch.type === "u32") return h >>> 0;
+  return h & 1;
+}
+
+/**
+ * The transform sample with every channel of {@link CHANNELS} written
+ * onto the point domain, plus an f32x4 `color` for the case that carries
+ * colour and channels together.
+ *
+ * Written DIRECTLY onto the columns rather than through `setAttribute`,
+ * and that is not a shortcut: `setAttribute`'s `value` is an f32 field,
+ * so a graph-authored `u32` is f32-rounded before the integer store and
+ * 2^24+1 never reaches the column at all. The values under test here are
+ * exactly the ones that route cannot express, so expressing them means
+ * writing the column — which is what `tests/instanceAttributes.test.ts`
+ * does on the CPU side for the same reason.
+ */
+function makeChannelSample(count: number, withSpecies: boolean): Geometry {
+  const geo = withSpecies ? makeSpeciesSample(count) : makeTransformSample(count);
+  const set = geo.attrs.point;
+  const pid = set.add("pid", "u32", 1);
+  for (let i = 0; i < count; i++) pid.set(i, i);
+  for (const ch of CHANNEL_MATRIX) {
+    const attr = set.add(ch.name, ch.type, ch.tupleSize);
+    for (let i = 0; i < count; i++) {
+      for (let k = 0; k < ch.tupleSize; k++) attr.set(i, channelValue(ch, i, k), k);
+    }
+  }
+  const color = set.add("color", "f32", 4);
+  for (let i = 0; i < count; i++) {
+    for (let k = 0; k < 4; k++) color.set(i, hashFloat(hashCombine(55, i, k)), k);
+  }
+  return geo;
+}
+
+/**
+ * A CPU channel column as the WORDS the device buffer must hold.
+ *
+ * `bool` is the one dtype whose two sides differ in width: one byte on
+ * the CPU column, one u32 word on the device, because WGSL `bool` is not
+ * host-shareable and cannot appear in a storage buffer. The widening is
+ * the slot upload's and it is a plain value copy, so the expected word IS
+ * the byte. Every other dtype is a reinterpretation and nothing is
+ * converted.
+ */
+function columnWords(col: AttrData): Uint32Array {
+  if (col instanceof Uint8Array) {
+    const out = new Uint32Array(col.length);
+    for (let i = 0; i < col.length; i++) out[i] = col[i];
+    return out;
+  }
+  return new Uint32Array(col.buffer, col.byteOffset, col.length);
+}
+
+interface ChannelAgreement {
+  /** Payload words compared (`count * itemSize`, summed over batches). */
+  compared: number;
+  /** Words not IDENTICAL to the CPU column's. There is no tolerance here. */
+  mismatchCount: number;
+  /** The first few, so a failure names words rather than a count. */
+  mismatches: Array<{ batch: number; instance: number; component: number; cpu: number; gpu: number }>;
+  /** Pad slots inspected: `count * (components - itemSize)`, so 0 unless itemSize is 3. */
+  padSlots: number;
+  /** Pad slots that are not exactly zero. */
+  padNonZero: number;
+}
+
+function emptyAgreement(): ChannelAgreement {
+  return { compared: 0, mismatchCount: 0, mismatches: [], padSlots: 0, padNonZero: 0 };
+}
+
+/**
+ * Compare one batch's worth of one channel, word for word, and inspect
+ * its pad slots. Accumulates so a channel's whole spawn is one number.
+ *
+ * `===` on u32 words is the strictest comparison available and is the
+ * right one: a gather has no arithmetic in it, so any difference at all
+ * is a layout or an indexing bug. A short or absent CPU column reads as
+ * `undefined` here and therefore mismatches on every word, which is the
+ * loud failure a length check alone would not give.
+ */
+function compareChannel(
+  agree: ChannelAgreement,
+  batch: number,
+  cpu: Uint32Array,
+  gpu: Uint32Array,
+  count: number,
+  itemSize: number,
+  components: number,
+): void {
+  for (let k = 0; k < count; k++) {
+    for (let c = 0; c < itemSize; c++) {
+      agree.compared++;
+      const a = cpu[k * itemSize + c];
+      const b = gpu[k * components + c];
+      if (a === b) continue;
+      agree.mismatchCount++;
+      if (agree.mismatches.length < 8) {
+        agree.mismatches.push({ batch, instance: k, component: c, cpu: a, gpu: b });
+      }
+    }
+    for (let c = itemSize; c < components; c++) {
+      agree.padSlots++;
+      if (gpu[k * components + c] !== 0) agree.padNonZero++;
+    }
+  }
+}
+
+/** Every channel of every batch, read back as words, in a stable order. */
+async function channelDigest(
+  device: GpuDeviceLike,
+  batches: readonly DeviceInstanceBatch[],
+): Promise<number[]> {
+  const out: number[] = [];
+  for (const b of batches) {
+    const attrs = deviceInstanceAttributesOf(b);
+    for (const ch of CHANNELS) {
+      const a = attrs[ch.name];
+      if (a === undefined) continue;
+      out.push(...(await readHandleWords(device, a.handle)));
+    }
+  }
+  return out;
+}
+
+/** The CPU cook of `spawnRig`'s chain, so a chained case compares spawner to spawner. */
+async function chainReference(geo: Geometry, ids: Record<string, string>): Promise<Geometry> {
+  const refGraph = new Graph(7);
+  const din = refGraph.add(dataInput, { items: [makeGeometryItem(geo)] }, ids.din);
+  const xf = refGraph.add(
+    transformPoints,
+    { translate: [1, 2, 3], rotateEuler: [0, 30, 0], scale: [2, 2, 2] },
+    ids.xf,
+  );
+  const or = refGraph.add(orientAlongVector, { direction: field({ fn: "position" }) }, ids.or);
+  refGraph.connect(din, "out", xf, "in");
+  refGraph.connect(xf, "out", or, "in");
+  refGraph.output(or, "out", "out");
+  const refItem = (await cook(refGraph)).outputs.out[0];
+  if (refItem.kind !== "geometry") throw new Error("scenario: expected geometry");
+  return refItem.geo;
+}
+
+interface ChannelCaseOpts {
+  readonly name: string;
+  readonly count: number;
+  readonly assetAttr?: string;
+  readonly colorAttr?: string;
+  readonly chain?: boolean;
+  /** Also cook a second time (determinism) and a channel-less twin. */
+  readonly deep?: boolean;
+}
+
+/**
+ * One channelled spawn, cooked device-resident and compared against the
+ * CPU spawner's own batches word for word.
+ *
+ * Each case gets its OWN evaluator so the pool counters are exact rather
+ * than cumulative: `holding.detachedBuffers` must be
+ * `batches * (1 transform + one buffer per channel)` and nothing else.
+ */
+async function channelCase(
+  device: GpuDeviceLike,
+  adapterInfo: { vendor?: string },
+  opts: ChannelCaseOpts,
+): Promise<Record<string, unknown>> {
+  const { name, count } = opts;
+  const geo = makeChannelSample(count, opts.assetAttr !== undefined);
+  const rigOpts = {
+    instanceAttrs: CHANNEL_NAMES,
+    ...(opts.assetAttr !== undefined ? { assetAttr: opts.assetAttr } : {}),
+    ...(opts.colorAttr !== undefined ? { colorAttr: opts.colorAttr } : {}),
+    ...(opts.chain === true ? { chain: true } : {}),
+  };
+  const ev = new GpuFieldEvaluator(device, {
+    adapterInfo,
+    deviceInstances: true,
+    deviceInstanceAttrs: true,
+  });
+  const rig = spawnRig(geo, rigOpts);
+  const cooked = await cook(rig.g, { gpu: ev });
+  const item = instancesOf(cooked);
+  const batches = item.deviceBatches;
+  if (batches === undefined) {
+    ev.dispose();
+    return { name, deviceBatchesPresent: false, stats: statsOf(cooked) };
+  }
+
+  // The CPU reference. A chained case must compare spawner to spawner, so
+  // the chain is cooked on the CPU first and ITS geometry is spawned.
+  const source = opts.chain === true ? await chainReference(geo, rig.ids) : geo;
+  const cpu = buildInstanceBatches(source, {
+    defaultAssetId: "tree",
+    ...(opts.assetAttr !== undefined ? { assetAttr: opts.assetAttr } : {}),
+    ...(opts.colorAttr !== undefined ? { colorAttr: opts.colorAttr } : {}),
+    instanceAttrs: CHANNEL_NAMES,
+  });
+
+  // Per channel, across every batch: the declared shape, the buffer
+  // length, the payload words and the pad slots.
+  const perChannel: Array<Record<string, unknown>> = [];
+  const totals = { compared: 0, mismatchCount: 0, padSlots: 0, padNonZero: 0 };
+  for (const ch of CHANNELS) {
+    const layout = deviceInstanceAttributeLayout(ch.type, ch.tupleSize);
+    const agree = emptyAgreement();
+    let present = true;
+    let shapeOk = true;
+    let byteLengthOk = true;
+    let lengthsAgree = true;
+    for (let j = 0; j < batches.length; j++) {
+      const dev = deviceInstanceAttributesOf(batches[j])[ch.name];
+      if (dev === undefined) {
+        present = false;
+        continue;
+      }
+      shapeOk = shapeOk && dev.type === ch.type && dev.itemSize === ch.tupleSize;
+      byteLengthOk = byteLengthOk && dev.handle.byteLength === batches[j].count * layout.byteStride;
+      const gpu = await readHandleWords(device, dev.handle);
+      const col = cpu[j]?.attributes?.[ch.name];
+      lengthsAgree =
+        lengthsAgree &&
+        gpu.length === batches[j].count * layout.components &&
+        col !== undefined &&
+        col.length === batches[j].count * ch.tupleSize;
+      compareChannel(
+        agree,
+        j,
+        col === undefined ? new Uint32Array(0) : columnWords(col),
+        gpu,
+        batches[j].count,
+        ch.tupleSize,
+        layout.components,
+      );
+    }
+    totals.compared += agree.compared;
+    totals.mismatchCount += agree.mismatchCount;
+    totals.padSlots += agree.padSlots;
+    totals.padNonZero += agree.padNonZero;
+    perChannel.push({
+      name: ch.name,
+      type: ch.type,
+      itemSize: ch.tupleSize,
+      components: layout.components,
+      byteStride: layout.byteStride,
+      present,
+      shapeOk,
+      byteLengthOk,
+      lengthsAgree,
+      ...agree,
+    });
+  }
+
+  // The pinned edge rows AS WORDS, readable in a failure rather than only
+  // counted. Only meaningful where batch 0 is the whole cloud in POINT
+  // order — the un-grouped case — because instance k is then point k and
+  // slot k holds the table entry the fixture wrote there. Read off the
+  // DEVICE, so the test can pin the bytes against literals instead of
+  // against the CPU column a shared bug would move too.
+  let heads: Record<string, number[]> | null = null;
+  if (opts.assetAttr === undefined) {
+    heads = {};
+    for (const name of ["f32x1", "i32x1", "u32x1", "boolx1", "f32x3"]) {
+      const dev = deviceInstanceAttributesOf(batches[0])[name];
+      if (dev === undefined) continue;
+      heads[name] = Array.from((await readHandleWords(device, dev.handle)).subarray(0, 32));
+    }
+  }
+
+  // The ordering invariant, from the device buffers ALONE: slot k's
+  // channel value and slot k's matrix must describe one point. The
+  // translation column is a straight copy of P (no arithmetic, hence bit
+  // equality, which the transform half of this suite already pins), so
+  // `transforms[k][12..14]` must be `P[pid[k]]` exactly. Skipped for the
+  // chained case, where P is recomputed on the device in f32 and there is
+  // no exact host-side P to compare against.
+  let srcCheck: Record<string, unknown> | null = null;
+  if (opts.chain !== true) {
+    const P = geo.attrs.point.require("P");
+    const seen = new Uint8Array(count);
+    let checked = 0;
+    let mismatches = 0;
+    let repeats = 0;
+    // The CONTROL for this check, computed in the same loop: the same
+    // comparison against the NEXT point's P. It has to disagree, or the
+    // check above is passing on something other than the pairing.
+    let shiftedMismatches = 0;
+    const first: Array<Record<string, number>> = [];
+    for (let j = 0; j < batches.length; j++) {
+      const pidAttr = deviceInstanceAttributesOf(batches[j]).pid;
+      if (pidAttr === undefined) continue;
+      const pid = await readHandleWords(device, pidAttr.handle);
+      const xf = await readHandle(device, batches[j].transforms);
+      for (let k = 0; k < batches[j].count; k++) {
+        const i = pid[k];
+        checked++;
+        if (i >= count || seen[i] === 1) repeats++;
+        else seen[i] = 1;
+        const shifted = (i + 1) % count;
+        for (let c = 0; c < 3; c++) {
+          if (!Object.is(xf[k * 16 + 12 + c], P.get(i, c))) {
+            mismatches++;
+            if (first.length < 8) {
+              first.push({ batch: j, slot: k, pid: i, component: c, gpu: xf[k * 16 + 12 + c], cpu: P.get(i, c) });
+            }
+          }
+          if (!Object.is(xf[k * 16 + 12 + c], P.get(shifted, c))) shiftedMismatches++;
+        }
+      }
+    }
+    let covered = 0;
+    for (let i = 0; i < count; i++) covered += seen[i];
+    srcCheck = { checked, mismatches, repeats, covered, shiftedMismatches, first };
+  }
+
+  // Non-vacuity, machine-checked and permanent: the comparator is run
+  // three more times over DELIBERATELY corrupted device words. A zero
+  // mismatch count is only evidence if these are non-zero.
+  let controls: Record<string, unknown> | null = null;
+  const ctl = CHANNELS.find((c) => c.name === "u32x3");
+  const ctlDev = ctl === undefined ? undefined : deviceInstanceAttributesOf(batches[0])[ctl.name];
+  const ctlCol = ctl === undefined ? undefined : cpu[0]?.attributes?.[ctl.name];
+  if (ctl !== undefined && ctlDev !== undefined && ctlCol !== undefined) {
+    const layout = deviceInstanceAttributeLayout(ctl.type, ctl.tupleSize);
+    const n = batches[0].count;
+    const words = await readHandleWords(device, ctlDev.handle);
+    const cpuw = columnWords(ctlCol);
+    const run = (mutate: (w: Uint32Array) => void): ChannelAgreement => {
+      const copy = Uint32Array.from(words);
+      mutate(copy);
+      const a = emptyAgreement();
+      compareChannel(a, 0, cpuw, copy, n, ctl.tupleSize, layout.components);
+      return a;
+    };
+    const clean = run(() => {});
+    // One payload word off by its lowest bit — the smallest possible lie,
+    // and the one a float tolerance would forgive.
+    const oneBit = run((w) => {
+      w[0] ^= 1;
+    });
+    // One pad slot no longer zero.
+    const padPoisoned = run((w) => {
+      w[ctl.tupleSize] = 1;
+    });
+    // Every instance shifted by one slot: a shuffle, which is what a
+    // second traversal in the wrong order would produce.
+    const rotated = run((w) => {
+      const c = layout.components;
+      const head = w.slice(0, c);
+      w.copyWithin(0, c);
+      w.set(head, (n - 1) * c);
+    });
+    controls = {
+      channel: ctl.name,
+      clean: { mismatchCount: clean.mismatchCount, padNonZero: clean.padNonZero, compared: clean.compared },
+      oneBitMismatches: oneBit.mismatchCount,
+      padPoisonedNonZero: padPoisoned.padNonZero,
+      rotatedMismatches: rotated.mismatchCount,
+    };
+  }
+
+  // Ownership: one buffer per batch for the transforms, one more per
+  // channel per batch — and the reserved colour channel counted ONCE,
+  // through `deviceInstanceAttributesOf`, never again as `colors`.
+  const expectedHandles =
+    batches.length * (1 + CHANNELS.length + (opts.colorAttr !== undefined ? 1 : 0));
+  const holding = {
+    detachedBuffers: ev.poolStats.detachedBuffers,
+    detachedBytes: ev.poolStats.detachedBytes,
+  };
+  const channelKeys = Object.keys(deviceInstanceAttributesOf(batches[0])).sort();
+
+  // The extras, for the case that carries them.
+  let deterministic: boolean | null = null;
+  let plainCarriesNoChannels: boolean | null = null;
+  let transformsUnmoved: boolean | null = null;
+  let againBatches: readonly DeviceInstanceBatch[] = [];
+  let plainBatches: readonly DeviceInstanceBatch[] = [];
+  if (opts.deep === true) {
+    const first = await channelDigest(device, batches);
+    againBatches = instancesOf(
+      await cook(spawnRig(makeChannelSample(count, opts.assetAttr !== undefined), rigOpts).g, {
+        gpu: ev,
+      }),
+    ).deviceBatches!;
+    const second = await channelDigest(device, againBatches);
+    deterministic = first.length === second.length && first.length > 0;
+    for (let i = 0; deterministic && i < first.length; i++) deterministic = first[i] === second[i];
+
+    const withChannels = await flatTransforms(device, batches);
+    // The identical rig with `instanceAttrs` taken out — not spread with
+    // an `undefined`, so the param genuinely is not set.
+    const plainOpts = {
+      ...(opts.assetAttr !== undefined ? { assetAttr: opts.assetAttr } : {}),
+      ...(opts.colorAttr !== undefined ? { colorAttr: opts.colorAttr } : {}),
+      ...(opts.chain === true ? { chain: true } : {}),
+    };
+    plainBatches = instancesOf(await cook(spawnRig(geo, plainOpts).g, { gpu: ev })).deviceBatches!;
+    const withoutChannels = await flatTransforms(device, plainBatches);
+    transformsUnmoved = withChannels.length === withoutChannels.length;
+    for (let i = 0; transformsUnmoved && i < withChannels.length; i++) {
+      transformsUnmoved = Object.is(withChannels[i], withoutChannels[i]);
+    }
+    plainCarriesNoChannels = plainBatches.every((b) => b.attributes === undefined);
+  }
+
+  // Release exactly once per handle, and count the releases so an
+  // enumeration that skipped one is visible as a number rather than as a
+  // leak somewhere later.
+  const released = { transforms: 0, channels: 0 };
+  const probe = deviceInstanceAttributesOf(batches[0])[CHANNEL_MATRIX[0].name].handle;
+  for (const b of [...batches, ...againBatches, ...plainBatches]) {
+    b.transforms.dispose();
+    released.transforms++;
+    for (const a of Object.values(deviceInstanceAttributesOf(b))) {
+      a.handle.dispose();
+      released.channels++;
+    }
+  }
+  const afterDispose = {
+    detachedBuffers: ev.poolStats.detachedBuffers,
+    detachedBytes: ev.poolStats.detachedBytes,
+    inFlight:
+      ev.poolStats.buffersCreated - ev.poolStats.buffersDestroyed - ev.poolStats.pooledBuffers,
+  };
+  // A second dispose of a channel handle is a no-op, never a double free.
+  let disposedTwiceThrew: string | null = null;
+  try {
+    probe.dispose();
+  } catch (err) {
+    disposedTwiceThrew = String(err);
+  }
+  const afterDoubleFree = {
+    detachedBuffers: ev.poolStats.detachedBuffers,
+    detachedBytes: ev.poolStats.detachedBytes,
+    inFlight:
+      ev.poolStats.buffersCreated - ev.poolStats.buffersDestroyed - ev.poolStats.pooledBuffers,
+  };
+  let resourceAfterDispose: string | null = null;
+  try {
+    void probe.resource;
+  } catch (err) {
+    resourceAfterDispose = err instanceof Error ? err.message : String(err);
+  }
+  ev.dispose();
+
+  return {
+    name,
+    deviceBatchesPresent: true,
+    chained: opts.chain === true,
+    assetAttr: opts.assetAttr ?? "",
+    colorAttr: opts.colorAttr ?? "",
+    stats: statsOf(cooked),
+    batchCount: batches.length,
+    shapes: batches.map((b) => [b.assetId, b.count] as const),
+    cpuShapes: cpu.map((b) => [b.assetId, b.count] as const),
+    instances: batches.reduce((n, b) => n + b.count, 0),
+    channelKeys,
+    perChannel,
+    totals,
+    heads,
+    srcCheck,
+    controls,
+    expectedHandles,
+    holding,
+    released,
+    afterDispose,
+    disposedTwiceThrew,
+    afterDoubleFree,
+    resourceAfterDispose,
+    deterministic,
+    plainCarriesNoChannels,
+    transformsUnmoved,
+    probeDisposed: probe.disposed,
+  };
+}
+
+/**
+ * With the opt-in withheld, a channelled spawn is exactly what it was:
+ * the planner rejects the run, the members cook per node, and the CPU
+ * spawner serves the WHOLE terminal — transforms and channels together.
+ * Never a device run that silently drops the data a host is about to
+ * bind.
+ */
+async function channelsOptOut(
+  device: GpuDeviceLike,
+  adapterInfo: { vendor?: string },
+): Promise<Record<string, unknown>> {
+  const count = 256;
+  const geo = makeChannelSample(count, true);
+  const cpu = buildInstanceBatches(geo, {
+    defaultAssetId: "tree",
+    assetAttr: "species",
+    instanceAttrs: CHANNEL_NAMES,
+  });
+
+  // deviceInstances on, deviceInstanceAttrs OFF.
+  const ev = new GpuFieldEvaluator(device, { adapterInfo, deviceInstances: true });
+  const cooked = await cook(
+    spawnRig(geo, { assetAttr: "species", instanceAttrs: CHANNEL_NAMES }).g,
+    { gpu: ev },
+  );
+  const item = instancesOf(cooked);
+  const deviceBatchesPresent = item.deviceBatches !== undefined;
+  const batches = deviceBatchesPresent ? [] : item.batches;
+  // The CPU batches must carry every channel, word for word.
+  let mismatches = 0;
+  let compared = 0;
+  for (let j = 0; j < batches.length; j++) {
+    for (const ch of CHANNELS) {
+      const got = batches[j].attributes?.[ch.name];
+      const want = cpu[j]?.attributes?.[ch.name];
+      if (got === undefined || want === undefined) {
+        mismatches += (cpu[j]?.count ?? 0) * ch.tupleSize;
+        continue;
+      }
+      const a = columnWords(got);
+      const b = columnWords(want);
+      for (let i = 0; i < b.length; i++) {
+        compared++;
+        if (a[i] !== b[i]) mismatches++;
+      }
+    }
+  }
+  const detachedBuffers = ev.poolStats.detachedBuffers;
+
+  // And a spawn naming NOTHING is unaffected by the flag being ON: the
+  // opt-in is about channels, not about the spawner.
+  const evOn = new GpuFieldEvaluator(device, {
+    adapterInfo,
+    deviceInstances: true,
+    deviceInstanceAttrs: true,
+  });
+  const noneCook = await cook(spawnRig(geo, { assetAttr: "species" }).g, { gpu: evOn });
+  const noneBatches = instancesOf(noneCook).deviceBatches;
+  const noneCarriesNoChannels = (noneBatches ?? []).every((b) => b.attributes === undefined);
+  for (const b of noneBatches ?? []) b.transforms.dispose();
+  const noneAfterDispose = evOn.poolStats.detachedBuffers;
+
+  ev.dispose();
+  evOn.dispose();
+
+  // The flag's own precondition, which is a constructor rule and not a
+  // device one: without `deviceInstances` no spawner terminates a
+  // resident run, so the flag would read as on while every channel still
+  // came from the CPU.
+  let aloneThrew: string | null = null;
+  try {
+    new GpuFieldEvaluator(device, { adapterInfo, deviceInstanceAttrs: true }).dispose();
+  } catch (err) {
+    aloneThrew = err instanceof Error ? err.message : String(err);
+  }
+
+  return {
+    deviceBatchesPresent,
+    batchCount: batches.length,
+    stats: statsOf(cooked),
+    cpuShapes: cpu.map((b) => [b.assetId, b.count] as const),
+    shapes: batches.map((b) => [b.assetId, b.count] as const),
+    compared,
+    mismatches,
+    detachedBuffers,
+    noneNamedDeviceResident: noneBatches !== undefined,
+    noneCarriesNoChannels,
+    noneAfterDispose,
+    aloneThrew,
+  };
+}
+
+/**
+ * The pad's actual hazard, which a fresh buffer cannot show.
+ *
+ * WebGPU zero-initializes a newly created buffer, and a retained buffer
+ * is normally created fresh — it is detached the moment it is produced
+ * and never returns to the pool — so a MISSING pad write reads as zero
+ * anyway and no assertion on a first cook can see the difference. The
+ * write earns its keep on a RECYCLED buffer, and the one path that
+ * recycles a retained one is a run that acquired it and then failed:
+ * every failure before the ownership transfer reclaims those buffers
+ * into the pool, still full of the bytes the dispatches wrote.
+ *
+ * So this cancels a channelled cook at its LAST cancellation check —
+ * after the dispatches, before the transfer — and cooks again on the same
+ * evaluator. `reused` counts the acquisitions the pool served from that
+ * wreckage; the pad slots are then inspected on buffers that are NOT
+ * blank. The pool buckets to powers of two and keys on (usage, bucket),
+ * and an itemSize-4 channel shares both with an itemSize-3 one of the
+ * same instance count, so the slot a pad occupies is exactly where a live
+ * component of the previous tenant sat.
+ */
+async function recycledChannelPads(
+  device: GpuDeviceLike,
+  adapterInfo: { vendor?: string },
+): Promise<Record<string, unknown>> {
+  const count = 256;
+  const geo = makeChannelSample(count, false);
+  const rigOpts = { instanceAttrs: CHANNEL_NAMES };
+  const ev = new GpuFieldEvaluator(device, {
+    adapterInfo,
+    deviceInstances: true,
+    deviceInstanceAttrs: true,
+  });
+
+  // How many times a clean run reads the signal, so the abort below can
+  // be placed at the last of them rather than guessed at.
+  let reads = 0;
+  const counting = {
+    get aborted(): boolean {
+      reads++;
+      return false;
+    },
+  } as unknown as AbortSignal;
+  const warm = instancesOf(
+    await cook(spawnRig(geo, rigOpts).g, { gpu: ev, signal: counting }),
+  ).deviceBatches!;
+  const checks = reads;
+  for (const b of warm) {
+    b.transforms.dispose();
+    for (const a of Object.values(deviceInstanceAttributesOf(b))) a.handle.dispose();
+  }
+
+  let n = 0;
+  const late = {
+    get aborted(): boolean {
+      return ++n >= checks;
+    },
+  } as unknown as AbortSignal;
+  const err = await cook(spawnRig(geo, rigOpts).g, { gpu: ev, signal: late }).then(
+    () => null,
+    (e: unknown) => e,
+  );
+  const pooledAfterAbort = ev.poolStats.pooledBuffers;
+  const reusedBefore = ev.poolStats.buffersReused;
+
+  const batches = instancesOf(await cook(spawnRig(geo, rigOpts).g, { gpu: ev })).deviceBatches!;
+  const reused = ev.poolStats.buffersReused - reusedBefore;
+
+  const cpu = buildInstanceBatches(geo, {
+    defaultAssetId: "tree",
+    instanceAttrs: CHANNEL_NAMES,
+  });
+  const agree = emptyAgreement();
+  for (const ch of CHANNELS) {
+    const layout = deviceInstanceAttributeLayout(ch.type, ch.tupleSize);
+    for (let j = 0; j < batches.length; j++) {
+      const dev = deviceInstanceAttributesOf(batches[j])[ch.name];
+      if (dev === undefined) continue;
+      const col = cpu[j]?.attributes?.[ch.name];
+      compareChannel(
+        agree,
+        j,
+        col === undefined ? new Uint32Array(0) : columnWords(col),
+        await readHandleWords(device, dev.handle),
+        batches[j].count,
+        ch.tupleSize,
+        layout.components,
+      );
+    }
+  }
+  for (const b of batches) {
+    b.transforms.dispose();
+    for (const a of Object.values(deviceInstanceAttributesOf(b))) a.handle.dispose();
+  }
+  const after = {
+    detachedBuffers: ev.poolStats.detachedBuffers,
+    detachedBytes: ev.poolStats.detachedBytes,
+  };
+  ev.dispose();
+
+  return {
+    checks,
+    cancelledName: err instanceof Error ? err.name : String(err),
+    isCookCancelled: err instanceof CookCancelledError,
+    pooledAfterAbort,
+    reused,
+    compared: agree.compared,
+    mismatchCount: agree.mismatchCount,
+    mismatches: agree.mismatches,
+    padSlots: agree.padSlots,
+    padNonZero: agree.padNonZero,
+    after,
+  };
+}
+
+/** Every channelled case, plus the opt-out half. */
+async function instanceChannels(
+  device: GpuDeviceLike,
+  adapterInfo: { vendor?: string },
+): Promise<Record<string, unknown>> {
+  const cases: Array<Record<string, unknown>> = [];
+  // One batch, point order: the case whose instance k IS point k, so the
+  // pinned edge rows sit at readable slots.
+  cases.push(await channelCase(device, adapterInfo, { name: "flat", count: 256 }));
+  // Four batches in first-occurrence order over a non-trivial
+  // permutation: the case a second traversal would break.
+  cases.push(
+    await channelCase(device, adapterInfo, {
+      name: "grouped",
+      count: 512,
+      assetAttr: "species",
+      deep: true,
+    }),
+  );
+  // Colour AND channels: colour is a channel IN the record, so this is
+  // also the case where enumerating both spellings would double-free.
+  cases.push(
+    await channelCase(device, adapterInfo, {
+      name: "coloured",
+      count: 512,
+      assetAttr: "species",
+      colorAttr: "color",
+    }),
+  );
+  // Behind a fused chain, so the channels ride a run of three members and
+  // their source columns are uploaded slots beside device-written ones.
+  cases.push(
+    await channelCase(device, adapterInfo, {
+      name: "chained",
+      count: 256,
+      assetAttr: "species",
+      chain: true,
+    }),
+  );
+  const recycled = await recycledChannelPads(device, adapterInfo);
+  const optOut = await channelsOptOut(device, adapterInfo);
+  return {
+    matrix: CHANNELS.map((c) => [c.name, c.type, c.tupleSize] as const),
+    cases,
+    recycled,
+    optOut,
+  };
+}
+
 /**
  * The spawner's per-cook budget, from the device side.
  *
@@ -1250,6 +2136,7 @@ async function main(): Promise<void> {
   out.grouping = await assetAttrGrouping(structural, adapter.info);
   out.groupingChain = await assetAttrChain(structural, adapter.info);
   out.colour = await instanceColour(structural, adapter.info);
+  out.channels = await instanceChannels(structural, adapter.info);
   out.budget = await budget(structural, adapter.info);
   out.optOut = await optInWithheld(structural, adapter.info);
 

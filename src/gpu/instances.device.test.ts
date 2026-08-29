@@ -15,7 +15,20 @@
  * must equal the CPU batch's bit for bit and any difference is a layout
  * or an indexing bug, never rounding. The budget's half asserts that the
  * device path adds no diagnostic of its own — the two paths' messages are
- * compared as whole strings. Bundles
+ * compared as whole strings.
+ *
+ * Phase 46 adds the NAMED per-instance channels, which shipped with their
+ * own weakest point stated: the gather WGSL had never executed anywhere,
+ * and the plan-to-kernel wiring was pinned once, for one channel, in
+ * isolation. Section 8 closes exactly that. It holds the gather to the
+ * colour bar and no lower — a copy carries no ULP class, so every
+ * assertion below is on raw 32-bit WORDS and there is no tolerance
+ * anywhere in it. What words buy over floats is that `-0` against `+0`, a
+ * canonicalized NaN payload, a `u32` past 2^24 and a negative `i32` are
+ * ONE comparison rather than four dtype-specific ones. All sixteen
+ * dtype x tupleSize combinations ride a SINGLE spawn, because "the dtype
+ * is absent from the kernel key" is a claim that testing three of four
+ * would find three times in four. Bundles
  * instances.testsupport.ts with esbuild and executes it in a plain Node
  * child process (see deviceRunner.mjs for why no vitest worker may touch
  * Dawn). Skips visibly without an adapter.
@@ -144,6 +157,7 @@ interface ScenarioOutput {
     batchCount: number;
   };
   colour: { cases: ColourCase[] };
+  channels: ChannelsOut;
   budget: {
     max: number;
     deviceMessage: string;
@@ -200,6 +214,118 @@ interface ColourCase {
   afterDispose: PoolSnap;
   headGpu: number[];
   headCpu: number[];
+}
+
+/** One channel of the dtype x tupleSize matrix, measured over a whole spawn. */
+interface ChannelObs {
+  name: string;
+  type: string;
+  itemSize: number;
+  /** f32-sized slots the device buffer spends per instance; `itemSize`, padded. */
+  components: number;
+  byteStride: number;
+  present: boolean;
+  /** The batch declares this channel's own dtype and item size, unwidened. */
+  shapeOk: boolean;
+  byteLengthOk: boolean;
+  lengthsAgree: boolean;
+  /** Payload words compared (`count * itemSize`, summed over batches). */
+  compared: number;
+  mismatchCount: number;
+  mismatches: Array<{
+    batch: number;
+    instance: number;
+    component: number;
+    cpu: number;
+    gpu: number;
+  }>;
+  /** Pad slots inspected: `count * (components - itemSize)`, so 0 unless itemSize is 3. */
+  padSlots: number;
+  padNonZero: number;
+}
+
+interface ChannelCase {
+  name: string;
+  deviceBatchesPresent: boolean;
+  chained: boolean;
+  assetAttr: string;
+  colorAttr: string;
+  stats: StatsShape;
+  batchCount: number;
+  shapes: Array<[string, number]>;
+  cpuShapes: Array<[string, number]>;
+  instances: number;
+  /** The batch's own channel record, as a consumer enumerates it. */
+  channelKeys: string[];
+  perChannel: ChannelObs[];
+  totals: { compared: number; mismatchCount: number; padSlots: number; padNonZero: number };
+  /** First 32 device words of a few channels; null unless batch 0 is point-ordered. */
+  heads: Record<string, number[]> | null;
+  srcCheck: {
+    checked: number;
+    mismatches: number;
+    repeats: number;
+    covered: number;
+    shiftedMismatches: number;
+    first: Array<Record<string, number>>;
+  } | null;
+  controls: {
+    channel: string;
+    clean: { mismatchCount: number; padNonZero: number; compared: number };
+    oneBitMismatches: number;
+    padPoisonedNonZero: number;
+    rotatedMismatches: number;
+  } | null;
+  expectedHandles: number;
+  holding: { detachedBuffers: number; detachedBytes: number };
+  released: { transforms: number; channels: number };
+  afterDispose: PoolSnap;
+  disposedTwiceThrew: string | null;
+  afterDoubleFree: PoolSnap;
+  resourceAfterDispose: string | null;
+  deterministic: boolean | null;
+  plainCarriesNoChannels: boolean | null;
+  transformsUnmoved: boolean | null;
+  probeDisposed: boolean;
+}
+
+interface ChannelsOut {
+  matrix: Array<[string, string, number]>;
+  cases: ChannelCase[];
+  recycled: {
+    checks: number;
+    cancelledName: string;
+    isCookCancelled: boolean;
+    pooledAfterAbort: number;
+    /** Acquisitions the pool served from the cancelled run's wreckage. */
+    reused: number;
+    compared: number;
+    mismatchCount: number;
+    mismatches: Array<{
+      batch: number;
+      instance: number;
+      component: number;
+      cpu: number;
+      gpu: number;
+    }>;
+    padSlots: number;
+    padNonZero: number;
+    after: { detachedBuffers: number; detachedBytes: number };
+  };
+  optOut: {
+    deviceBatchesPresent: boolean;
+    batchCount: number;
+    stats: StatsShape;
+    cpuShapes: Array<[string, number]>;
+    shapes: Array<[string, number]>;
+    compared: number;
+    mismatches: number;
+    detachedBuffers: number;
+    noneNamedDeviceResident: boolean;
+    noneCarriesNoChannels: boolean;
+    noneAfterDispose: number;
+    aloneThrew: string | null;
+  };
 }
 
 /**
@@ -766,6 +892,368 @@ describe.skipIf(testDevice === null)(
       expect(o.detachedBuffers).toBe(0);
       expect(o.parityVsCpuOnly.n).toBeGreaterThan(0);
       expect(o.parityVsCpuOnly.rangeRel).toBeLessThanOrEqual(CHAIN_RANGE_REL);
+    });
+
+    // -----------------------------------------------------------------
+    // 8. named per-instance channels (phase 46)
+
+    const chanCase = (name: string): ChannelCase => {
+      const c = scenario.channels.cases.find((x) => x.name === name);
+      if (c === undefined) throw new Error(`scenario reported no channel case "${name}"`);
+      return c;
+    };
+
+    /** The channel record's keys, sorted — the 16-cell matrix plus `pid`. */
+    const MATRIX_KEYS = [
+      "boolx1", "boolx2", "boolx3", "boolx4",
+      "f32x1", "f32x2", "f32x3", "f32x4",
+      "i32x1", "i32x2", "i32x3", "i32x4",
+      "pid",
+      "u32x1", "u32x2", "u32x3", "u32x4",
+    ];
+
+    it("every dtype at every width ships on ONE spawn, in the layout the rule dictates", () => {
+      // The matrix is pinned here and not merely looped, because an
+      // empty or thinned one would make every per-channel assertion in
+      // this section pass without measuring anything.
+      expect(scenario.channels.matrix).toHaveLength(17);
+      expect(scenario.channels.cases.map((c) => c.name)).toEqual([
+        "flat",
+        "grouped",
+        "coloured",
+        "chained",
+      ]);
+      for (const c of scenario.channels.cases) {
+        expect(c.deviceBatchesPresent, c.name).toBe(true);
+        expect(c.perChannel, c.name).toHaveLength(17);
+        expect([...c.channelKeys].sort(), c.name).toEqual(
+          // The coloured case carries the reserved channel as well, and
+          // as a MEMBER of the record rather than beside it.
+          c.colorAttr === "" ? MATRIX_KEYS : [...MATRIX_KEYS, "color"].sort(),
+        );
+        for (const p of c.perChannel) {
+          expect(p.present, `${c.name}/${p.name}`).toBe(true);
+          // The batch declares the point attribute's OWN dtype and item
+          // size — nothing is widened to f32 on the way across.
+          expect(p.shapeOk, `${c.name}/${p.name}`).toBe(true);
+          expect(p.byteLengthOk, `${c.name}/${p.name}`).toBe(true);
+          expect(p.lengthsAgree, `${c.name}/${p.name}`).toBe(true);
+        }
+      }
+      // deviceInstanceAttributeLayout's two rules, read off the produced
+      // buffers: 1/2/4 spend their own count, 3 spends FOUR, and a bool
+      // spends a u32 word like everything else.
+      expect(
+        chanCase("flat").perChannel.map((p) => [p.name, p.itemSize, p.components, p.byteStride]),
+      ).toEqual([
+        ["pid", 1, 1, 4],
+        ["f32x1", 1, 1, 4], ["f32x2", 2, 2, 8], ["f32x3", 3, 4, 16], ["f32x4", 4, 4, 16],
+        ["i32x1", 1, 1, 4], ["i32x2", 2, 2, 8], ["i32x3", 3, 4, 16], ["i32x4", 4, 4, 16],
+        ["u32x1", 1, 1, 4], ["u32x2", 2, 2, 8], ["u32x3", 3, 4, 16], ["u32x4", 4, 4, 16],
+        ["boolx1", 1, 1, 4], ["boolx2", 2, 2, 8], ["boolx3", 3, 4, 16], ["boolx4", 4, 4, 16],
+      ]);
+    });
+
+    it("the device channel words equal the CPU columns EXACTLY, dtype for dtype", () => {
+      // The bar colour set, generalized. A gather has no arithmetic in
+      // it, so there is no ULP class to hide a layout or an indexing bug
+      // behind: compared as raw 32-bit words, which is stricter than any
+      // float compare — `-0` does not pass as `+0` and a canonicalized
+      // NaN payload would show.
+      for (const c of scenario.channels.cases) {
+        expect(
+          c.totals.mismatchCount,
+          `${c.name}: first mismatches ${JSON.stringify(
+            c.perChannel.flatMap((p) => p.mismatches.map((m) => ({ channel: p.name, ...m }))),
+          )}`,
+        ).toBe(0);
+        for (const p of c.perChannel) {
+          expect(p.mismatchCount, `${c.name}/${p.name}`).toBe(0);
+          // Per channel, so a single dtype silently comparing zero words
+          // cannot hide inside a healthy total.
+          expect(p.compared, `${c.name}/${p.name}`).toBe(c.instances * p.itemSize);
+        }
+      }
+      // Pin the sample sizes: 41 words per instance (1 + (1+2+3+4)*4).
+      expect(chanCase("flat").instances).toBe(256);
+      expect(chanCase("flat").totals.compared).toBe(256 * 41);
+      expect(chanCase("grouped").instances).toBe(512);
+      expect(chanCase("grouped").totals.compared).toBe(512 * 41);
+      expect(chanCase("coloured").totals.compared).toBe(512 * 41);
+      expect(chanCase("chained").totals.compared).toBe(256 * 41);
+    });
+
+    it("carries the words a float round trip destroys — -0, NaN, subnormals, 2^32-1", () => {
+      // Pinned as LITERAL words rather than compared against the CPU
+      // column, so a bug shared by both paths would still show. Read off
+      // the device buffer of the un-grouped case, where instance k is
+      // point k and the fixture's edge table sits at slots 0..19.
+      const heads = chanCase("flat").heads;
+      if (heads === null) throw new Error("the flat case reported no heads");
+      // f32: +0, -0 (0x80000000 — the sign bit only a copy keeps), NaN
+      // (0x7FC00000, payload intact), +/-Inf, the smallest SUBNORMALS
+      // (1 and 0x80000001) which a flush-to-zero would have erased, half
+      // the smallest normal, both f32 extremes, and 2^24+1 — which f32
+      // cannot hold, so BOTH sides store 16777216 (0x4B800000) and the
+      // claim is that they agree, not that a value survives a width it
+      // never had.
+      expect(heads.f32x1.slice(0, 20)).toEqual([
+        0, 2147483648, 2143289344, 2139095040, 4286578688, 1, 2147483649, 4194304, 2139095039,
+        4286578687, 8388608, 2155872256, 1036831949, 3184315597, 1266679808, 3414163456, 869711765,
+        1199562752, 1206984804, 3103880184,
+      ]);
+      // i32: INT32_MIN (0x80000000) and -1 (0xFFFFFFFF) have their top
+      // bit set, so an i32 quietly read as f32 is a huge negative and as
+      // u32 a huge positive; -16777217 (0xFEFFFFFF) is past the f32
+      // integer limit on the negative side.
+      expect(heads.i32x1.slice(0, 20)).toEqual([
+        0, 4294967295, 2147483648, 2147483647, 4278190079, 16777217, 4278190080, 16777216,
+        2147483649, 1, 3294967293, 1000000003, 4261412863, 33554433, 4294967289, 7, 4294901759,
+        65537, 4171510507, 123456789,
+      ]);
+      // u32: 0xFFFFFFFF, which an f32 round trip returns as 4294967296,
+      // and 2^24+1, the first integer f32 cannot represent — both exact.
+      expect(heads.u32x1.slice(0, 20)).toEqual([
+        0, 1, 4294967295, 16777217, 16777216, 2147483648, 2147483647, 4294967294, 3735928559,
+        2863311530, 1431655765, 4278255360, 33554433, 4026531840, 65537, 4294901760, 2, 16777218,
+        3221225472, 2147483649,
+      ]);
+      // bool: one BYTE on the CPU column, one u32 WORD here. The
+      // widening is the slot upload's and it is a value copy.
+      expect(heads.boolx1.slice(0, 20)).toEqual([
+        0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0,
+      ]);
+    });
+
+    it("an itemSize-3 channel spends FOUR slots and the fourth is 0 for every instance", () => {
+      // The layout hazard, asserted rather than trusted: WGSL gives
+      // `array<vec3<T>>` a 16-byte stride, so a 3-word buffer would shift
+      // every instance by a growing offset and read like a shader bug.
+      // The pad is written as an explicit zero, which is what makes a
+      // pooled buffer's every byte defined.
+      for (const c of scenario.channels.cases) {
+        // Four channels of itemSize 3, one pad slot each per instance.
+        expect(c.totals.padSlots, c.name).toBe(c.instances * 4);
+        expect(c.totals.padNonZero, c.name).toBe(0);
+        for (const p of c.perChannel) {
+          expect(p.padSlots, `${c.name}/${p.name}`).toBe(
+            c.instances * (p.components - p.itemSize),
+          );
+          expect(p.padNonZero, `${c.name}/${p.name}`).toBe(0);
+          expect(p.components, `${c.name}/${p.name}`).toBe(p.itemSize === 3 ? 4 : p.itemSize);
+        }
+      }
+      // And in the buffer: three payload words then a zero, per instance.
+      const heads = chanCase("flat").heads;
+      if (heads === null) throw new Error("the flat case reported no heads");
+      expect(heads.f32x3.slice(0, 16)).toEqual([
+        0, 2147483648, 2143289344, 0,
+        2139095040, 4286578688, 1, 0,
+        2147483649, 4194304, 2139095039, 0,
+        4286578687, 8388608, 2155872256, 0,
+      ]);
+      expect(heads.f32x3.filter((_, i) => i % 4 === 3).every((w) => w === 0)).toBe(true);
+    });
+
+    it("the pad is WRITTEN, proved on a recycled buffer rather than a blank one", () => {
+      // The test above cannot tell a written zero from a never-written
+      // one, and that is not a nit: WebGPU zero-initializes a newly
+      // created buffer, and a retained buffer is normally created fresh
+      // (detached the moment it is produced, never returned), so deleting
+      // the kernel's pad write leaves every assertion in this suite
+      // passing — MEASURED, by doing exactly that.
+      //
+      // The write earns its keep on a RECYCLED buffer. A run that fails
+      // before the ownership transfer reclaims its retained buffers into
+      // the pool still full of the bytes the dispatches wrote, and the
+      // pool keys on (usage, bucket) — under which an itemSize-4 channel
+      // and an itemSize-3 one of the same instance count are the SAME
+      // bucket. So a pad slot lands exactly where a live component of the
+      // previous tenant sat. Under the deleted-write mutant this case
+      // reports 899 of 1024 pad slots dirty; with the write it is 0.
+      const r = scenario.channels.recycled;
+      expect(r.isCookCancelled).toBe(true);
+      expect(r.cancelledName).toBe("CookCancelledError");
+      // Non-vacuity of the RECYCLING itself: a run that quietly created
+      // fresh buffers would prove nothing here, so the reuse is counted.
+      expect(r.pooledAfterAbort).toBeGreaterThan(0);
+      expect(r.reused).toBeGreaterThanOrEqual(56);
+      expect(r.padSlots).toBe(256 * 4);
+      expect(r.padNonZero).toBe(0);
+      // And the payload is still exact on a recycled buffer: the gather
+      // covers every live word, so nothing of the previous tenant shows
+      // through anywhere else either.
+      expect(r.compared).toBe(256 * 41);
+      expect(r.mismatchCount, JSON.stringify(r.mismatches)).toBe(0);
+      expect(r.after).toMatchObject({ detachedBuffers: 0, detachedBytes: 0 });
+    });
+
+    it("a channel value and its matrix come from ONE point, through the permutation", () => {
+      // Proved from the DEVICE buffers alone, with no reference to the
+      // CPU batch: the `pid` channel carries each point's own index and
+      // the transform's translation column is a straight copy of P, so
+      // `transforms[k][12..14]` must be `P[pid[k]]` exactly. A gather
+      // that walked point order while compose walked the grouping
+      // permutation would disagree on almost every instance.
+      for (const name of ["flat", "grouped", "coloured"]) {
+        const s = chanCase(name).srcCheck;
+        if (s === null) throw new Error(`case "${name}" reported no srcCheck`);
+        expect(s.checked, name).toBe(chanCase(name).instances);
+        expect(s.mismatches, `${name}: ${JSON.stringify(s.first)}`).toBe(0);
+        // pid is a PERMUTATION of the cloud: every point once, none twice.
+        // A collapsed or zeroed channel would agree with the matrix at
+        // slot 0 and nowhere else, and would fail here first.
+        expect(s.covered, name).toBe(chanCase(name).instances);
+        expect(s.repeats, name).toBe(0);
+        // The control for this very check: the same comparison against
+        // the NEXT point's P. It must disagree everywhere, or the check
+        // above is passing on something other than the pairing.
+        expect(s.shiftedMismatches, name).toBe(chanCase(name).instances * 3);
+      }
+      // Batch order and membership are the CPU spawner's, exactly.
+      expect(chanCase("grouped").shapes).toEqual([
+        ["pine", 102],
+        ["rock", 103],
+        ["tree", 205],
+        ["fern", 102],
+      ]);
+      for (const c of scenario.channels.cases) {
+        expect(c.shapes, c.name).toEqual(c.cpuShapes);
+      }
+      // The chained case has no exact host-side P to compare against
+      // (transformPoints recomputes it on the device in f32), so it is
+      // declared absent rather than silently skipped.
+      expect(chanCase("chained").srcCheck).toBeNull();
+    });
+
+    it("the comparators can FAIL: one bit, one pad slot, one shuffle", () => {
+      // Non-vacuity, machine-checked rather than argued. Every zero above
+      // is only evidence if the same comparator reports non-zero on
+      // deliberately corrupted device words — so it is re-run three times
+      // per case over a mutated copy.
+      for (const c of scenario.channels.cases) {
+        const ctl = c.controls;
+        if (ctl === null) throw new Error(`case "${c.name}" reported no controls`);
+        expect(ctl.channel, c.name).toBe("u32x3");
+        expect(ctl.clean.compared, c.name).toBeGreaterThan(0);
+        expect(ctl.clean.mismatchCount, c.name).toBe(0);
+        expect(ctl.clean.padNonZero, c.name).toBe(0);
+        // One payload word off by its LOWEST bit: the smallest lie there
+        // is, and exactly the one a float tolerance would forgive.
+        expect(ctl.oneBitMismatches, c.name).toBe(1);
+        // One pad slot no longer zero.
+        expect(ctl.padPoisonedNonZero, c.name).toBe(1);
+        // Every instance shifted by one slot — what a second traversal in
+        // the wrong order produces. It mismatches on EVERY word, which is
+        // also the check that the fixture's values are per-instance
+        // distinct: a constant column would agree with its own shuffle.
+        expect(ctl.rotatedMismatches, c.name).toBe(ctl.clean.compared);
+      }
+    });
+
+    it("fuses, and spends one dispatch per channel per batch — colour costs none", () => {
+      for (const c of scenario.channels.cases) {
+        expect(c.stats.residentRuns, c.name).toBe(1);
+        expect(c.stats.fallbacks, c.name).toEqual({});
+      }
+      // One compose dispatch per asset, then one gather per channel per
+      // asset: the channels are a separate kernel, not more bindings on
+      // compose (whose widest form already binds seven of the baseline
+      // eight and would have fitted exactly one).
+      expect(chanCase("flat").batchCount).toBe(1);
+      expect(chanCase("flat").stats.dispatches).toBe(1 + 17);
+      expect(chanCase("grouped").batchCount).toBe(4);
+      expect(chanCase("grouped").stats.dispatches).toBe(4 + 4 * 17);
+      // Colour rides the COMPOSE kernel, so asking for it as well adds
+      // one buffer per batch and not one dispatch.
+      expect(chanCase("coloured").stats.dispatches).toBe(chanCase("grouped").stats.dispatches);
+      // And fusion still reaches THROUGH the spawner: three members, no
+      // readback at all, plus the same 4 + 68.
+      expect(chanCase("chained").stats.fusedNodes).toBe(3);
+      expect(chanCase("chained").stats.readbacksSaved).toBe(3);
+      expect(chanCase("chained").stats.dispatches).toBe(3 + 4 + 4 * 17);
+    });
+
+    it("one buffer per channel per batch, retained once and released once", () => {
+      // Nothing in the library frees these. A binding that retained only
+      // `transforms` would leak one buffer per channel per batch per
+      // cook, and the counters are where that is visible.
+      for (const c of scenario.channels.cases) {
+        expect(c.holding.detachedBuffers, c.name).toBe(c.expectedHandles);
+        expect(c.holding.detachedBytes, c.name).toBeGreaterThan(0);
+        expect(c.afterDispose, c.name).toMatchObject({
+          detachedBuffers: 0,
+          detachedBytes: 0,
+          inFlight: 0,
+        });
+      }
+      // Pinned literally, so the arithmetic is checked and not just
+      // consistent with itself: batches * (1 transform + 17 channels),
+      // and the coloured case's reserved channel makes it 19 per batch —
+      // counted ONCE, through the record, never again as `colors`.
+      expect(chanCase("flat").expectedHandles).toBe(1 * 18);
+      expect(chanCase("grouped").expectedHandles).toBe(4 * 18);
+      expect(chanCase("coloured").expectedHandles).toBe(4 * 19);
+      expect(chanCase("coloured").released).toEqual({ transforms: 4, channels: 4 * 18 });
+      expect(chanCase("chained").released).toEqual({ transforms: 4, channels: 4 * 17 });
+      // The grouped case cooks three times (channels, again, plain), so
+      // its releases count all three and the plain one carries none.
+      expect(chanCase("grouped").released).toEqual({ transforms: 12, channels: 2 * 4 * 17 });
+    });
+
+    it("a channel handle disposed twice is a no-op, and refuses its buffer afterwards", () => {
+      for (const c of scenario.channels.cases) {
+        expect(c.disposedTwiceThrew, c.name).toBeNull();
+        expect(c.probeDisposed, c.name).toBe(true);
+        // Never a double free: the second dispose must not move the
+        // pool's accounting at all.
+        expect(c.afterDoubleFree, c.name).toEqual(c.afterDispose);
+        expect(c.resourceAfterDispose, c.name).toMatch(/was disposed/);
+        expect(c.resourceAfterDispose, c.name).toMatch(/re-cook to obtain a fresh one/);
+        // The handle names the CHANNEL it held, not just "transforms" —
+        // one handle type, but a diagnostic that says which buffer.
+        expect(c.resourceAfterDispose, c.name).toMatch(/instance "f32x1" values/);
+      }
+    });
+
+    it("asking for channels moves no transform byte, and a recook gathers the same words", () => {
+      const g = chanCase("grouped");
+      expect(g.deterministic).toBe(true);
+      // The identical rig without instanceAttrs composes byte-identical
+      // matrices and carries no channel record at all — absent, not empty.
+      expect(g.transformsUnmoved).toBe(true);
+      expect(g.plainCarriesNoChannels).toBe(true);
+    });
+
+    it("without the opt-in the CPU spawner serves the WHOLE terminal, channels included", () => {
+      // The load-bearing default. `pcg-ts/three`'s device adapter binds
+      // the matrix and the reserved colour and refuses the rest by name,
+      // so a graph that names channels and renders through it works only
+      // while this stays off. Turned on unconditionally it would go
+      // resident and then throw at the adapter.
+      const o = scenario.channels.optOut;
+      expect(o.deviceBatchesPresent).toBe(false);
+      expect(o.stats.residentRuns).toBe(0);
+      // Rejected by the PLANNER, under the reason that already exists —
+      // a new one would be a second way to say the same thing.
+      expect(o.stats.fallbacks).toEqual({ "run-plan-failed": 1 });
+      expect(o.detachedBuffers).toBe(0);
+      // And the CPU batches carry every channel, word for word: the
+      // fallback is the whole terminal, never a device run silently
+      // dropping the data a host is about to bind.
+      expect(o.shapes).toEqual(o.cpuShapes);
+      expect(o.compared).toBe(256 * 41);
+      expect(o.mismatches).toBe(0);
+      // The flag is about CHANNELS, not about the spawner: a spawn naming
+      // none is device-resident with it on, exactly as before.
+      expect(o.noneNamedDeviceResident).toBe(true);
+      expect(o.noneCarriesNoChannels).toBe(true);
+      expect(o.noneAfterDispose).toBe(0);
+      // And the flag alone is refused by name rather than silently
+      // ignored — without deviceInstances no spawner terminates a
+      // resident run, so it could never take effect.
+      expect(o.aloneThrew).toMatch(/deviceInstanceAttrs requires deviceInstances: true/);
+      expect(o.aloneThrew).toMatch(/batch\.attributes\[name\]\.handle\.resource/);
     });
   },
 );
