@@ -582,6 +582,24 @@ better-behaved materials — they corrected "material-dependent" to
 "binding-dependent" themselves, which is the accurate framing and the
 one the docs now carry.
 
+**5b-i. CORRECTION to our own correction, and it was ours twice.** The
+docs then said "a material that reads its own instanced attributes
+rather than `instanceMatrix` shares them regardless of count", and I
+told the integrator the same thing to explain their +0. FALSE.
+`NodeMaterial.js:796` branches on the OBJECT alone — `isInstancedMesh`
+plus an `instanceMatrix` that is an `InstancedBufferAttribute` — and
+never on what the material's node graph reads, so `instancedMesh(object)`
+runs regardless and the matrix node is created regardless. Declaring
+your own instanced attributes avoids a per-launch material VARIANT; it
+does not avoid the per-mesh vertex program. Two claims, easily merged,
+and the integrator caught the merge in their own renderer's comment
+before we caught it in our docs. THE COUNT IS THE ONLY ESCAPE.
+Worth noticing how this one survived: the +0 measurement had ALREADY
+been re-attributed to the instance count, and the sentence lived on
+because it sat in a separate clause that the re-attribution did not
+visit. A correction that fixes the finding and leaves its restatement
+standing is a fourth costume in embryo.
+
 **5c. A DEFENCE THAT WORKS AND WILL STOP WORKING, worth stealing and
 worth guarding.** Their instanced attributes default `aInstScale` to 1
 rather than 0, specifically so a missing channel renders visibly wrong

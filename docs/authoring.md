@@ -2604,8 +2604,19 @@ is unique per mesh and every new mesh is a new program. Past that count
 three falls to four interleaved instanced `vec4` attributes, whose names
 come from a per-builder counter, and the source is identical across
 meshes again. So small instanced meshes share programs WORSE than large
-ones, and a material that reads its own instanced attributes rather than
-`instanceMatrix` shares them regardless of count.
+ones.
+
+**The count is the only escape, and your material does not get a vote.**
+`NodeMaterial.js:796` applies `instancedMesh(object)` on the OBJECT
+alone — `isInstancedMesh` plus an `instanceMatrix` that is an
+`InstancedBufferAttribute` — not on anything the material's node graph
+reads. So declaring your own instanced attributes and never touching
+`instanceMatrix` does NOT opt you out: the matrix node is created anyway,
+and below the threshold it is still uniquely named. Pooling a material
+and reading per-instance data through your own attributes avoids a
+per-launch material VARIANT, which is a different and real win; it does
+not avoid the per-mesh vertex program. Those are two claims and they are
+easy to merge by accident.
 
 **The crossover is a hard edge, and the comparison is `<=`.** With the
 default 65536-byte limit it falls between 1024 instances and 1025.
