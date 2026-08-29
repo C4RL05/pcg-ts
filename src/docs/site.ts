@@ -346,8 +346,9 @@ ${ledeHtml}
  *
  * The same reachability argument `renderSiteLede` makes, factored out so
  * the chrome can borrow it: a non-greedy span between two literal
- * markers, rejected if it contains a second marker of the same kind. The
- * body IS markup here, so the stamp rules do not apply and cannot.
+ * markers, rejected unless the document holds exactly one marker of each
+ * side. The body IS markup here, so the stamp rules do not apply and
+ * cannot.
  *
  * Absence is an error, not a no-op. A page whose chrome silently stopped
  * being written looks exactly like a page that is up to date, which is
@@ -372,9 +373,21 @@ export function renderSiteBlock(
       ].join("\n"),
     );
   }
-  const inner = html.slice(open + openTag.length, close);
-  if (inner.includes(openTag) || inner.includes(closeTag)) {
-    throw new Error(`${file}: nested ${openTag} markers — the hole must be one span.`);
+  // Nesting is not the only way to get a second span. TWO COMPLETE PAIRS
+  // of the same kind nest nothing and pass every check inside the first
+  // one, and the rewrite below would fill the first and leave the second
+  // stale for good — a page half-generated and half-frozen, which is the
+  // exact failure this module exists to make impossible. So count across
+  // the whole document, not just inside the first span.
+  const opens = html.split(openTag).length - 1;
+  const closes = html.split(closeTag).length - 1;
+  if (opens > 1 || closes > 1) {
+    throw new Error(
+      [
+        `${file}: ${opens} ${openTag} and ${closes} ${closeTag} markers — a page may have exactly one of each.`,
+        `Only the first would ever be rewritten; the rest would silently freeze at whatever they hold today.`,
+      ].join("\n"),
+    );
   }
   const out = html.slice(0, open + openTag.length) + `\n${body}\n` + html.slice(close);
   return { html: out, stamps: 1 };

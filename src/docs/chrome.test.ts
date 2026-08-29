@@ -112,6 +112,13 @@ describe("the breadcrumb", () => {
     expect(crumbFor(HOME_PAGE)).toBeUndefined();
   });
 
+  it("hides the crumb separators from assistive tech", () => {
+    // Otherwise every breadcrumb announces "slash" twice.
+    const html = renderChromeHeader("guides/racetrack.html", "0.17.0");
+    expect(html).not.toMatch(/<span class="sep">/);
+    expect((html.match(/<span class="sep" aria-hidden="true">/g) ?? []).length).toBe(2);
+  });
+
   it("does not repeat the wordmark's own name", () => {
     const html = renderChromeHeader("guides/racetrack.html", "0.17.0");
     const crumb = html.slice(html.indexOf("sitehdr-crumb"), html.indexOf("sitehdr-meta"));
@@ -140,6 +147,17 @@ describe("the header", () => {
     expect((row.match(/class="here"/g) ?? []).length).toBe(1);
   });
 
+  it("offers a skip link, and every page has its target", () => {
+    // The rail puts 19-36 links before the first word of the article.
+    expect(renderChromeHeader("manual.html", "0.17.0")).toContain(
+      '<a class="skip-to-main" href="#main">',
+    );
+    for (const page of CHROME_PAGES) {
+      const html = readFileSync(repoFile(`docs/${page}`), "utf8");
+      expect(html, `docs/${page} has no #main for the skip link`).toMatch(/<main\b[^>]*\bid="main"/);
+    }
+  });
+
   it("gives the mark link an accessible name", () => {
     // The svg is aria-hidden and site.css's .vh helper is scoped to
     // .hero-title, so the name has to be an attribute here.
@@ -166,6 +184,20 @@ describe("the rail", () => {
     expect(withToc.indexOf("On this page")).toBeGreaterThan(withToc.indexOf("Reference"));
     expect(withToc).toContain('href="#install"');
     expect(renderChromeRail("manual.html", [])).not.toContain("On this page");
+  });
+
+  it("keeps the article's h1 the first heading on the page", () => {
+    // Group labels are <p aria-hidden> with the name on the <ul>, so the
+    // rail does not put six <h2> above the page's own <h1>.
+    const rail = renderChromeRail("manual.html", [{ id: "a", text: "A" }]);
+    expect(rail).not.toContain("<h2");
+    expect(rail).toContain('<ul aria-label="Docs">');
+    expect(rail).toContain('<p class="rail-lbl" aria-hidden="true">Docs</p>');
+  });
+
+  it("separates the md badge from the label it follows", () => {
+    // Without the space the accessible name is "Node referencemd".
+    expect(renderChromeRail("manual.html", [])).toContain("Node reference <span");
   });
 
   it("escapes a label that carries markup syntax", () => {

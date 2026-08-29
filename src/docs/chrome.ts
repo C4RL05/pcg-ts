@@ -252,14 +252,16 @@ export function renderChromeHeader(page: string, version: string): string {
       ? ""
       : [
           '    <nav class="sitehdr-crumb" aria-label="Breadcrumb">',
-          '<span class="sep">/</span>',
+          // aria-hidden: otherwise every crumb announces "slash".
+          '<span class="sep" aria-hidden="true">/</span>',
           `<span>${escapeHtml(crumb.section)}</span>`,
-          '<span class="sep">/</span>',
+          '<span class="sep" aria-hidden="true">/</span>',
           `<span aria-current="page">${escapeHtml(crumb.page)}</span>`,
           "</nav>",
         ].join("");
 
   return [
+    '<a class="skip-to-main" href="#main">Skip to content</a>',
     '<header class="sitehdr">',
     '  <div class="sitehdr-row">',
     `    <a class="sitehdr-home" href="${home}" aria-label="pcg-ts — home">${WORDMARK}</a>`,
@@ -333,7 +335,9 @@ function railItem(item: ChromeItem, page: string): string {
   const here = item.href === page;
   const cls = here ? ' class="here"' : "";
   const current = here ? ' aria-current="page"' : "";
-  const badge = item.md === true ? '<span class="md">md</span>' : "";
+  // The leading space is not decoration: without it the accessible name
+  // is "Node referencemd", because the badge's 7px margin is visual only.
+  const badge = item.md === true ? ' <span class="md">md</span>' : "";
   return `      <li><a href="${resolveHref(item.href, page)}"${cls}${current}>${escapeHtml(item.label)}${badge}</a></li>`;
 }
 
@@ -349,9 +353,14 @@ export function renderChromeRail(page: string, toc: readonly TocEntry[]): string
   const lines: string[] = ['<nav class="rail" aria-label="Site index">'];
 
   for (const group of SITE_INDEX) {
+    const label = escapeHtml(group.label);
     lines.push('  <div class="rail-grp">');
-    lines.push(`    <h2>${escapeHtml(group.label)}</h2>`);
-    lines.push("    <ul>");
+    // A <p>, not an <h2>: six rail headings before the article's own <h1>
+    // is a broken heading order for anyone navigating by heading. The
+    // group name reaches assistive tech as the list's label instead, so
+    // nothing is lost and it is not announced twice.
+    lines.push(`    <p class="rail-lbl" aria-hidden="true">${label}</p>`);
+    lines.push(`    <ul aria-label="${label}">`);
     for (const item of group.items) lines.push(railItem(item, page));
     lines.push("    </ul>");
     lines.push("  </div>");
@@ -359,8 +368,8 @@ export function renderChromeRail(page: string, toc: readonly TocEntry[]): string
 
   if (toc.length > 0) {
     lines.push('  <div class="rail-grp rail-toc">');
-    lines.push("    <h2>On this page</h2>");
-    lines.push("    <ul>");
+    lines.push('    <p class="rail-lbl" aria-hidden="true">On this page</p>');
+    lines.push('    <ul aria-label="On this page">');
     for (const entry of toc) {
       lines.push(`      <li><a href="#${entry.id}">${escapeHtml(entry.text)}</a></li>`);
     }
@@ -531,7 +540,7 @@ export const CHROME_CSS = `/* ---------- the shared header bar ---------- */
 }
 .rail-grp { margin-bottom: 22px; }
 .rail-grp:last-child { margin-bottom: 0; }
-.rail h2 {
+.rail-lbl {
   margin: 0 0 10px;
   font: 600 11px/1 var(--mono);
   letter-spacing: 0.14em;
@@ -569,6 +578,35 @@ export const CHROME_CSS = `/* ---------- the shared header bar ---------- */
 
 /* A sticky bar means an in-page anchor would otherwise land under it. */
 :target { scroll-margin-top: 64px; }
+
+/* The footer is outside the shell, so it keeps site.css's 960px .wrap
+   while the header and the article are on the 1180px page. That is a
+   110px inset per side under a full-width hairline that lines up with
+   the header's — which reads as a mistake rather than as a narrower
+   band. Put it on the same page as everything above it. */
+body:has(.shell) footer .wrap { max-width: 1180px; }
+
+/* ---------- skip link ---------- */
+
+/* The rail puts 19-36 links between the top of the page and the first
+   word of it. Without this, reaching the article by keyboard means
+   tabbing through the whole site index on every page. */
+.skip-to-main {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 30;
+  border: 0;
+}
+.skip-to-main:focus {
+  left: var(--gutter);
+  top: 8px;
+  padding: 8px 12px;
+  background: var(--accent);
+  color: #000;
+  font: 600 12px/1 var(--mono);
+  letter-spacing: 0.06em;
+}
 
 /* ---------- the dev grid overlay ---------- */
 

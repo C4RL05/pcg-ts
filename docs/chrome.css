@@ -142,7 +142,7 @@
 }
 .rail-grp { margin-bottom: 22px; }
 .rail-grp:last-child { margin-bottom: 0; }
-.rail h2 {
+.rail-lbl {
   margin: 0 0 10px;
   font: 600 11px/1 var(--mono);
   letter-spacing: 0.14em;
@@ -180,6 +180,35 @@
 
 /* A sticky bar means an in-page anchor would otherwise land under it. */
 :target { scroll-margin-top: 64px; }
+
+/* The footer is outside the shell, so it keeps site.css's 960px .wrap
+   while the header and the article are on the 1180px page. That is a
+   110px inset per side under a full-width hairline that lines up with
+   the header's — which reads as a mistake rather than as a narrower
+   band. Put it on the same page as everything above it. */
+body:has(.shell) footer .wrap { max-width: 1180px; }
+
+/* ---------- skip link ---------- */
+
+/* The rail puts 19-36 links between the top of the page and the first
+   word of it. Without this, reaching the article by keyboard means
+   tabbing through the whole site index on every page. */
+.skip-to-main {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 30;
+  border: 0;
+}
+.skip-to-main:focus {
+  left: var(--gutter);
+  top: 8px;
+  padding: 8px 12px;
+  background: var(--accent);
+  color: #000;
+  font: 600 12px/1 var(--mono);
+  letter-spacing: 0.06em;
+}
 
 /* ---------- the dev grid overlay ---------- */
 

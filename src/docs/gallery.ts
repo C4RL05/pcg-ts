@@ -370,9 +370,9 @@ export function renderGallery(
      parent is exactly as tall as it is — scrolls it away immediately.
      The rail's parent is the document body, which is the whole page. */
   .controls-rail {
-    /* 48px, the shared header's row height: two sticky bars, stacked, not
-       overlapping. */
-    position: sticky; top: 48px; z-index: 5;
+    /* 49px, the shared header's 48px row plus its 1px bottom rule: two
+       sticky bars, stacked, not overlapping. */
+    position: sticky; top: 49px; z-index: 5;
     border-bottom: 1px solid var(--line);
     background: color-mix(in srgb, var(--bg) 88%, transparent);
     backdrop-filter: blur(8px);
@@ -459,12 +459,22 @@ export function renderGallery(
     * { transition: none !important; }
   }
 
+  /* Deep-linking a card is this page's headline affordance, and the
+     chrome's :target rule clears one 49px bar. Here the header and the
+     filter rail stack, so a fresh load of #<graph-id> landed the card
+     under the filter rail with its highlight border hidden. Declared
+     after the chrome block below would be tidier, but this file's own
+     rules come first and a later equal-specificity rule wins, which is
+     why the override is repeated at the end of the chrome instead. */
+
 /* ---------- the shared chrome ---------- *
    Inlined from src/docs/chrome.ts rather than linked, because this page is
    generated with its own stylesheet and has never linked site.css. One
    source, two consumers: the hand-authored pages get the same string as
    the generated docs/chrome.css. */
 ${CHROME_CSS}
+  /* Overrides the chrome's single-bar value: see the note above. */
+  :target { scroll-margin-top: 118px; }
 </style>
 
 ${renderChromeHeader("gallery.html", options.version)}
@@ -492,7 +502,7 @@ ${families.map(([family]) => `        <button type="button" data-family="${famil
   </div>
 </div>
 
-<main class="wrap">
+<main id="main" class="wrap">
 ${families.map(([family, group]) => renderFamily(family, group, options)).join("\n")}
   <p class="empty" id="empty" hidden>Nothing matches that filter.</p>
 </main>

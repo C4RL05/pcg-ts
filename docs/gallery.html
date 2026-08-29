@@ -88,9 +88,9 @@
      parent is exactly as tall as it is — scrolls it away immediately.
      The rail's parent is the document body, which is the whole page. */
   .controls-rail {
-    /* 48px, the shared header's row height: two sticky bars, stacked, not
-       overlapping. */
-    position: sticky; top: 48px; z-index: 5;
+    /* 49px, the shared header's 48px row plus its 1px bottom rule: two
+       sticky bars, stacked, not overlapping. */
+    position: sticky; top: 49px; z-index: 5;
     border-bottom: 1px solid var(--line);
     background: color-mix(in srgb, var(--bg) 88%, transparent);
     backdrop-filter: blur(8px);
@@ -176,6 +176,14 @@
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
   }
+
+  /* Deep-linking a card is this page's headline affordance, and the
+     chrome's :target rule clears one 49px bar. Here the header and the
+     filter rail stack, so a fresh load of #<graph-id> landed the card
+     under the filter rail with its highlight border hidden. Declared
+     after the chrome block below would be tidier, but this file's own
+     rules come first and a later equal-specificity rule wins, which is
+     why the override is repeated at the end of the chrome instead. */
 
 /* ---------- the shared chrome ---------- *
    Inlined from src/docs/chrome.ts rather than linked, because this page is
@@ -323,7 +331,7 @@
 }
 .rail-grp { margin-bottom: 22px; }
 .rail-grp:last-child { margin-bottom: 0; }
-.rail h2 {
+.rail-lbl {
   margin: 0 0 10px;
   font: 600 11px/1 var(--mono);
   letter-spacing: 0.14em;
@@ -362,6 +370,35 @@
 /* A sticky bar means an in-page anchor would otherwise land under it. */
 :target { scroll-margin-top: 64px; }
 
+/* The footer is outside the shell, so it keeps site.css's 960px .wrap
+   while the header and the article are on the 1180px page. That is a
+   110px inset per side under a full-width hairline that lines up with
+   the header's — which reads as a mistake rather than as a narrower
+   band. Put it on the same page as everything above it. */
+body:has(.shell) footer .wrap { max-width: 1180px; }
+
+/* ---------- skip link ---------- */
+
+/* The rail puts 19-36 links between the top of the page and the first
+   word of it. Without this, reaching the article by keyboard means
+   tabbing through the whole site index on every page. */
+.skip-to-main {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 30;
+  border: 0;
+}
+.skip-to-main:focus {
+  left: var(--gutter);
+  top: 8px;
+  padding: 8px 12px;
+  background: var(--accent);
+  color: #000;
+  font: 600 12px/1 var(--mono);
+  letter-spacing: 0.06em;
+}
+
 /* ---------- the dev grid overlay ---------- */
 
 /* site.css draws the overlay's twelve tracks inside .wrap, which is 960px.
@@ -377,12 +414,15 @@
    <html>, which the g key sets. */
 body:has(.shell) .grid-guide .wrap { max-width: 1180px; }
 
+  /* Overrides the chrome's single-bar value: see the note above. */
+  :target { scroll-margin-top: 118px; }
 </style>
 
+<a class="skip-to-main" href="#main">Skip to content</a>
 <header class="sitehdr">
   <div class="sitehdr-row">
     <a class="sitehdr-home" href="./index.html" aria-label="pcg-ts — home"><svg class="sitehdr-mark" viewBox="0 0 1055 128" aria-hidden="true" focusable="false"><g fill-rule="nonzero" transform="translate(-9.14,127.96)"><path d="M147.76,-95.97L147.76,-127.96L9.14,-127.96L9.14,-95.97L147.76,-95.97ZM147.762,-95.97L147.762,-63.98L41.13,-63.98L9.14,-31.99L9.14,0L41.13,0L41.13,-31.99L147.762,-31.99L179.752,-63.98L179.752,-95.97L147.762,-95.97Z"/><path d="M368.768,-95.97L368.768,-127.96L230.145,-127.96L198.155,-95.97L198.155,-31.99L230.139,-31.99L230.139,0L368.768,0L368.768,-31.99L230.145,-31.99L230.145,-95.97L368.768,-95.97Z"/><path d="M557.783,-95.97L557.783,-127.96L419.16,-127.96L387.17,-95.97L387.17,-31.99L419.16,-31.99L419.16,-95.97L557.783,-95.97ZM478.925,0L510.917,-31.99L525.793,-31.99L525.793,0L557.783,0L557.783,-63.98L497.696,-63.98L465.706,-31.99L419.16,-31.99L419.16,0L478.925,0Z"/><rect x="576.186" y="-63.98" width="127.96" height="31.99"/><g transform="translate(-18.4628,0)"><path d="M823.908,0L823.908,-95.97L791.918,-95.97L791.918,0L823.908,0ZM893.218,-95.97L893.218,-127.96L823.911,-127.96L823.911,-95.97L893.218,-95.97ZM791.912,-95.97L791.912,-127.96L722.608,-127.96L722.608,-95.97L791.912,-95.97Z"/></g><g transform="translate(884.017944,0)"><path d="M41.13,-95.97L147.762,-95.97L147.762,-127.96L41.13,-127.96L9.14,-95.97L9.14,-63.98L179.752,0L179.752,-34.149L41.13,-86.156L41.13,-95.97ZM41.13,0L41.13,-31.99L9.14,-31.99L9.14,0L41.13,0ZM179.755,-63.986L179.755,-95.97L147.765,-95.97L147.765,-63.986L179.755,-63.986Z"/></g></g></svg></a>
-    <nav class="sitehdr-crumb" aria-label="Breadcrumb"><span class="sep">/</span><span>Reference</span><span class="sep">/</span><span aria-current="page">Corpus gallery</span></nav>
+    <nav class="sitehdr-crumb" aria-label="Breadcrumb"><span class="sep" aria-hidden="true">/</span><span>Reference</span><span class="sep" aria-hidden="true">/</span><span aria-current="page">Corpus gallery</span></nav>
     <nav class="sitehdr-sections" aria-label="Sections">
       <a href="./manual.html">Docs</a>
       <a href="./guides/racetrack.html">Guides</a>
@@ -423,7 +463,7 @@ body:has(.shell) .grid-guide .wrap { max-width: 1180px; }
   </div>
 </div>
 
-<main class="wrap">
+<main id="main" class="wrap">
   <section class="family" id="family-basics">
     <p class="eyebrow">basics · 65 graphs</p>
     <p class="blurb">One concept per file, cooked from JSON alone. These are what the node reference points at when it says a param takes a field.</p>
