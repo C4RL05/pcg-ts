@@ -13,8 +13,10 @@
  * file (and a second inlined copy inside the generated gallery), so a
  * token renamed in site.css would leave the chrome referencing a variable
  * nobody defines — which CSS resolves to nothing, without an error. The
- * suite reads site.css and checks every `var(--…)` the chrome uses is
- * declared there.
+ * suite reads BOTH hosts — site.css and the gallery's own inline `:root`
+ * — and checks every `var(--…)` the chrome uses is declared in each. One
+ * host is not enough: the two palettes are separate copies, so a token
+ * present in one and missing from the other fails on exactly one page.
  *
  * Imported from source, so `npm test` works on a fresh clone with no
  * build. If a link test fails, the fix is in `SITE_INDEX`; if a token
@@ -240,12 +242,31 @@ describe("the table of contents", () => {
 describe("the stylesheet", () => {
   const siteCss = readFileSync(repoFile("docs/site.css"), "utf8");
 
+  const used = [...new Set([...CHROME_CSS.matchAll(/var\((--[a-z0-9-]+)\)/g)].map((m) => m[1] as string))];
+
   it("uses only tokens site.css declares", () => {
-    const used = new Set([...CHROME_CSS.matchAll(/var\((--[a-z0-9-]+)\)/g)].map((m) => m[1] as string));
     for (const token of used) {
       expect(
         siteCss.includes(`${token}:`),
         `chrome.css uses ${token}, which docs/site.css does not declare`,
+      ).toBe(true);
+    }
+  });
+
+  it("uses only tokens the gallery's own palette declares too", () => {
+    // The linked pages are not the only host. gallery.html inlines this
+    // same string beside a palette copy of its own, so a token that only
+    // site.css declares resolves to nothing THERE and nowhere else — and
+    // an invalid var() is not an error, it is a declaration that quietly
+    // computes away. That is how the hover glitch's --r/--b split shipped
+    // dead on one page out of seven while looking right on the other six.
+    const gallery = readFileSync(repoFile("docs/gallery.html"), "utf8");
+    const root = /:root \{([^}]*)\}/.exec(gallery);
+    expect(root, "docs/gallery.html declares no :root palette").not.toBeNull();
+    for (const token of used) {
+      expect(
+        (root as RegExpExecArray)[1].includes(`${token}:`),
+        `chrome.css uses ${token}, which docs/gallery.html's inline :root does not declare`,
       ).toBe(true);
     }
   });
@@ -272,6 +293,77 @@ describe("the stylesheet", () => {
       /@media \(min-width: 861px\) \{\s*body:has\(\.rail\) \.sitehdr-sections \{ display: none; \}/,
     );
     expect(CHROME_CSS).toMatch(/@media \(max-width: 860px\) \{ \.rail \{ display: none; \} \}/);
+  });
+
+  it("answers a hover on the mark with the glitch, not with green", () => {
+    // The green tint was the old affordance and it is now the
+    // reduced-motion fallback only. If someone reinstates the plain rule
+    // the mark stops being the logo doing its one trick and goes back to
+    // being a link that turns a colour, so pin both halves.
+    expect(CHROME_CSS).toMatch(/\.sitehdr-home:hover \.sitehdr-mark \{\s*animation:\s*sitehdr-tear/);
+    expect(CHROME_CSS).toContain("@keyframes sitehdr-tear");
+    expect(CHROME_CSS).toContain("@keyframes sitehdr-split");
+    expect(CHROME_CSS).toMatch(
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\.sitehdr-home:hover \.sitehdr-mark \{ animation: none; \}\s*\.sitehdr-home:hover \{ color: var\(--accent\); \}/,
+    );
+    // Cut the whole reduced-motion block out and there must be no rule
+    // left that colours the link on hover. Slicing at the query's start
+    // instead would miss one reinstated after it, and matching a fixed
+    // one-line spelling would miss one that got reformatted.
+    const at = CHROME_CSS.indexOf("@media (prefers-reduced-motion");
+    let depth = 0;
+    let rest = CHROME_CSS.slice(0, at);
+    for (let i = CHROME_CSS.indexOf("{", at); i < CHROME_CSS.length; i++) {
+      if (CHROME_CSS[i] === "{") depth += 1;
+      else if (CHROME_CSS[i] === "}" && (depth -= 1) === 0) {
+        rest += CHROME_CSS.slice(i + 1);
+        break;
+      }
+    }
+    expect(rest, "the reduced-motion block was not found or is unbalanced").not.toBe(
+      CHROME_CSS.slice(0, at),
+    );
+    expect(rest).not.toMatch(/\.sitehdr-home:hover[^{}]*\{[^{}]*color:/);
+  });
+
+  it("splits the mark on the primaries the palette reserves for marks", () => {
+    // --r and --b, never --accent, and never a raw hex: the split is the
+    // lockup's own. A blur radius would turn it into the soft shadow
+    // site.css does not use. The paren-aware pattern matters -- a lazy
+    // one stops inside var(--r) and would skip a hex-coloured stop
+    // entirely instead of failing on it.
+    const shadows = [...CHROME_CSS.matchAll(/drop-shadow\(((?:[^()]|\([^()]*\))*)\)/g)].map(
+      (m) => m[1] as string,
+    );
+    expect(shadows.length, "the hover glitch draws no channel split").toBeGreaterThan(0);
+    const CHANNEL = /^(-?\d+)(?:px)? (-?\d+)(?:px)? 0 var\(--([rb])\)$/;
+    for (const arg of shadows) {
+      expect(CHANNEL.test(arg), `drop-shadow(${arg}) is not a hard-offset channel split`).toBe(true);
+    }
+
+    // The two channels of a stop separate in opposite directions by the
+    // same amount -- that is what reads as a split rather than a blur or
+    // a double image. Which of them leads flips frame to frame, so the
+    // invariant is the negation, not a fixed order.
+    const body = /@keyframes sitehdr-split \{([\s\S]*?)\n\}/.exec(CHROME_CSS);
+    expect(body, "the split keyframes are missing or unterminated").not.toBeNull();
+    let pairs = 0;
+    for (const line of (body as RegExpExecArray)[1].split("\n")) {
+      const stop = [...line.matchAll(/drop-shadow\(((?:[^()]|\([^()]*\))*)\)/g)].map(
+        (m) => CHANNEL.exec(m[1] as string) as RegExpExecArray,
+      );
+      if (stop.length === 0) continue;
+      pairs += 1;
+      expect(stop.length, `${line.trim()} does not split both channels`).toBe(2);
+      const [a, b] = stop;
+      expect([a[3], b[3]].sort().join(""), `${line.trim()} is not one --r and one --b`).toBe("br");
+      // Summed rather than negated: Object.is separates -0 from 0, and a
+      // stop with no vertical offset writes 0 on both channels.
+      expect(Number(a[1]) + Number(b[1]), `${line.trim()} separates x unevenly`).toBe(0);
+      expect(Number(a[2]) + Number(b[2]), `${line.trim()} separates y unevenly`).toBe(0);
+      expect(Number(a[1]), `${line.trim()} separates the channels by nothing`).not.toBe(0);
+    }
+    expect(pairs, "the split keyframes carry no channel stop").toBeGreaterThan(0);
   });
 
   it("contains no backtick", () => {

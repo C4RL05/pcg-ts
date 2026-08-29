@@ -324,6 +324,14 @@ export function renderGallery(
     --card: #0d0d0d;
     --accent: #00ff00;
     --accent-ink: #ededed;
+    /* The three primaries, spent as MARKS and never on body copy --
+       site.css's words. Here they are what the inlined chrome's hover
+       glitch splits the wordmark on: undeclared, the filter is invalid
+       at computed-value time and the split silently draws nothing while
+       the rest of the burst still runs. */
+    --r: #ff0000;
+    --g: #00ff00;
+    --b: #0000ff;
     --mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
     --sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
     /* The shared chrome inlined below is written against site.css's grid

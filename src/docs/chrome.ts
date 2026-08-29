@@ -207,7 +207,9 @@ export function crumbFor(page: string): Crumb | undefined {
  * The same outlines the landing page's static fallback draws, at 16px:
  * small enough to read as a mark rather than a title, and the only thing
  * in the bar that goes anywhere but forward. `fill: currentColor` is what
- * lets the hover rule reach it.
+ * lets the reduced-motion hover reach it; the glitch that runs otherwise
+ * is on the mark itself, so it needs the class and not the inherited
+ * colour. See `.sitehdr-home:hover .sitehdr-mark` in {@link CHROME_CSS}.
  */
 const WORDMARK = [
   '<svg class="sitehdr-mark" viewBox="0 0 1055 128" aria-hidden="true" focusable="false">',
@@ -428,8 +430,75 @@ export const CHROME_CSS = `/* ---------- the shared header bar ---------- */
   color: var(--ink-hi);
   flex: none;
 }
-.sitehdr-home:hover { color: var(--accent); }
 .sitehdr-mark { display: block; height: 16px; width: auto; fill: currentColor; }
+
+/* Hovering the mark runs the landing page's glitch rather than tinting
+   the link green. It is the same fault the animated lockup draws, cut
+   down to what survives at 16px, and it is CSS because the header pulls
+   no asset and runs no script -- the lockup's engine is five modules and
+   a generated glyph atlas, which is not a thing to load on six reference
+   pages for an ornament this size. So the effect is restated in the one
+   language the bar already speaks.
+
+   The drop-shadow pair is the channel split, not a shadow: zero blur,
+   hard offset, --r trailing the centre and --b leading it, which is the
+   order stage.js composites them in. site.css's no-shadow rule is about
+   soft UI depth, and this is the opposite of that.
+
+   The offsets are retuned rather than scaled. PARAMS states the hero's
+   in logo units against a 1055-wide box; at the 132px this mark is wide
+   they all land under a pixel, and a split you cannot see is not one.
+
+   The hero's drop param dims individual displaced slices, which one
+   element
+   cannot do -- dimming the whole mark instead just fades it to grey and
+   reads as a transition, not a fault. So it is spent as a single
+   frame of near-blackout at 12% and the rest of the burst stays at full
+   white, where the split has something to separate from.
+
+   steps(1, end) is what makes it read as digital: every stop holds until
+   the next instead of easing into it. The burst fills the first quarter
+   and the rest of the cycle is still, so holding the pointer gives an
+   intermittent fault at roughly the lockup's own cadence rather than a
+   continuous shake. */
+.sitehdr-home:hover .sitehdr-mark {
+  animation:
+    sitehdr-tear 1.6s steps(1, end) infinite,
+    sitehdr-split 1.6s steps(1, end) infinite;
+}
+@keyframes sitehdr-tear {
+  0%   { transform: none; opacity: 1; }
+  3%   { transform: translate3d(-3px, 1px, 0); opacity: 1; }
+  6%   { transform: translate3d(2px, -1px, 0); opacity: 1; }
+  9%   { transform: translate3d(-1px, 0, 0); opacity: 1; }
+  12%  { transform: none; opacity: 0.2; }
+  15%  { transform: translate3d(3px, 1px, 0); opacity: 1; }
+  18%  { transform: translate3d(-2px, 0, 0); opacity: 1; }
+  21%  { transform: translate3d(1px, -1px, 0); opacity: 1; }
+  24%  { transform: translate3d(-1px, 0, 0); opacity: 1; }
+  26%  { transform: none; opacity: 1; }
+  100% { transform: none; opacity: 1; }
+}
+@keyframes sitehdr-split {
+  0%   { filter: none; }
+  3%   { filter: drop-shadow(-2px 0 0 var(--r)) drop-shadow(2px 0 0 var(--b)); }
+  6%   { filter: drop-shadow(1px 0 0 var(--r)) drop-shadow(-1px 0 0 var(--b)); }
+  9%   { filter: drop-shadow(-1px 0 0 var(--r)) drop-shadow(1px 0 0 var(--b)); }
+  12%  { filter: none; }
+  15%  { filter: drop-shadow(-3px 0 0 var(--r)) drop-shadow(3px 0 0 var(--b)); }
+  18%  { filter: drop-shadow(1px 1px 0 var(--r)) drop-shadow(-1px -1px 0 var(--b)); }
+  21%  { filter: drop-shadow(-1px 0 0 var(--r)) drop-shadow(1px 0 0 var(--b)); }
+  24%  { filter: none; }
+  26%  { filter: none; }
+  100% { filter: none; }
+}
+
+/* Where motion is unwelcome the old rule is the fallback, not nothing:
+   the link still has to answer the pointer. */
+@media (prefers-reduced-motion: reduce) {
+  .sitehdr-home:hover .sitehdr-mark { animation: none; }
+  .sitehdr-home:hover { color: var(--accent); }
+}
 .sitehdr-gh { display: block; width: 15px; height: 15px; fill: currentColor; }
 
 /* The mark already spells the name, so the crumb opens on its separator
