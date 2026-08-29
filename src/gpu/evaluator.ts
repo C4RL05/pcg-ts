@@ -168,6 +168,37 @@ export interface GpuFieldEvaluatorOptions {
    */
   readonly deviceInstances?: boolean;
   /**
+   * Opt in to producing the spawner's NAMED per-instance channels
+   * (`spawnInstances`' `instanceAttrs`) on the device as well as its
+   * transforms. Requires {@link deviceInstances}, and the constructor
+   * refuses the pair without it rather than accepting a flag that could
+   * do nothing.
+   *
+   * Default false, and false is exactly the pre-existing behaviour: a
+   * spawn naming any channel declines the resident run
+   * (`"run-plan-failed"`), its members cook per-node, and the CPU spawner
+   * composes the transforms AND the channels together — a working graph,
+   * byte for byte the one it was.
+   *
+   * Turning it on moves the OBLIGATION to bind those columns to the host.
+   * Each channel arrives as `batch.attributes[name]`, an owned handle
+   * whose `handle.resource` is the buffer, laid out by
+   * `deviceInstanceAttributeLayout` (dtype preserved; an itemSize-3
+   * channel spends 4 slots; a `bool` channel is u32 words). The device
+   * adapter in `pcg-ts/three` binds the reserved `"color"` channel and
+   * REFUSES every other one — it names `handle.resource` as the way out —
+   * so a graph rendering through that adapter goes from working to
+   * throwing the moment its channels become device-resident. That is the
+   * whole reason this is its own flag instead of part of
+   * {@link deviceInstances}: only a host that binds the buffers itself
+   * should ask for it.
+   *
+   * Every channel is a GATHER, so its bytes equal the CPU batch's
+   * exactly; there is no tolerance class here, unlike the composed
+   * transforms.
+   */
+  readonly deviceInstanceAttrs?: boolean;
+  /**
    * Opt in to resolving fields whose spec was DERIVED by the combinator
    * API — `mul(position(), 0.1)`, `ge(randomField("species"), 0.72)` —
    * rather than AUTHORED through `fieldFromJson`. A combinator field
@@ -245,6 +276,17 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
    */
   readonly acceptDerivedSpecs: boolean;
 
+  /**
+   * Whether a device-resident spawner terminal also produces its named
+   * per-instance channels — see
+   * `GpuFieldEvaluatorOptions.deviceInstanceAttrs`. Read here rather than
+   * advertised on `GpuFieldResolver`: nothing in core decides anything
+   * from it (device batches are never memo-cached, so there is no key to
+   * salt), and the one consumer that must act on it — the host binding
+   * the buffers — reads the batch's `attributes` record instead.
+   */
+  readonly deviceInstanceAttrs: boolean;
+
   private readonly device: GpuDeviceLike;
   /** Compiled kernels (or compile failures) by field key + full layout. */
   private readonly kernels = new Map<string, CompiledFieldKernel | Error>();
@@ -267,12 +309,27 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
         `GpuFieldEvaluator: maxElementsPerDispatch must be a finite number, got ${opts.maxElementsPerDispatch}; leave it unset to use the device maximum`,
       );
     }
+    if (opts.deviceInstanceAttrs === true && opts.deviceInstances !== true) {
+      // A flag that silently does nothing is worse than one that refuses:
+      // without `deviceInstances` no spawner ever terminates a resident
+      // run, so there is no batch for a channel to ride on and the setting
+      // would read as "on" while every channel still came from the CPU.
+      throw new Error(
+        "GpuFieldEvaluator: deviceInstanceAttrs requires deviceInstances: true — per-instance " +
+          "channels ride on a device-resident spawner terminal, and without deviceInstances no " +
+          "spawner is one, so the flag could never take effect. Pass both to produce channels " +
+          "on the device (and bind them yourself from batch.attributes[name].handle.resource), " +
+          "or drop deviceInstanceAttrs to let the CPU spawner produce transforms and channels " +
+          "together.",
+      );
+    }
     this.device = device;
     this.cacheSalt = saltFrom(opts.adapterInfo ?? device.adapterInfo);
     this.pool = new BufferPool(device, opts.maxPooledBytes ?? DEFAULT_MAX_POOLED_BYTES);
     this.maxElementsPerDispatch = opts.maxElementsPerDispatch;
     this.maxResidentBytes = opts.maxResidentBytes ?? DEFAULT_MAX_RESIDENT_BYTES;
     this.residentTerminals = opts.deviceInstances === true ? DEVICE_INSTANCE_TERMINALS : [];
+    this.deviceInstanceAttrs = opts.deviceInstanceAttrs === true;
     // Through the shared accessor, not `opts.acceptDerivedSpecs === true`
     // written out again: the executor interprets the same absent-means-
     // false rule through this function, so there is one reading of the
@@ -442,7 +499,9 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
     ctx: ResidentRunContext,
     stats?: GpuCookStats,
   ): object | null {
-    const outcome = planResidentRun(members, ctx, this.maxResidentBytes, this.acceptDerivedSpecs);
+    const outcome = planResidentRun(members, ctx, this.maxResidentBytes, this.acceptDerivedSpecs, {
+      deviceInstanceAttrs: this.deviceInstanceAttrs,
+    });
     if ("plan" in outcome) return outcome.plan;
     if (stats !== undefined) {
       stats.fallbacks[outcome.reason] = (stats.fallbacks[outcome.reason] ?? 0) + 1;

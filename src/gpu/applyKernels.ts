@@ -94,6 +94,12 @@ export const APPLY_WORKGROUP_SIZE = 64;
  * Nothing cached can be stale, because nothing cached changed. That is
  * the test to apply to any future variant: a bump is required unless the
  * existing keys still map to the existing bytes.
+ *
+ * Per-instance channels did not bump it either, and pass the same test
+ * from the other direction: {@link makeInstanceChannelApply} is a WHOLE
+ * NEW kernel under keys (`instanceChannel|...`) nothing has ever cached,
+ * and it changed not one character of any existing one — the compose
+ * kernel included, which is exactly why channels did not go into it.
  */
 const APPLY_VERSION = "apply2";
 
@@ -742,7 +748,11 @@ export function makeComposeInstancesApply(
   // buffers (P, rot, scale, transforms, perm, colour source, colour out)
   // against the baseline `maxStorageBuffersPerShaderStage` of 8 — the
   // uniform is not one of them. One free slot is left. Anything added
-  // here after this point needs that limit checked, not assumed.
+  // here after this point needs that limit checked, not assumed — which
+  // is why NAMED per-instance channels are their own kernel
+  // ({@link makeInstanceChannelApply}, three bindings, one dispatch per
+  // channel per batch) rather than more bindings on this one: extending
+  // it in place would have bought exactly one channel.
   const colVar = hasColor
     ? bindings.add("color", "read", "f32", `colour source: f32 tupleSize ${colorTupleSize}`)
     : "";
@@ -812,6 +822,108 @@ export function makeComposeInstancesApply(
     bindings.items,
     [],
     body,
+    indexed,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// spawnInstances: one NAMED per-instance channel, gathered out of a
+// resident attribute buffer into its own retained buffer. Roles: "src"
+// (read, the source attribute column), "out" (read_write, the retained
+// channel buffer) and — in indexed mode — "perm" (read, the same
+// host-planned grouping permutation the compose kernel reads).
+
+/**
+ * Per-instance channel gather kernel: `out[i] = src[perm[base + i]]`,
+ * all components, one dispatch per asset batch exactly as the compose
+ * kernel runs.
+ *
+ * **A separate kernel per channel, not more bindings on compose.** The
+ * compose kernel's widest form already binds seven of the baseline
+ * `maxStorageBuffersPerShaderStage` of 8 (see
+ * {@link makeComposeInstancesApply}), so folding channels into it would
+ * buy exactly ONE and then fail on the second. This binds three
+ * (source, output, permutation) whatever the channel is, so the number of
+ * channels a spawn may carry is bounded by nothing here — it costs one
+ * dispatch and one buffer each, and no binding budget.
+ *
+ * **Every channel is a WORD gather, whatever its dtype.** Both sides bind
+ * as `array<u32>`, so the kernel moves raw 4-byte words and never a
+ * value: there is no conversion to round, no arithmetic to contract into
+ * FMA, and no float path to canonicalize a NaN payload. That is why this
+ * is a bit-exact port of the CPU spawner's `readInstanceAttr` and not a
+ * tolerance class — the same argument colour makes, generalized. It is
+ * also why the dtype is absent from the generated text and from the
+ * specialization key: `f32x2` and `u32x2` are the same kernel, and the
+ * element type travels on the batch's `DeviceInstanceAttribute` where a
+ * renderer reads it. A `bool` channel arrives here already widened to
+ * u32 0/1, because that is how every bool column enters a resident slot.
+ *
+ * `components` is what {@link deviceInstanceAttributeLayout} says the
+ * buffer spends per instance — `itemSize`, except that 3 pads to 4 for
+ * the WGSL `array<vec3<T>>` 16-byte stride. It is PASSED IN rather than
+ * recomputed so the padding rule has exactly one owner; the pad slot is
+ * written as an explicit zero for the same reason the colour kernel
+ * writes its own, namely that these buffers come from a reuse pool and a
+ * handed-out buffer whose every byte is defined is one a test can compare
+ * in full.
+ *
+ * `indexed` selects multi-asset mode and reads the source through the
+ * SAME `perm[base + i]` the matrix did, so an instance's channel value
+ * and its transform always come from one point. Sharing the expression is
+ * the correctness argument, exactly as it is for colour.
+ */
+export function makeInstanceChannelApply(
+  itemSize: number,
+  components: number,
+  indexed = false,
+): ApplyKernel {
+  if (!Number.isInteger(itemSize) || itemSize < 1 || itemSize > 4) {
+    throw new Error(
+      `apply codegen: per-instance channel itemSize ${itemSize} is out of range; a channel binds ` +
+        "as a WGSL storage array of a scalar or a vec2/vec3/vec4, so it must be a whole number " +
+        "in 1..4 (the planner rejects wider columns before reaching codegen)",
+    );
+  }
+  const expected = itemSize === 3 ? 4 : itemSize;
+  if (components !== expected) {
+    throw new Error(
+      `apply codegen: per-instance channel of itemSize ${itemSize} spends ${expected} slots per ` +
+        `instance, not ${components}; pass the \`components\` deviceInstanceAttributeLayout ` +
+        "returns rather than a second reading of the vec3 padding rule",
+    );
+  }
+  const bindings = new BindingList();
+  const srcVar = bindings.add("src", "read", "u32", `channel source: ${itemSize} word(s) per point`);
+  const outVar = bindings.add(
+    "out",
+    "read_write",
+    "u32",
+    `out: ${components} word(s) per instance${components !== itemSize ? " (vec3 storage stride, [3] = 0 pad)" : ""}`,
+  );
+  // Declared last, mirroring the compose kernel: the non-indexed variant
+  // keeps the binding indices it would have had without a permutation.
+  const permVar = indexed
+    ? bindings.add("perm", "read", "u32", "grouping permutation: source point index per slot")
+    : "";
+  const src = indexed ? "src" : "i";
+  const read = (k: number): string =>
+    itemSize === 1 ? `${srcVar}[${src}]` : k === 0 ? `${srcVar}[s]` : `${srcVar}[s + ${k}u]`;
+  const write = (k: number): string =>
+    components === 1 ? `${outVar}[i]` : k === 0 ? `${outVar}[o]` : `${outVar}[o + ${k}u]`;
+  const lines: string[] = [];
+  if (indexed) lines.push(`  let src = ${permVar}[params.base + i];`);
+  if (itemSize > 1) lines.push(`  let s = ${src} * ${itemSize}u;`);
+  if (components > 1) lines.push(`  let o = i * ${components}u;`);
+  for (let k = 0; k < itemSize; k++) lines.push(`  ${write(k)} = ${read(k)};`);
+  // The vec3 pad. Written, never left: see the doc comment.
+  for (let k = itemSize; k < components; k++) lines.push(`  ${write(k)} = 0u;`);
+  return assemble(
+    `instanceChannel|ts=${itemSize}|c=${components}${indexed ? "|perm" : ""}`,
+    0,
+    bindings.items,
+    [],
+    lines.join("\n"),
     indexed,
   );
 }

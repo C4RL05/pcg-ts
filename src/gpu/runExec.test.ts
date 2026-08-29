@@ -13,8 +13,12 @@
 import { describe, expect, it } from "vitest";
 import { Geometry } from "../data/index.js";
 import { CookCancelledError } from "../graph/errors.js";
-import type { DeviceInstanceBatch, ResidentMemberDesc } from "../fields/index.js";
-import { createGpuCookStats } from "../fields/index.js";
+import type {
+  DeviceInstanceBatch,
+  ResidentMemberDesc,
+  ResidentRunContext,
+} from "../fields/index.js";
+import { createGpuCookStats, deviceInstanceAttributesOf } from "../fields/index.js";
 import { buildInstanceBatches } from "../spawn/index.js";
 import type {
   GpuBindGroupLike,
@@ -187,7 +191,7 @@ const spawnMember = (params: Record<string, unknown>): ResidentMemberDesc => ({
   seed: 99,
 });
 
-function planFor(geo: Geometry, params: Record<string, unknown>) {
+function planFor(geo: Geometry, params: Record<string, unknown>, deviceInstanceAttrs = false) {
   const attributes: Record<string, { type: never; tupleSize: number }> = {};
   for (const attr of geo.attrs.point) {
     attributes[attr.name] = { type: attr.type as never, tupleSize: attr.tupleSize };
@@ -197,6 +201,7 @@ function planFor(geo: Geometry, params: Record<string, unknown>) {
     { attributes, count: geo.attrs.point.count, needsGeometry: false },
     Number.MAX_SAFE_INTEGER,
     false,
+    { deviceInstanceAttrs },
   );
   if (!("plan" in outcome)) throw new Error(`expected a plan, got ${outcome.reason}`);
   return outcome.plan;
@@ -458,24 +463,28 @@ describe("resident run executor: instance colour", () => {
   });
 });
 
-describe("resident run executor: ownership under failure", () => {
-  /** A pool whose `detach` throws on the `failAt`-th call (1-based). */
-  class FlakyPool extends BufferPool {
-    private calls = 0;
-    constructor(
-      device: GpuDeviceLike,
-      maxBytes: number,
-      private readonly failAt: number,
-    ) {
-      super(device, maxBytes);
-    }
-    override detach(buf: GpuBufferLike): ReturnType<BufferPool["detach"]> {
-      this.calls++;
-      if (this.calls === this.failAt) throw new Error("simulated detach failure");
-      return super.detach(buf);
-    }
+/**
+ * A pool whose `detach` throws on the `failAt`-th call (1-based). At
+ * module scope because both the transform/colour ownership suite and the
+ * channel one need it, and a second copy is a second thing to drift.
+ */
+class FlakyPool extends BufferPool {
+  private calls = 0;
+  constructor(
+    device: GpuDeviceLike,
+    maxBytes: number,
+    private readonly failAt: number,
+  ) {
+    super(device, maxBytes);
   }
+  override detach(buf: GpuBufferLike): ReturnType<BufferPool["detach"]> {
+    this.calls++;
+    if (this.calls === this.failAt) throw new Error("simulated detach failure");
+    return super.detach(buf);
+  }
+}
 
+describe("resident run executor: ownership under failure", () => {
   it("a partial build disposes what it detached, exactly once, and strands nothing", async () => {
     const geo = speciesCloud(MIXED);
     const device = fakeDevice();
@@ -572,5 +581,372 @@ describe("resident run executor: ownership under failure", () => {
     expect(pool.stats.buffersCreated).toBeGreaterThan(0);
     expect(inFlight(pool.stats)).toBe(0);
     expect(pool.stats.detachedBuffers).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Named per-instance channels (opt-in). A fake device cannot run the
+// gather shader, so the bit-exactness case below is built the only honest
+// way without one: everything that could be wrong OUTSIDE the four copy
+// lines — which buffer each dispatch binds, the permutation that was
+// uploaded, the (count, base) each per-batch dispatch carries, the stride
+// each buffer was sized for — is taken from what the executor ACTUALLY
+// did, and only the copy itself is modelled. That model is exactly the
+// kernel text `runPlan.test.ts` pins verbatim ("the gather kernel is a raw
+// WORD copy"), so the pair covers the whole path. The device suite
+// re-derives it against a real adapter.
+
+/** Point cloud carrying one channel column per dtype and tuple size. */
+function channelCloud(ids: readonly string[]): Geometry {
+  const geo = speciesCloud(ids);
+  const set = geo.attrs.point;
+  const plantId = set.add("plantId", "u32", 1);
+  const phase = set.add("phase", "f32", 2);
+  const tint = set.add("tint", "f32", 3);
+  const offset = set.add("offset", "i32", 4);
+  const flag = set.add("flag", "bool", 1);
+  for (let i = 0; i < ids.length; i++) {
+    // Values chosen so a wrong stride or a wrong source index cannot
+    // coincide with the right one: every component of every point differs.
+    plantId.setTuple(i, [0xdead_0000 + i]); // past 2^24, so f32 would lose it
+    phase.setTuple(i, [i + 0.125, -(i + 0.25)]);
+    tint.setTuple(i, [i / 8, 1 - i / 8, 0.5 + i / 32]);
+    offset.setTuple(i, [-i, i * 7, -(i * 11), i * 13]);
+    flag.setTuple(i, [i % 2]);
+  }
+  return geo;
+}
+
+/** The channel-carrying shapes `channelCloud` writes, in one place. */
+const CHANNEL_SHAPES = [
+  { name: "plantId", type: "u32", itemSize: 1, components: 1 },
+  { name: "phase", type: "f32", itemSize: 2, components: 2 },
+  { name: "tint", type: "f32", itemSize: 3, components: 4 },
+  { name: "offset", type: "i32", itemSize: 4, components: 4 },
+  { name: "flag", type: "bool", itemSize: 1, components: 1 },
+] as const;
+
+const CHANNEL_NAMES = CHANNEL_SHAPES.map((c) => c.name);
+
+/** Words a device channel buffer spends per batch of `n` instances. */
+const channelBytes = (n: number, components: number): number => n * components * 4;
+
+describe("resident run executor: named per-instance channels", () => {
+  it("acquires one buffer per channel per batch and dispatches one kernel into each", async () => {
+    const geo = channelCloud(MIXED);
+    const device = fakeDevice();
+    const pool = new BufferPool(device, 1 << 22);
+    const stats = createGpuCookStats();
+    const plan = planFor(geo, { assetAttr: "species", instanceAttrs: [...CHANNEL_NAMES] }, true);
+
+    const result = await executeResidentRun(envFor(device, pool), plan, { geo }, stats);
+    const batches = result.deviceBatches as readonly DeviceInstanceBatch[];
+
+    // The batches are still the CPU spawner's, in its order: channels
+    // ride the grouping, they do not change it.
+    expect(batches.map((b) => [b.assetId, b.count])).toEqual(
+      MIXED_ORDER.map((a, j) => [a, MIXED_COUNTS[j]]),
+    );
+
+    // One handle per channel per batch, each declaring the AUTHOR's dtype
+    // and item size and sized at the buffer's PADDED stride.
+    batches.forEach((b, j) => {
+      const attrs = deviceInstanceAttributesOf(b);
+      expect(Object.keys(attrs), `batch ${j} channel names`).toEqual([...CHANNEL_NAMES]);
+      for (const shape of CHANNEL_SHAPES) {
+        const ch = attrs[shape.name];
+        expect([ch.type, ch.itemSize], `batch ${j} ${shape.name}`).toEqual([
+          shape.type,
+          shape.itemSize,
+        ]);
+        expect(ch.handle.byteLength, `batch ${j} ${shape.name} bytes`).toBe(
+          channelBytes(MIXED_COUNTS[j], shape.components),
+        );
+      }
+    });
+    // 4 batches x 5 channels = 20 distinct handles, plus 4 transforms.
+    const handles = batches.flatMap((b) => [
+      b.transforms,
+      ...Object.values(deviceInstanceAttributesOf(b)).map((c) => c.handle),
+    ]);
+    expect(handles).toHaveLength(24);
+    expect(new Set(handles).size).toBe(24);
+    // No colour was asked for, so there is none — a channel record does
+    // not conjure the reserved entry.
+    expect(batches.every((b) => b.colors === undefined)).toBe(true);
+
+    // Dispatches: compose once per batch, then each gather once per
+    // batch. Chunking never multiplies the counter, but these are genuinely
+    // distinct kernels over distinct ranges.
+    expect(device.dispatches).toHaveLength(4 * 6);
+    expect(stats.dispatches).toBe(4 * 6);
+    // Every gather binds three buffers: source (shared across batches),
+    // its own output, and the ONE uploaded permutation the compose read.
+    const composePerm = device.dispatches[0].bound.get(5)!;
+    const gathers = device.dispatches.slice(4); // the compose's four come first
+    expect(gathers).toHaveLength(20);
+    for (const d of gathers) {
+      expect(d.bound.size).toBe(4); // uniform + src + out + perm
+      expect(d.bound.get(3)).toBe(composePerm);
+    }
+    // Each channel's source buffer is one slot buffer shared by all four
+    // of its dispatches; each output is that batch's own.
+    CHANNEL_SHAPES.forEach((shape, ci) => {
+      const mine = gathers.filter((_, k) => Math.floor(k / 4) === ci);
+      expect(new Set(mine.map((d) => d.bound.get(1))).size, `${shape.name} source`).toBe(1);
+      expect(new Set(mine.map((d) => d.bound.get(2))).size, `${shape.name} out`).toBe(4);
+      mine.forEach((d, j) => {
+        expect(d.uniform[0], `${shape.name} batch ${j} count`).toBe(MIXED_COUNTS[j]);
+        // The same `base` the compose kernel used for that batch: one
+        // permutation, one slice, so matrix and channel agree on the point.
+        expect(d.uniform[3], `${shape.name} batch ${j} base`).toBe(
+          device.dispatches[j].uniform[3],
+        );
+      });
+    });
+
+    // 24 buffers left the pool and 24 disposes bring it back to zero.
+    expect(pool.stats.detachedBuffers).toBe(24);
+    expect(inFlight(pool.stats)).toBe(0);
+    for (const h of handles) h.dispose();
+    expect(pool.stats).toMatchObject({ detachedBuffers: 0, detachedBytes: 0 });
+    // Exactly once each: a double release would show as destroys === 2.
+    expect(device.buffers.map((b) => b.destroys).filter((n) => n > 1)).toEqual([]);
+    // ...and a second dispose is a no-op, not a second free.
+    for (const h of handles) h.dispose();
+    expect(device.buffers.map((b) => b.destroys).filter((n) => n > 1)).toEqual([]);
+  });
+
+  it("gathers exactly the bytes the CPU spawner would, per dtype and item size", async () => {
+    // The reference is `buildInstanceBatches`. A channel is a GATHER, so
+    // there is no tolerance class to spend here: every word must match.
+    const geo = channelCloud(MIXED);
+    const device = fakeDevice();
+    const pool = new BufferPool(device, 1 << 22);
+    const plan = planFor(geo, { assetAttr: "species", instanceAttrs: [...CHANNEL_NAMES] }, true);
+    const result = await executeResidentRun(envFor(device, pool), plan, { geo }, undefined);
+    const batches = result.deviceBatches!;
+    const cpu = buildInstanceBatches(geo, {
+      defaultAssetId: "tree",
+      assetAttr: "species",
+      instanceAttrs: [...CHANNEL_NAMES],
+    });
+
+    // The permutation the executor really uploaded, read back off the
+    // device — not the test's idea of one.
+    const permBuf = device.dispatches[0].bound.get(5)!;
+    const perm = new Uint32Array(permBuf.bytes.buffer, permBuf.bytes.byteOffset, MIXED.length);
+
+    expect(batches.map((b) => b.assetId)).toEqual(cpu.map((b) => b.assetId));
+    batches.forEach((batch, j) => {
+      const base = device.dispatches[j].uniform[3];
+      const attrs = deviceInstanceAttributesOf(batch);
+      for (const shape of CHANNEL_SHAPES) {
+        // What the CPU batch holds for this channel, as raw words. bool
+        // is the one dtype whose CPU column is bytes (Uint8Array) and
+        // whose device buffer is u32 words — the documented widening, not
+        // a value change, so compare the values it carries.
+        const cpuCol = cpu[j].attributes![shape.name];
+        // The kernel, modelled: out[i * components + c] = src[perm[base + i] * itemSize + c],
+        // with the pad slot written as an explicit zero. Sourced from the
+        // POINT column so a wrong permutation cannot be hidden by reading
+        // the CPU batch instead.
+        const src = geo.attrs.point.require(shape.name).data;
+        const expected = new Uint32Array(batch.count * shape.components);
+        const srcWords =
+          src instanceof Uint8Array
+            ? Uint32Array.from(src) // the bool widening the slot upload does
+            : new Uint32Array(src.buffer, src.byteOffset, src.length);
+        for (let i = 0; i < batch.count; i++) {
+          const p = perm[base + i];
+          for (let c = 0; c < shape.itemSize; c++) {
+            expected[i * shape.components + c] = srcWords[p * shape.itemSize + c];
+          }
+        }
+        // 1. The modelled gather agrees with the CPU spawner's own copy,
+        //    word for word, which is what makes it a valid model.
+        const cpuWords =
+          cpuCol instanceof Uint8Array
+            ? Uint32Array.from(cpuCol)
+            : new Uint32Array(cpuCol.buffer, cpuCol.byteOffset, cpuCol.length);
+        for (let i = 0; i < batch.count; i++) {
+          for (let c = 0; c < shape.itemSize; c++) {
+            expect(
+              expected[i * shape.components + c],
+              `batch ${j} ${shape.name}[${i}].${c}`,
+            ).toBe(cpuWords[i * shape.itemSize + c]);
+          }
+        }
+        // 2. The device buffer the executor handed out is sized for
+        //    exactly those words — a stride the model and the allocation
+        //    have to agree on or the comparison above proves nothing. It
+        //    is also where the two residencies legitimately differ: the
+        //    padded channel spends a third more bytes here than the CPU
+        //    column packs, and the bool one spends four times as many.
+        expect(attrs[shape.name].handle.byteLength, `${shape.name} bytes`).toBe(expected.byteLength);
+        const cpuBytes = shape.name === "flag" ? cpuCol.length : cpuCol.byteLength;
+        expect(expected.byteLength >= cpuBytes, `${shape.name} device >= cpu`).toBe(true);
+        expect(expected.byteLength).toBe(batch.count * shape.components * 4);
+      }
+    });
+    // A u32 id past 2^24 is the reason the dtype is never widened: it must
+    // survive the round trip identically on both paths.
+    expect(cpu[0].attributes!.plantId[0]).toBeGreaterThan(0xff_ffff);
+    for (const b of batches) {
+      b.transforms.dispose();
+      for (const ch of Object.values(deviceInstanceAttributesOf(b))) ch.handle.dispose();
+    }
+  });
+
+  it("carries colour and channels side by side, one handle each", async () => {
+    const geo = channelCloud(MIXED);
+    geo.attrs.point.add("color", "f32", 3);
+    const device = fakeDevice();
+    const pool = new BufferPool(device, 1 << 22);
+    const result = await executeResidentRun(
+      envFor(device, pool),
+      planFor(geo, { colorAttr: "color", instanceAttrs: ["plantId", "tint"] }, true),
+      { geo },
+      undefined,
+    );
+    const batch = result.deviceBatches![0];
+    const attrs = deviceInstanceAttributesOf(batch);
+    // Colour is the RESERVED entry, first, with the channels after it —
+    // and `batch.colors` is the accessor over that same handle, so an
+    // owner looping this record disposes each buffer exactly once.
+    expect(Object.keys(attrs)).toEqual(["color", "plantId", "tint"]);
+    expect(batch.colors).toBe(attrs.color.handle);
+    expect(attrs.color.itemSize).toBe(3);
+    expect(attrs.color.handle.byteLength).toBe(8 * 16);
+    expect(attrs.plantId.handle.byteLength).toBe(8 * 4);
+    expect(attrs.tint.handle.byteLength).toBe(8 * 16);
+    // 1 transforms + 1 colour + 2 channels.
+    expect(pool.stats.detachedBuffers).toBe(4);
+    batch.transforms.dispose();
+    for (const ch of Object.values(attrs)) ch.handle.dispose();
+    expect(pool.stats).toMatchObject({ detachedBuffers: 0, detachedBytes: 0 });
+    expect(device.buffers.map((b) => b.destroys).filter((n) => n > 1)).toEqual([]);
+  });
+
+  it("without the opt-in there is no plan at all, so nothing changes", async () => {
+    // The regression guard, stated at the seam that matters: the same
+    // spawn planned WITHOUT the flag never reaches the executor, so a
+    // host rendering CPU batches today keeps rendering them.
+    const geo = channelCloud(MIXED);
+    expect(() => planFor(geo, { instanceAttrs: ["plantId"] })).toThrow(/run-plan-failed/);
+    // ...and a channel-less spawn is untouched by the flag being on.
+    const device = fakeDevice();
+    const pool = new BufferPool(device, 1 << 22);
+    const result = await executeResidentRun(
+      envFor(device, pool),
+      planFor(geo, {}, true),
+      { geo },
+      undefined,
+    );
+    const batch = result.deviceBatches![0];
+    expect(batch.attributes).toBeUndefined();
+    expect(batch.colors).toBeUndefined();
+    expect(pool.stats.detachedBuffers).toBe(1);
+    batch.transforms.dispose();
+  });
+
+  it("a channel named __proto__ arrives as an own key, not a lost handle", async () => {
+    // A channel is named after a point attribute, and an attribute is
+    // named by the graph's JSON — `__proto__` included, which an
+    // AttributeSet stores like any other name. On an ordinary object
+    // literal `record["__proto__"] = h` sets the PROTOTYPE and adds no
+    // own key, so the handle would be invisible to
+    // `deviceInstanceAttributesOf` (it tests propertyIsEnumerable) and
+    // therefore to every owner counting handles to dispose: a leaked GPU
+    // buffer, which is the failure mode this whole path guards. The
+    // executor builds the record with a null prototype for exactly this.
+    // Verified by mutation: swap `Object.create(null)` for `{}` in run.ts
+    // and the channel vanishes from the batch and its buffer never frees.
+    const geo = speciesCloud(["a", "a"]);
+    const weird = geo.attrs.point.add("__proto__", "u32", 1);
+    weird.setTuple(0, [11]);
+    weird.setTuple(1, [22]);
+    // Object.fromEntries defines own properties, so the layout the
+    // planner is handed really does carry the name. Note what that
+    // implies and do not overclaim it: a COOK cannot reach this today,
+    // because `narrowRun` in src/graph/execute.ts builds ctx.attributes
+    // as an object literal and drops `__proto__` one seam earlier, so
+    // the planner rejects the channel as "not on the point domain". This
+    // test therefore pins the executor's own guard as defence in depth —
+    // correct if that seam is fixed, and free either way.
+    const attributes = Object.fromEntries(
+      geo.attrs.point.names().map((n) => {
+        const a = geo.attrs.point.require(n);
+        return [n, { type: a.type, tupleSize: a.tupleSize }];
+      }),
+    ) as ResidentRunContext["attributes"];
+    const outcome = planResidentRun(
+      [spawnMember({ instanceAttrs: ["__proto__"] })],
+      { attributes, count: 2, needsGeometry: false },
+      Number.MAX_SAFE_INTEGER,
+      false,
+      { deviceInstanceAttrs: true },
+    );
+    if (!("plan" in outcome)) throw new Error(`expected a plan, got ${outcome.reason}`);
+
+    const device = fakeDevice();
+    const pool = new BufferPool(device, 1 << 20);
+    const result = await executeResidentRun(envFor(device, pool), outcome.plan, { geo }, undefined);
+    const batch = result.deviceBatches![0];
+    const attrs = deviceInstanceAttributesOf(batch);
+    expect(Object.keys(attrs)).toEqual(["__proto__"]);
+    expect(Object.prototype.propertyIsEnumerable.call(attrs, "__proto__")).toBe(true);
+    expect(attrs["__proto__"].handle.byteLength).toBe(2 * 4);
+    // Disposing what the enumeration yields really does free everything:
+    // the whole point of the channel being reachable is that it is
+    // reachable to its OWNER.
+    expect(pool.stats.detachedBuffers).toBe(2);
+    batch.transforms.dispose();
+    for (const ch of Object.values(attrs)) ch.handle.dispose();
+    expect(pool.stats).toMatchObject({ detachedBuffers: 0, detachedBytes: 0 });
+  });
+
+  it("a detach failure partway through a batch's channels strands nothing", async () => {
+    // Detach order within a batch is transforms, colour, then each
+    // channel in plan order. Failing on the fourth call blows up inside
+    // batch 0's channels with three handles built: they must be freed by
+    // the catch, exactly once each, and the rest left to the pool.
+    const geo = channelCloud(MIXED);
+    geo.attrs.point.add("color", "f32", 3);
+    const device = fakeDevice();
+    const pool = new FlakyPool(device, 1 << 22, 4);
+    await expect(
+      executeResidentRun(
+        envFor(device, pool),
+        planFor(geo, { assetAttr: "species", colorAttr: "color", instanceAttrs: ["plantId", "tint"] }, true),
+        { geo },
+        undefined,
+      ),
+    ).rejects.toThrow(/simulated detach failure/);
+    expect(pool.stats.buffersDetached).toBe(3);
+    expect(pool.stats).toMatchObject({ detachedBuffers: 0, detachedBytes: 0 });
+    expect(inFlight(pool.stats)).toBe(0);
+    expect(device.buffers.map((b) => b.destroys).filter((n) => n > 1)).toEqual([]);
+    expect(device.buffers.filter((b) => b.destroys === 1)).toHaveLength(3);
+  });
+
+  it("a cancellation before the transfer detaches no channel buffer either", async () => {
+    const geo = channelCloud(MIXED);
+    const device = fakeDevice();
+    const pool = new BufferPool(device, 1 << 22);
+    const ctrl = new AbortController();
+    device.onSubmit = () => ctrl.abort();
+    await expect(
+      executeResidentRun(
+        envFor(device, pool),
+        planFor(geo, { assetAttr: "species", instanceAttrs: [...CHANNEL_NAMES] }, true),
+        { geo, signal: ctrl.signal },
+        undefined,
+      ),
+    ).rejects.toBeInstanceOf(CookCancelledError);
+    expect(pool.stats.buffersDetached).toBe(0);
+    expect(pool.stats.detachedBuffers).toBe(0);
+    expect(inFlight(pool.stats)).toBe(0);
+    expect(device.buffers.every((b) => b.destroys === 0)).toBe(true);
   });
 });

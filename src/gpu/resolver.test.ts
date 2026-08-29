@@ -136,6 +136,66 @@ describe("GpuFieldEvaluator eligibility gate (device-free)", () => {
     expect(wideStats.fallbacks).toEqual({});
   });
 
+  it("planRun hands the CHANNEL opt-in onward too, and it is off by default", () => {
+    // The same hand-off, one flag over: the planner rejects a spawn
+    // naming per-instance channels unless the evaluator asked for them.
+    // Dropping this hand-off is the regression that matters — a spawn
+    // that falls back to the CPU today would go device-resident and then
+    // throw at a renderer adapter that binds only "color".
+    const spawn: ResidentMemberDesc = {
+      id: "spawn",
+      type: "spawnInstances",
+      kind: "spawnInstances",
+      params: { assetId: "tree", assetAttr: "", colorAttr: "", instanceAttrs: ["plantId"] },
+      seed: 3,
+    };
+    const ctx: ResidentRunContext = {
+      attributes: { P: { type: "f32", tupleSize: 3 }, plantId: { type: "u32", tupleSize: 1 } },
+      count: 16,
+      needsGeometry: false,
+    };
+    const off = new GpuFieldEvaluator(untouchableDevice(), { deviceInstances: true });
+    const offStats = createGpuCookStats();
+    expect(off.deviceInstanceAttrs).toBe(false);
+    expect(off.planRun([spawn], ctx, offStats)).toBeNull();
+    expect(offStats.fallbacks).toEqual({ "run-plan-failed": 1 });
+
+    const on = new GpuFieldEvaluator(untouchableDevice(), {
+      deviceInstances: true,
+      deviceInstanceAttrs: true,
+    });
+    const onStats = createGpuCookStats();
+    expect(on.deviceInstanceAttrs).toBe(true);
+    expect(on.planRun([spawn], ctx, onStats)).not.toBeNull();
+    expect(onStats.fallbacks).toEqual({});
+  });
+
+  it("the channel opt-in refuses to be set without the spawner opt-in", () => {
+    // Without `deviceInstances` no spawner terminates a resident run, so
+    // there is no batch for a channel to ride on and the flag would read
+    // as on while every channel still came from the CPU. A setting that
+    // silently does nothing is worse than one that refuses.
+    expect(
+      () => new GpuFieldEvaluator(untouchableDevice(), { deviceInstanceAttrs: true }),
+    ).toThrow(/deviceInstanceAttrs requires deviceInstances: true/);
+    expect(
+      () =>
+        new GpuFieldEvaluator(untouchableDevice(), {
+          deviceInstances: false,
+          deviceInstanceAttrs: true,
+        }),
+    ).toThrow(/deviceInstanceAttrs requires deviceInstances: true/);
+    // The pair is fine, and so is neither.
+    expect(
+      () =>
+        new GpuFieldEvaluator(untouchableDevice(), {
+          deviceInstances: true,
+          deviceInstanceAttrs: true,
+        }),
+    ).not.toThrow();
+    expect(new GpuFieldEvaluator(untouchableDevice()).deviceInstanceAttrs).toBe(false);
+  });
+
   it("missing attributes fall back with reason compile-error", () => {
     const ev = new GpuFieldEvaluator(untouchableDevice());
     const stats = createGpuCookStats();

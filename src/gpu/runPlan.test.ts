@@ -35,6 +35,14 @@ interface InstancesShape {
   readonly count: number;
   readonly bytes: number;
   readonly colorBytes: number;
+  readonly channels: readonly {
+    readonly name: string;
+    readonly type: string;
+    readonly itemSize: number;
+    readonly components: number;
+    readonly byteStride: number;
+  }[];
+  readonly channelBytes: number;
   readonly permBytes: number;
 }
 
@@ -605,6 +613,8 @@ describe("resident run planning: spawnInstances terminal", () => {
       count: 1000,
       bytes: 64_000,
       colorBytes: 0,
+      channels: [], // no channels asked for: no kernel, no buffer
+      channelBytes: 0,
       permBytes: 0, // constant mode uploads no permutation
     });
     expect(applyOf(p, 0).perBatch).toBe(false); // one dispatch over everything
@@ -770,6 +780,8 @@ describe("resident run planning: multi-asset spawner terminal", () => {
       count: 1000,
       bytes: 64_000,
       colorBytes: 0,
+      channels: [],
+      channelBytes: 0,
       permBytes: 4000,
     });
     // The string column is NEVER uploaded: the host resolves the key.
@@ -849,14 +861,16 @@ describe("resident run planning: multi-asset spawner terminal", () => {
     // being executed by another. Phase 29 made `instances` plural and
     // added `permBytes`, so it moved to /4; phase 45 added the colour
     // output (`colorAttr`, `colorTupleSize`, `colorBytes`) and the
-    // `colorOut` buffer ref, so it is at /5. Change the plan's shape and
+    // `colorOut` buffer ref, taking it to /5; named per-instance channels
+    // added `channels`, `channelBytes` and the indexed `channelOut` ref,
+    // so it is at /6. Change the plan's shape and
     // this must move with it — an unbumped tag is a stale-plan bug, not
     // a cosmetic slip, and nothing else in the suite notices a revert.
     const p = plan(
       [member("transformPoints", { translate: [1, 2, 3], rotateEuler: [0, 90, 0], scale: [2, 2, 2] })],
       8,
     );
-    expect((p as unknown as { readonly format: string }).format).toBe("pcg-resident-run/5");
+    expect((p as unknown as { readonly format: string }).format).toBe("pcg-resident-run/6");
   });
 });
 
@@ -942,6 +956,8 @@ describe("resident run planning: instance colour", () => {
       count: 1000,
       bytes: 64_000,
       colorBytes: 16_000, // 16 bytes per instance, not 12
+      channels: [],
+      channelBytes: 0,
       permBytes: 4000,
     });
   });
@@ -1019,14 +1035,19 @@ describe("resident run planning: instance colour", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Named per-instance channels: the one spawner condition that is NOT a
-// mistake. The library promises that a path which cannot run on the GPU
-// falls back with a machine-readable reason rather than silently doing
-// something else — and a resident run that composed the transforms while
-// dropping the channels would be exactly the silent something else, since
-// the host is about to bind those columns by name. So the planner refuses
-// the run, the terminal falls back per-node, and the CPU spawner produces
-// the transforms AND the channels together.
+// Named per-instance channels with the opt-in OFF — the default, and the
+// only behaviour that existed before the flag. The library promises that a
+// path which cannot run on the GPU falls back with a machine-readable
+// reason rather than silently doing something else, and a resident run
+// that composed the transforms while dropping the channels would be
+// exactly the silent something else, since the host is about to bind those
+// columns by name. So the planner refuses the run, the terminal falls back
+// per-node, and the CPU spawner produces the transforms AND the channels
+// together.
+//
+// Every assertion below is the pre-flag behaviour held in place: default
+// off has to be the old path byte for byte, or the flag is not opt-in. The
+// opt-in ON is a describe of its own, further down.
 
 /** TRS layout plus channel-shaped columns: a u32 id, an f32x2, a string. */
 const CHANNEL_LAYOUT: ResidentRunContext["attributes"] = {
@@ -1064,9 +1085,9 @@ describe("resident run planning: the spawner's per-instance channels", () => {
     // budget's — no new fallback vocabulary. A caller observes the
     // counter key and nothing else: `PlanRejection` carries only
     // `reason`, so the planner's own sentence ("instanceAttrs names N
-    // per-instance channel(s)...") never leaves planResidentRun. There
-    // is nothing else here to assert, and asserting a message would pin
-    // a string no cook can ever hand back.
+    // per-instance channel(s) and this resolver did not opt in...") never
+    // leaves planResidentRun. There is nothing else here to assert, and
+    // asserting a message would pin a string no cook can ever hand back.
     expect(rejection([spawn({ instanceAttrs: ["plantId"] })], 16, CHANNEL_LAYOUT)).toBe(
       "run-plan-failed",
     );
@@ -1076,13 +1097,12 @@ describe("resident run planning: the spawner's per-instance channels", () => {
   });
 
   it("rejects on the CHANNEL, not on anything wrong with it", () => {
-    // The reason is a binding budget, not a validation failure: the
-    // compose kernel's widest form already binds seven storage buffers
-    // against the baseline maxStorageBuffersPerShaderStage of 8, so an
-    // ARBITRARY number of gather channels does not fit in it. So a
-    // perfectly good, device-eligible u32 column rejects exactly as a
-    // nonexistent name does — the two are indistinguishable here, which
-    // is the point. A future kernel that fitted them would flip both.
+    // With the flag off the gate fires BEFORE any lookup, so a perfectly
+    // good, device-eligible u32 column rejects exactly as a nonexistent
+    // name does — the two are indistinguishable here, which is the point.
+    // Turning the flag on separates them (the u32 plans, the nonexistent
+    // name still rejects); that is the opt-in describe's job, and these
+    // cases stay here to pin that OFF really is one undifferentiated no.
     expect(rejection([spawn({ instanceAttrs: ["plantId"] })], 16, CHANNEL_LAYOUT)).toBe(
       "run-plan-failed",
     );
@@ -1142,6 +1162,368 @@ describe("resident run planning: the spawner's per-instance channels", () => {
     expect(coloured.instances?.colorAttr).toBe("tint");
     expect(coloured.instances?.colorTupleSize).toBe(3);
     expect(coloured.instances?.colorBytes).toBe(16 * 16);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Named per-instance channels with the opt-in ON. The flag is the whole
+// difference: the same spawn, the same layout, and now the channels are
+// gathered on the device into buffers the HOST binds. Everything below is
+// unreachable without `deviceInstanceAttrs`, which is what makes the
+// describe above the default and this one the widening.
+
+/** CHANNEL_LAYOUT plus the shapes only the device has an opinion about. */
+const WIDE_CHANNEL_LAYOUT: ResidentRunContext["attributes"] = {
+  ...CHANNEL_LAYOUT,
+  flag: { type: "bool", tupleSize: 1 },
+  offset: { type: "i32", tupleSize: 4 },
+  basis: { type: "f32", tupleSize: 9 },
+};
+
+/** Plan with the channel opt-in ON. */
+function planCh(
+  members: readonly ResidentMemberDesc[],
+  count: number,
+  attributes = WIDE_CHANNEL_LAYOUT,
+  maxBytes = Number.MAX_SAFE_INTEGER,
+  needsGeometry = true,
+): PlanShape {
+  const outcome = planResidentRun(members, { attributes, count, needsGeometry }, maxBytes, false, {
+    deviceInstanceAttrs: true,
+  });
+  if (!("plan" in outcome)) throw new Error(`expected a plan, got ${outcome.reason}`);
+  return outcome.plan as unknown as PlanShape;
+}
+
+/** One opted-in spawn's outcome as a plain string (see `outcomeOf` above). */
+const chOutcome = (params: Record<string, unknown>, count = 16): string => {
+  const outcome = planResidentRun(
+    [spawn(params)],
+    { attributes: WIDE_CHANNEL_LAYOUT, count, needsGeometry: true },
+    Number.MAX_SAFE_INTEGER,
+    false,
+    { deviceInstanceAttrs: true },
+  );
+  return "plan" in outcome ? "planned" : outcome.reason;
+};
+
+/** A device-resident spawn, planned with channels on and no geometry read. */
+const chPlan = (params: Record<string, unknown>, count = 16, attributes = WIDE_CHANNEL_LAYOUT): PlanShape =>
+  planCh([spawn(params)], count, attributes, Number.MAX_SAFE_INTEGER, false);
+
+describe("resident run planning: per-instance channels, opted in", () => {
+  it("plans a valid u32 channel: its own kernel, its own retained bytes", () => {
+    const p = chPlan({ instanceAttrs: ["plantId"] });
+    // Two steps in the one member: compose, then one gather.
+    expect(p.members[0].steps).toHaveLength(2);
+    expect(p.members[0].steps[1].key).toBe("apply2|instanceChannel|ts=1|c=1");
+    // The dtype is deliberately ABSENT from the key: every channel is a
+    // word gather, so f32x1 and u32x1 are one kernel and one pipeline.
+    expect(p.members[0].steps[1].key).not.toContain("u32");
+    expect(p.instances?.channels).toEqual([
+      { name: "plantId", type: "u32", itemSize: 1, components: 1, byteStride: 4 },
+    ]);
+    // 16 instances x 4 bytes, and it is its own line in the accounting.
+    expect(p.instances?.channelBytes).toBe(16 * 4);
+    expect(p.instances?.colorBytes).toBe(0);
+    // Three bindings at most: source, out, and (here) no permutation.
+    expect(p.members[0].steps[1].bindings).toEqual([
+      // plantId's slot, allocated after P/rot/scale by the compose kernel.
+      { binding: 1, ref: { kind: "slot", index: 3 } },
+      { binding: 2, ref: { kind: "channelOut", index: 0 } },
+    ]);
+    // A spawner still mutates nothing, channels or not.
+    expect(p.written).toEqual([]);
+  });
+
+  it("carries the dtype and the item size through unchanged, and pads only 3", () => {
+    // The ABI: the point attribute's own type and tuple size, never
+    // widened to f32 — and a device buffer that differs from the CPU
+    // column exactly where deviceInstanceAttributeLayout says it does.
+    const p = chPlan({ instanceAttrs: ["plantId", "phase", "tint", "offset", "flag"] }, 10);
+    expect(p.instances?.channels).toEqual([
+      { name: "plantId", type: "u32", itemSize: 1, components: 1, byteStride: 4 },
+      { name: "phase", type: "f32", itemSize: 2, components: 2, byteStride: 8 },
+      // The one that pads: 3 components, 4 slots, 16 bytes — the WGSL
+      // array<vec3<T>> stride, the same rule colour has always followed.
+      { name: "tint", type: "f32", itemSize: 3, components: 4, byteStride: 16 },
+      { name: "offset", type: "i32", itemSize: 4, components: 4, byteStride: 16 },
+      // bool declares bool and spends a u32 word: not host-shareable in
+      // WGSL, so it rides as 0/1 exactly as every other bool binding does.
+      { name: "flag", type: "bool", itemSize: 1, components: 1, byteStride: 4 },
+    ]);
+    expect(p.instances?.channelBytes).toBe(10 * (4 + 8 + 16 + 16 + 4));
+    // One kernel each, in the order the param listed them.
+    expect(p.members[0].steps).toHaveLength(6);
+    expect(p.members[0].steps.slice(1).map((st) => st.key)).toEqual([
+      "apply2|instanceChannel|ts=1|c=1",
+      "apply2|instanceChannel|ts=2|c=2",
+      "apply2|instanceChannel|ts=3|c=4",
+      "apply2|instanceChannel|ts=4|c=4",
+      "apply2|instanceChannel|ts=1|c=1",
+    ]);
+    // ...and a distinct output index each, in that same order.
+    expect(p.members[0].steps.slice(1).map((st) => st.bindings[1].ref)).toEqual(
+      [0, 1, 2, 3, 4].map((index) => ({ kind: "channelOut", index })),
+    );
+    // f32x1 and u32x1 share a key AND therefore a pipeline: `plantId` and
+    // `flag` are the same kernel, which is the point of dropping the dtype.
+    expect(p.members[0].steps[1].key).toBe(p.members[0].steps[5].key);
+  });
+
+  it("reads the LATEST epoch, exactly as colour does", () => {
+    // A channel an earlier member wrote must be gathered from THAT
+    // member's output buffer, not the input epoch — the same bytes the
+    // CPU spawner sees when it reads the chain's output geometry.
+    const p = planCh(
+      [
+        member("setAttribute", { name: "phase", type: "f32", tupleSize: 2, value: 0.5, seed: 0 }, "sa"),
+        spawn({ instanceAttrs: ["phase"] }),
+      ],
+      8,
+      WIDE_CHANNEL_LAYOUT,
+      Number.MAX_SAFE_INTEGER,
+      false,
+    );
+    const target = applyOf(p, 0).bindings[0].ref as { kind: string; index: number };
+    const source = p.members[1].steps[1].bindings[0].ref as { kind: string; index: number };
+    expect(source.kind).toBe("slot");
+    expect(source.index).toBe(target.index);
+  });
+
+  it("gathers through the SAME permutation the matrix did, per batch", () => {
+    const p = chPlan({ assetAttr: "species", instanceAttrs: ["plantId"] }, 100);
+    const gather = p.members[0].steps[1];
+    // perm is declared last, so it is binding 3 here — and the ref is the
+    // same `perm` kind the compose kernel binds, i.e. one uploaded
+    // permutation shared by every kernel of the terminal.
+    expect(gather.bindings.map((b) => b.ref)).toEqual([
+      { kind: "slot", index: expect.any(Number) },
+      { kind: "channelOut", index: 0 },
+      { kind: "perm" },
+    ]);
+    // One dispatch per asset batch, with `base` in the uniform: the
+    // gather runs exactly as the compose does, or the two would disagree
+    // about which point fills instance slot i.
+    expect(gather.perBatch).toBe(true);
+    expect(gather.uniformBytes).toBe(16); // header + base
+    expect(p.members[0].steps[0].perBatch).toBe(true); // and so does the compose
+    // Constant mode drops both, and pays 12 bytes of uniform again.
+    const constant = chPlan({ instanceAttrs: ["plantId"] }, 100);
+    expect(constant.members[0].steps[1].perBatch).toBe(false);
+    expect(constant.members[0].steps[1].uniformBytes).toBe(12);
+    expect(constant.members[0].steps[1].bindings).toHaveLength(2);
+  });
+
+  it("colour and channels coexist: the reserved name is still colorAttr's", () => {
+    const p = chPlan({ colorAttr: "tint", instanceAttrs: ["plantId", "phase"] });
+    expect(p.instances?.colorAttr).toBe("tint");
+    expect(p.instances?.colorBytes).toBe(16 * 16);
+    expect(p.instances?.channels.map((c) => c.name)).toEqual(["plantId", "phase"]);
+    expect(p.instances?.channelBytes).toBe(16 * (4 + 8));
+    // compose (which carries colour) + two gathers.
+    expect(p.members[0].steps).toHaveLength(3);
+  });
+
+  it("still rejects every channel the CPU spawner would refuse", () => {
+    // The CPU rules from resolveInstanceAttrs, mirrored. Each REJECTS
+    // rather than throws, so the terminal falls back per-node and that
+    // function raises THE message — the one naming the node, the param,
+    // the channel and the way out. A second wording here would be a
+    // second thing to drift, and a PlanRejection carries only a reason.
+    const cases: readonly (readonly [string, unknown])[] = [
+      ["reserved colour name", ["color"]],
+      ["empty name", [""]],
+      ["duplicate", ["plantId", "plantId"]],
+      ["not on the point domain", ["absent"]],
+      ["string column", ["species"]],
+      ["entry is not a string", [7]],
+      ["entry is null", [null]],
+      ["one bad name among good ones", ["plantId", "species"]],
+      ["not an array", "plantId"],
+      ["lengthless object", {}],
+    ];
+    for (const [label, instanceAttrs] of cases) {
+      expect(chOutcome({ instanceAttrs }), label).toBe("run-plan-failed");
+    }
+  });
+
+  it("rejects a channel WIDER than a vec4 — a device narrowing, not a disagreement", () => {
+    // The CPU carries a 9-component channel happily; WGSL has no vector
+    // wider than 4, so this one goes back to it. Falling back is the
+    // right answer and there is no error to raise at all.
+    expect(chOutcome({ instanceAttrs: ["basis"] })).toBe("run-plan-failed");
+    // And it is the WIDTH, not the name: 4 is fine.
+    expect(chOutcome({ instanceAttrs: ["offset"] })).toBe("planned");
+  });
+
+  it("REJECTS rather than throws, for every channel shape — whatever the order of the checks", () => {
+    // The invariant behind the rule above, stated so it cannot be lost to
+    // a refactor. `deviceInstanceAttributeLayout` raises a PLAIN Error for
+    // an out-of-range item size, and a plain Error escapes
+    // planResidentRun's catch (which converts only PlanFail) — it would
+    // surface as a hard failure on a graph the CPU cooks fine, turning a
+    // designed fallback into a crash. Today the width check runs first
+    // AND the layout call is caught; this pins the outcome rather than
+    // either mechanism, so reordering the validation cannot break it
+    // silently. Verified by mutation: drop the width check and remove the
+    // try/catch and this reports a thrown error instead of a reason.
+    const wide: ResidentRunContext["attributes"] = {
+      P: { type: "f32", tupleSize: 3 },
+      basis: { type: "f32", tupleSize: 9 },
+      zero: { type: "f32", tupleSize: 0 },
+      fractional: { type: "f32", tupleSize: 2.5 },
+      huge: { type: "u32", tupleSize: 1024 },
+      negative: { type: "i32", tupleSize: -1 },
+      ok: { type: "u32", tupleSize: 1 },
+    };
+    for (const name of ["basis", "zero", "fractional", "huge", "negative", "ok"]) {
+      let outcome: ReturnType<typeof planResidentRun>;
+      expect(() => {
+        outcome = planResidentRun(
+          [spawn({ instanceAttrs: [name] })],
+          { attributes: wide, count: 8, needsGeometry: false },
+          Number.MAX_SAFE_INTEGER,
+          false,
+          { deviceInstanceAttrs: true },
+        );
+      }, `${name} must not throw`).not.toThrow();
+      // Only the one valid shape plans; every other is a counted reason.
+      expect("plan" in outcome! ? "planned" : outcome!.reason, name).toBe(
+        name === "ok" ? "planned" : "run-plan-failed",
+      );
+    }
+  });
+
+  it("EMPTY and ABSENT plan identically with the flag on and with it off", () => {
+    // The flag widens what a NAMED channel does and nothing else: a spawn
+    // that names none must produce the same plan either way, or the
+    // default is not really the default.
+    const on = chPlan({ instanceAttrs: [] });
+    const off = plan([spawn({ instanceAttrs: [] })], 16, WIDE_CHANNEL_LAYOUT, Number.MAX_SAFE_INTEGER, false);
+    expect(on.instances).toEqual(off.instances);
+    expect(on.instances?.channels).toEqual([]);
+    expect(on.instances?.channelBytes).toBe(0);
+    expect(on.totalBytes).toBe(off.totalBytes);
+    expect(on.members[0].steps).toHaveLength(1);
+    // Absent is the same case, for graphs serialized before the param.
+    expect(chPlan({}).instances).toEqual(off.instances);
+  });
+
+  it("channel bytes count against the memory bound like any other allocation", () => {
+    const layout: ResidentRunContext["attributes"] = {
+      P: { type: "f32", tupleSize: 3 },
+      plantId: { type: "u32", tupleSize: 1 },
+    };
+    // 8 points: P slot (12/pt) + plantId slot (4/pt) + retained
+    // transforms (64/pt) + retained channel (4/pt). needsGeometry false,
+    // so there is no readback staging in the sum.
+    const withChannel = 8 * (12 + 4 + 64 + 4);
+    expect(chPlan({ instanceAttrs: ["plantId"] }, 8, layout).totalBytes).toBe(withChannel);
+    const budget = (maxBytes: number, params: Record<string, unknown>): string => {
+      const outcome = planResidentRun(
+        [spawn(params)],
+        { attributes: layout, count: 8, needsGeometry: false },
+        maxBytes,
+        false,
+        { deviceInstanceAttrs: true },
+      );
+      return "plan" in outcome ? "planned" : outcome.reason;
+    };
+    // Exactly on the bound plans; one byte under is `run-too-large`, and
+    // that is the reason — not `run-plan-failed`, so a caller can still
+    // tell a run that did not FIT from one that could not be built.
+    expect(budget(withChannel, { instanceAttrs: ["plantId"] })).toBe("planned");
+    expect(budget(withChannel - 1, { instanceAttrs: ["plantId"] })).toBe("run-too-large");
+    // ...and the channel is what pushed it over: the same spawn without
+    // one fits in the smaller budget.
+    expect(budget(withChannel - 1, {})).toBe("planned");
+  });
+
+  it("counts a padded channel at its PADDED stride, not its item size", () => {
+    // The bound must count what the buffer costs. An itemSize-3 channel
+    // spends 16 bytes per instance, and budgeting 12 would let a run plan
+    // that cannot allocate.
+    const layout: ResidentRunContext["attributes"] = {
+      P: { type: "f32", tupleSize: 3 },
+      tint: { type: "f32", tupleSize: 3 },
+    };
+    const p = chPlan({ instanceAttrs: ["tint"] }, 8, layout);
+    expect(p.instances?.channelBytes).toBe(8 * 16);
+    expect(p.totalBytes).toBe(8 * (12 + 12 + 64 + 16)); // P slot, tint slot, transforms, channel
+  });
+
+  it("the gather kernel is a raw WORD copy, pinned verbatim", () => {
+    // The bit-exactness argument lives in this text and nowhere else:
+    // both sides bind as array<u32>, so the kernel moves 4-byte words and
+    // never a value — no conversion to round, no arithmetic to contract,
+    // no float path to canonicalize a NaN payload. Pinned in full for the
+    // widest variant (padded and indexed); the body alone for the rest.
+    const indexed = chPlan({ assetAttr: "species", instanceAttrs: ["tint"] }, 8).members[0].steps[1];
+    expect(indexed.wgsl).toBe(`// Generated by pcg-ts resident-run apply codegen.
+// Dispatch: 1D, chunked; element index i = chunkOffset + gid.x, one
+// invocation per element; only element i's slots are accessed.
+
+struct PcgParams {
+  count: u32,
+  seed: u32,
+  chunkOffset: u32,
+  base: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: PcgParams;
+@group(0) @binding(1) var<storage, read> b1: array<u32>; // channel source: 3 word(s) per point
+@group(0) @binding(2) var<storage, read_write> b2: array<u32>; // out: 4 word(s) per instance (vec3 storage stride, [3] = 0 pad)
+@group(0) @binding(3) var<storage, read> b3: array<u32>; // grouping permutation: source point index per slot
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x + params.chunkOffset;
+  if (i >= params.count) {
+    return;
+  }
+  let src = b3[params.base + i];
+  let s = src * 3u;
+  let o = i * 4u;
+  b2[o] = b1[s];
+  b2[o + 1u] = b1[s + 1u];
+  b2[o + 2u] = b1[s + 2u];
+  b2[o + 3u] = 0u;
+}
+`);
+    // The other item sizes, non-indexed. Note what is NOT here: a
+    // bitcast, an f32() call, a select, or a second traversal.
+    const bodyOf = (name: string): string => {
+      const { wgsl } = chPlan({ instanceAttrs: [name] }, 8).members[0].steps[1];
+      return wgsl.slice(wgsl.indexOf("  }\n") + 4, wgsl.lastIndexOf("}\n"));
+    };
+    expect(bodyOf("plantId")).toBe("  b2[i] = b1[i];\n");
+    expect(bodyOf("phase")).toBe(
+      "  let s = i * 2u;\n  let o = i * 2u;\n  b2[o] = b1[s];\n  b2[o + 1u] = b1[s + 1u];\n",
+    );
+    expect(bodyOf("offset")).toBe(
+      "  let s = i * 4u;\n  let o = i * 4u;\n  b2[o] = b1[s];\n  b2[o + 1u] = b1[s + 1u];\n" +
+        "  b2[o + 2u] = b1[s + 2u];\n  b2[o + 3u] = b1[s + 3u];\n",
+    );
+    // A bool channel emits the identical text a u32 one does: it entered
+    // the resident slot already widened to u32 0/1.
+    expect(bodyOf("flag")).toBe(bodyOf("plantId"));
+  });
+
+  it("costs three storage bindings whatever the channel is, so nothing bounds their number", () => {
+    // The reason channels are their own kernel: the compose kernel's
+    // widest form binds seven of the baseline eight, and folding them in
+    // would have bought exactly ONE. Here the compose is at its widest
+    // and four channels ride beside it at three bindings each.
+    const p = chPlan({
+      assetAttr: "species",
+      colorAttr: "tint",
+      instanceAttrs: ["plantId", "phase", "offset", "flag"],
+    });
+    expect(p.members[0].steps[0].bindings).toHaveLength(7); // the widest compose
+    const gathers = p.members[0].steps.slice(1);
+    expect(gathers).toHaveLength(4);
+    for (const step of gathers) expect(step.bindings).toHaveLength(3);
   });
 });
 

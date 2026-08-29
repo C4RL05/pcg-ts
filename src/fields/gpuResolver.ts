@@ -106,6 +106,13 @@ export interface GpuCookStats {
    * chunks of one range, so counting them once each keeps the number a
    * measure of device work. A constant-`assetId` spawner has exactly one
    * asset and so still counts one.
+   *
+   * A spawner terminal is also the one member that can carry SEVERAL
+   * apply kernels: the compose kernel, plus one gather kernel per named
+   * per-instance channel when the resolver opted in to producing them
+   * (`GpuFieldEvaluatorOptions.deviceInstanceAttrs`). Each of those
+   * dispatches per asset too, so a 4-asset spawn with 3 channels counts
+   * 16. Colour is not among them — it rides the compose kernel.
    */
   dispatches: number;
   /** Pipelines compiled because no cached pipeline matched the kernel key. */

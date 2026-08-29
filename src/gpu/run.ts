@@ -91,6 +91,22 @@
  * {@link INSTANCE_COLOR_BYTES} per instance where the CPU array packs 12,
  * because a renderer binds it as `array<vec3<f32>>`.
  *
+ * Named per-instance channels: OPT-IN, and off by default, where colour
+ * is not. With `ResidentPlanOptions.deviceInstanceAttrs` set, each name in
+ * `instanceAttrs` gets its own gather kernel
+ * ({@link makeInstanceChannelApply}, three bindings) and its own retained
+ * buffer per batch — a separate kernel rather than more bindings on
+ * compose, whose widest form already binds seven of the baseline eight and
+ * so would have fitted exactly ONE more. Like colour these are pure
+ * gathers off the same source index, so the bytes must equal the CPU
+ * batch's exactly; unlike colour they are refused unless the caller asked,
+ * because they move an OBLIGATION to the host. The device adapter in
+ * `pcg-ts/three` binds the reserved `"color"` channel and refuses every
+ * other one, pointing the host at `batch.attributes[name].handle.resource`
+ * — so a graph that renders through that adapter today keeps working
+ * only while this flag stays off, and a planner that simply started
+ * accepting channels would break it.
+ *
  * The spawner's `MAX_INSTANCES` budget is enforced here too, as a
  * `PlanFail`: the run is rejected, its members cook per-node, and the CPU
  * spawner raises the single diagnostic. Same mechanism an unsupported
@@ -100,8 +116,9 @@
  * Pool discipline: every buffer is released in a `finally` (never
  * mapped — the readback unmaps in its own `finally`), on success,
  * failure, and cancellation alike. The one exception is the retained
- * transform and colour buffers, and it is an exception by construction
- * rather than by omission: ownership transfers in the very last loop before the
+ * transform, colour and channel buffers, and it is an exception by
+ * construction rather than by omission: ownership transfers in the very
+ * last loop before the
  * result is built, after the final cancellation check, so every earlier
  * failure path still reclaims them — and a failure after (or partway
  * through) the transfer disposes the handles built so far in the
@@ -113,7 +130,10 @@ import type { AttrType, Geometry } from "../data/index.js";
 // the package surface (see its comment), and this is the one producer.
 import { makeDeviceInstanceBatch } from "../fields/gpuResolver.js";
 import {
+  deviceInstanceAttributeLayout,
   isField,
+  type DeviceInstanceAttrType,
+  type DeviceInstanceAttribute,
   type DeviceInstanceBatch,
   type DeviceTransformsHandle,
   type GpuCookStats,
@@ -123,6 +143,7 @@ import {
   type ResidentRunResult,
 } from "../fields/index.js";
 import { cloneGeometry } from "../graph/clone.js";
+import { INSTANCE_COLOR_CHANNEL } from "../graph/data.js";
 import { CookCancelledError } from "../graph/errors.js";
 import { deviceSpec, type FieldSpecArg, specChildren } from "../fields/spec.js";
 import { hashCombine } from "../random/index.js";
@@ -134,6 +155,7 @@ import {
   INSTANCE_COLOR_COMPONENTS,
   MAX_APPLY_CONST_SLOTS,
   makeComposeInstancesApply,
+  makeInstanceChannelApply,
   makeJitterPointsApply,
   makeOrientApply,
   makeSetAttributeApply,
@@ -219,6 +241,15 @@ type BufRef =
    * binds a whole buffer.
    */
   | { readonly kind: "colorOut" }
+  /**
+   * The retained buffer of ONE named per-instance channel of the batch
+   * being dispatched (spawner terminal with `instanceAttrs` set and the
+   * resolver opted in). Per batch for the reasons `out` and `colorOut`
+   * are, and additionally INDEXED — by position in
+   * `InstancesDesc.channels` — because a spawn may name several. The
+   * executor resolves it as `channelOutBufs[batch][index]`.
+   */
+  | { readonly kind: "channelOut"; readonly index: number }
   /**
    * The uploaded grouping permutation (attribute-mode spawner only): one
    * u32 source point index per instance slot, batches concatenated.
@@ -308,6 +339,32 @@ export const INSTANCE_COLOR_BYTES = INSTANCE_COLOR_COMPONENTS * 4;
  * points, so their transform bytes always sum to
  * `count * INSTANCE_MATRIX_BYTES` however the grouping falls.
  */
+/**
+ * One named per-instance channel a device-resident spawner produces: the
+ * plan-time half of {@link DeviceInstanceAttribute}.
+ *
+ * `type` and `itemSize` are the point attribute's own — the ABI is the
+ * dtype and is never widened (a u32 id past 2^24 does not survive f32) —
+ * while `components` and `byteStride` are what the DEVICE BUFFER spends,
+ * which differs from the CPU column exactly where
+ * {@link deviceInstanceAttributeLayout} says it does. Both are stored
+ * rather than recomputed downstream so the padding rule has one owner and
+ * the executor's allocation, the kernel's write stride and the batch's
+ * declared shape cannot drift apart.
+ */
+interface InstanceChannelDesc {
+  /** Channel name, which is the point attribute's name (no renaming). */
+  readonly name: string;
+  /** Element type, preserved from the point domain. Never `"string"`. */
+  readonly type: DeviceInstanceAttrType;
+  /** Components per instance as the AUTHOR sees them, 1..4. */
+  readonly itemSize: number;
+  /** f32-sized slots the buffer spends per instance; `itemSize`, padded. */
+  readonly components: number;
+  /** Bytes per instance: `components * 4`. */
+  readonly byteStride: number;
+}
+
 interface InstancesDesc {
   /** `spawnInstances`' `assetId`: the id every unset/empty point resolves to. */
   readonly assetId: string;
@@ -332,11 +389,28 @@ interface InstancesDesc {
   readonly bytes: number;
   /** Retained colour bytes across every batch: `count * INSTANCE_COLOR_BYTES`, or 0. */
   readonly colorBytes: number;
+  /**
+   * Named per-instance channels, in the order `instanceAttrs` listed
+   * them — which is also the order the executor retains their handles and
+   * installs them on the batch. Empty unless the spawn named channels AND
+   * the resolver opted in (see `planResidentRun`'s `deviceInstanceAttrs`);
+   * a channel-less plan is therefore byte-identical to the pre-channel
+   * one, which is the whole default.
+   */
+  readonly channels: readonly InstanceChannelDesc[];
+  /**
+   * Retained channel bytes across every batch and every channel:
+   * `sum(count * byteStride)`. Grouping-independent for the same reason
+   * `bytes` is — the batches partition the points — so it is a plan-time
+   * number, and it counts against `run-too-large` like any other
+   * allocation.
+   */
+  readonly channelBytes: number;
   /** Permutation upload: `count * 4` in attribute mode, 0 in constant mode. */
   readonly permBytes: number;
 }
 
-const PLAN_FORMAT = "pcg-resident-run/5";
+const PLAN_FORMAT = "pcg-resident-run/6";
 
 /** Opaque (to the executor) compiled run plan. */
 export interface ResidentRunPlan {
@@ -378,6 +452,33 @@ export interface PlanRejection {
 }
 
 export type PlanOutcome = { readonly plan: ResidentRunPlan } | PlanRejection;
+
+/**
+ * Widenings the calling evaluator has opted in to. An options object
+ * rather than more positional booleans: `acceptDerivedSpecs` is already
+ * one, and two adjacent bare booleans at a call site is a swap waiting to
+ * happen.
+ */
+export interface ResidentPlanOptions {
+  /**
+   * May a device-resident spawner terminal produce the NAMED per-instance
+   * channels its `instanceAttrs` param lists? Omitted or false — the
+   * default — means no: a spawn naming any channel rejects the run
+   * (`run-plan-failed`), its members cook per-node, and the CPU spawner
+   * produces the transforms AND the channels, exactly as before this flag
+   * existed.
+   *
+   * Turning it on moves those columns onto the device, and the HOST then
+   * owns binding them: they arrive as `batch.attributes[name]`, whose
+   * `handle.resource` is the buffer. `pcg-ts/three`'s device adapter binds
+   * the reserved `"color"` channel and refuses every other one by design,
+   * so a graph that renders through it today and starts producing
+   * channels on the device would go from working to throwing — which is
+   * the whole reason this is opt-in and not a widening of
+   * `deviceInstances`.
+   */
+  readonly deviceInstanceAttrs?: boolean;
+}
 
 const REJECT: PlanRejection = { reason: "run-plan-failed" };
 
@@ -537,6 +638,7 @@ function residentRunFootprint(
     readbackBytes +
     (instances?.bytes ?? 0) +
     (instances?.colorBytes ?? 0) +
+    (instances?.channelBytes ?? 0) +
     (instances?.permBytes ?? 0);
   return { writtenList, materialize, totalBytes };
 }
@@ -559,13 +661,21 @@ function residentRunFootprint(
  * executor's fusion gate already filters members by the same predicate),
  * and a default would let a caller silently plan against a narrower rule
  * than the one whose memo keys were salted.
+ *
+ * `opts.deviceInstanceAttrs` is the evaluator's per-instance CHANNEL
+ * opt-in and defaults to OFF, which is the pre-channel behaviour exactly:
+ * a spawn naming any channel rejects, its members cook per-node, and the
+ * CPU spawner composes the transforms and the channels together. See the
+ * `spawnInstances` case for what turning it on costs the host.
  */
 export function planResidentRun(
   members: readonly ResidentMemberDesc[],
   ctx: ResidentRunContext,
   maxResidentBytes: number,
   acceptDerivedSpecs: boolean,
+  opts: ResidentPlanOptions = {},
 ): PlanOutcome {
+  const deviceInstanceAttrs = opts.deviceInstanceAttrs === true;
   const count = ctx.count;
   const layout = new Map<string, FieldKernelAttr>(Object.entries(ctx.attributes));
   const slots: SlotDesc[] = [];
@@ -907,22 +1017,100 @@ export function planResidentRun(
             if (key === undefined) throw new PlanFail(`assetAttr "${assetAttr}" not on the point domain`);
             if (key.type !== "string") throw new PlanFail(`assetAttr "${assetAttr}" is ${key.type}, not string`);
           }
-          // Named per-instance channels are not device-resident. The
-          // compose kernel's widest form already binds seven storage
-          // buffers against the baseline
-          // `maxStorageBuffersPerShaderStage` of 8, so an arbitrary
-          // number of gather channels does not fit in it — and a run that
-          // dropped them silently would hand a host an ABI with holes in
-          // it. Reject, so the terminal falls back per-node and the CPU
-          // spawner composes the transforms AND the channels together.
+          // Named per-instance channels: OFF by default, and off means
+          // exactly what it always meant — reject, so the terminal falls
+          // back per-node and the CPU spawner composes the transforms AND
+          // the channels together. A run that produced the transforms and
+          // dropped the channels would hand a host an ABI with holes in
+          // it, which is the one outcome this rejection exists to prevent.
+          //
+          // ON, the channels are gathered on the device, one kernel and
+          // one retained buffer each. It is a separate flag from
+          // `deviceInstances` rather than part of it because it moves an
+          // OBLIGATION to the host: the three.js device adapter binds the
+          // reserved "color" channel and refuses every other one, so a
+          // graph rendering through it keeps working only while this stays
+          // off. See ResidentPlanOptions.deviceInstanceAttrs.
           const rawChannels = p.instanceAttrs;
+          const channels: InstanceChannelDesc[] = [];
           if (rawChannels !== undefined) {
             if (!Array.isArray(rawChannels)) throw new PlanFail("instanceAttrs");
-            if (rawChannels.length > 0) {
+            if (rawChannels.length > 0 && !deviceInstanceAttrs) {
               throw new PlanFail(
-                `instanceAttrs names ${rawChannels.length} per-instance channel(s); the device ` +
-                  "spawner composes transforms and colour only",
+                `instanceAttrs names ${rawChannels.length} per-instance channel(s) and this ` +
+                  "resolver did not opt in to device channels (deviceInstanceAttrs)",
               );
+            }
+            // The CPU rules, from `resolveInstanceAttrs` in
+            // src/spawn/instanceAttrs.ts, decided here from the LAYOUT —
+            // all a plan sees. Every one of them REJECTS rather than
+            // throws, on the doctrine this whole case already follows for
+            // assetAttr, colorAttr and the instance budget: the run falls
+            // back per-node and `resolveInstanceAttrs` raises THE message,
+            // the one naming the node, the param, the offending channel
+            // and the way out (which candidates exist, why a string cannot
+            // cross, that colorAttr is the route for colour). A second
+            // wording here would be a second thing to drift, and a
+            // `PlanRejection` carries only a reason — the sentence would
+            // never reach a caller anyway.
+            const seen = new Set<string>();
+            for (const raw of rawChannels) {
+              // Not a string is not a valid graph; the param is string[].
+              if (typeof raw !== "string") throw new PlanFail("instanceAttrs entry is not a string");
+              if (raw === "") throw new PlanFail("instanceAttrs contains an empty name");
+              if (seen.has(raw)) throw new PlanFail(`instanceAttrs names "${raw}" twice`);
+              seen.add(raw);
+              if (raw === INSTANCE_COLOR_CHANNEL) {
+                throw new PlanFail(
+                  `instanceAttrs cannot carry "${INSTANCE_COLOR_CHANNEL}" — the name is reserved ` +
+                    "for per-instance RGB (colorAttr is the route)",
+                );
+              }
+              const attr = layout.get(raw);
+              if (attr === undefined) {
+                throw new PlanFail(`instanceAttrs "${raw}" not on the point domain`);
+              }
+              if (attr.type === "string") {
+                throw new PlanFail(`instanceAttrs "${raw}" is a string attribute`);
+              }
+              // The one rule the CPU does NOT have, so it is a device
+              // NARROWING and not a disagreement: WGSL has no vector wider
+              // than 4, so a 5-component channel would be a different
+              // binding convention on every renderer rather than a bigger
+              // buffer. Rejecting sends it to the CPU spawner, which
+              // carries it happily — a fallback, not an error.
+              if (!Number.isInteger(attr.tupleSize) || attr.tupleSize < 1 || attr.tupleSize > 4) {
+                throw new PlanFail(
+                  `instanceAttrs "${raw}" has tupleSize ${attr.tupleSize}; a device channel binds ` +
+                    "as a scalar or a vec2/vec3/vec4",
+                );
+              }
+              // The padding and bool→u32 rules, from their one owner.
+              //
+              // CAUGHT, not trusted, and the check above is not what makes
+              // this safe. `deviceInstanceAttributeLayout` raises a plain
+              // Error for an out-of-range item size, and a plain Error
+              // escapes this function's `catch` (which only converts
+              // `PlanFail`) — so it would surface as a hard failure on a
+              // graph the CPU cooks perfectly well, turning a designed
+              // fallback into a crash. Relying on the ordering of these
+              // two statements to prevent that makes eight lines of
+              // validation load-bearing in a way nothing states; this
+              // makes the rejection structural instead. Same shape as
+              // `compileParam`'s catch around `compileFieldSpec`.
+              let chLayout;
+              try {
+                chLayout = deviceInstanceAttributeLayout(attr.type, attr.tupleSize);
+              } catch {
+                throw new PlanFail(`instanceAttrs "${raw}" has no device channel layout`);
+              }
+              channels.push({
+                name: raw,
+                type: attr.type,
+                itemSize: attr.tupleSize,
+                components: chLayout.components,
+                byteStride: chLayout.byteStride,
+              });
             }
           }
           const rawColor = p.colorAttr;
@@ -976,6 +1164,31 @@ export function planResidentRun(
               indexed,
             ),
           );
+          // One gather kernel per channel, after the compose. Order is
+          // immaterial to the result — every one of these writes its own
+          // retained buffer and reads only slots — but it is the order the
+          // executor's dispatch records and the batch's channel record
+          // follow, so it stays the author's.
+          channels.forEach((ch, index) => {
+            const chRefs: Record<string, BufRef> = {
+              // Through `slotFor`, exactly as colour is: a channel an
+              // earlier member WROTE is read from that member's epoch,
+              // which is the same "latest bytes" the CPU spawner sees when
+              // it reads the chain's output geometry.
+              src: { kind: "slot", index: slotFor(ch.name) },
+              out: { kind: "channelOut", index },
+            };
+            if (indexed) chRefs.perm = { kind: "perm" };
+            steps.push(
+              applyStep(
+                makeInstanceChannelApply(ch.itemSize, ch.components, indexed),
+                0,
+                chRefs,
+                [],
+                indexed,
+              ),
+            );
+          });
           instances = {
             assetId,
             assetAttr,
@@ -984,6 +1197,8 @@ export function planResidentRun(
             count,
             bytes: count * INSTANCE_MATRIX_BYTES,
             colorBytes: colorTupleSize > 0 ? count * INSTANCE_COLOR_BYTES : 0,
+            channels,
+            channelBytes: channels.reduce((acc, ch) => acc + count * ch.byteStride, 0),
             permBytes: indexed ? count * 4 : 0,
           };
           break;
@@ -1097,15 +1312,17 @@ export async function executeResidentRun(
   /**
    * Buffers whose ownership has left the pool this run: the retained
    * instance-transform buffers (one per asset batch) and, when the
-   * spawner asked for colour, the instance-colour buffers beside them.
+   * spawner asked for colour or named channels, the instance-colour and
+   * per-channel buffers beside them.
    * The `finally` below must not release them — the pool no longer owns
    * them and would throw — and a failure after the transfer must destroy
    * them through their handle, so a broken run never leaks device memory.
    */
   const retained = new Set<GpuBufferLike>();
   /**
-   * Handles minted this run, in batch order (transforms then colours
-   * within a batch). Every buffer whose ownership left the pool is either
+   * Handles minted this run, in batch order (transforms, then colour,
+   * then each named channel in plan order, within a batch). Every buffer
+   * whose ownership left the pool is either
    * destroyed on the spot (the one failure window below) or reachable
    * through exactly one entry here, so the `catch` frees each exactly
    * once — `dispose()` is idempotent, and no two entries wrap the same
@@ -1181,6 +1398,18 @@ export async function executeResidentRun(
       grouping === undefined || plan.instances === null || plan.instances.colorBytes === 0
         ? []
         : Array.from(grouping.counts, (n) => acquire(n * INSTANCE_COLOR_BYTES, RETAINED_USAGE));
+    // Named per-instance channels: one more retained buffer per batch PER
+    // CHANNEL, `[batch][channel]`, same flags for the same reason — a
+    // renderer binds one of these exactly as it binds the transforms. The
+    // stride is the channel's own (`components * 4`, so 16 for an
+    // itemSize-3 one), never a shared constant: see InstanceChannelDesc.
+    const channelDescs = plan.instances?.channels ?? [];
+    const channelOutBufs: GpuBufferLike[][] =
+      grouping === undefined || channelDescs.length === 0
+        ? []
+        : Array.from(grouping.counts, (n) =>
+            channelDescs.map((ch) => acquire(n * ch.byteStride, RETAINED_USAGE)),
+          );
     const bufFor = (ref: BufRef, batch: number): GpuBufferLike => {
       if (ref.kind === "slot") return slotBufs[ref.index];
       if (ref.kind === "col") return colBufs[ref.index];
@@ -1193,6 +1422,16 @@ export async function executeResidentRun(
           );
         }
         return colorOut;
+      }
+      if (ref.kind === "channelOut") {
+        const channelOut = channelOutBufs[batch]?.[ref.index];
+        if (channelOut === undefined) {
+          throw new Error(
+            `resident run: a kernel binds retained per-instance channel ${ref.index} but the ` +
+              "plan declares no such channel (plan and kernels disagree)",
+          );
+        }
+        return channelOut;
       }
       if (ref.kind === "perm") {
         if (permBuf === undefined) {
@@ -1384,7 +1623,9 @@ export async function executeResidentRun(
       if (
         grouping === undefined ||
         outBufs.length !== grouping.order.length ||
-        colorOutBufs.length !== (wantsColor ? grouping.order.length : 0)
+        colorOutBufs.length !== (wantsColor ? grouping.order.length : 0) ||
+        channelOutBufs.length !== (channelDescs.length > 0 ? grouping.order.length : 0) ||
+        channelOutBufs.some((row) => row.length !== channelDescs.length)
       ) {
         throw new Error(
           "resident run: the plan declares an instances output but the acquired transform " +
@@ -1421,25 +1662,62 @@ export async function executeResidentRun(
           `${batchCount} instances of "${assetId}"`,
         );
         retainedHandles.push(handle);
-        if (!wantsColor) {
-          batches.push(makeDeviceInstanceBatch(assetId, batchCount, handle));
-          continue;
+        // Every channel of this batch, colour included, in ONE record.
+        // Each `retain` is pushed to `retainedHandles` on the line after
+        // it returns, so a throw anywhere later in this loop frees every
+        // buffer already detached and exactly once.
+        //
+        // NULL PROTOTYPE. A channel is named after a point attribute, and
+        // an attribute may be called anything a graph's JSON says —
+        // including `__proto__`, which on an ordinary object literal SETS
+        // THE PROTOTYPE instead of adding an own key. The handle would
+        // then be invisible to `deviceInstanceAttributesOf` (it tests
+        // `propertyIsEnumerable`) and so to every owner counting handles
+        // to dispose: a leaked GPU buffer, which is exactly the failure
+        // mode this whole path is careful about. With no prototype there
+        // is nothing for that name to shadow and it lands as a plain own
+        // key like any other.
+        //
+        // DEFENCE IN DEPTH, and say so honestly: today the name cannot
+        // reach here through a cook at all, because `narrowRun` in
+        // src/graph/execute.ts builds `ctx.attributes` as an object
+        // literal too and drops `__proto__` one seam earlier — so the
+        // planner never sees the attribute and rejects the channel as
+        // "not on the point domain". This costs nothing and holds if that
+        // seam is ever fixed (it should be: silently dropping a named
+        // attribute is what this library refuses elsewhere). The CPU twin
+        // `allocInstanceAttrs` has the same literal and the same hole.
+        const attributes = Object.create(null) as Record<string, DeviceInstanceAttribute>;
+        if (wantsColor) {
+          const colors = retain(
+            colorOutBufs[j],
+            batchCount * INSTANCE_COLOR_BYTES,
+            `${batchCount} instance colours of "${assetId}"`,
+          );
+          retainedHandles.push(colors);
+          // Colour goes in as the RESERVED channel, not beside the
+          // channels: `batch.colors` is then an accessor over it, so a
+          // consumer looping `deviceInstanceAttributesOf` sees exactly one
+          // handle for it and disposes it exactly once. The planner
+          // refuses a named channel called "color", so nothing can
+          // overwrite this entry.
+          attributes[INSTANCE_COLOR_CHANNEL] = { handle: colors, type: "f32", itemSize: 3 };
         }
-        const colors = retain(
-          colorOutBufs[j],
-          batchCount * INSTANCE_COLOR_BYTES,
-          `${batchCount} instance colours of "${assetId}"`,
-        );
-        retainedHandles.push(colors);
-        // Colour goes in as the RESERVED channel, not beside the channels:
-        // `batch.colors` is then an accessor over it, so a consumer
-        // looping `deviceInstanceAttributesOf` sees exactly one handle for
-        // it and disposes it exactly once.
-        batches.push(
-          makeDeviceInstanceBatch(assetId, batchCount, handle, {
-            color: { handle: colors, type: "f32", itemSize: 3 },
-          }),
-        );
+        channelDescs.forEach((ch, ci) => {
+          const chHandle = retain(
+            channelOutBufs[j][ci],
+            batchCount * ch.byteStride,
+            `${batchCount} instance "${ch.name}" values of "${assetId}"`,
+          );
+          retainedHandles.push(chHandle);
+          // `type` and `itemSize` are the AUTHOR's, never the buffer's:
+          // an itemSize-3 channel declares 3 and spends 4 slots, which is
+          // the one thing deviceInstanceAttributeLayout exists to say.
+          attributes[ch.name] = { handle: chHandle, type: ch.type, itemSize: ch.itemSize };
+        });
+        // An empty record is the channel-less batch: makeDeviceInstanceBatch
+        // returns the identical object it returned before channels existed.
+        batches.push(makeDeviceInstanceBatch(assetId, batchCount, handle, attributes));
       }
       deviceBatches = batches;
     }
