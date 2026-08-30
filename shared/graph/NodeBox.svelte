@@ -93,6 +93,12 @@
       tabindex="-1"
       aria-label="node {node.id}"
       onpointerdown={(e) => {
+        /* Left button only. The other two mean "pan the graph" wherever
+           they are pressed, including over a box — so a right-drag that
+           starts here has to fall through to the canvas untouched, and
+           must not leave a selection change behind as a souvenir of a
+           gesture that was never about this node. */
+        if (e.button !== 0) return;
         onSelect?.();
         onBodyDown?.(e);
       }}
@@ -149,6 +155,10 @@
         tabindex="-1"
         aria-label="output pin {pin.name}"
         onpointerdown={(e) => {
+          /* Left button only, and the stop travels with it: swallowing a
+             right press here would put a 9-unit hole in the pan gesture
+             at every output pin. */
+          if (e.button !== 0) return;
           e.stopPropagation();
           onOutDown?.(e, pin.name, i);
         }}
@@ -172,6 +182,14 @@
 <style>
   .body {
     fill: #0e0e0e;
+    /* NAMED, not inherited. The editor's canvas turns its own
+       `pointer-events` off while the render shows through it, so that the
+       gaps between nodes orbit the scene — and a box that inherited that
+       would be a node you cannot grab. Saying `all` here is what makes
+       the box one of the marks that stays hit-testable through the hole.
+       The read-only variant below says `none` for the same reason, in the
+       other direction. */
+    pointer-events: all;
     stroke: var(--ed-edge);
     /* Never thinner than one screen pixel. `--hairline` is set by the
        canvas from the live zoom (see the transformed group there); the

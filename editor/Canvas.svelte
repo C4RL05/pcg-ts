@@ -36,6 +36,7 @@
     model,
     selectedId,
     previews,
+    porous = false,
     onSelect,
     onMove,
     onConnect,
@@ -50,6 +51,22 @@
      * walk of the graph inside a drag.
      */
     previews: ReadonlyMap<string, readonly ParamPreview[]>;
+    /**
+     * THE SURFACE BETWEEN THE MARKS BELONGS TO WHATEVER IS BEHIND IT.
+     *
+     * Set while the render shows through the canvas. The SVG then takes
+     * no pointer of its own and the marks on it take theirs back (see the
+     * `.canvas.porous` rules), so the empty parts of the graph orbit the
+     * scene and the nodes still move, zoom and pan. Off, the canvas owns
+     * the whole rectangle — which is what the graph-only view wants,
+     * where an empty right-drag has to pan and there is nothing behind to
+     * hand it to.
+     *
+     * The gestures below need no branch on it. A press that starts on a
+     * mark is tracked from `window` for as long as it lasts, so a pan or
+     * a node drag keeps running over ground the SVG cannot be hit on.
+     */
+    porous?: boolean;
     onSelect: (id: string | null) => void;
     onMove: (id: string, x: number, y: number) => void;
     onConnect: (edge: EdgeView) => void;
@@ -221,6 +238,7 @@
 <svg
   bind:this={svgEl}
   class="canvas"
+  class:porous
   role="application"
   aria-label="node graph canvas"
   onwheel={onWheel}
@@ -314,6 +332,33 @@
        read as a text selection on the way. */
     user-select: none;
     touch-action: none;
+  }
+  /**
+   * POROUS: the sheet stands aside, its marks do not.
+   *
+   * `pointer-events` is inherited, but a descendant that names its own
+   * value is hit-tested on that value regardless of what its ancestors
+   * said — so turning the SVG off and the marks back on leaves exactly
+   * the graph's own silhouette taking the pointer, with the render
+   * reachable through everything else. Every gesture still arrives here:
+   * a wheel or a press that lands on a node bubbles out of it to this
+   * element's handlers, which is why neither of them has to move.
+   *
+   * The list below is short because it is the only thing that has to be
+   * true. Almost every shape in a node box is already `pointer-events:
+   * none` (labels, pin dots, separators, the wire lines and their
+   * casings) and stays that way; the exceptions are the three that ARE
+   * targets — the box body, the pin hit circles, the edges' fat invisible
+   * hit stroke — and those name `all`/`stroke` at their own definitions,
+   * so they need nothing here. The wire hit stroke is deliberately among
+   * them: a cable is graph, not scene, and clicking one is how it is cut.
+   *
+   * `touch-action` is not repeated: it is resolved from the hit element
+   * UPWARD, and this element is still on that path even when it cannot
+   * itself be hit.
+   */
+  .canvas.porous {
+    pointer-events: none;
   }
   /**
    * A cable takes the colour of the KIND it carries, from the same four

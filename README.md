@@ -541,6 +541,10 @@ The graph is a full-bleed overlay over its own cooked render. **Space**
 cycles the three views — scene, scene + graph, graph only — and
 shift-space walks back; **F** re-frames the scene, **Ctrl/Cmd+0** puts
 the graph canvas back to 100%, and **Delete** removes the selected node.
+With both layers up the mouse is split by what is under it rather than
+by a modifier: over a node it moves the node, pans the graph on the
+right button and zooms it on the wheel, and over the space between nodes
+it flies the scene exactly as the scene-only view does.
 The toolbar carries the graph picker, the seed box, export and import,
 a `shade` selector (lit / normals, a redraw rather than a recook), fit /
 100% / a deterministic auto-layout, and a `cook` selector switching

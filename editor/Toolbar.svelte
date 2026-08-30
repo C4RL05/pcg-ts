@@ -342,7 +342,7 @@
       aria-pressed={sceneOn}
       aria-label="scene"
       onclick={() => onToggleLayer("scene")}
-      title="scene — the render. Turning it off leaves the graph alone on screen, never nothing. Hold shift over `scene + graph` to fly the scene through the graph."
+      title="scene — the render. Turning it off leaves the graph alone on screen, never nothing. Over `scene + graph` the mouse follows what it is on: a node moves and zooms the graph, the space between nodes flies the scene."
       >{@render icon(TOOLBAR_ICONS.scene)}</button>
     <!-- Inert while the scene is hidden, like everything else in this
          group: pointing a camera nobody can see is a control that appears

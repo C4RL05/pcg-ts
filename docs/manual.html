@@ -897,7 +897,7 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
     <p>Everything <a href="#ex-01">chapter 4</a> says about it being built on the public API this manual documents is also the reason it is worth authoring in: there is no second implementation of anything here, so a graph that behaves in the editor behaves in your application.</p>
 
     <h3 id="editor-screen">What is on screen</h3>
-    <p>Two layers, one over the other. The <strong>render</strong> is the cook you are looking at; the <strong>node canvas</strong> is a full-bleed overlay over it, not a pane beside it. The space bar cycles the three views — scene, scene + graph, graph only — and <code>shift</code>+space walks back. There is no fourth state with neither layer up, so clicking the toggle of the only layer showing swaps to the other rather than clearing the page. In the combined view the toolbar's slider pushes the render back until the nodes read over it, and holding <code>shift</code> reaches past the graph to fly the scene without leaving the view.</p>
+    <p>Two layers, one over the other. The <strong>render</strong> is the cook you are looking at; the <strong>node canvas</strong> is a full-bleed overlay over it, not a pane beside it. The space bar cycles the three views — scene, scene + graph, graph only — and <code>shift</code>+space walks back. There is no fourth state with neither layer up, so clicking the toggle of the only layer showing swaps to the other rather than clearing the page. In the combined view the toolbar's slider pushes the render back until the nodes read over it, and the mouse is split between the two layers by what it is over rather than by a modifier — see below.</p>
     <p>Two cards float over the canvas. One is the loaded graph's <strong>knobs</strong> — its title, what it is for, and the params worth turning — and it is always up, because every graph has some. The other is the <strong>node inspector</strong>, and it exists only while a node is selected: a panel that is empty most of the time is a panel asking for the width back. Cook errors get their own strip under the toolbar rather than a dialog, so the graph they are about is still in front of you.</p>
 
     <h3 id="editor-toolbar">The toolbar</h3>
@@ -949,6 +949,22 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
     </div>
     <p>Every one of those yields to a focused text field and to an open modal, so a space typed into a param box is a space. <code>Ctrl+0</code> is the one exception, and for a reason rather than by omission: it means nothing inside a text field, so there is nothing to yield to and it still works with the caret in a param box.</p>
     <p>The canvas itself pans with the right button and zooms on the wheel; a graph opens at 100% whenever it fits there and fitted otherwise.</p>
+
+    <h3 id="editor-mouse">The mouse, when both layers are up</h3>
+    <p>In <strong>scene + graph</strong> the two layers want the same three gestures, and which one answers is decided per event by what is under the pointer — no modifier, and nothing to hold.</p>
+    <div class="tablewrap">
+    <table>
+      <thead><tr><th>Under the pointer</th><th>Left drag</th><th>Right drag</th><th>Wheel</th></tr></thead>
+      <tbody>
+        <tr><td>A node's box</td><td>Move the node</td><td>Pan the whole graph</td><td>Zoom the graph</td></tr>
+        <tr><td>An output pin</td><td>Pull a wire out of it</td><td>Pan the whole graph</td><td>Zoom the graph</td></tr>
+        <tr><td>A wire, or an input pin</td><td>Nothing — a wire is <em>clicked</em> to cut it, and an input pin is a drop target</td><td>Pan the whole graph</td><td>Zoom the graph</td></tr>
+        <tr><td>The space between them</td><td colspan="3">The scene, exactly as it flies with the graph turned off: orbit, pan, dolly.</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p>Wires and input pins count as graph, not as scene, even though a left-drag on one does nothing: a cable is what you click to cut, and an input pin is where a wire is dropped, so both keep a hit target and neither hands the drag to the camera. In <strong>graph only</strong> there is nothing behind the canvas to reach, so the canvas takes the whole surface and an empty right-drag pans as it always did.</p>
+    <p>Clearing the selection is the one place the two layers still overlap: a plain left-click on the render, like a left-click on empty canvas, closes the inspector. The scene's right and middle drags do not — panning the camera is not a statement about which node you were reading.</p>
   </section>
 
   <section>

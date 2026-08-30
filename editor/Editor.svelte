@@ -102,22 +102,34 @@
     { id: "graph", scene: false, graph: true },
   ] as const;
 
-  /**
-   * Shift hands the mouse to the render while both are on screen. The
-   * graph keeps it otherwise, which is the common case; holding a key is
-   * how you reach past it to fly the scene without leaving the view.
-   *
-   * Only in `scene + graph`: with the scene covered there is nothing
-   * behind the canvas to reach.
-   */
-  let shiftHeld = $state(false);
   let viewIndex = $state(1);
   const view = $derived(VIEWS[viewIndex]);
-  // Declared after `view`, which it reads. A `$derived` is lazy, so the
-  // original order happened to work — but it read a block-scoped binding
-  // from above its declaration, which is a TDZ error the moment anything
-  // evaluates it eagerly.
-  const sceneHasPointer = $derived(shiftHeld && view.id === "both");
+  /**
+   * WHO GETS THE MOUSE WHILE BOTH LAYERS ARE UP: whatever is under it.
+   *
+   * This used to be a modifier — the graph took every event, and holding
+   * shift made the whole canvas stand aside so the render could be flown.
+   * That is a mode, and a mode you have to hold: the two halves of the
+   * view answered the same gesture depending on a key, and nothing on
+   * screen said which one was listening.
+   *
+   * It is a hit test now. The canvas is porous where it is EMPTY — the
+   * SVG stands aside, and the node boxes, their pins and the wires' hit
+   * strokes re-arm themselves on top of it (see `Canvas.svelte`). So the
+   * pointer navigates whatever it is actually over: a node moves, zooms
+   * and pans its graph; the gaps between them orbit the scene exactly as
+   * the scene-only view does. No key, and no state to remember.
+   *
+   * Only in `scene + graph`. With the scene covered there is nothing
+   * behind the canvas to reach, so the graph keeps the whole surface —
+   * which is what makes right-drag-to-pan work over empty space there.
+   *
+   * Declared after `view`, which it reads. A `$derived` is lazy, so the
+   * other order happened to work once — but it read a block-scoped
+   * binding from above its declaration, which is a TDZ error the moment
+   * anything evaluates it eagerly.
+   */
+  const sceneShowsThrough = $derived(view.id === "both");
 
   /**
    * HOW FAR THE RENDER IS PUSHED BACK SO THE GRAPH CAN BE READ.
@@ -713,21 +725,41 @@
       deleteNode(selectedId);
     }
   }
+
+  /**
+   * Pressing the empty canvas clears the selection. The canvas answers
+   * that itself when it owns the surface — but in the combined view the
+   * empty parts of it are porous, so the press lands on the render and
+   * the SVG never hears it. Same gesture, same result, caught one level
+   * out: a press that reaches nothing belonging to the editor is a press
+   * on the background.
+   *
+   * `closest` rather than a rectangle test, because the parts that must
+   * NOT deselect are the floating cards, the toolbar and the node menu —
+   * all of them inside the overlay, none of them a fixed region.
+   *
+   * LEFT BUTTON ONLY, and that is the whole difference between a click
+   * and a gesture. Right and middle over the render are the scene's pan
+   * and dolly, and they are not a statement about the selection: without
+   * this guard every camera pan in the combined view threw the inspector
+   * away, mid-drag, from under the hand doing the panning. The canvas'
+   * own path has always had the same rule the other way round — it
+   * returns for button 2/1 before it reaches its deselect — so this keeps
+   * the two spellings of one behaviour saying the same thing.
+   */
+  function dismissSelectionOffCanvas(e: PointerEvent): void {
+    if (e.button !== 0) return;
+    if (!sceneShowsThrough || modal !== null || selectedId === null) return;
+    const target = e.target;
+    if (target instanceof Element && target.closest(".editor") !== null) return;
+    select(null);
+  }
 </script>
 
-<!-- Shift is read off every event that carries it rather than tracked as
-     a keypress alone: a window that gains focus with the key already down
-     never sees its keydown, and a lost keyup would otherwise leave the
-     canvas dead until the next press. -->
 <svelte:window
-  onkeydown={(e) => {
-    shiftHeld = e.shiftKey;
-    onKeydown(e);
-  }}
-  onkeyup={(e) => (shiftHeld = e.shiftKey)}
-  onblur={() => (shiftHeld = false)}
+  onkeydown={onKeydown}
+  onpointerdown={dismissSelectionOffCanvas}
   onpointermove={(e) => {
-    shiftHeld = e.shiftKey;
     pointer.x = e.clientX;
     pointer.y = e.clientY;
   }} />
@@ -785,12 +817,13 @@
        it taking the pointer: `display: none` cannot be clicked, so the
        render underneath orbits normally with no click-through needed. -->
   <div class="body" hidden={!view.graph}>
-    <div class="canvas-wrap" class:through={sceneHasPointer}>
+    <div class="canvas-wrap" class:through={sceneShowsThrough}>
       <Canvas
         bind:this={canvas}
         {model}
         {selectedId}
         {previews}
+        porous={sceneShowsThrough}
         onSelect={select}
         onMove={moveNode}
         onConnect={connectEdge}
@@ -888,7 +921,15 @@
   /* Only the parts take the pointer; the overlay itself is a frame, and
      so is the row inside it — otherwise the row would swallow whatever
      the canvas declined, which is exactly what an earlier attempt at
-     click-through got wrong. */
+     click-through got wrong.
+
+     DO NOT REORDER THE NEXT TWO RULES. `.body` is a direct child of
+     `.editor`, so both match it, and Svelte scoping gives both the same
+     (0,2,0) — `.editor.svelte-x>*` against `.body.svelte-x`. Source order
+     is the ONLY thing making `none` win, and `.body` taking the pointer
+     is precisely the failure the paragraph above describes: the row
+     swallows what the porous canvas declined, and the press reaches
+     neither the graph nor the render. */
   .editor > :global(*) {
     pointer-events: auto;
   }
@@ -898,25 +939,33 @@
   .body > :global(*) {
     pointer-events: auto;
   }
-  /* Shift held, scene visible: the canvas and its wrapper both stand
-     aside so the wheel and the buttons reach the renderer beneath. The
-     columns beside it never do, so a knob is still turnable mid-flight. */
+  /**
+   * WHO OWNS THE WHEEL AND THE RIGHT BUTTON — settled per event by what
+   * is under the pointer, not by a mode.
+   *
+   * Both gestures mean "move the view" to the graph and to the scene's
+   * orbit controls, and the overlay covers the render completely. The
+   * split is a hit test: this wrapper and the SVG inside it stand aside
+   * while the scene is visible, and the graph's own marks — node bodies,
+   * pin targets, wire hit strokes — put themselves back with an explicit
+   * `pointer-events`. So a press over a node reaches the canvas by
+   * bubbling out of the mark it landed on, and a press over the gap
+   * between two nodes reaches the renderer beneath.
+   *
+   * `pointer-events: none` on an ancestor does not disable a descendant
+   * that names its own value — that asymmetry is the whole mechanism, and
+   * it is why the hole does not have to be cut through three elements one
+   * at a time. What it DOES have to be cut through is all three: a single
+   * `auto` anywhere on the chain (this wrapper, `.body`, the SVG) catches
+   * everything the layer below was meant to get. An earlier attempt at
+   * click-through set it on the SVG alone and reached neither layer.
+   *
+   * The columns beside the canvas never stand aside, so a knob is still
+   * turnable mid-flight.
+   */
   .canvas-wrap.through {
     pointer-events: none;
   }
-  /**
-   * WHO OWNS THE WHEEL AND THE RIGHT BUTTON. Both gestures mean "move the
-   * view" to the graph and to the scene's orbit controls, and the overlay
-   * covers the render completely — so whenever the graph is up it takes
-   * them, and the scene is flown from the view where the graph is not.
-   *
-   * An earlier version tried to split them by state, making the SVG
-   * click-through so the render could be orbited underneath. It did not
-   * work: the canvas wrapper and `.body` still took the events, so they
-   * reached neither the graph nor the scene. Splitting input by state
-   * would mean making a hole through three elements, for a pairing one
-   * press of the space bar already gives.
-   */
 
   .scrim {
     position: fixed;
