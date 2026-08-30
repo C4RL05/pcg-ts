@@ -154,23 +154,54 @@ export interface RacetrackLevelsInput extends DressGraphInput {
  *
  * EXCEPT AT THE END OF THE TABLE, WHERE THE LAST BOUND IS INCLUSIVE, and
  * that one exception is what makes the partition TOTAL rather than merely
- * disjoint. `stationW` is an f32 column while the station process works in
- * f64, and rounding to f32 can round UP: a station strictly below
- * `lengthW` in f64 can land exactly on `lengthW` as an f32. Half-open
- * everywhere would leave it owned by nobody -- it fails `lt` in the last
- * sector and `ge` in every other -- and it would be a silent loss of one
- * placement, on a band about half an f32 ulp wide. The World's own closed
- * table wraps `s = length` round to sector 0, but a filter over a column
- * cannot wrap, so the last sector takes it instead.
+ * disjoint.
  *
- * THE BOUNDS ARE COMPARED AS THE f64 THEY ARE. An earlier version rounded
- * them to f32 first, on the theory that two sectors either side of a seam
- * would otherwise disagree about it. They cannot: the runtime derives one
- * sector's `sMax` and the next one's `sMin` from a single computation, so
- * they are the same double, and `attribute()` widens the f32 column back
- * to f64 to compare. The rounding changed which sector owned a station in
- * a sub-ulp band and never changed HOW MANY owned it, so it bought
- * nothing and explained itself wrongly.
+ * BOTH SIDES OF THE COMPARISON ARE f32, WHICH IS THE WHOLE MECHANISM.
+ * `stationW` is an f32 column while the station process works in f64,
+ * so the stored value is `fround(s)`. The bound is an f32 too, and that
+ * is the part that is easy to get wrong: `ctx.sMax` is a plain number, a
+ * numeric field param is lifted through `resolveField` into `constant()`,
+ * and `constant()` writes its value into a `Float32Array`
+ * (`src/fields/inputs.ts`). So the filter compares `fround(station)`
+ * against `fround(sMax)` — never the doubles either of them came from.
+ *
+ * `lengthW` is ~1000 accumulated `hypot` terms over `halfWidth` and is
+ * therefore never f32-representable in practice (0 of the 8 shipped seeds
+ * are; `fround(lengthW) > lengthW` on 6 of them). A station strictly
+ * below `lengthW` in f64 can round to `fround(lengthW)` — the bound's own
+ * f32 value — and then it fails `lt` in the last sector and `ge` in every
+ * other, a silent loss of one placement. THE BAND IS
+ * `[fround(lengthW) - ulp/2, lengthW)`, which is half an f32 ulp only
+ * where `fround(lengthW) > lengthW` and WIDER on the seeds that round the
+ * other way -- up to a full ulp, 3.05e-5 W or about 0.27 mm of track, and
+ * 2.12e-5 W on seed 1, which is the seed the test runs on. `le` claims it
+ * instead, and claims it exactly: `Math.fround` is monotone, so any
+ * station at or below `lengthW` in f64 has
+ * `fround(station) <= fround(lengthW)` and the last sector cannot miss
+ * one. Note `le` needs only `<=` there; what defeats it is a station
+ * strictly ABOVE `lengthW` by more than the rounding slack, which is the
+ * next paragraph.
+ *
+ * NOTE WHAT DOES NOT SAVE IT. Nothing in `src/runtime` maps a content arc
+ * position to an owning sector -- the World cuts ranges and hands them to
+ * `bind`, and the `s`-wrap on a closed table applies to the ANCHOR, not to
+ * content. By the World's own half-open convention a position at exactly
+ * `length` is inside no sector at all. The filter is the only ownership
+ * rule there is, so the last sector has to take that placement itself.
+ *
+ * AND WHAT WOULD BREAK IT. The `le` is exact only because the bound is
+ * rounded the same way the column is. Give `constant()` f64 precision and
+ * the hole opens for real, because a station that rounds strictly ABOVE
+ * `lengthW` fails `le` against an f64 bound exactly as it fails `lt`. A
+ * host whose stations come from different arithmetic than the column --
+ * summing f64 positions rather than reading the f32 `P` it stored, where
+ * the two lap lengths diverge by f32 RELATIVE epsilon and so by far more
+ * than the ulp above (and by more the further the centreline is from the
+ * origin) -- is already in that case, and wants the last sector to carry NO
+ * upper bound at all. That is correct for a divergence in either direction
+ * and still cannot double-claim, since the sector below ends at this
+ * sector's `sMin`. This demo does not need it: its stations and its length
+ * are the same numbers to begin with.
  */
 export function buildDressingGraph(opts: {
   readonly seed: number;

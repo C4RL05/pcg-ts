@@ -20,10 +20,14 @@ import { describe, expect, it } from "vitest";
 import {
   Graph,
   World,
+  attribute,
   buildInstanceBatches,
   cook,
   dataInput,
+  evaluateField,
   firstGeometry,
+  le,
+  lt,
   makeGeometryItem,
   setAttribute,
   spawnInstances,
@@ -445,34 +449,83 @@ describe("racetrack levels: a placement exactly on a seam", () => {
 
 describe("racetrack levels: the end of the table is owned", () => {
   it(
-    "a station that rounds up onto the lap length still has a sector",
+    "a station that collides with the last bound's f32 value still has a sector",
     async () => {
       const seed = SEEDS[0];
       const { lap, dressing } = await dressedLapFor(seed);
 
-      // THE INPUT CLASS HALF-OPEN-EVERYWHERE LOSES. `stationW` is an f32
-      // column and the station process works in f64, so a station
-      // strictly below `lengthW` can round UP to exactly `lengthW` on the
-      // way into the column. It then fails `lt` in the last sector and
-      // `ge` in every other, and one placement vanishes with nothing
-      // going red. The band is about half an f32 ulp, which is why no
-      // generated lap has ever landed in it -- and why the case has to be
-      // built rather than waited for.
+      // THE INPUT CLASS HALF-OPEN-EVERYWHERE LOSES, and it is a collision
+      // between two f32s rather than a station reaching the length. The
+      // column is f32, and so is the BOUND -- `ctx.sMax` is a plain number,
+      // and a numeric field param is lifted through `constant()` into a
+      // `Float32Array`. So the rule compares `fround(station)` against
+      // `fround(lengthW)`, and a station strictly below `lengthW` in f64
+      // that rounds to `fround(lengthW)` fails `lt` in the last sector and
+      // `ge` in every other. One placement vanishes with nothing going red,
+      // on a band up to half an f32 ulp wide -- which is why no generated
+      // lap has ever landed in it, and why the case has to be built.
       const atEnd = Math.fround(lap.lengthW);
-      const nudged = Math.fround(lap.lengthW - 1e-6);
+      // ONE f32 ULP BELOW THE BOUND, STEPPED IN THE COLUMN'S OWN
+      // REPRESENTATION. Subtracting a small DECIMAL is not a step in f32
+      // at all -- how far `lengthW - 1e-6` lands depends on where `lengthW`
+      // happens to sit inside its f32 gap, and on this seed it rounds
+      // straight back to `atEnd`, so the old expression produced a second
+      // copy of the seam station and the test ran with no control. (On
+      // seed 3 the same expression does clear the gap, which is worse than
+      // failing: the control existed or not depending on the seed.)
+      // Stepping the representation is the only way to say "the tightest
+      // station still strictly inside" and mean it on every lap.
+      const f32Below = (x: number): number => {
+        const f = new Float32Array(1);
+        f[0] = x;
+        new Int32Array(f.buffer)[0] -= 1; // x > 0 here, so down is toward zero
+        return f[0];
+      };
+      const nudged = f32Below(atEnd);
       const moved = dressing.placements.map((p, i) =>
         i === 0 ? { ...p, station: nudged } : i === 1 ? { ...p, station: atEnd } : p,
       );
 
       const { settled } = await settledFor(seed, moved);
       const station = settled.attrs.point.require(PLACEMENT.station);
-      let atLength = 0;
+
+      // THE PREMISE, AND IT HAS TO MEASURE THE COMPARISON THE LEVEL
+      // ACTUALLY MAKES. Counting stations >= `atEnd` only proves the value
+      // this test just wrote landed in the column, which is true however
+      // the arithmetic behaves -- the version that checked that was green
+      // for a reason unrelated to what it claims. An assertion built out of
+      // `Math.fround` identities is no better: `fround(fround(x)) < fround(x)`
+      // cannot fail, so it measures nothing. So evaluate the level's own two
+      // predicates on the settled column, against the bound the last sector
+      // is handed, and require that half-open DROPS the seam station while
+      // `le` keeps it and the control survives both.
+      expect(lap.lengthW).not.toBe(Math.fround(lap.lengthW));
+
+      const ctx = { geo: settled, domain: "point" as const, seed: 0 };
+      const st = attribute(PLACEMENT.station);
+      const byLt = evaluateField(lt(st, lap.lengthW), ctx).data;
+      const byLe = evaluateField(le(st, lap.lengthW), ctx).data;
+
+      // Both stations must still BE in the column, and be distinct: the
+      // settling upstream is entitled to move a placement, and a control
+      // that got merged onto the seam is the defect this block exists for.
+      let seam = -1;
+      let inside = -1;
       for (let i = 0; i < settled.pointCount; i++) {
-        if (station.get(i) >= atEnd) atLength++;
+        const v = station.get(i);
+        if (v === atEnd) seam = i;
+        else if (v === nudged) inside = i;
       }
-      // Again the premise first: if f32 stopped rounding these up, the
-      // test would be exercising an ordinary interior station.
-      expect(atLength).toBeGreaterThan(0);
+      expect({ seam: seam >= 0, inside: inside >= 0, distinct: atEnd !== nudged }).toEqual({
+        seam: true,
+        inside: true,
+        distinct: true,
+      });
+      // The seam station: half-open loses it, inclusive claims it.
+      expect([byLt[seam], byLe[seam]]).toEqual([0, 1]);
+      // The control, one f32 ulp inside: both rules keep it, so the check
+      // above is discriminating rather than always-zero.
+      expect([byLt[inside], byLe[inside]]).toEqual([1, 1]);
 
       const { bySector } = await driveLap(seed, { placements: moved });
       const total = [...bySector.values()].reduce((n, v) => n + v.length, 0);

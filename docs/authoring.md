@@ -630,6 +630,40 @@ idempotent.
 | `randomField` | `{ fn, key?: 0 \| "salt" }` | Per-element deterministic random in [0, 1) from (context seed, key, element IDENTITY): point identity on the point domain, the order-independent fold of a primitive's own points' identities on the primitive domain, and the element index on vertex and detail |
 | `param` | `{ fn, name: "amplitude" }` | The value bound to that name, substituted where the literal would have stood. Same for every element — a value that varies per element is an attribute, not a param. An unbound `param` builds (its key and its GPU kernel need only the name) but refuses to evaluate |
 
+**A number you hand a field param is an f32, not the double you wrote.**
+`resolveField` lifts any plain number or array through `constant`, and
+`constant` writes its value into a `Float32Array` — so the value the
+expression actually sees is `Math.fround(x)`. Elementwise combinators
+write `Float32Array` outputs too. Attribute columns arrive at their own
+storage width (an `i32` or `u32` column is not widened), but the literal
+beside them in a comparison has already been rounded.
+
+Nowhere does this matter more than in an OWNERSHIP RULE, where the
+question is which of two cells claims an element and the answer must be
+"exactly one". Two doubles inside the same f32 compare EQUAL, so a
+half-open `[min, max)` test against a bound that is not f32-representable
+is a test against that bound's f32 neighbour. That is usually invisible
+and occasionally load-bearing in both directions:
+
+- It is why the shared-endpoint rule works at all. Neighbouring cells
+  derive the seam from one computation, so both sides round to the same
+  f32 and the partition stays exact — the same reason `filterByBounds`
+  tells you to compare against the box rather than recover the index
+  arithmetically.
+- It is why a bound at the END of a table needs care. `demos/racetrack`
+  runs a `"path"` level whose last sector must use `le` rather than `lt`:
+  its `stationW` column is f32, the lap length is an accumulated arc
+  length that is never f32-representable, and a station strictly below
+  that length can round onto the bound's own f32 value. Half-open
+  everywhere would drop it from every sector — a silent loss on a band up
+  to a full f32 ulp wide. See the comment above `buildDressingGraph`.
+
+A host that computes the same quantity in f64 OUTSIDE the graph and
+compares it to what the graph stored will see the two disagree by f32
+relative epsilon, which is much wider than an ulp of the bound and grows
+with distance from the origin. Such a rule wants no upper bound on the
+last cell at all rather than a wider comparison.
+
 `attributeIs` and `byAttribute` share one rule that will surprise you,
 and it is forced rather than chosen: **a literal the geometry's string
 table does not hold yields all zeros (or, for `byAttribute`, the
