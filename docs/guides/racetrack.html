@@ -162,7 +162,7 @@
   /* ── the rules ───────────────────────────────────────────────────
      site.css's .cards/.card carry the grid and the frame. These are the
      three parts a rule card has that a plain card does not: the id it is
-     known by in the source, what KIND of rule it is, and the figure it
+     known by in the code, what KIND of rule it is, and the figure it
      is measured at. */
   .cards .card { display: flex; flex-direction: column; gap: 7px; }
   .card .id {
@@ -227,7 +227,7 @@
   /* THE ONE FIGURE THAT MUST NOT FOLLOW THE PAGE INK. It is a picture of
      the demo’s own screen, and the gap between two greys IS the argument
      that section makes. The SWATCHES carry the demo’s true values
-     (0x999999 for the reference poses, 0x404040 for what the rules
+     (0x999999 for the vocabulary’s own poses, 0x404040 for what the rules
      built); the label beside a swatch is lifted to #8a8a8a, because
      0x404040 on the demo’s own #111 ground measures about 1.6:1 and is
      not readable as text. Painted through classes rather than fill=
@@ -351,7 +351,7 @@
       <h2 id="roadside-is-instructions" data-toc="The idea">A roadside is not scenery. It is instructions.</h2>
     </div>
     <div class="sec-body">
-      <p>In a racing game, the trees, signs, barriers and grandstands beside the track are not decoration. They tell you a corner is coming, how hard it is, and where to brake. Take them away and the same road becomes unreadable at speed.</p>
+      <p>On a fast road, the trees, signs, barriers and grandstands beside the track are not decoration. They tell you a corner is coming, how hard it is, and where to brake. Take them away and the same road becomes unreadable at speed.</p>
       <p>So the demo is given two things. A <strong>spec</strong> — rules with numbers in them: how much stuff, how far off the road, what must stay visible from the cockpit, what has to stand before a corner. And a <strong>vocabulary</strong> — the objects it may use, described as sizes and habits.</p>
       <p class="pull">Then it dresses a road it has never seen, and every rule has to come out true.</p>
     </div>
@@ -457,7 +457,7 @@
             </g>
           </svg>
         </div>
-        <figcaption><b>Cross-section.</b> Every object is filed under three numbers: how far along the lap, how far across, how high. The bands are the shares the spec asks for, and the finished lap has to land inside every one of them.</figcaption>
+        <figcaption><b>Cross-section.</b> Every object is filed under three numbers: how far along the lap, how far across, how high. The bands are the shares Z-3 asks for, and the finished lap has to land inside every one of them.</figcaption>
       </figure>
     </div>
   </section>
@@ -582,26 +582,26 @@
   <!-- ══ 4. THE DATA ═══════════════════════════════════════════ -->
   <section>
     <div class="sec-head">
-      <p class="eyebrow">What data we use</p>
+      <p class="eyebrow">What the demo reads</p>
       <h2 id="a-vocabulary-of-boxes" data-toc="The data">A vocabulary of boxes, and the habits of each box.</h2>
     </div>
     <div class="sec-body">
-      <p>The demo reads one data file, <code>demos/racetrack/vocabulary.json</code>. Think of it as a parts list: each object described as a handful of axis-aligned boxes, plus a record of how that kind of object <strong>behaves</strong> — how far off the road it stands, how high, how often, which side, whether it prefers corners or straights.</p>
+      <p>The demo reads one data file, <code>demos/racetrack/vocabulary.json</code>. Think of it as a parts list: each object described as a handful of axis-aligned boxes, plus how that kind of object <strong>behaves</strong> — how far off the road it stands, how high, how often, which side, whether it prefers corners or straights.</p>
 
       <div class="stats">
         <div class="stat"><b>229</b><span>objects</span></div>
         <div class="stat"><b>2,200</b><span>boxes</span></div>
-        <div class="stat"><b>362</b><span>recorded poses</span></div>
+        <div class="stat"><b>362</b><span>poses</span></div>
         <div class="stat"><b>5</b><span>shape classes</span></div>
-        <div class="stat"><b>286 W</b><span>reference lap</span></div>
+        <div class="stat"><b>286 W</b><span>lap length</span></div>
       </div>
 
       <figure>
         <div class="plate">
-          <svg viewBox="0 0 1000 300" role="img" aria-label="One entry from the vocabulary: a tree reduced to four boxes, beside the statistics recorded for it">
+          <svg viewBox="0 0 1000 300" role="img" aria-label="One entry from the vocabulary: a tree as four boxes, beside the statistics stored for it">
             <!-- left: the object as boxes -->
             <g transform="translate(60,40)">
-              <text class="s-lbl-s" x="0" y="-14">ANY OBJECT, AS THE FILE SEES IT</text>
+              <text class="s-lbl-s" x="0" y="-14">ANY OBJECT, AS THE VOCABULARY HOLDS IT</text>
               <!-- silhouette ghost -->
               <path d="M70,150 C70,110 40,105 44,72 C48,40 78,26 96,34 C112,10 150,18 152,46 C176,52 176,92 150,100 C140,130 118,146 110,150 Z"
                     fill="var(--rule-2)" stroke="var(--rule)" stroke-width="1"/>
@@ -611,14 +611,14 @@
               <rect x="108" y="42" width="66" height="58" fill="none" stroke="var(--ink)" stroke-width="1.4"/>
               <rect x="62" y="86" width="76" height="66" fill="none" stroke="var(--ink)" stroke-width="1.4"/>
               <rect x="84" y="146" width="16" height="52" fill="none" stroke="var(--ink)" stroke-width="1.4"/>
-              <text class="s-lbl-s" x="0" y="220">Four boxes, the median. You cannot get the</text>
-              <text class="s-lbl-s" x="0" y="234">object back out — but you can build one to fit.</text>
+              <text class="s-lbl-s" x="0" y="220">Four boxes: a size and a rough shape,</text>
+              <text class="s-lbl-s" x="0" y="234">enough to build something that fits them.</text>
             </g>
 
-            <!-- right: the record -->
+            <!-- right: the entry -->
             <g transform="translate(430,26)">
               <line class="s-hair" x1="-40" y1="0" x2="-40" y2="250"/>
-              <text class="s-lbl-s" x="0" y="0">ONE REAL ENTRY, AND ITS HABITS</text>
+              <text class="s-lbl-s" x="0" y="0">ONE ENTRY, AND ITS HABITS</text>
               <g class="s-lbl">
                 <text x="0" y="30">size</text>          <text x="150" y="30" class="s-ink2">0.92 × 0.86 × 1.81 W</text>
                 <text x="0" y="54">stands at</text>     <text x="150" y="54" class="s-ink2">t = 1.66 W &nbsp;(1.45 … 3.51)</text>
@@ -656,7 +656,7 @@
         </div>
       </div>
 
-      <p class="note">Each entry also carries a set of recorded <strong>poses</strong>, and they are the reason the dressing does not look stamped. The format stores no rotation, so an object has one representative shape — but every pose keeps its own boxes, and 362 poses give 361 distinct sets. The turn that was never written down survives in the shapes.</p>
+      <p class="note">Each entry also carries a set of <strong>poses</strong>, and they are the reason the dressing does not look stamped. The vocabulary carries no rotation, so the demo chooses one — but every pose keeps its own boxes, and 362 poses give 361 distinct sets. The variety is in the shapes.</p>
     </div>
   </section>
 
@@ -737,7 +737,7 @@
       <div class="spine">
         <div class="step"><span class="n">0</span><span class="t">Reserve</span><span class="d">Set aside the objects tall enough to be corner markers, before anything else can spend them.</span></div>
         <div class="step"><span class="n">1</span><span class="t">Stations</span><span class="d">Decide how many things there are and roughly where along the lap they go.</span></div>
-        <div class="step"><span class="n">2</span><span class="t">Assets</span><span class="d">Give each station an object, drawn from the habits recorded against it.</span></div>
+        <div class="step"><span class="n">2</span><span class="t">Assets</span><span class="d">Give each station an object, drawn from the habits stored against it.</span></div>
         <div class="step"><span class="n">3</span><span class="t">Corridor</span><span class="d">Push anything overhanging the driving volume outwards — by its <em>near face</em>, not its centre.</span></div>
         <div class="step"><span class="n">4</span><span class="t">Language</span><span class="d">Add the corner markers and the braking rulers. This is the part that makes the road readable.</span></div>
         <div class="step"><span class="n">5</span><span class="t">Landmarks</span><span class="d">Make sure every tenth of the lap has something recognisable in it.</span></div>
@@ -835,7 +835,7 @@
         </figure>
         <div class="sec-body" style="gap:14px">
           <p>Both layers are on screen at once. The lighter wireframe drops the vocabulary's own poses straight onto the lap, placed by nothing but their three numbers. The darker wireframe is what the rules built from nothing.</p>
-          <p>They stand side by side on purpose. Statistics can say the generated set matches the reference on every single figure, and it can still look wrong at eye level. The only test that catches that is a person looking at it.</p>
+          <p>They stand side by side on purpose. Statistics can say the generated set matches the vocabulary on every single figure, and it can still look wrong at eye level. The only test that catches that is a person looking at it.</p>
           <p class="note">There is also a density slider, because “how much stuff” is taste as much as measurement — the rule gives a range, not a number.</p>
         </div>
       </div>

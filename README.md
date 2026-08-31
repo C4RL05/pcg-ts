@@ -99,7 +99,7 @@ And six demos, each one something a single graph cannot be on its own:
 <td><b><a href="https://c4rl05.github.io/pcg-ts/demos/infinite-world/">infinite world</a></b><br>A world streamed around a flying camera, coarse to fine. Drag the cell size and watch the rocks not move.</td>
 <td><b><a href="https://c4rl05.github.io/pcg-ts/demos/galaxy/">galaxy</a></b><br>An unbounded spiral galaxy that is a pure function of its seed. Click a star to visit its planets.</td>
 <td><b><a href="https://c4rl05.github.io/pcg-ts/demos/gpu-world/">gpu world</a></b><br>The same streaming, with every instance matrix composed on the GPU and drawn without ever being read back.</td>
-<td><b><a href="https://c4rl05.github.io/pcg-ts/demos/racetrack/">racetrack</a></b><br>Roadside art placed along a spline the page was handed, to six legibility rules measured from a racing game. Every repair says how much it had to do.</td>
+<td><b><a href="https://c4rl05.github.io/pcg-ts/demos/racetrack/">racetrack</a></b><br>Roadside art placed along a spline the page was handed, to six legibility rules. Every repair says how much it had to do.</td>
 <td><b><a href="https://c4rl05.github.io/pcg-ts/demos/road/">road</a></b><br>The same page with the rules taken out — one evenly spaced row per side. Shot at the same station, so the diff is what the rules added.</td>
 <td><b><a href="https://c4rl05.github.io/pcg-ts/demos/lanterns/">lanterns</a></b><br>One u32 per instance, drawn. The graph settles where each lantern hangs and the seed it carries; the shader makes colour, pulse and bob out of that integer.</td>
 </tr>
@@ -1075,7 +1075,7 @@ world drawing from device-resident instance transforms
 ([live](https://c4rl05.github.io/pcg-ts/demos/gpu-world/)), and roadside
 art placed along a spline the page was handed rather than made
 ([live](https://c4rl05.github.io/pcg-ts/demos/racetrack/)), to six legibility
-rules measured from a racing game and run as a bounded fixed point,
+rules run as a bounded fixed point,
 because a single pass through them cannot satisfy them all. Beside it,
 [`demos/road`](https://c4rl05.github.io/pcg-ts/demos/road/)
 is the same page with no placement rules in it at all: the two have

@@ -13,8 +13,9 @@
  * lap). Those are the claims that survive the re-basing, and they are the
  * ones a golden file would not have caught anyway.
  *
- * THE SYNTHETIC HALF RUNS ON A HAND-BUILT LAP, on purpose. A measured kit
- * has 229 assets whose weights differ by three orders of magnitude, which
+ * THE SYNTHETIC HALF RUNS ON A HAND-BUILT LAP, on purpose. A local
+ * catalogue has 229 assets whose weights differ by three orders of
+ * magnitude, which
  * is exactly the wrong fixture for asking "does the bracket land where
  * the weights say": the answer is dominated by a handful of rows and a
  * bug in the tail is invisible. Four assets with weights chosen to be
@@ -348,7 +349,7 @@ describe("assetGraph: the weighted pick", () => {
 
   it("keeps each asset on the side its instances were on", async () => {
     // The gate `racetrackAssets` makes of `placeAsset`, made of the graph:
-    // an asset measured entirely on one side stays there, and one with no
+    // an asset whose laterals are entirely on one side stays there, and one with no
     // lean gets a fair flip rather than a constant.
     const right = [asset(0, 1, [1, 1, 1, 1], { right: 1 }), asset(1, 0, [0, 0, 0, 0])];
     const left = [asset(0, 1, [1, 1, 1, 1], { right: 0 }), asset(1, 0, [0, 0, 0, 0])];
@@ -370,7 +371,7 @@ describe("assetGraph: the weighted pick", () => {
     // segment's slope rather than clamping, so an asset whose lateral p10
     // is near zero draws a NEGATIVE magnitude a few times a lap -- and
     // then the side is decided by the sign of the draw rather than by the
-    // asset's measured lean. Dropping both `abs` calls changed nothing at
+    // asset's own lean. Dropping both `abs` calls changed nothing at
     // all on the shipped vocabulary, so only a fixture that reaches the
     // extrapolation can pin it.
     const wide = [
@@ -400,14 +401,14 @@ describe("assetGraph: the weighted pick", () => {
 });
 
 /**
- * THE SHIPPED VOCABULARY, NOT A MEASURED KIT, and that is a deliberate
+ * THE SHIPPED VOCABULARY, NOT A LOCAL CATALOGUE, and that is a deliberate
  * departure from `racetrackAssets`. That suite exists to compare two
- * SOURCES of the same quantity and has to run on measurement; this one
- * asks whether a graph draws what a function draws, which is a question
- * about the arithmetic and not about the circuit. The shipped vocabulary
- * is committed, so these run in a plain checkout — and the measured kits
- * live outside both repositories, so a suite gated on them is a suite CI
- * never executes.
+ * ACCOUNTS of the same quantity and has to run on a full
+ * catalogue; this one asks whether a graph draws what a function draws,
+ * which is a question about the arithmetic and not about the circuit. The
+ * shipped vocabulary is committed, so these run in a plain checkout — and
+ * a local catalogue is absent from a plain checkout, so a suite gated on
+ * one is a suite CI never executes.
  */
 describe("assetGraph: the lap the page actually draws", () => {
   const kit = shippedVocabulary();
@@ -420,9 +421,9 @@ describe("assetGraph: the lap the page actually draws", () => {
     const { pool } = reserveFor(kit, seed);
     const out = await cookLapPlacements({ lap, seed, pool });
     expect(out.choices.length).toBe(out.stations.stations.length);
-    // A station with no asset is legal and vanishingly unlikely on a real
-    // kit -- 229 assets, and a bucket in which every one of them weighs
-    // zero would be a defect in the measurement, not a draw.
+    // A station with no asset is legal and vanishingly unlikely on a full
+    // catalogue -- 229 assets, and a bucket in which every one of them
+    // weighs zero would be a defect in the catalogue, not a draw.
     expect(out.choices.every((c) => c !== undefined)).toBe(true);
     expect(out.choices.every((c) => c && c.assetIndex >= 0 && c.assetIndex < pool.length)).toBe(
       true,

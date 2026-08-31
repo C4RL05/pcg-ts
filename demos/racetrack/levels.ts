@@ -56,8 +56,8 @@
  * `setAttribute` takes a `values` table and a field-capable INDEX into it,
  * which is exactly how `dressGraph`'s Z-3 redraw re-derives an asset id
  * from a pose column every round. What a graph still needs handed to it is
- * the TABLE — the strings themselves — and that is a fact about the kit
- * rather than about fields. The conclusion below is unchanged; the reason
+ * the TABLE — the strings themselves — and that is a fact about the
+ * vocabulary rather than about fields. The conclusion below is unchanged; the reason
  * for it was wrong. That argument used to rest on
  * a much larger number — one per copy of the entire pose library times
  * the entire placement list — and `copyToPoints`' per-target source

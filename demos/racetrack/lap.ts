@@ -213,7 +213,7 @@ function unit(v: [number, number, number]): [number, number, number] {
 
 /**
  * Track coordinates to a world position — the lookup a placement log
- * needs, and the inverse of what the kit's exporter measured.
+ * needs, and the inverse of the coordinates the vocabulary states.
  *
  * `station` is in HALF-WIDTHS and wraps, matching the contract; the
  * conversion to the arc length `poseAt` wants happens here so no caller

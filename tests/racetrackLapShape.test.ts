@@ -1,5 +1,5 @@
 /**
- * The demo's spline, held to the measured shape of a real circuit.
+ * The demo's spline, held to the target shape of a circuit.
  *
  * WHY THIS IS GATED. The spline is the demo's INPUT, and the rules it
  * exists to exercise are corner rules: dress a corner's approach, put a
@@ -7,13 +7,13 @@
  * A lap with no tight corners satisfies all of them by having nothing to
  * do, and would go on satisfying them while the generator quietly could
  * not handle a real track. The first version of this file did exactly
- * that — a radius p10 of 9.5W where the measured range is 5.1 to 8.8, and
+ * that — a radius p10 of 9.5W where the target range is 5.1 to 8.8, and
  * almost nothing in the tight bucket at all.
  *
- * THE BANDS ARE p10-p90 OVER TWENTY-TWO CIRCUITS, not tolerances. Landing
- * inside them means this lap is the kind of thing the rules were measured
- * on; landing outside means the demo is testing something else. They are
- * upstream's figures, length-weighted, with corners counted as RUNS so a
+ * THE BANDS ARE p10-p90 SPREADS, not tolerances. Landing
+ * inside them means this lap is the kind of thing the rules were written
+ * for; landing outside means the demo is testing something else. They are
+ * the rules' figures, length-weighted, with corners counted as RUNS so a
  * long bend is one corner rather than forty.
  *
  * These are checked against the SPLINE ITSELF rather than against a cook,
@@ -25,16 +25,15 @@ import { makeTrackSpline } from "../demos/racetrack/spline.js";
 /**
  * Curvature bucket cuts in W, and the share of lap length each holds.
  *
- * The cuts are upstream's rather than guessed — an earlier version here
+ * The cuts are the rules' rather than guessed — an earlier version here
  * used 8 / 16 / 30 and the straight edge was well off, which moves a lot
  * of track between buckets for a keyed statistic.
  *
- * The shares are the PER-CIRCUIT p10-p90 over twenty-two circuits, not
- * the exemplar kit's. The street circuit reads 58.7% straight, above the
- * population's p90 of 53.3: it is an unusually straight circuit and was
- * handed over as the one reference. Tuning toward it would have been
- * tuning toward an outlier, which is a caution that applies to anything
- * else read off that one circuit as though it were the population.
+ * The shares are p10-p90 ranges, so they say what an ordinary lap looks
+ * like rather than what this one must hit. A single catalogue variant can
+ * sit outside them — the street one reads 58.7% straight against a 53.3
+ * p90 — so tuning toward any one variant would be tuning toward an
+ * outlier.
  */
 const BUCKETS = [
   { name: "tight", lo: 0, hi: 7, share: [0.046, 0.189] },
@@ -55,7 +54,7 @@ interface Shape {
 }
 
 /**
- * Every published lap-shape figure, measured the way upstream defines it.
+ * Every published lap-shape figure, measured the way the rules define it.
  *
  * Curvature by central difference of unit tangents, which is what
  * `writeCurveFrame` does — so this measures the same quantity the cooked
@@ -102,7 +101,7 @@ function shapeOf(seed: number): Shape {
   const finite = R.filter(Number.isFinite).sort((a, b) => a - b);
   const pctl = (f: number): number => finite[Math.min(finite.length - 1, Math.floor(f * finite.length))];
 
-  // Corners as RUNS under R = 12W, upstream's definition.
+  // Corners as RUNS under R = 12W, the rules' definition.
   let corners = 0;
   let inCorner = 0;
   for (let i = 0; i < n; i++) {
@@ -129,13 +128,13 @@ function shapeOf(seed: number): Shape {
   };
 }
 
-describe("the demo's lap is shaped like a measured circuit", () => {
+describe("the demo's lap is shaped like a racing circuit", () => {
   const s = shapeOf(1);
 
   it("reports its shape", () => {
     console.log(
       [
-        "lap shape, seed 1 (bands are p10-p90 over 22 real circuits)",
+        "lap shape, seed 1 (bands are p10-p90 spreads)",
         `  lap length        ${s.lapW.toFixed(0)} W        [286-443]`,
         `  radius p10        ${s.p10.toFixed(1)} W        [5.1-8.8]`,
         `  radius median     ${s.median.toFixed(1)} W       [16.4-45.1]`,
@@ -216,9 +215,9 @@ describe("the demo's lap is shaped like a measured circuit", () => {
    * THE ONE A MEDIAN CANNOT SEE, and the reason it is gated separately.
    *
    * The first windowless wobble put the median radius squarely in band
-   * and left only 11.5% of the lap truly straight, under a measured p10
+   * and left only 11.5% of the lap truly straight, under a target p10
    * of 14.2. "Half the lap curves" and "a quarter of it does not" are
-   * both true of a real circuit and neither implies the other, so a lap
+   * both true of a circuit and neither implies the other, so a lap
    * can satisfy the median while having no straight at all — which is a
    * different track to drive and a different one to dress.
    *

@@ -16,7 +16,7 @@
  *   - no stretch begins inside a corner tighter than the rule's threshold;
  *   - none begins within `flareW` before such a corner;
  *   - no two come within `separationW` of each other, ON THE LOOP;
- *   - every length is one the source's own quantiles could have produced;
+ *   - every length is one the vocabulary's own quantiles could have produced;
  *   - the covered total reaches the budget without overshooting it by more
  *     than the clamp allows.
  *
@@ -277,7 +277,7 @@ describe("racetrack enclosure, as a graph", () => {
         expect(p.cornerOk, `seed ${seed} plan ${i}: accepted against its own corner verdict`)
           .toBe(1);
 
-        // And a length the source's quantiles could have produced, above
+        // And a length the vocabulary's quantiles could have produced, above
         // the tail the racetrack draws from.
         expect(p.lengthW, `seed ${seed} plan ${i}: length below the floor`).toBeGreaterThanOrEqual(
           ENCLOSE.minLengthW,

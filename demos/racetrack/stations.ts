@@ -11,8 +11,8 @@
  * the last attempt ended up with a lap-scale artefact driven by a fitted
  * label.
  *
- * THE TARGET IS THE DISPERSION CURVE, NOT THE CLUSTER TABLES. The source
- * measurement publishes cluster counts, sizes and spans, and a
+ * THE TARGET IS THE DISPERSION CURVE, NOT THE CLUSTER TABLES. A
+ * catalogue's tables give cluster counts, sizes and spans, and a
  * homogeneous Poisson process at the same density reproduces almost all
  * of them — so placing clumps drawn from those tables counts the
  * clustering twice, once for the clumps placed and again for the merging
@@ -23,30 +23,30 @@
  * TWO LEVELS, AND EXACTLY TWO. One level of clustering flattens the curve
  * to about 1.9 at every window — the small scales carry themselves and
  * nothing carries the middle. A lap-scale envelope is the other failure:
- * it keeps climbing to 38 and 60 where the source plateaus at 16-24W,
+ * it keeps climbing to 38 and 60 where the target plateaus at 16-24W,
  * because a swell puts its variance at the largest scales. Clumps of
  * FINITE EXTENT, scattered, are the only thing that climbs and then
  * stops.
  */
 import { Pcg32, hashCombine } from "pcg-ts";
 
-/** The published window widths. Upstream's, so the two are one statistic. */
+/** The published window widths, so the two curves are one statistic. */
 export const DISPERSION_WINDOWS_W = [2, 4, 8, 16, 32, 64, 128] as const;
 
 /**
- * The source's MEDIAN index of dispersion at each window — reported
+ * The published MEDIAN index of dispersion at each window — reported
  * against, never aimed at. See {@link DISPERSION_SPREAD}.
  */
 export const DISPERSION_TARGET = [1.48, 1.81, 3.01, 5.03, 6.63, 5.98, 5.11] as const;
 
 /**
- * And its p10-p90 across circuits, which is the part that matters.
+ * And its p10-p90 spread, which is the part that matters.
  *
  * A FIFTEEN-FOLD RANGE at a 32W window. A lap landing on the median is no
  * more expected than one at 2 or at 20, so matching the median row would
  * be fitting to the centre of a distribution that wide — easy to hit by
- * accident and meaningless when hit. What the source constrains is the
- * SHAPE: the curve climbs and then stops from about 16-24W. That claim
+ * accident and meaningless when hit. What the curve constrains is the
+ * SHAPE: it climbs and then stops from about 16-24W. That claim
  * survives the spread, and so do the two mechanisms it rules out.
  */
 export const DISPERSION_SPREAD = [
@@ -74,7 +74,7 @@ export const DENSITY = {
   unfinished: 0.6,
 } as const;
 
-/** The shape of the two-level process. Fitted to the curve, not measured. */
+/** The shape of the two-level process. Fitted to the curve, not the tables. */
 export interface StationParams {
   /** Placements per W of lap. */
   readonly density: number;
@@ -109,9 +109,9 @@ export const FITTED: StationParams = {
 };
 
 /**
- * A NOTE ON `clusterSpreadW`, because it looks wrong beside the source.
+ * A NOTE ON `clusterSpreadW`, because it looks wrong beside the tables.
  *
- * The measurement thresholds clusters at 1.5W and reports a median span
+ * The tables threshold clusters at 1.5W and report a median span
  * of 0.55W, and this is five. They are not the same quantity: 1.5W is
  * where a DETECTOR cuts a continuous distribution of gaps, and 4.99 is
  * the standard deviation of the process that produces those gaps. A
@@ -141,7 +141,7 @@ function gauss(u: () => number): number {
  * The COUNT is exact — `density * lapW` rounded — rather than Poisson.
  * A budget is a budget: D-1 is a target a generator hits, and letting the
  * total float adds variance at the lap scale, which is the one place the
- * source has none.
+ * vocabulary has none.
  */
 /**
  * What a generating pass had to REPAIR, reported rather than swallowed.
@@ -252,7 +252,7 @@ export const COVERAGE = { within2W: 0.85, maxGapW: 25 } as const;
  * pull against each other: the same finite-extent clumps that make the
  * dispersion curve climb and plateau are what leave holes between them.
  * Fitting the process hard enough to never leave a 25W gap would flatten
- * the curve, and the curve is the part with a measurement behind it —
+ * the curve, and the curve is the part with a statistic behind it —
  * D-4 is a stated floor with a threshold, which is exactly the kind of
  * rule a generator should ENFORCE rather than hope for. Fitted to
  * eight laps it failed on one, at 31.7W, which is what hoping looks like.
@@ -323,7 +323,7 @@ export interface CoverageRepair<T> {
 export interface CoverageRepairOptions<T> {
   /**
    * Placements that may never be the donor. The corner language pins its
-   * markers and rulers to a measured distance before an entry, so moving
+   * markers and rulers to a stated distance before an entry, so moving
    * one to close a gap would satisfy D-4 by breaking L-2 or L-3 — a
    * repair that fixes its own rule by breaking another's is worse than
    * the hole it closed.

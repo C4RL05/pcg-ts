@@ -1,28 +1,25 @@
 /**
  * A vocabulary the demo can publish.
  *
- * WHY THIS EXISTS. Every rule in this demo is driven by a measured kit —
- * an asset catalogue with, for each piece, where its instances actually
- * sat across the track, how high, which side, and how its rate varied
- * with curvature. That catalogue is derived measurement of a commercial
- * game. It is not ours to redistribute, it is gitignored, and the
- * published build therefore has no `kit.json` at all: the live demo drew
- * placeholder boxes and reported "rules idle" while six rules sat behind
- * it doing nothing anybody could see.
+ * WHY THIS EXISTS. Every rule in this demo is driven by a catalogue — an
+ * asset list with, for each piece, where its instances sit across the
+ * track, how high, which side, and how its rate varies with curvature.
+ * A build carrying no `kit.json` at all drew placeholder boxes and
+ * reported "rules idle" while six rules sat behind it doing nothing
+ * anybody could see.
  *
- * So this builds a vocabulary from THE PUBLISHED RULES THEMSELVES rather
- * than from any measurement — Z-3's band shares, Z-4's size-by-band
- * ranges, Z-5's separate along and across extents, C-1's gap CV, D-6's
- * curvature response. Those are numbers in a design document, stated as
- * ranges an implementer is meant to hit. Nothing here is copied from
- * anything; it is what the rules ask for, made concrete.
+ * So this builds a vocabulary from THE RULES THEMSELVES — Z-3's band
+ * shares, Z-4's size-by-band ranges, Z-5's separate along and across
+ * extents, C-1's gap CV, D-6's curvature response. Each is stated as a
+ * range an implementer is meant to hit; this is what the rules ask for,
+ * made concrete.
  *
- * AND IT IS A BETTER DEMONSTRATION THAN THE MEASURED KIT WOULD BE. A
+ * AND IT IS A BETTER DEMONSTRATION THAN A FIXED CATALOGUE WOULD BE. A
  * generator that only works on one catalogue has shown nothing. Dressing
- * a vocabulary built to a spec, and having every rule fire and every gate
- * hold, is the actual claim: THE RULES ARE THE PRODUCT AND THE KIT IS
- * INTERCHANGEABLE. The measured kit stays available locally as the
- * reference layer, which is where a like-for-like comparison belongs.
+ * a vocabulary built to the rules, and having every rule fire and every gate
+ * hold, is the actual claim: THE RULES ARE THE PRODUCT AND THE CATALOGUE
+ * IS INTERCHANGEABLE. An optional local catalogue is drawn beside it as
+ * the reference layer, which is where a like-for-like comparison belongs.
  *
  * WHAT IT HAS TO CONTAIN, or rules fall silent and the demo is dishonest
  * in a subtler way. Each of these is deliberate, not decoration:
@@ -32,45 +29,43 @@
  *   - pieces whose own lateral distribution reaches inside 1W, so Z-1's
  *     corridor resolution is reachable rather than vacuously satisfied
  *   - a long tail of one-offs, so L-4 has landmarks to draw on: the
- *     source has 135 of 206 assets appearing exactly once, and a kit of
- *     evenly-used pieces cannot make a lap navigable
+ *     vocabulary has 135 of 206 assets appearing exactly once, and a kit
+ *     of evenly-used pieces cannot make a lap navigable
  *   - pieces low and near enough to form the lines L-5 forbids
  */
 import { rand } from "./assets.js";
 import type { Kit, KitBox } from "./kit.js";
-import measured from "./vocabulary.json";
+import vocabularyData from "./vocabulary.json";
 
 /**
  * THE VOCABULARY THE PAGE ACTUALLY SHIPS WITH.
  *
  * Per-asset bounding-box decompositions and the placement statistics the
- * rules read, measured from a source circuit and committed — see
+ * rules read, committed as `vocabulary.json` — see
  * `scripts/gen-racetrack-vocabulary.mjs` for what it carries and what it
- * deliberately leaves behind. It is dimensions and statistics: a median
- * of five axis-aligned boxes per asset, which is a guide for generating
- * an asset rather than an asset, and no level layout or source
- * identifiers at all.
+ * deliberately leaves out. It is dimensions and statistics: a median of
+ * five axis-aligned boxes per asset, which is a guide for generating an
+ * asset rather than an asset, and no level layout at all.
  *
  * IT IS HERE BECAUSE THE GENERATED ALTERNATIVE WAS NOT GOOD ENOUGH. A
  * catalogue built from the rule ranges alone came out at 1.7 boxes per
  * asset against this one's 5.2, and a placement dressed from it reads as
  * a crate rather than as a grandstand. The rules were never the problem;
- * the vocabulary was, and the part of a real vocabulary that matters
- * turns out to be its internal structure rather than its dimensions.
+ * the vocabulary was, and the part of a vocabulary that matters turns out
+ * to be its internal structure rather than its dimensions.
  */
 export function shippedVocabulary(): Kit {
   return {
-    track: { lapLengthW: measured.lapLengthW, halfWidthGameUnits: 1000 },
-    assets: measured.assets as unknown as Kit["assets"],
+    track: { lapLengthW: vocabularyData.lapLengthW, halfWidthUnits: 1000 },
+    assets: vocabularyData.assets as unknown as Kit["assets"],
     // THE RECORDED INSTANCES, which do two jobs. They are the reference
     // layer the page draws beside the generated dressing, and they are
     // the pose library that stops every copy of an object facing the same
     // way. What they are NOT is a level: a layout only means anything
-    // paired with the track it was authored on, and this demo generates
-    // its own spline — different length, corners in different places — so
-    // the sequence lands on geometry it was never made for. That is
-    // exactly what makes it good evidence rather than a copy.
-    placements: measured.placements as unknown as Kit["placements"],
+    // paired with the lap it belongs to, and this demo generates its own
+    // spline — different length, corners in different places — so the
+    // sequence lands on geometry it was never made for.
+    placements: vocabularyData.placements as unknown as Kit["placements"],
   };
 }
 
@@ -195,9 +190,9 @@ export function buildVocabulary(seed = 1): VocabAsset[] {
     const band = BANDS[b];
     for (let k = 0; k < band.n; k++) {
       const s = id;
-      // Z-5: along and across are separate measurements. An aspect ratio
+      // Z-5: along and across are separate quantities. An aspect ratio
       // rather than a square footprint, because the two differ by up to a
-      // factor of thirty inside one real kit and a vocabulary of squares
+      // factor of thirty inside one catalogue and a vocabulary of squares
       // makes the along-lap gap statistics meaningless.
       const foot = span(band.foot, rand(seed, s, 0x01));
       const aspect = 0.25 + rand(seed, s, 0x02) * 3.5;
@@ -351,16 +346,16 @@ export function buildVocabulary(seed = 1): VocabAsset[] {
 /**
  * A whole kit, in the shape `dressLap` reads.
  *
- * `placements` is empty: those are the REFERENCE layer, a record of where
- * a measured circuit put its own art, and a synthetic vocabulary has no
- * such record to offer. The page shows the reference only when the real
- * kit is present, which is the honest arrangement — there is nothing to
- * compare a generated lap against here except the rules it was generated
- * from, and those are already gated in the tests.
+ * `placements` is empty: those are the REFERENCE layer, a catalogue's own
+ * recorded placements, and a synthetic vocabulary has none to offer. The
+ * page shows the reference only when a catalogue carrying placements is
+ * present, which is the honest arrangement — there is nothing to compare
+ * a generated lap against here except the rules it was generated from,
+ * and those are already gated in the tests.
  */
-export function syntheticKit(lapLengthW: number, halfWidthGameUnits = 1000, seed = 1): Kit {
+export function syntheticKit(lapLengthW: number, halfWidthUnits = 1000, seed = 1): Kit {
   return {
-    track: { lapLengthW, halfWidthGameUnits },
+    track: { lapLengthW, halfWidthUnits },
     assets: buildVocabulary(seed) as unknown as Kit["assets"],
     placements: [],
   };

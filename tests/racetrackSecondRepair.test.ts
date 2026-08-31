@@ -456,7 +456,7 @@ describe("the post-enclosure repair pass", () => {
    * The claim was: `CORRIDOR.ceilingW` is 1.2W, `SIGHTLINE.eyeW` is 0.3W,
    * every chord runs from the eye DOWN to a target on the road surface,
    * therefore 0.9W of clearance no kit can close — "a property of two
-   * constants in this repository, not of any measured art". Both premises
+   * constants in this repository, not of any asset's geometry". Both premises
    * are true and the conclusion does not follow, because THE LAP IS NOT
    * FLAT. `LAP.relief` is 26 against a half-width of 9, written as a
    * two-cycle sinusoid, so the surface swings +/-2.89W. A cover rib is

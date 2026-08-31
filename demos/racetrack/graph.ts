@@ -56,7 +56,7 @@ import {
   createPolyline,
 } from "pcg-ts";
 // The threshold, not the model: `corners.ts` states what a corner IS —
-// upstream's cut at R = 12W, with the argument for keeping a crude
+// the rule set's cut at R = 12W, with the argument for keeping a crude
 // definition — and this graph is where that cut is applied. Importing it
 // rather than restating the 12 is the point: a demo with the number
 // written down twice is a demo where the boundary the runs are cut at and
@@ -91,8 +91,8 @@ export const OUTPUTS = {
  *
  * A placement rule that says "a barrier 1.2 across, 30 apart" is a rule
  * about ONE track. Said in half-widths and arc length it is a rule about
- * every track, which is the whole reason a kit measured off one circuit
- * can dress a spline that circuit never had. So the centreline publishes
+ * every track, which is the whole reason a catalogue stated against one
+ * lap can dress a spline it never saw. So the centreline publishes
  * the coordinate system rather than leaving each rule to derive it, and
  * every consumer — the host's placement lookup in `lap.ts`, the rules in
  * `dress.ts`, and whatever reads the reference log — reads these four

@@ -20,12 +20,12 @@
  * consumed from. They are drawn OVER each other rather than side by side
  * so the two readings share every pixel instead of splitting the screen,
  * and the car is one object in both, so they can never disagree about
- * where the player is.
+ * where the car is.
  *
  * EVERYTHING IS WIREFRAME, and that is not a placeholder for shading. The
  * output of this technique is a COMPOSITION — what is where, at what size,
  * facing which way. Solid boxes with a light on them would read as bad
- * art; a wireframe reads as what it is, which is the measurement.
+ * art; a wireframe reads as what it is, which is the composition.
  *
  * THE DRESSING ARRIVES IN SECTORS. The rules still settle the WHOLE lap at
  * once — they have to, because a corner's marker is a statement about the
@@ -218,7 +218,7 @@ const layers: Layer[] = [];
  * How much bigger the car is drawn on the map than in the world.
  *
  * The car is ONE object in both passes, which is what keeps the two views
- * from ever disagreeing about where the player is — but a five-unit wedge
+ * from ever disagreeing about where the car is — but a five-unit wedge
  * on a five-thousand-unit lap is a sub-pixel speck from above. So the map
  * pass scales it to a fixed share of the FRAME rather than of the world,
  * which is what every map marker does and what no world-space size can
@@ -281,40 +281,40 @@ function paintStreamed(pass: "chase" | "map"): void {
 }
 
 /**
- * Load the optional MEASURED kit once, before the first cook draws
+ * Load the optional local catalogue once, before the first cook draws
  * anything. It is the reference layer only; the dressing does not depend
- * on it. See `measuredKit` below.
+ * on it. See `referenceKit` below.
  */
 async function loadReference(): Promise<void> {
-  measuredKit = await loadKit();
+  referenceKit = await loadKit();
 }
 
 /**
  * The vocabulary the rules dress from.
  *
- * THE MEASURED KIT IS THE REFERENCE, NOT THE SOURCE. It cannot be
- * published — it is derived measurement of a commercial game — so a build
- * without it used to draw placeholder boxes and report "rules idle",
- * which meant the live demo showed none of the thing it exists to show.
- * The dressing now runs on a vocabulary built from the published RULES
- * (see `vocabulary.ts`), and the measured kit, when present, is drawn
- * beside it as the comparison.
+ * THE OPTIONAL LOCAL CATALOGUE IS THE REFERENCE, NOT WHAT THE RULES
+ * DRESS FROM. It is
+ * not published, so a build without it used to draw placeholder boxes and
+ * report "rules idle", which meant the live demo showed none of the thing
+ * it exists to show. The dressing now runs on a vocabulary built from the
+ * published RULES (see `vocabulary.ts`), and the local catalogue, when
+ * present, is drawn beside it as the comparison.
  *
  * Which also makes the better point: a generator that only works on one
  * catalogue has demonstrated nothing.
  */
 function dressingKit(): Kit {
-  // THE MEASURED KIT WHEN THERE IS ONE. The generated vocabulary exists
-  // so the PUBLISHED page has something to dress from; making it
+  // THE LOCAL CATALOGUE WHEN THERE IS ONE. The generated vocabulary
+  // exists so the PUBLISHED page has something to dress from; making it
   // unconditional was a mistake that confused what ships with what runs,
   // and it cost most of the demo's quality wherever a kit was available.
   //
-  // Measured on the same lap under the same rules: dressing from the
-  // measured kit gives 1980 boxes at 5.59 per placement from 150 distinct
-  // assets. The real vocabulary's own box decompositions are what make a
+  // On the same lap under the same rules: dressing from the local
+  // catalogue gives 1980 boxes at 5.59 per placement from 150 distinct
+  // assets. A catalogue's own box decompositions are what make a
   // placement read as a grandstand rather than as a crate — and 5.59
-  // against the reference layer's 6.08 is why the generated dressing sits
-  // beside the measured art without looking out of place.
+  // against the reference layer's 6.08 is why the two sit beside each
+  // other without looking out of place.
   //
   // TWO THINGS ABOUT THOSE NUMBERS, both found on 2026-08-28 and both
   // worth having here rather than in a commit message.
@@ -328,18 +328,18 @@ function dressingKit(): Kit {
   // THE SECOND IS THAT THE COMPARISON THIS SENTENCE USED TO MAKE NO LONGER
   // EXISTS. It read "against 580 boxes at 1.7 per placement from 90", and
   // re-measuring that arm gives 1980 / 5.59 / 150 — the SAME lap, to the
-  // box. `vocabulary.json` is now the anonymised dump of this same
+  // box. `vocabulary.json` now carries this same
   // catalogue: 229 assets either way, the same ids, the same 362 recorded
   // placements and 2200 library boxes, differing only in the names. So the
   // branch below is still the right one to take — a checkout with no local
   // manifest must dress from something — but it is no longer a fallback of
   // lower quality, and any argument that rests on it being one needs
   // rebuilding before it is quoted again.
-  if (measuredKit) return measuredKit;
+  if (referenceKit) return referenceKit;
 
-  // Otherwise the committed vocabulary: the same measured dimensions and
-  // statistics, carrying no level layout and no source identifiers. It is
-  // what every visitor to the published page dresses from.
+  // Otherwise the committed vocabulary: the same dimensions and
+  // statistics, carrying no level layout. It is what every visitor to the
+  // published page dresses from.
   if (!vocabulary) vocabulary = shippedVocabulary();
   return vocabulary;
 }
@@ -356,10 +356,10 @@ const chaseCamera = new PerspectiveCamera(65, 1, 0.1, 4000);
 /**
  * The car — a wedge, drawn in both passes.
  *
- * In the CHASE pass it is the subject; in the MAP pass it is the player
+ * In the CHASE pass it is the subject; in the MAP pass it is the subject's
  * position, which is one of the two things the map exists to show. ONE
  * object rather than a car and a separate marker, so the two views can
- * never disagree about where on the lap the player is.
+ * never disagree about where on the lap the car is.
  */
 const car = new Mesh(
   new ConeGeometry(1.8, 5, 3),
@@ -378,10 +378,10 @@ layers.push({
 // ------------------------------------------------------------------ //
 
 /**
- * The measured kit, if one was made available. See `kit.js` — it is
- * optional, absent for almost everyone, and the page owes it nothing.
+ * The optional local catalogue, if one was made available. See `kit.js` —
+ * it is absent for almost everyone, and the page owes it nothing.
  */
-let measuredKit: Kit | undefined;
+let referenceKit: Kit | undefined;
 
 /** The published vocabulary the rules dress from. Built once per seed. */
 let vocabulary: Kit | undefined;
@@ -425,13 +425,13 @@ function disposeBuilt(): void {
 }
 
 /**
- * Draw the measured kit's placements on THIS spline.
+ * Draw the catalogue's own placements on THIS spline.
  *
  * The whole point of the track frame, made visible. These are 442
- * placements measured on a real circuit, dropped onto a lap they were
- * never measured from, through nothing but a station, a signed lateral
- * and a height. If the two sides mean the same thing by those, this reads
- * as a track; if either has a convention backwards, it reads as a cloud.
+ * placements dropped onto a lap they were never made for, through nothing
+ * but a station, a signed lateral and a height. If the two sides mean the
+ * same thing by those, this reads as a track; if either has a convention
+ * backwards, it reads as a cloud.
  *
  * A REFERENCE AND NOT A TARGET: nothing this page generates is fitted to
  * these. They are drawn beside the generated verges so a person can see
@@ -439,9 +439,9 @@ function disposeBuilt(): void {
  * replaced.
  */
 function buildReference(circuit: Circuit): SpawnedLayer | undefined {
-  // Through `dressingKit`, so the choice of source is made in exactly one
-  // place and the shipped vocabulary is parsed once rather than re-wrapped
-  // on every cook.
+  // Through `dressingKit`, so the choice of catalogue is made in exactly
+  // one place and the shipped vocabulary is parsed once rather than
+  // re-wrapped on every cook.
   const from = dressingKit();
   if (from.placements.length === 0) return undefined;
   const lap = circuit.lap;
@@ -739,7 +739,7 @@ function disposeStreamedDressing(): void {
 /**
  * THE GENERATED DRESSING — the thing this page is about, now streamed.
  *
- * Placed by the rules from the kit's own measurements and drawn with the
+ * Placed by the rules from the kit's own statistics and drawn with the
  * same renderer as the reference, so the two can still be compared fairly.
  *
  * AND THE LIST IS THE LEVEL'S OWN NOW. `placements` is not passed at all:
@@ -1031,9 +1031,9 @@ overlay.addSlider("speed", { min: 0, max: 160, step: 1, value: state.speed }, (v
   state.speed = v;
 });
 // DENSITY IS THE ONE RULE PARAMETER ON THE PANEL, because it is the one
-// a viewer will want to argue with — and because leaving the measured
-// reference layer off makes the generated dressing look thinner than the
-// two together did. The readout names D-1's accepted band so the slider
+// a viewer will want to argue with — and because leaving the reference
+// layer off makes the generated dressing look thinner than the two
+// together did. The readout names D-1's accepted band so the slider
 // cannot quietly imply that every position on it is equally valid.
 overlay.addSlider(
   "density",
@@ -1137,11 +1137,11 @@ function showLapStats(): void {
   }
 
   // D-1 in its own units, with the verdict rather than just the number,
-  // READ FROM THE SPEC rather than restated here: this line carried
+  // READ FROM `DENSITY` rather than restated here: this line carried
   // 0.6-1.2 by hand while DENSITY says 0.71-1.54, so the verdict on screen
   // was wrong at both edges. `unfinished` is a third verdict and not a
   // synonym for the floor — below it a lap is unfinished rather than
-  // sparse, which is the word the spec asks for.
+  // sparse, which is the word D-1 asks for.
   const perW = level.placed / circuit.lap.lengthW;
   const band =
     perW < DENSITY.unfinished
@@ -1290,7 +1290,7 @@ async function cookAndBuild(): Promise<void> {
     // made the placements DATA in the lap graph. A graph whose answer is
     // bound into it as input is a picture of one lap and cannot be
     // serialized and re-run against another spline, which is the only
-    // version of it a game could ship.
+    // version of it anything downstream could ship.
     //
     // ONE COOK STAYS, DELIBERATELY. `cookReserveMarkers` decides WHICH
     // ASSETS EXIST before anything is dressed -- the pool everything
@@ -1433,7 +1433,7 @@ function frame(): void {
   }
 }
 
-// The kit first, so the opening cook can draw it: a reference layer that
+// The catalogue first, so the opening cook can draw it: a reference layer that
 // appears a beat after the page does reads as a bug rather than as an
 // optional extra.
 void loadReference()

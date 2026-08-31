@@ -8,26 +8,26 @@
  * Swap this file for a track exported from anywhere and nothing
  * downstream changes.
  *
- * IT IS SHAPED LIKE A REAL CIRCUIT, and that took a different
+ * IT IS SHAPED LIKE A RACING CIRCUIT, and that took a different
  * construction than the obvious one. The first version was a sum of
  * integer harmonics of the lap angle — closes exactly, reads fine from
  * above, and cannot produce a racetrack. A radial harmonic of order k
  * puts its curvature extremes 2k times around the lap, so the corner
  * COUNT is set by the order and the corner DEPTH by the amplitude, and
- * the two cannot be chosen independently. Measured against the published
- * shape of twenty-two real circuits, prioritising the tight tail gave a
+ * the two cannot be chosen independently. Against the shape targets
+ * below, prioritising the tight tail gave a
  * radius p10 of 6.8W (wanted 5.1-8.8) with 3.57 corners per 20W (wanted
  * 0.61-1.33); prioritising the corner count gave 0.92 corners per 20W
  * with a p10 of 18.1 and one percent of the lap in a corner against a
- * measured twenty to thirty-seven. The two targets are mutually
- * exclusive under a harmonic sum, because real circuits have a BIMODAL
+ * target twenty to thirty-seven. The two targets are mutually
+ * exclusive under a harmonic sum, because a circuit has BIMODAL
  * curvature — near-straight between distinct corners — and a sum of
  * sinusoids is smooth everywhere.
  *
  * SO: A FILLETED POLYGON. Vertices on a jittered circle rounded by arcs.
  * Closure is free because a polygon closes, the corner count IS the
  * vertex count, and each corner's radius is its fillet's — so every
- * figure a real circuit is measured by becomes a knob rather than an
+ * figure in the target table below becomes a knob rather than an
  * emergent property.
  *
  * PLUS A WINDOWED WOBBLE, which is the part that is not obvious, and
@@ -35,13 +35,13 @@
  *
  * A filleted polygon has LITERAL straights, and half a lap of literal
  * straight reads as an infinite radius: the median came out at 76W
- * against a measured 31.5. So the long edges have to bend. A low-order
+ * against a target 31.5. So the long edges have to bend. A low-order
  * radial wobble does that without touching a 4W fillet, and it moved the
  * median into band immediately.
  *
- * It also bent EVERYTHING, which the median could not see. A quarter of a
- * real lap — 25.4% [14.2-39.7] at R >= 200W — is straight in the sense a
- * driver would recognise, and a global wobble left 11.5%, under the tenth
+ * It also bent EVERYTHING, which the median could not see. A quarter of
+ * the lap — 25.4% [14.2-39.7] at R >= 200W — has to be straight in the
+ * sense a driver would recognise, and a global wobble left 11.5%, under the tenth
  * percentile. So the wobble is WINDOWED: a raised sinusoid clipped at a
  * floor, active over part of the lap and exactly zero over the rest, with
  * the clip smooth enough that the window is not itself a corner.
@@ -71,9 +71,9 @@ export interface TrackOptions {
 }
 
 /**
- * The measured shape of a real circuit, and what each knob below is set
- * from. Medians over twenty-two circuits, length-weighted, with corners
- * counted as RUNS so a long bend is one corner rather than forty.
+ * The target shape, and what each knob below is set from. Medians are
+ * length-weighted, with corners counted as RUNS so a long bend is one
+ * corner rather than forty.
  *
  * Kept here as a comment rather than as code because nothing reads them
  * at runtime — the tuning happened once, offline, and `tests/
@@ -89,8 +89,8 @@ export interface TrackOptions {
  *
  * A CORNER IS A MAXIMAL RUN of frames under R = 12W, with no hysteresis
  * and no minimum length, so two bends with a frame of straight between
- * them are two corners. That is upstream's definition and it is crude on
- * purpose: tightening it to a 2W minimum run moves their population
+ * them are two corners. That is the rules' definition and it is crude on
+ * purpose: tightening it to a 2W minimum run moves the population
  * figure from 18 corners to 15, which is not enough to matter. Entry is
  * the run's first frame in racing order and severity is its tightest
  * radius, which is what L-2 and L-3 assume.
@@ -215,7 +215,7 @@ function fillet(V: readonly Pt[], seed: number): Pt[] {
 /** The half-width the corner radii above were tuned against. */
 const DEFAULT_HALF_WIDTH = 9;
 
-/** A closed racetrack centreline, shaped like a measured circuit. */
+/** A closed racetrack centreline, shaped to the targets above. */
 export function makeTrackSpline(opts: TrackOptions = {}): Spline {
   const halfWidth = opts.halfWidth ?? DEFAULT_HALF_WIDTH;
   const count = opts.samples ?? 1440;

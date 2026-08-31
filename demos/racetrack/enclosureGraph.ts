@@ -34,7 +34,7 @@
  * POSTCONDITION instead; so is this. What must hold is what L-6 actually
  * says: no stretch starts inside a corner tighter than
  * `noStartTighterThanW` or within `flareW` before one, no two come within
- * `separationW`, every length is a draw from the source's own quantiles,
+ * `separationW`, every length is a draw from the vocabulary's own quantiles,
  * and the covered total lands inside one draw of the budget.
  *
  * WHY THE CANDIDATES ARE BUILT UP FRONT. Only the CLASH test needs the
@@ -173,8 +173,8 @@ const SCRATCH = {
  *
  * `dressGraph.ts` argues for this repetition and `pathCoverage`'s own
  * description argues for it from the library's side: a measurement whose
- * whole value is that today's figure compares with one taken upstream must
- * not move when a placement rule is retuned. The suite pins the two equal.
+ * whole value is that today's figure compares with the one L-6 states
+ * must not move when a placement rule is retuned. The suite pins the two equal.
  */
 export const HEAVY_W = 10;
 
@@ -204,9 +204,9 @@ export const PLAN_PIN = "carry";
  *
  * EVERYTHING HERE IS A PURE FUNCTION OF THE ASSET, which is why it is
  * built once in TypeScript rather than per tile in the graph.
- * `coverCandidates` is already a filter over the kit -- what the source
- * put above the corridor and wide enough to reach across it -- and the
- * floors, the base height and the column count are each one line of
+ * `coverCandidates` is already a filter over the kit -- what the
+ * vocabulary puts above the corridor and wide enough to reach across it --
+ * and the floors, the base height and the column count are each one line of
  * arithmetic over one asset. Computing them here makes the graph side a
  * gather of six columns instead of six expressions repeated per piece.
  */
@@ -224,9 +224,9 @@ export const COVER_ASSET = {
   /**
    * Where its CENTRE sits so that its BASE clears the corridor.
    *
-   * `max(measured median, ceilingW + tall/2)` -- the reference's
-   * expression, and its comment is the reason it is not just the measured
-   * height: a piece whose centre sits at 1.4W and is 0.6W thick reaches
+   * `max(height median, ceilingW + tall/2)` -- the reference's
+   * expression, and its comment is the reason it is not just that median:
+   * a piece whose centre sits at 1.4W and is 0.6W thick reaches
    * down to 1.1W, inside the protected volume, and Z-1 would then stand it
    * off to the corridor edge and put a hole in the roof exactly where the
    * driver looks. Raising it here is what makes cover exempt from Z-1
@@ -241,8 +241,8 @@ export const COVER_ASSET = {
    *
    * BESIDE THE FLOORED ONES AND NOT INSTEAD OF THEM, because the two are
    * asked different questions. `alongW` and `acrossW` carry the floors the
-   * tiling needs -- an asset measured at zero along would tile for ever --
-   * while a PLACEMENT carries what the asset actually measures, which is
+   * tiling needs -- an asset whose length reads zero would tile for ever --
+   * while a PLACEMENT carries the asset's actual extents, which is
    * what its boxes are built from. Floor the placement's extents and every
    * cover piece narrower than 0.2W is drawn wider than it is.
    */
@@ -280,8 +280,8 @@ export const PIECE = {
  *
  * The weights are the kit's and never change, so the cumulative table is
  * built here and the graph carries only the comparisons. `max(1,
- * instances)` is the reference's floor, so an asset the source placed
- * once and an asset it never placed still get a chance.
+ * instances)` is the reference's floor, so an asset the vocabulary lists
+ * once and an asset it lists none of still get a chance.
  */
 function pickIndexField(u: Field, weights: readonly number[]): Field {
   let total = 0;
@@ -299,7 +299,7 @@ function pickIndexField(u: Field, weights: readonly number[]): Field {
 }
 
 /**
- * A stretch length from the source's own quantiles: `drawStretchLengthW`
+ * A stretch length from the vocabulary's own quantiles: `drawStretchLengthW`
  * as one expression.
  *
  * INTERPOLATED IN LOG SPACE ABOVE THE MEDIAN, which is the reference's
@@ -920,7 +920,7 @@ export function coverCloud(
     ord.set(i, i);
     id.set(i, a.id);
     // The two floors are the reference's, and they are floors rather than
-    // guards: an asset measured at zero along would tile for ever.
+    // guards: an asset whose length reads zero would tile for ever.
     const alongW = Math.max(0.3, a.size.along);
     const acrossW = Math.max(0.2, a.size.across);
     along.set(i, alongW);
@@ -1304,7 +1304,7 @@ export const BUDGET = {
  * WHAT THE RULE ASKS FOR IS THE TAIL, NOT THE TOTAL, and that is why this
  * takes two numbers rather than one. The ordinary dressing on an
  * overhead-rich kit already runs a fifth of the lap under something -- but
- * in fifty-odd SHORT stretches, where the source holds 39% of its covered
+ * in fifty-odd SHORT stretches, where the vocabulary holds 39% of its covered
  * length in the few longer than 10W. The total can be right while the
  * shape is wrong, and what enclosure supplies is the long stretches the
  * incidental cover never produces.
@@ -1507,8 +1507,8 @@ function writeBudgetFromRuns(
   }
 
   // TWO TARGETS, AND THE FIRST DRAFT OF THE RULE COLLAPSED THEM INTO ONE.
-  // L-6 asks for a total (10-25% of lap, population median 10.5%) and the
-  // measurement behind it carries a shape (39% of covered length in
+  // L-6 asks for a total (10-25% of lap, 10.5% at its middle) and the
+  // distribution behind it carries a shape (39% of covered length in
   // stretches longer than 10W). Solving only for the shape gives
   // `(f*total - long)/(1 - f)`, which is correct arithmetic and wrong: on
   // a lap with NO cover it returns zero, because 39% of nothing is
@@ -1686,7 +1686,7 @@ export interface CoverTrimOptions {
  *
  * WHY IT TAKES A WHOLE STRETCH RATHER THAN THE MOST CENTRAL PIECES is
  * `reduceEnclosure`'s own finding and worth restating, because the
- * arithmetic below looks like it could shave: of the enclosure exemplar's
+ * arithmetic below looks like it could shave: of an enclosed lap's
  * 124 covered frames only 11 are roofed by a SINGLE object, the median has
  * three holders and the p90 has six. TILED COVER IS REDUNDANT COVER, so
  * removing one piece costs a placement and opens no sky nine times in ten.

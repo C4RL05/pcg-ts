@@ -2,31 +2,30 @@
  * The station process, held to the published dispersion curve.
  *
  * WHY THE CURVE AND NOT A SINGLE NUMBER. "How clumped is this" has a
- * different answer at every scale, and the source's answer is a SHAPE:
+ * different answer at every scale, and the published answer is a SHAPE:
  * it climbs from a 2W window to about 16-24W and then stops. Two
  * mechanisms that fail this test pass a single-window one — a lap-scale
  * envelope keeps climbing to 38 and 60, and a single level of clustering
  * flattens to about 1.9 everywhere. Both would score correctly at one
- * window chosen badly, which is why the rule was restated twice upstream
- * before becoming a curve.
+ * window chosen badly, which is why the rule was restated twice before
+ * becoming a curve.
  *
  * AND WHY THE SHAPE AND NOT THE VALUES. The published row is a median
- * over circuits whose p10-p90 at a 32W window is [1.7, 26.4]. A lap
+ * whose p10-p90 at a 32W window is [1.7, 26.4]. A lap
  * landing on 6.63 there is no more expected than one at 2 or at 20, so
  * the values are reported and bracket-checked while the SHAPE is what is
  * actually gated. The two negatives below are the reason that is enough:
  * both wrong mechanisms are wrong in shape, and both sit comfortably
  * inside those brackets while being wrong.
  *
- * MEASURED AT UPSTREAM'S WIDTHS AND WITH UPSTREAM'S DEFINITION —
+ * MEASURED AT THE PUBLISHED WIDTHS AND WITH THE PUBLISHED DEFINITION —
  * 2/4/8/16/32/64/128 W, variance-to-mean of the count in a window,
  * Poisson null at 1.0. Not because those widths are special but because
  * they are the ones the published table uses, and two curves at different
  * widths are two statistics.
  *
  * AVERAGED OVER SEEDS. At a 128W window a 347W lap holds two bins, so one
- * seed's figure there is nearly meaningless; the source's own circuits
- * are 286-443W and had the same problem. The gate is on the mean over
+ * seed's figure there is nearly meaningless. The gate is on the mean over
  * eight laps, and the per-seed spread is reported so nobody reads the
  * mean as a promise about one lap.
  */
@@ -64,7 +63,7 @@ function meanCurve(lapW = LAP_W): number[] {
 }
 
 describe("the station process", () => {
-  it("reports its curve against the source", () => {
+  it("reports its curve against the published row", () => {
     const got = meanCurve();
     const row = (label: string, v: readonly number[]): string =>
       label.padEnd(9) + v.map((x) => x.toFixed(2).padStart(7)).join("");
@@ -84,16 +83,16 @@ describe("the station process", () => {
    * INSIDE THE BRACKETS, NOT ON THE MEDIAN — and the difference is the
    * whole point.
    *
-   * The published row is a median over circuits whose p10-p90 at a 32W
+   * The published row is a median whose p10-p90 at a 32W
    * window is [1.7, 26.4]: a fifteen-fold range. An earlier version of
    * this file gated each window within 25% of the median, which would
    * have been fitting to the centre of a distribution that wide — a
-   * target no real circuit is expected to hit, easy to reach by accident,
-   * and meaningless when reached. The brackets are what the source
+   * target no lap is expected to hit, easy to reach by accident,
+   * and meaningless when reached. The brackets are what the curve
    * actually constrains.
    */
   it.each(DISPERSION_WINDOWS_W.map((w, i) => [w, i] as const))(
-    "sits inside the source's spread at a %iW window",
+    "sits inside the published spread at a %iW window",
     (_w, i) => {
       const got = meanCurve()[i];
       const [lo, hi] = DISPERSION_SPREAD[i];
@@ -106,9 +105,9 @@ describe("the station process", () => {
    * THE SHAPE, ASSERTED SEPARATELY FROM THE VALUES.
    *
    * Every window could sit inside its tolerance while the curve did
-   * something the source never does — and the two failure modes upstream
-   * names are both shape failures rather than value failures. So the
-   * climb and the plateau are checked as relations, which no amount of
+   * something the published curve never does — and the two failure modes
+   * the rule names are both shape failures rather than value failures. So
+   * the climb and the plateau are checked as relations, which no amount of
    * per-window slack can satisfy by accident.
    */
   it("climbs to the middle scales and then stops", () => {
@@ -125,7 +124,7 @@ describe("the station process", () => {
     // 64W AND 128W ARE THE DIAGNOSTIC WINDOWS, and worth knowing if an
     // envelope is ever suspected of having crept back in. A depth-1.0
     // lap-period envelope reads 1.9 / 2.8 / 4.5 / 9.8 / 17.7 / 38.3 /
-    // 60.2 — inside the source's p90 from 2W through 32W, and outside it
+    // 60.2 — inside the published p90 from 2W through 32W, and outside it
     // only at the last two, which is exactly where a swell puts its
     // variance and the only place the brackets are narrow relative to it.
     // Everything narrower will look fine.
@@ -192,14 +191,15 @@ describe("the station process", () => {
    * And it is the ONLY thing that catches a mild envelope. A depth-1.0
    * one is caught by the brackets, but late — only at 64W and 128W. One
    * mild enough to sit inside every bracket is invisible to them at every
-   * width, and the envelope built below is that kind. Upstream names two mechanisms that read as
-   * the same rule and are not, and both were built and measured
-   * downstream before being ruled out — so they are the exact shapes this
-   * has to reject. Building them here and watching the gate refuse them
-   * is the same discipline as the shuffled hop and the random-mask fill:
-   * an instrument that has never said no has not been shown to work.
+   * width, and the envelope built below is that kind. The rule names two
+   * mechanisms that read as the same rule and are not, and both were built
+   * and measured downstream before being ruled out — so they are the exact
+   * shapes this has to reject. Building them here and watching the gate
+   * refuse them is the same discipline as the shuffled hop and the
+   * random-mask fill: an instrument that has never said no has not been
+   * shown to work.
    */
-  describe("the shapes the source does not have", () => {
+  describe("the shapes the curve does not have", () => {
     const shape = (stations: readonly number[]): { climbs: boolean; stops: boolean } => {
       const c = dispersionCurve(stations, LAP_W);
       const at = (w: number): number => c[DISPERSION_WINDOWS_W.indexOf(w as never)];

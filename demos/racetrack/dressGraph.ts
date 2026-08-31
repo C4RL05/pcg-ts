@@ -6,7 +6,7 @@
  * height, and which recorded pose of that asset to draw. Level 1 owns the
  * GEOMETRY: turning each of those rows into oriented boxes, keeping them
  * out of the corridor, and measuring what the result does to the lap.
- * That is the half a game streams per cell, so it is the half that has to
+ * That is the half a streamed world produces per cell, so it is the half that has to
  * cook, cache, partition and lower like everything else in this library
  * rather than being a synchronous pass a page runs once.
  *
@@ -363,7 +363,7 @@ export const DRESS_OUTPUTS = {
  * `enclosure.ts` already argues why its copy is restated rather than
  * imported from `zones.ts`: those are placement rules that may be
  * retuned, this is a measurement whose whole value is that a figure taken
- * today compares with one taken upstream, and a measurement that moves
+ * today compares with the one L-6 states, and a measurement that moves
  * when a rule is tuned measures the tuning. `pathCoverage`'s own `far`
  * description makes the same argument from the library's side — "prefer
  * restating the number here to importing it from whatever placed the
@@ -692,7 +692,7 @@ const BOX = {
 /**
  * The smallest world extent a box may have. `dress.ts`'s own floor.
  *
- * Three quarters of a measured kit is single-sided surface, so a box's
+ * Three quarters of the vocabulary is single-sided surface, so a box's
  * depth is frequently exactly zero. A zero extent is a degenerate slab
  * that the ray test answers containment for rather than crossing, and it
  * draws as nothing — so `buildBoxes` floors it, and this has to floor it
@@ -945,15 +945,15 @@ export interface DressGraphInput {
 }
 
 /**
- * One entry of the pose library: the boxes of one recorded instance.
+ * One entry of the pose library: the boxes of one instance.
  *
  * A POSE IS THE UNIT, NOT AN ASSET, and that is the whole reason this
- * table exists. The kit format stores no rotation, so an asset carries
+ * table exists. The kit format states no rotation, so an asset carries
  * one representative box set and stamping every copy from it faces every
- * object the same way round the lap. Every recorded INSTANCE carries its
+ * object the same way round the lap. Every INSTANCE carries its
  * own correct boxes, though — on the shipped vocabulary 362 instances
- * give 361 distinct sets — so the yaw the format never stored survives in
- * the shapes, and a placement draws one of them. `buildBoxes` says the
+ * give 361 distinct sets — so the yaw the format does not state survives
+ * in the shapes, and a placement draws one of them. `buildBoxes` says the
  * same thing at greater length; this restates it because `kitIndex` is
  * private to `dress.ts` and the two derivations have to agree. That they
  * do is what the box comparison in the test actually proves.
@@ -965,7 +965,7 @@ export interface DressGraphInput {
  * a column moves.
  */
 export interface PoseLibrary {
-  /** Asset id -> the pose ids recorded for it, in the kit's own order. */
+  /** Asset id -> the pose ids it carries, in the kit's own order. */
   readonly posesOf: Map<number, number[]>;
   /** Pose id -> its boxes. Index IS the id. */
   readonly boxes: LooseBoxes[];
@@ -1008,7 +1008,7 @@ export function poseLibrary(kit: Kit): PoseLibrary {
   }
 
   // The catalogue's own fallbacks, in `buildBoxes`' order of preference:
-  // an asset with recorded instances never reaches these, and one without
+  // an asset with instances of its own never reaches these, and one without
   // has only these. Registered under ids of their own so that the pose a
   // placement selects is always one lookup into one table.
   //
@@ -1049,14 +1049,14 @@ function poseFor(lib: PoseLibrary, p: StationedPlacement, seed: number): number 
  * The asset id of one placement, keyed by the pose its boxes come from.
  *
  * BY POSE AND NOT BY ASSET, because the pose is what decides the shape.
- * One kit asset can be recorded in several poses with different box
+ * One kit asset can carry several poses with different box
  * decompositions, so `kit:42` names a thing that does not have one
  * geometry and an asset map keyed by it would have to pick. The pose id
  * already answers exactly the question a mesh is the answer to.
  *
  * COVER IS ITS OWN VOCABULARY rather than a flag beside the id, which is
  * `spawn.ts`'s argument for `boxAssetId` and holds unchanged one
- * granularity up: a tunnel rib and a verge post can be the same measured
+ * granularity up: a tunnel rib and a verge post can be the same
  * boxes and are not the same thing to look at. The two ids may share a
  * geometry -- they do today -- but they are separate keys, so a map that
  * wants to draw structure differently from scenery can, without this
@@ -1196,7 +1196,7 @@ function placementCloudInTrackCoords(
   // placement belongs to no enclosure run, and a column filled by
   // `mergePoints`' default would say it belongs to the one starting at
   // station zero. -1 is the same "no such thing" this file uses for a
-  // pose the kit never recorded.
+  // pose the kit does not carry.
   const noRun = pts.add(PLACEMENT.coverRun, "f32", 1);
   const asset = pts.add(PLACEMENT.asset, "string", 1);
 
@@ -2585,7 +2585,7 @@ function writeCorridor(g: Graph, tag: string): { head: NodeHandle; tail: NodeHan
  * `rot` IS `orientAlongVector` WITH AXIS `+y`, WHICH IS NOT A PREFERENCE.
  * The frame a box has to be axis-aligned in is (across, along, up) as the
  * matrix's columns — local X across, local Y along, local Z up — because
- * that is the frame the kit measured its boxes in. `+y` puts the local Y
+ * that is the frame the kit's boxes are given in. `+y` puts the local Y
  * on `direction`, and for the ±y axes the node's own contract is that
  * local +Z takes the up hint. So `direction: along` and `up: up` give
  * exactly those three columns, and the node's up-hint construction
@@ -2914,10 +2914,10 @@ function writeSightlineCull(
  *
  * AND THE RULE IS INVENTED, WHICH THIS FILE MUST NOT LAUNDER. `falseEdges.ts`
  * says so at length: the divergence band in particular survived a test that
- * REFUTED its other half — 5 of 17 measured runs diverge, at p = 0.264 —
- * so `[0.02, 0.3]` is a choice about what a driver misreads and not a fact
- * about the source. Stating it as nodes makes it cook; it does not make it
- * measured.
+ * REFUTED its other half — 5 of 17 runs in the vocabulary diverge, at
+ * p = 0.264 — so `[0.02, 0.3]` is a choice about what a driver misreads
+ * and not a fact about the vocabulary. Stating it as nodes makes it cook;
+ * it does not make it evidence.
  *
  * THE SEAM IS A RING, WHICH IS WHY `wrap` IS ON AND `period` IS STATED.
  * `edgeRuns` scans each side as one closed ring — a run that straddles the
@@ -3189,7 +3189,7 @@ function bandField(tW: Field, hW: Field): Field {
  * affinities a curvature bucket weighs by, and the quantiles a lateral is
  * drawn from. The second also has to know whether an asset can REACH the
  * band being filled, whether the corner language reserved it, and which
- * recorded poses it has — none of which a station cares about, and all of
+ * poses it has — none of which a station cares about, and all of
  * which are properties of the POOL rather than of any placement, so they
  * are computed once here and never in the graph.
  */
@@ -3311,7 +3311,7 @@ export function mixPoseCloud(
 ): Geometry {
   const ids: number[] = [];
   for (const a of pool) for (const id of lib.posesOf.get(a.id) ?? []) ids.push(id);
-  // A pool with no recorded pose anywhere still needs a row: over an EMPTY
+  // A pool with no pose anywhere still needs a row: over an EMPTY
   // source `transferByIndex` misses every point under all three settings,
   // and a miss leaves the destination's PRIOR value — which here would be
   // a pose belonging to the asset the placement is no longer using.
@@ -3395,8 +3395,8 @@ function perBand(dst: Field, of: (band: Band) => number): Field {
  *
  * THE HALF `quotaRebalance` DELIBERATELY DOES NOT DO. The quota names the
  * placements that must change band; this draws each of them a new asset
- * from the pool, a lateral and a height from that asset's own measured
- * distribution, and a recorded pose to give it a shape. Every one of those
+ * from the pool, a lateral and a height from that asset's own
+ * distribution, and a pose to give it a shape. Every one of those
  * is a pure function of one placement and the pool, which is why it can be
  * a chain of nodes at all — and why it had to wait for the decision, which
  * is a fact about the whole lap and could not.
@@ -3486,9 +3486,9 @@ function writeBandRedraw(
   const usable = mul(ge(dst, 0), perBand(dst, (b) => (bandPools[MIX_BANDS.indexOf(b)] ? 1 : 0)));
 
   // The candidate pool, transcribed: reserved assets are out, an asset with
-  // no recorded pose is out, `over` additionally refuses anything that
+  // no pose is out, `over` additionally refuses anything that
   // would not fit under the overhead ceiling, and what is left has to REACH
-  // the band — its measured laterals must overlap it, or the clamp below
+  // the band — its laterals must overlap it, or the clamp below
   // would put the piece where its own instances never sat.
   const reachLo = attribute(MIX_ASSET.reachLo);
   const reachHi = attribute(MIX_ASSET.reachHi);
@@ -3578,7 +3578,7 @@ function writeBandRedraw(
   // comes from the asset's whole distribution and the band is a slice of
   // it, so most draws miss — arithmetic rather than bad luck. What the rule
   // wants is a placement of THIS asset in THAT band, and the asset was
-  // chosen because its own instances are observed there, so the lateral is
+  // chosen because its own instances sit there, so the lateral is
   // clamped into the intersection. The band's top belongs to the band ABOVE
   // it, so the ceiling is approached and never touched.
   const clampLo = max(blo, reachLo);
@@ -3629,8 +3629,8 @@ function writeBandRedraw(
     [
       MIX.commit,
       // `poseId >= 0` IS THE BACKSTOP AND NOT THE GUARD, which is worth
-      // saying because it reads like the guard. An asset with no recorded
-      // pose has `floor(u * 0) = 0`, so its slot is the NEXT asset's first
+      // saying because it reads like the guard. An asset with no pose
+      // has `floor(u * 0) = 0`, so its slot is the NEXT asset's first
       // pose — a perfectly valid id, and `outOfRange: "clamp"` never
       // engages. What actually keeps such an asset out of the draw is
       // `eligible`'s `poseCount > 0`, upstream in the weight. This term
@@ -4233,7 +4233,7 @@ function writeCopyScale(
 }
 
 /**
- * The box build: each placement takes the boxes of the pose it recorded.
+ * The box build: each placement takes the boxes of the pose it drew.
  *
  * WHY IT IS A SELECTION RATHER THAN A LOOKUP, which is the one thing
  * about this file that should not be copied without reading this
@@ -4596,7 +4596,7 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   const library = poseCloud(lib, lap.halfWidth);
 
   // L-6 DRAWS FROM THE WHOLE KIT, NOT FROM THE POOL. `dressLap` passes
-  // `all` to `placeEnclosure` -- every asset the source placed somewhere --
+  // `all` to `placeEnclosure` -- every asset the vocabulary places somewhere --
   // where the ordinary dressing draws from `pool`, which has had L-2 and
   // L-3's corner vocabulary reserved out of it. Cover is a different
   // question from scenery and a marker's exclusion from one says nothing
@@ -4642,7 +4642,8 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   // Handed none, {@link addLapPlacements} decides them from the path --
   // stations, D-4's coverage repair, the asset choice, the assembly -- and
   // the graph becomes a thing that can be serialized and re-run against
-  // another spline, which is the only version of it a game could ship.
+  // another spline, which is the only version of it a real-time host could
+  // ship.
   //
   // NOT A MODE, AND THE STAGES BELOW CANNOT TELL. Both branches end on a
   // cloud carrying exactly the same columns -- asserted, in
@@ -5531,7 +5532,7 @@ function writeCoverPlacements(
     {
       name: SCRATCH_POSE,
       tupleSize: 1,
-      // A CANDIDATE THE KIT RECORDED NO POSE FOR IS SENT TO ROW -1, not to
+      // A CANDIDATE THE KIT CARRIES NO POSE FOR IS SENT TO ROW -1, not to
       // its own offset. The first draft floored the count at one and let
       // the modulo produce 0, which indexes `poseOff` exactly -- the NEXT
       // candidate's first pose, a real pose id belonging to a different

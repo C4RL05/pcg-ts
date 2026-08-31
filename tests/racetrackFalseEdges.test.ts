@@ -1,12 +1,12 @@
 /**
  * L-5: no false edges.
  *
- * THE RULE UPSTREAM EXPECTED TO BE WRONG. Half of it is confirmed and
+ * THE RULE THAT WAS EXPECTED TO BE WRONG. Half of it is confirmed and
  * half of it is refuted, and the refuted half is the half I first
  * reported from two runs on one circuit — which is exactly why the
  * pooled sweep was worth asking for.
  *
- * ACROSS ALL TWENTY-TWO CIRCUITS, seventeen qualifying runs, against a
+ * ACROSS THE WHOLE CATALOGUE, seventeen qualifying runs, against a
  * null that keeps the stations and shuffles the offsets:
  *
  *   worst residual   0.063W real vs 0.237W null   p < 0.002
@@ -14,7 +14,7 @@
  *   diverging        5 of 17 vs 7 of 17           p = 0.264
  *
  * The lines are real and deliberately assembled. THE NON-DIVERGENCE IS
- * NOT: a third of the originals' verge lines are false edges by L-5's own
+ * NOT: a third of the catalogue's own verge lines are false edges by L-5's own
  * definition. Seventeen runs at a 41% null rate would have given
  * p = 0.0006 had none diverged, so this is a test that could have
  * confirmed the rule and did not — not an underpowered one.
@@ -147,7 +147,7 @@ describe("what counts as a false edge", () => {
   });
 
   it("permits the same line when it runs parallel", () => {
-    // THE DISTINCTION THE WHOLE RULE TURNS ON, and the thing the source
+    // THE DISTINCTION THE WHOLE RULE TURNS ON, and the thing the catalogue
     // actually does: a continuous line at the same height in the same
     // band is fine as long as it keeps its distance. A detector that
     // flagged this would forbid barriers.
@@ -248,7 +248,7 @@ describe("breaking a false edge", () => {
     // The rule names its own fix: diverging ground detail sits below
     // h = 0.2W or beyond |t| = 2.5W. Straightening the line instead would
     // put a placement at a lateral its own asset never sat at, and every
-    // other rule here draws laterals from measurement.
+    // other rule here draws laterals from the vocabulary.
     const r = repairFalseEdges(line, lapW);
     const moved = r.log.map((m) => r.placements[m.index]);
     for (const p of moved) {
@@ -339,9 +339,9 @@ describe.skipIf(!KIT)("false edges on a generated lap", () => {
           `A barrier is a REGULAR RUN, not dense furniture, and this demo builds neither: ` +
           `it declines to produce a diverging line rather than producing an assembled one.`,
         `L-5, in Z2-Z3 at h ${FALSE_EDGE.heightW[0]}-${FALSE_EDGE.heightW[1]}W. ` +
-          `Pooled over 22 source circuits: 17 qualifying runs. Residual 0.063W real vs 0.237W ` +
+          `Pooled over the catalogue's own placements: 17 qualifying runs. Residual 0.063W real vs 0.237W ` +
           `null (p<0.002) — the lines are real. Diverging 5 of 17 vs 7 expected (p=0.264) — ` +
-          `the non-divergence is NOT the source's, it is ours.`,
+          `the non-divergence is NOT the catalogue's, it is ours.`,
         ...rows,
       ].join("\n"),
     );

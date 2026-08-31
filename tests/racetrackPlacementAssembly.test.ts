@@ -5,7 +5,7 @@
  * lap's dressing in TypeScript and `placementCloudInTrackCoords` turns the
  * answer into a cloud; `buildDressGraph` then binds that cloud in with
  * `dataInput`. Every rule downstream of it has been a graph stage for
- * weeks, so what stops a game generating a track from a serialized graph
+ * weeks, so what stops a host generating a track from a serialized graph
  * and a spline is no longer a missing rule — it is that the LIST is data
  * in the graph rather than something the graph decides.
  *

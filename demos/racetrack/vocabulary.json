@@ -1,5 +1,5 @@
 {
- "note": "Dimensional vocabulary for demos/racetrack: per-asset bounding-box decompositions and the placement statistics the rules read. Measurements of objects, not the objects. No level layout and no source identifiers — see scripts/gen-racetrack-vocabulary.mjs.",
+ "note": "Dimensional vocabulary for demos/racetrack: per-asset bounding-box decompositions and the placement statistics the rules read. Dimensions and placement statistics, not geometry. No level layout — see scripts/gen-racetrack-vocabulary.mjs.",
  "units": {
   "length": "track half-widths (W)",
   "axes": "across (right of travel), along (racing direction), up (surface normal)",

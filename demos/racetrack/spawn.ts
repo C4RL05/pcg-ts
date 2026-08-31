@@ -13,7 +13,7 @@
  *
  * TWO CLOUDS, BECAUSE THERE ARE TWO GRANULARITIES and the demo needs
  * both. A placement is ONE object — a gantry, a grandstand — and that is
- * what a game's art binds to. But the measured kit describes each of
+ * what a renderer's art binds to. But the catalogue describes each of
  * those as a handful of boxes, and the boxes are what this page has ever
  * been able to draw. So:
  *
@@ -42,7 +42,7 @@ export const ASSET_ATTR = "asset";
 /**
  * The asset id every point falls back to.
  *
- * `PlacedBox.role` is INFERRED rather than measured (`kit.ts`), so a box
+ * `PlacedBox.role` is INFERRED rather than stated (`kit.ts`), so a box
  * whose role could not be worked out arrives as `"mass"` already. Naming
  * the same value here means the fallback and the common case are one
  * entry in the asset map rather than two that must agree.
@@ -54,7 +54,7 @@ export const DEFAULT_ASSET = "mass";
  * answer for.
  *
  * A CLOSED SET, DELIBERATELY. `PlacedBox.role` comes from the kit file,
- * which is external measured data this repository does not contain and
+ * which is an optional local file this repository does not contain and
  * cannot constrain — so a kit carrying a role nobody anticipated would
  * otherwise reach `toInstancedMeshes` as an unknown asset id and throw,
  * taking the page down over a label. {@link boxAssetId} folds anything
@@ -70,7 +70,7 @@ const KNOWN_ROLES: ReadonlySet<string> = new Set(BOX_ROLES);
  * The asset id of one box.
  *
  * COVER IS ITS OWN VOCABULARY, not a flag on the scenery's. A tunnel rib
- * and a verge post can be the same measured box and are not the same
+ * and a verge post can be the same box and are not the same
  * thing to look at: one is structure over the racing line, the other is
  * something standing beside it. `legibility.ts` makes exactly this
  * argument for marking cover rather than inferring it, and the id has to
@@ -92,7 +92,7 @@ export function boxAssetIds(): string[] {
  * PREFIXED, BECAUSE THE KIT'S IDS ARE BARE INTEGERS. An asset id is a
  * string an asset map is keyed by, and `"42"` says nothing about where it
  * came from or what would answer for it — while `"kit:42"` says it is the
- * forty-second asset of the measured kit, which is exactly the fact a
+ * forty-second asset of the catalogue, which is exactly the fact a
  * person binding a mesh to it needs. It also keeps the placement ids in a
  * different namespace from the box roles, so the two maps can never
  * silently answer each other's questions.
@@ -198,8 +198,7 @@ export function boxCloud(boxes: readonly PlacedBox[]): Geometry {
  * ONE OBJECT, NOT ITS BOXES. `asset` is the kit's own asset id, `P` and
  * `rot` are the track frame at the placement's own (station, t, h), and
  * `scale` is left at 1 because a real prop carries its own size and being
- * scaled to a measured bounding box is precisely what would make it
- * wrong.
+ * scaled to a bounding box is precisely what would make it wrong.
  *
  * IT DRAWS NOTHING TODAY, and that is not a defect. The asset map has no
  * entry for any kit asset id, because the assets do not exist yet. What

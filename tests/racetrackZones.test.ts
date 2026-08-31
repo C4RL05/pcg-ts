@@ -5,7 +5,7 @@
  *
  * Z-1's corridor obviously is: nothing may be inside it, ever. Z-3's band
  * mix reads as a distribution — six shares with ranges around them — and
- * sampling at the source's own share puts `mid` at 40.6% on one lap in
+ * sampling at the vocabulary's own share puts `mid` at 40.6% on one lap in
  * eight against a stated ceiling of 40. A lap outside the range has
  * broken the rule however faithfully the sampler was aimed, so the mix is
  * sampled for its variation and then REPAIRED into range, exactly as D-4
@@ -13,11 +13,10 @@
  * distribution's clothes over a threshold, and the distinction is now
  * worth checking for by default.
  *
- * ONE CAUTION CARRIED FROM UPSTREAM: Z-3's figures come from the exemplar
- * circuit rather than from the population, and that circuit has now sat
- * high or outside on straightness, density and curvature-bucket share. A
- * miss here is a question about the reference before it is a question
- * about the placement.
+ * ONE CAUTION ABOUT Z-3: its band is narrow, and a catalogue variant can
+ * sit high or outside on straightness, density and curvature-bucket
+ * share. A miss here is a question about the catalogue before it is a
+ * question about the placement.
  */
 import { describe, expect, it } from "vitest";
 import { bandOfPlacement } from "../demos/racetrack/assets.js";
@@ -177,7 +176,7 @@ describe("the corridor", () => {
    */
   it.each([
     [0.0, "on the centreline"],
-    [0.24, "at the source's median reach"],
+    [0.24, "at the vocabulary's median reach"],
     [0.6, "half way out"],
     [-0.9, "just inside, left"],
   ])("resolves a conflict at t=%s (%s)", (t) => {

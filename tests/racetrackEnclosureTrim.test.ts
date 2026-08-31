@@ -399,7 +399,7 @@ const TWIN_LIFT_W = 0.01;
  * higher — same asset, same lateral, same STATION, so the same shadow and
  * the same run, now with two members in it and still the shortest thing the
  * trim will look at. That is the file's own standing lesson applied to
- * itself: an exemplar chosen for one property will silently fail to exercise
+ * itself: a fixture chosen for one property will silently fail to exercise
  * the rules that depend on the others.
  */
 async function overEnclosed(): Promise<{

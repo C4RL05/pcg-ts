@@ -8,8 +8,8 @@
  * downstream has to be retyped when the sampling changes. The PLACEMENT
  * RULES are not settled: `dressVerges` below places one row per side at
  * an even spacing, which is the least interesting thing a roadside can
- * be, and is deliberately the one part written to be thrown away when the
- * spec lands.
+ * be, and is deliberately the one part written to be thrown away once a
+ * rule has an opinion about where things go.
  *
  * THE SPLINE ARRIVES AS DATA, not as a generated loop. `dataInput` is the
  * seam: the host builds the centreline (`spline.ts`), wraps it in a
@@ -44,7 +44,7 @@ export interface RoadOptions {
   readonly spline: Spline;
   /** Frames placed around the lap — the resolution every rule reads. */
   readonly frames?: number;
-  /** Prop stations per lap, per side. Placeholder until the spec lands. */
+  /** Prop stations per lap, per side. A flat count: nothing varies it yet. */
   readonly propStations?: number;
   /** Gap between the road edge and the first row of dressing, in world units. */
   readonly verge?: number;
@@ -58,7 +58,7 @@ export const OUTPUTS = {
   frames: "frames",
   /** The road surface swept along it. */
   road: "road",
-  /** Roadside dressing — points today, instances once the spec lands. */
+  /** Roadside dressing — points today, instances once a rule picks what stands. */
   props: "props",
 } as const;
 
@@ -77,9 +77,9 @@ export const OUTPUTS = {
  * THE ORDER OF THE CROSS IS THE CONTRACT, not a preference. `cross(up,
  * tangent)` points LEFT of travel in a right-handed Y-up frame — check it
  * with tangent +Z and up +Y and you get +X, which is the driver's left.
- * The kit this demo is built to dress states `lateral` as positive to the
- * RIGHT of travel, so the operands are this way round and must stay this
- * way round. Getting it backwards mirrors every placement about the
+ * The vocabulary the dressing rules read states `lateral` as positive to
+ * the RIGHT of travel, so the operands are this way round and must stay
+ * this way round. Getting it backwards mirrors every placement about the
  * centreline, which on a symmetric-looking lap is a silent failure: it
  * costs nothing to read and everything to notice.
  */
@@ -105,7 +105,7 @@ function dressVerges(
   const row = g.add(pathResample, { mode: "count", count: opts.stations }, "propRow");
   g.connect(frames, "out", row, "in");
 
-  // The sign IS the kit's `lateral`: positive is right of travel, because
+  // The sign IS the vocabulary's `lateral`: positive is right of travel, because
   // ACROSS points right. `side` is written with that sign rather than a
   // left/right word, so the placeholder already speaks the coordinate the
   // real rules are stated in.

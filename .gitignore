@@ -27,14 +27,13 @@ coverage/
 # the next clone gets a dangling submodule reference it cannot resolve.
 .claude/worktrees/
 
-# The measured kit, if someone has put one here for the road demo to draw
-# as a reference layer. Derived measurement of a copyrighted game, living
-# outside both repositories: never ours to commit, and the page does
+# An optional local catalogue, if someone has put one here for the road
+# demo to draw as a reference layer. Local and optional: the page runs
 # without it.
 /kit.json
 
-# Where the measured kits live on THIS machine. The kits are measurements
-# of a commercial product and neither they nor their filenames belong in a
-# public checkout; see tests/support/kits.ts. Absent for almost everyone,
-# which is why every suite that needs one skips.
+# The local manifest naming where the catalogue files sit on THIS machine.
+# Machine-specific absolute paths, so it stays out of the checkout; see
+# tests/support/kits.ts. Absent for almost everyone, which is why every
+# suite that needs one skips.
 /road-kits.local.json

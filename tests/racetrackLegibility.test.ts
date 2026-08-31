@@ -133,7 +133,7 @@ describe.skipIf(!KIT)("L-4, landmark uniqueness", () => {
    * thing L-4 exists to prevent.
    *
    * One family covering everything is the documented failure of the
-   * originals' worst tracks (54% of placements from a single family), and
+   * catalogue's worst laps (54% of placements from a single family), and
    * a lap made entirely of repeats has no landmark anywhere. If the
    * detector cannot see that, its zero on a real lap means nothing.
    */
@@ -179,12 +179,12 @@ describe.skipIf(!KIT)("L-4, landmark uniqueness", () => {
  * built to break it. A marker rule that passes on a lap with the markers
  * deleted is not a rule.
  *
- * L-3 IS AN INVENTION and is tested as one. The source circuits have a
+ * L-3 IS AN INVENTION and is tested as one. A catalogue has a
  * median of ZERO verticals in the window it fills, so there is no
- * measurement to match — only the rule's own text, which asks for three
+ * figure to match — only the rule's own text, which asks for three
  * evenly spaced marks. What is checked is therefore that they are a
  * RULER: three of them, on one line, with a spacing CV of zero, against
- * the 0.46 the source manages by accident on the 4% of corners where
+ * the 0.46 the catalogue manages by accident on the 4% of corners where
  * three happen to fall there at all.
  */
 describe.skipIf(!KIT)("L-2 and L-3, the corner language", () => {
@@ -222,15 +222,15 @@ describe.skipIf(!KIT)("L-2 and L-3, the corner language", () => {
   }
 
   /**
-   * THE CANDIDATE SET, AND WHY IT IS NOT UPSTREAM'S.
+   * THE CANDIDATE SET, AND WHY IT IS NOT L-2'S STRICT ONE.
    *
-   * Their test is proportions AND a measured height median in 1-2W. On
+   * L-2's own test is proportions AND a height median in 1-2W. On
    * this kit that leaves exactly three assets — the bare minimum the
    * language needs — which makes the choice between them degenerate and
    * puts the rule one asset away from silently doing nothing. Proportions
    * alone leave eight. This test exists to keep both numbers visible, so
-   * that if their validator applies the strict form the difference is a
-   * known quantity rather than a surprise.
+   * that if a validator applies the strict form the difference
+   * is a known quantity rather than a surprise.
    */
   it("reports the vocabulary the kit can supply", () => {
     const loose = markerCandidates(all);
@@ -373,10 +373,10 @@ describe.skipIf(!KIT)("L-2 and L-3, the corner language", () => {
    * a number somebody downstream needs. L-3 always adds and pays by
    * displacing the most repeated ordinary placements from the same
    * window, so its net cost is the difference between two counts. And the
-   * `before` column is the contrast with the source: a median of zero
-   * verticals in the braking window, across 305 real corners.
+   * `before` column is the contrast with the vocabulary: a median of zero
+   * verticals in the braking window, across 305 corners.
    */
-  it("reports the budget drift and the contrast with the source", async () => {
+  it("reports the budget drift and the contrast with the vocabulary", async () => {
     const rows: string[] = [];
     for (const seed of [1, 2, 3, 4]) {
       const { lap, corners, markers, raw, lang } = await spoken(seed);
@@ -393,9 +393,9 @@ describe.skipIf(!KIT)("L-2 and L-3, the corner language", () => {
     console.log(
       [
         `L-2/L-3 cost. Source, over 305 corners tighter than R=${BRAKING.tighterThanW}W: ` +
-          `median ${BRAKING.sourceMedianCount} verticals in the window, ` +
-          `${(100 * BRAKING.sourceAnyShare).toFixed(0)}% have any, ` +
-          `${(100 * BRAKING.sourceThreeShare).toFixed(0)}% have three.`,
+          `median ${BRAKING.specMedianCount} verticals in the window, ` +
+          `${(100 * BRAKING.specAnyShare).toFixed(0)}% have any, ` +
+          `${(100 * BRAKING.specThreeShare).toFixed(0)}% have three.`,
         ...rows,
       ].join("\n"),
     );

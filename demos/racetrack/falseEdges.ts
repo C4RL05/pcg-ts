@@ -7,10 +7,10 @@
  * road. Diverging ground detail must sit below h = 0.2W or beyond
  * |t| = 2.5W.
  *
- * UPSTREAM CALLED THIS ONE INVENTED AND EXPECTED IT TO BE WRONG. The
- * answer, from a pooled sweep of all twenty-two circuits, is that half of
- * it is confirmed and half of it is refuted — and the half that is
- * refuted is the half I first reported.
+ * THIS ONE IS INVENTED, AND WAS EXPECTED TO BE WRONG. The answer, from
+ * a pooled sweep of the catalogue's own placements, is that half of it is
+ * confirmed and half of it is refuted — and the half that is refuted is
+ * the half I first reported.
  *
  * SEVENTEEN QUALIFYING RUNS, against a null that shuffles which lateral
  * goes with which station inside the band and side, so the runs form in
@@ -21,34 +21,34 @@
  *   lines diverging past 0.02            5 of 17       7 of 17       p = 0.264
  *
  * THE LINES ARE REAL. Four times tighter to a straight fit than chance,
- * and flatter than chance. The originals do build continuous horizontal
- * lines at exactly this height in exactly this band, and they are
- * assembled, not scattered.
+ * and flatter than chance. The catalogue's own placements do build
+ * continuous horizontal lines at exactly this height in exactly this
+ * band, and they are assembled, not scattered.
  *
  * THE NON-DIVERGENCE IS NOT. Five of seventeen diverge against seven
- * expected: A THIRD OF THE ORIGINALS' VERGE LINES ARE FALSE EDGES BY THIS
- * RULE'S OWN DEFINITION. And that is not an underpowered null — seventeen
+ * expected: A THIRD OF THE CATALOGUE'S OWN VERGE LINES ARE FALSE EDGES BY
+ * THIS RULE'S OWN DEFINITION. And that is not an underpowered null — seventeen
  * runs at a 41% null rate would have given p = 0.0006 had none diverged,
  * so the test could have confirmed the rule and did not. It is
  * non-significant at every qualifying span from 4W to 8W, so it is not a
  * threshold artefact either.
  *
- * The reading: the tightness is a property of how the art was assembled —
+ * The reading: the tightness is a property of how a run is assembled —
  * repeated pieces set along a barrier at a fixed offset — and not of any
- * rule against divergence. Where a line drifts, the originals let it
+ * rule against divergence. Where a line drifts, the catalogue lets it
  * drift. So L-5 stays INVENTED, with the invention now separated from the
- * observation: build the lines the way the source does, and add the
+ * rest: build the lines the way the catalogue does, and add the
  * non-divergence yourself, knowing it is yours.
  *
  * WHICH MAKES THE REPAIR MATTER MORE THAN A GREEN WOULD HAVE. If the
- * originals only avoid two thirds of these by accident, a generator that
- * avoids all of them is doing something the source does not, deliberately
- * and for a stated reason.
+ * catalogue only avoids two thirds of these by accident, a generator that
+ * avoids all of them is doing something the catalogue does not,
+ * deliberately and for a stated reason.
  *
  * The generator, by contrast, places laterals independently from each
  * asset's own distribution — which is the null — so it produces false
  * edges at the null rate unless something stops it. That is why the
- * repair exists whatever the originals turn out to do.
+ * repair exists whatever the catalogue turns out to do.
  */
 import type { StationedPlacement } from "./legibility.js";
 import { SAME_PLACE_W } from "./tolerance.js";
@@ -73,11 +73,11 @@ export const FALSE_EDGE = {
 } as const;
 
 /**
- * WHAT A REAL BARRIER LOOKS LIKE, and what this demo does not build.
+ * WHAT A BARRIER LOOKS LIKE, and what this demo does not build.
  *
- * Measured over the 17 qualifying runs pooled across the source
- * circuits. It is here because it is the SPEC FOR THE PIECE THAT IS
- * MISSING, and it belongs next to the rule that piece would satisfy.
+ * Pooled over the 17 qualifying runs in the catalogue. It is here because
+ * it DESCRIBES THE PIECE THAT IS MISSING, and it belongs next to
+ * the rule that piece would satisfy.
  *
  *   pieces per run     p10 3      median 5      p90 13      max 15
  *   run length         p10 5.4W   median 6.5W   p90 22.6W   max 40.6W
@@ -92,7 +92,7 @@ export const FALSE_EDGE = {
  *
  * ONE FIGURE IS CENSORED AND MUST NOT BE BUILT TO. A run is DEFINED by
  * gaps under 3W, so the spacing p90 of 2.93W is the definition showing
- * through rather than a measurement. The median and the CV are the usable
+ * through rather than a finding. The median and the CV are the usable
  * numbers.
  *
  * WHY THIS DEMO ONLY AVOIDS THE FAILURE INSTEAD OF BUILDING THE THING.
@@ -108,13 +108,13 @@ export const FALSE_EDGE = {
  * outcome than two repairs.
  *
  * NOBODY HAS COMPARED THEM, AND THE PREDICTION IS ON THE RECORD SO IT CAN
- * BE WRONG. Upstream's guess, made before anyone checked: ONE primitive.
+ * BE WRONG. The guess, made before anyone checked: ONE primitive.
  * Both are repeated pieces at a fixed offset over a station range, and
  * both showed the same tiling signature from opposite directions — L-6's
- * cover measured as 126 separate objects with no single one above 5.9% of
- * it, L-5's barrier measured as a spacing CV of 0.37 against C-1's
- * 1.5-2.5 — and neither had any reason to resemble the other unless the
- * artists had one way of building a run.
+ * cover reads as 126 separate objects with no single one above 5.9% of
+ * it, L-5's barrier as a spacing CV of 0.37 against C-1's
+ * 1.5-2.5 — and neither had any reason to resemble the other unless a run
+ * has exactly one way of being built.
  *
  * If it turns out to be TWO, the interesting part is what separates them,
  * and that is the better finding. Written down here rather than left in a
@@ -368,7 +368,7 @@ export interface EdgeRepair {
  * band rather than the line being straightened — straightening it would
  * make the line PARALLEL, which is allowed, but it would also move a
  * placement to a lateral its own asset never sat at, and every other rule
- * here draws laterals from measurement.
+ * here draws laterals from the vocabulary.
  *
  * THE MIDDLE MEMBER, because a line is broken most cheaply where it is
  * least anchored: dropping an end shortens the run and may leave the rest

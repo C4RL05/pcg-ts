@@ -31,11 +31,11 @@
  * frame that `pathRuns` performs. A divergence between the two then has
  * to be an edit somebody made, not a difference that crept in.
  *
- * THE DEFINITION IS UPSTREAM'S, and it is crude on purpose: a corner is a
+ * THE RULE SET DEFINES IT, and it is crude on purpose: a corner is a
  * maximal run of frames under R = 12W, with no hysteresis and no minimum
  * length. A chicane whose curvature crosses 12W between the two apexes is
- * two corners. Keeping their definition is what lets a figure measured on
- * their circuits be compared with a figure measured on this one at all —
+ * two corners. Keeping that definition is what lets a figure the rules
+ * quote be compared with a figure measured on this lap at all —
  * a better definition here would silently rebase every published number.
  *
  * SIGN IS THE PART THAT CANNOT BE CHECKED BY EYE. "Outside" is the side
@@ -46,7 +46,7 @@
  */
 import type { CornerColumns, Lap } from "./lap.js";
 
-/** Corners are runs under this radius, in half-widths. Upstream's cut. */
+/** Corners are runs under this radius, in half-widths. The rules' cut. */
 export const CORNER_R_W = 12;
 
 /** L-2's severity split, and L-3's and L-6's threshold. */
@@ -64,7 +64,7 @@ export interface Corner {
   readonly entryW: number;
   /** Station of the run's last frame, in W. May be less than entry: it wraps. */
   readonly exitW: number;
-  /** The run's tightest radius, in W — upstream's per-corner severity. */
+  /** The run's tightest radius, in W — the per-corner severity. */
   readonly tightestW: number;
   /** +1 for a right-hander, -1 for a left-hander. */
   readonly turn: 1 | -1;

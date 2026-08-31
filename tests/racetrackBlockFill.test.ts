@@ -4,14 +4,14 @@
  * TWO SUITES, and the split is the point. The first uses synthetic boxes
  * and runs everywhere: it checks that asking for a share of the volume
  * GIVES that share, which is a property of the calibration and needs no
- * outside data. The second measures against the real kit and SKIPS when
- * that file is absent — it is derived measurements of a copyrighted game,
- * lives outside both repositories, and CI has never seen it.
+ * outside data. The second runs against a local catalogue and SKIPS when
+ * that file is absent, which is the ordinary case: it is an optional
+ * local file, and CI has never seen it.
  *
- * The second suite is why this file exists. The upstream measurement of
- * the original art asks one question of anything generated to stand in
- * for it — does it have the same emptiness — and a generator that is not
- * measured against that answer is a generator nobody can correct.
+ * The second suite is why this file exists. The catalogue's own geometry
+ * asks one question of anything generated to stand in for it — does it
+ * have the same emptiness — and a generator that is not measured against
+ * that answer is a generator nobody can correct.
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
@@ -344,7 +344,7 @@ describe("the fill keeps the share it is asked for", () => {
   });
 });
 
-describe.skipIf(!KIT)("against the measured kit", () => {
+describe.skipIf(!KIT)("against the local catalogue", () => {
   const kit = !!KIT
     ? (JSON.parse(readFileSync(KIT!, "utf8")) as { assets: KitAsset[] })
     : { assets: [] };
@@ -374,9 +374,9 @@ describe.skipIf(!KIT)("against the measured kit", () => {
    * detail of the measurement — it is the measurement. A ratio near 1
    * says the fill made volume; near 2 says it made surface.
    *
-   * This is the diagnostic upstream used to find that three quarters of
-   * the source art has no interior at all, applied to what this side
-   * generates. It needs no target and cannot drift with anyone's pitch,
+   * This is the diagnostic that found three quarters of the catalogue's
+   * art has no interior at all, applied to what this side generates. It
+   * needs no target and cannot drift with anyone's pitch,
    * which is exactly why it was the thing left standing when the bands
    * were withdrawn.
    *
@@ -451,8 +451,8 @@ describe.skipIf(!KIT)("against the measured kit", () => {
    * runs 1.85 and `frame` 2.20, so the two classes with a carveable
    * interior are the two this test does not measure.)
    *
-   * That is the same discovery upstream made by sweeping the pitch, seen
-   * from the geometry instead of from a count: the decomposition has no
+   * That is the same discovery the pitch sweep made, seen from the
+   * geometry instead of from a count: the decomposition has no
    * interior to carve because its thin axis is pinned at the grid that
    * produced it. So this test asserts the DIAGNOSIS rather than a shell
    * behaviour there is no data to show.

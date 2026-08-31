@@ -6,7 +6,7 @@
  *
  *   0. reserve       L-2/L-3's vocabulary, before anything is dressed
  *   1. stations      how many and where along  (D-1, D-5's curve)
- *   2. assets        which asset, from its own measured behaviour
+ *   2. assets        which asset, from its own placement statistics
  *   3. corridor      Z-1, by size
  *   4. language      L-2's markers and L-3's rulers
  *   5. landmarks     L-4        — REFERENCE ONLY, see the last paragraph
@@ -27,7 +27,8 @@
  * L-3's "on one line". §9 resolves that by ordering rather than by
  * exemption, so the cull wins and the damage is counted.
  *
- * Seven and eight still come after the cull, for the original reason: a
+ * Seven and eight still come after the cull, for the reason they always
+ * have: a
  * mix repaired before a cull is a mix repaired against a lap that no
  * longer exists.
  *
@@ -159,9 +160,9 @@ export interface DressOptions {
    * IT IS AN OPTION RATHER THAN A SWITCH INSIDE because cooking is async
    * and `dressLap` is not. Reaching a cook from here would make this
    * function async and ripple through every synchronous caller and test
-   * for no benefit; taking the answer instead leaves the source the
-   * caller's to choose, which is the arrangement this campaign is
-   * heading for anyway.
+   * for no benefit; taking the answer instead leaves it to the caller to
+   * choose where the stations come from, which is the arrangement this
+   * campaign is heading for anyway.
    *
    * Omitted, the fitted TypeScript process runs as it always has. The two
    * do NOT agree station for station and cannot — see
@@ -487,7 +488,7 @@ export function frameLookup(lap: Lap): (s: number, t: number, h: number) => Fram
 type KitBoxes = { min: number[]; max: number[]; role?: string; thickness?: number }[];
 
 interface KitIndex {
-  /** Asset id -> every recorded pose of it. */
+  /** Asset id -> every pose of it the vocabulary carries. */
   readonly poseOf: Map<number, KitBoxes[]>;
   /** Asset id -> the catalogue entry, without a linear scan. */
   readonly assetById: Map<number, { boxes?: KitBoxes; poses?: KitBoxes[] }>;
@@ -509,12 +510,12 @@ function kitIndex(kit: Kit): KitIndex {
   const hit = kitIndexCache.get(kit);
   if (hit) return hit;
 
-  // EVERY RECORDED POSE OF EACH ASSET, gathered from the kit's own
-  // instances. The format stores no rotation, so an asset has one
+  // EVERY POSE OF EACH ASSET, gathered from the kit's own
+  // instances. The format states no rotation, so an asset has one
   // representative box set and drawing every copy from it stamps the same
   // object at the same yaw all the way round the lap. But each instance's
   // boxes are correct, and on this kit 362 of them give 361 distinct
-  // sets — the yaw the format never stored, surviving in the shapes.
+  // sets — the yaw the format does not state, surviving in the shapes.
   const poseOf = new Map<number, KitBoxes[]>();
   for (const pl of (kit.placements ?? []) as unknown as {
     asset: number;
@@ -566,17 +567,17 @@ export function buildBoxes(
 
     // A POSE PER COPY, NOT ONE POSE PER ASSET.
     //
-    // The source format stores no rotation, so an asset carries ONE
+    // The format states no rotation, so an asset carries ONE
     // representative box set — and drawing every copy from it stamps the
     // same object at the same yaw all the way round the lap, which is
     // what made the generated dressing read as wrongly placed beside the
-    // measured art. But every recorded INSTANCE carries its own correct
-    // boxes, and on this kit 362 instances give 361 distinct box sets:
-    // the yaw the format did not store is still there, in the shapes.
+    // catalogue's own placements. But every INSTANCE carries its own
+    // correct boxes, and on this kit 362 instances give 361 distinct box
+    // sets: the yaw the format does not state is still there, in the shapes.
     //
     // So the vocabulary keeps them as `poses` and a placement draws one.
-    // It is the measured art being used as what it is — a library of real
-    // poses — rather than a layout, which is the part that stays behind.
+    // It is the catalogue used as what it is — a library of poses —
+    // rather than a layout, which is the part that stays behind.
     const poses = poseOf.get(p.asset.id) ?? kitAsset?.poses;
     const pose =
       poses && poses.length > 0
@@ -727,11 +728,12 @@ export function placementsBeforeLanguage(
 }
 
 /**
- * Dress a lap from a measured kit.
+ * Dress a lap from a catalogue.
  *
- * The output is the same `PlacedBox` shape the reference log produces, so
- * a page can draw generated dressing and measured dressing with one
- * renderer — which is the only way a viewer can compare them fairly.
+ * The output is the same `PlacedBox` shape the reference layer produces,
+ * so a page can draw generated dressing and the catalogue's own
+ * placements with one renderer — which is the only way a viewer can
+ * compare them fairly.
  */
 export function dressLap(
   kit: Kit,
@@ -866,7 +868,7 @@ export function dressLap(
     // Z-1 FIRST, OVER WHAT THE PREVIOUS ROUND'S MIX DREW. The `over` band is |t| < 1W,
     // which is the corridor — so satisfying Z-3's floor for it means
     // deliberately drawing assets whose own lateral sits there, and
-    // `placeAsset` then gives them their own measured HEIGHT, which for
+    // `placeAsset` then gives them their own HEIGHT, which for
     // most of them is about half a half-width. That is an object in the
     // middle of the road at knee height. Z-1 ran at step 3 and never saw
     // them, because they did not exist yet; nine per lap survived to the
@@ -944,7 +946,7 @@ export function dressLap(
     //
     // WHAT IT SUPPLIES IS THE TAIL, NOT THE TOTAL. That incidental cover
     // is fifty-odd SHORT stretches with a heavy-tail share of ZERO, where
-    // the source holds 39% of its covered length in the few longer than
+    // the vocabulary holds 39% of its covered length in the few longer than
     // 10W. The total can be right while the shape is wrong: what the
     // dressing never produces on its own is a tunnel.
     const already = measureEnclosure(lap, buildBoxes(kit, lap, placements, seed));

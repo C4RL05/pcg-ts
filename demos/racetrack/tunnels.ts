@@ -1,15 +1,15 @@
 /**
  * L-6: enclosure, placed.
  *
- * ENCLOSURE IS A PATTERN, NOT AN ASSET, and that is a measurement rather
- * than a modelling preference. On the most enclosed of the twenty-two
- * source circuits the cover is held up by 126 SEPARATE OBJECTS and the
+ * ENCLOSURE IS A PATTERN, NOT AN ASSET, and that is what the vocabulary
+ * says rather than a modelling preference. In its most enclosed lap the
+ * cover is held up by 126 SEPARATE OBJECTS and the
  * largest single one accounts for 5.9% of it. The workhorse is a strip
  * 0.47W wide and 5.45W long placed 24 times. So there is no tunnel model
  * to find and place; there is a run of repeated pieces over a station
  * range, which is what this builds.
  *
- * THE TARGET MOVED, AND THE OLD ONE WAS AN ARTEFACT. Upstream's first
+ * THE TARGET MOVED, AND THE OLD ONE WAS AN ARTEFACT. L-6's first
  * figure was 32.3% of a lap enclosed, and it has been withdrawn: three
  * different projections of the same circuit gave 7.9%, 32.3% and 50.3%,
  * and 32.3% came from nearest-frame projection near a hairpin, where one
@@ -23,7 +23,7 @@
  * what exposed this one.
  *
  * THE LENGTHS ARE HEAVILY SKEWED and fitting the median alone would build
- * the wrong circuit. Pooled over 326 real stretches: p10 0.9W, median
+ * the wrong circuit. Pooled over the vocabulary's 326 stretches: p10 0.9W, median
  * 1.1W, p75 3.1W, p90 6.9W, max 42.4W — and the 6% longer than 10W hold
  * 39% of all the covered length. Mostly one-frame gantries, plus a few
  * real tunnels doing most of the work. A generator matched to the median
@@ -40,12 +40,12 @@ import { CORRIDOR, OVERHEAD } from "./zones.js";
 export const ENCLOSE = {
   /** L-6's revised range, after the 32.3% figure was withdrawn. */
   ruleShare: [0.1, 0.25],
-  /** What the source population actually does, by the ray method. */
+  /** What the vocabulary's population actually does, by the ray method. */
   sourceShare: 0.105,
   /**
    * The stretch-length distribution, as (cumulative probability, length
-   * in W). The last point is the observed maximum at its own rank in 326
-   * samples, which is what keeps the tail from being cut off at p90.
+   * in W). The last point is the largest of the 326 samples at its own
+   * rank, which is what keeps the tail from being cut off at p90.
    */
   lengthCdf: [
     [0.1, 0.9],
@@ -58,7 +58,7 @@ export const ENCLOSE = {
   minLengthW: 0.5,
   /** A stretch is "long" for the concentration figure at this length. */
   longW: 10,
-  /** Share of covered length held by the long stretches, in the source. */
+  /** Share of covered length held by the long stretches, in the vocabulary. */
   sourceLongShare: 0.39,
   /** L-6's flare: the mouth opens over this distance. */
   flareW: 2.5,
@@ -73,7 +73,7 @@ export const ENCLOSE = {
 } as const;
 
 /**
- * A stretch length, from the source's own quantiles.
+ * A stretch length, from the vocabulary's own quantiles.
  *
  * INTERPOLATED IN LOG SPACE above the median, because the tail spans a
  * factor of forty and linear interpolation between p90 and the maximum
@@ -109,13 +109,13 @@ export interface EnclosurePlan {
 /**
  * Which assets can hold up cover.
  *
- * THE TEST IS WHERE ITS INSTANCES SAT, NOT WHAT IT IS CALLED. A piece
- * that the source placed above the corridor ceiling, near enough to the
+ * THE TEST IS WHERE ITS INSTANCES SIT, NOT WHAT IT IS CALLED. A piece
+ * the vocabulary places above the corridor ceiling, near enough to the
  * centre to reach over the road, is cover — whatever family it came from.
- * On the enclosure exemplar that is 121 of 235 assets, holding 195 of the
- * circuit's 401 placements.
+ * On the enclosed kit that is 121 of 235 assets, holding 195 of that
+ * lap's 401 placements.
  *
- * AND THEIR MEASURED HEIGHT IS USABLE, unlike a shell's. These are thin
+ * AND THEIR STATED HEIGHT IS USABLE, unlike a shell's. These are thin
  * plates and strips, so their bounds centre is on the material rather
  * than in an empty middle — which is exactly the distinction that makes
  * Z-3's `over` band take its height from the band instead.
@@ -128,7 +128,7 @@ export function coverCandidates(assets: readonly PlaceableAsset[]): PlaceableAss
 
       // ITS BASE SAT ABOVE THE CORRIDOR, NOT ITS CENTRE.
       //
-      // The first version asked whether the measured height MEDIAN
+      // The first version asked whether the height MEDIAN
       // cleared 1.2W, and that is the bounds-centre mistake for the third
       // time in this demo. A grass bank 2.6W tall whose centre sat at
       // 1.3W has its base on the ground: it is a landform beside the
@@ -137,7 +137,7 @@ export function coverCandidates(assets: readonly PlaceableAsset[]): PlaceableAss
       // on the racing line.
       //
       // What makes something cover is that its MATERIAL was above the
-      // corridor. A gantry recorded at 2.03W and 0.42W thick has a base
+      // corridor. A gantry listed at 2.03W and 0.42W thick has a base
       // at 1.82W and passes; the grass bank has a base at 0.00W and does
       // not.
       //
@@ -145,10 +145,10 @@ export function coverCandidates(assets: readonly PlaceableAsset[]): PlaceableAss
       // A piece sitting on the ceiling is roof under one rounding and
       // scenery under another, and the two answers do not differ by a
       // little — one of them tiles a tunnel out of it. `base` is a
-      // difference of two measured f64s here and would be a difference of
+      // difference of two f64s here and would be a difference of
       // two f32s once these rules run in attribute columns, where the
       // spacing at 1.2W is 1.2e-7 and the subtraction can carry a few of
-      // them. On the three measured kits the nearest asset to this cut is
+      // them. On the three kits the nearest asset to this cut is
       // 2.1e-2W above it, so the tolerance admits nothing new today; it
       // is here so that the kit which does sit on the line gets one
       // answer rather than two.
@@ -163,7 +163,7 @@ export function coverCandidates(assets: readonly PlaceableAsset[]): PlaceableAss
 /**
  * Where the cover goes.
  *
- * INDEPENDENTLY ROUND THE LAP, not clustered. The source's gap CV is 0.9
+ * INDEPENDENTLY ROUND THE LAP, not clustered. The vocabulary's gap CV is 0.9
  * against a SIMULATED uniform null of 0.9 — indistinguishable. The null
  * had to be simulated: at fifteen stretches the sample CV sits below 1 by
  * construction, and reading it directly would have said the stretches
@@ -187,7 +187,7 @@ export function planEnclosure(
    * L-6 IS USUALLY ASKED FOR THE TAIL, NOT THE TOTAL. Measured by ray
    * cast, the ordinary dressing on an overhead-rich kit already runs a
    * fifth to a quarter of the lap under something — but in fifty-odd
-   * SHORT stretches with a heavy-tail share of zero, where the source has
+   * SHORT stretches with a heavy-tail share of zero, where the vocabulary has
    * about fifteen stretches holding 39% of their covered length in the
    * few longer than 10W. The total is right and the shape is wrong. So
    * what enclosure has to supply is the long stretches the incidental
@@ -262,7 +262,7 @@ export function planEnclosure(
       continue;
     }
 
-    // The piece, weighted by how often the source used it.
+    // The piece, weighted by its frequency in the vocabulary.
     let total = 0;
     for (const a of cover) total += Math.max(1, a.instances);
     let u = rand(seed, k, 0x6c03) * total;
@@ -304,13 +304,14 @@ export function coverPlacements(plan: EnclosurePlan, lapW: number, seed: number)
   const alongW = Math.max(0.3, plan.asset.size.along);
   const acrossW = Math.max(0.2, plan.asset.size.across);
   // ITS BASE MUST CLEAR THE CORRIDOR, not just its centre. A piece whose
-  // measured centre sits at 1.4W and is 0.6W thick reaches down to 1.1W,
+  // centre sits at 1.4W and is 0.6W thick reaches down to 1.1W,
   // which is inside the protected volume — Z-1 then stands it off to the
   // corridor edge and the tunnel acquires a hole exactly where the driver
   // looks. Raising it here is what makes cover exempt from Z-1 honest:
   // it is exempt because it is already clear, not because it is special.
-  // ONE POSE FOR THE WHOLE RUN. Every recorded instance of an asset has
-  // its own box set — the yaw the format never stored — and drawing a
+  // ONE POSE FOR THE WHOLE RUN. Every instance of an asset in the
+  // vocabulary has its own box set — the yaw the format does not
+  // store — and drawing a
   // fresh one per piece is right for scenery and wrong here. A tunnel is
   // the same segment repeated; varying the shape along it reopens the
   // seams the overlap was added to close, and a 17W covered stretch fell
@@ -373,8 +374,8 @@ export function placeEnclosure(
  * How much LONG cover to add, given what the lap already has.
  *
  * TWO TARGETS, AND THE FIRST DRAFT COLLAPSED THEM INTO ONE. L-6 asks for
- * a total (10-25% of lap, population median 10.5%) and the measurement
- * behind it carries a shape (39% of covered length in stretches longer
+ * a total (10-25% of lap, 10.5% at its middle) and it carries a shape
+ * with it (39% of covered length in stretches longer
  * than 10W). Solving only for the shape gives
  * `x = (f*total - long)/(1 - f)`, which is correct arithmetic and wrong:
  * on a lap with NO cover it returns zero, because 39% of nothing is
@@ -409,7 +410,7 @@ export function longCoverBudgetW(
  * The quantile at which a drawn stretch first exceeds `longW`.
  *
  * DERIVED FROM THE DISTRIBUTION, not chosen: `drawStretchLengthW` crosses
- * 10W at u = 0.9198, which sits neatly against the source's own figure
+ * 10W at u = 0.9198, which sits neatly against the vocabulary's own figure
  * that 6% of its stretches are that long. Drawing above it gives 12.1W at
  * 0.93, 17.6W at 0.95 and 37.2W at 0.99 — the tunnels, and only the
  * tunnels.
@@ -435,8 +436,8 @@ export function longStretchShare(lengths: readonly number[]): number {
  * rather than a hope.
  *
  * THE FIRST VERSION TRIMMED THE MOST CENTRAL PIECES AND WAS WRONG, in a
- * way worth keeping because the reasoning looked sound. Of the enclosure
- * exemplar's 124 covered frames, only 11 are roofed by a SINGLE object;
+ * way worth keeping because the reasoning looked sound. Of the enclosed
+ * kit's 124 covered frames, only 11 are roofed by a SINGLE object;
  * the median frame has three holders and the p90 has six. TILED COVER IS
  * REDUNDANT COVER. So removing an overhead piece costs a placement and
  * opens no sky about nine times in ten — the trim was paying in
@@ -478,18 +479,15 @@ export function reduceEnclosure<T extends StationedPlacement>(
    * THE FALLBACK, NOT THE MECHANISM — and it has never once fired.
    *
    * Z-3 wants a tenth of the population over the corridor and L-6 wants
-   * at most a quarter of the lap roofed. Across the twenty-two circuits
-   * those are not independent axes: enclosure correlates with `over`
-   * share at r = 0.57, roughly 2.5% + 0.62 x over-share. But at the
-   * ranges as written they are compatible — Z-3's 10-21% predicts 9-16%
-   * enclosure, comfortably inside L-6 — and the two circuits that satisfy
-   * both are ORDINARY ones, ranking 2nd and 4th most typical of the
-   * twenty-two on eight axes chosen to exclude enclosure and `over` share
-   * so the question could not answer itself. The ruleset describes a real
-   * and unremarkable circuit.
+   * at most a quarter of the lap roofed. Those are not independent axes:
+   * enclosure tracks `over` share closely, roughly 2.5% + 0.62 x
+   * over-share. But at the ranges as written they are compatible — Z-3's
+   * 10-21% predicts 9-16% enclosure, comfortably inside L-6 — so a lap
+   * that satisfies one has no trouble satisfying the other, and this
+   * fallback should be rare.
    *
    * Measured here: twelve laps across two vocabularies — including the
-   * most overhead-rich circuit in the source, whose own `over` share is
+   * most overhead-rich lap in the vocabulary, whose own `over` share is
    * 32%, half again above Z-3's ceiling — and this floor stopped the trim
    * on none of them. Every lap landed inside L-6's range with runs to
    * spare.

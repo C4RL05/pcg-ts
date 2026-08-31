@@ -4,7 +4,7 @@
  * TODAY EVERY ID IS THE SAME UNIT CUBE, and that is the point rather than
  * a shortcut. The output of this technique is a COMPOSITION — what is
  * where, at what size, facing which way — and a wireframe box reads as
- * the measurement it is, where a shaded prop would read as bad art (see
+ * the composition it is, where a shaded prop would read as bad art (see
  * `main.ts`' header, which has argued this since before the rules
  * landed). So the map exists not to make the picture different but to
  * make the picture ADDRESSABLE: `panel` and `cover:span` are separate
@@ -19,9 +19,9 @@
  * and its material together, dispose the geometry with the map.
  *
  * TWO PALETTES, NOT TWO GEOMETRIES. The generated dressing and the
- * measured reference must be told apart at a glance and must otherwise be
+ * reference layer must be told apart at a glance and must otherwise be
  * drawn by exactly the same renderer, because the whole question this page
- * asks is whether the generated one reads like the measured one. A
+ * asks is whether the generated one reads like the reference. A
  * different colour is the smallest difference that answers "which am I
  * looking at"; a different mesh would be a different picture and would
  * make the comparison worthless.
@@ -53,7 +53,7 @@ const UNIT_BOX = new BoxGeometry(1, 1, 1);
 export const PALETTE = {
   /** The generated dressing — the thing this page is about. */
   generated: { color: 0x404040, opacity: 0.95 },
-  /** The measured kit, drawn beside it as a reference and not a target. */
+  /** The optional local catalogue, drawn beside it as a reference. */
   reference: { color: 0x999999, opacity: 0.85 },
 } as const;
 
@@ -259,7 +259,7 @@ function mergePose(boxes: readonly PoseBoxW[]): BufferGeometry {
   // A pose of more than ~2730 boxes overflows a 16-bit index. The shipped
   // vocabulary is nowhere near that, and picking the width from the count
   // costs one comparison against a whole class of silently wrapped
-  // geometry on a kit nobody has measured yet.
+  // geometry on a catalogue nobody has built yet.
   const vertices = boxes.length * perBox;
   const index =
     vertices > 65535

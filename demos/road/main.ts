@@ -2,7 +2,7 @@
  * Roadside dressing along a spline you already have — the simple one.
  *
  * THE TWIN OF `demos/racetrack`, and the reason there are two.
- * `racetrack` is where the placement rules go: the spec's corner reactions, its variety, its
+ * `racetrack` is where the placement rules go: corner reactions, variety,
  * clearance checks, and whatever host-side loop those turn out to need.
  * This page is the same thing with none of that — one spline, one sweep,
  * one evenly spaced row per side — and it stays that way. It is what you
@@ -18,11 +18,11 @@
  * Everything below the identity strings is byte-identical today.
  *
  * WHAT THIS PAGE IS FOR. A road is not the interesting part of a road —
- * the interesting part is everything standing beside it, and where that
- * comes from. So the page is handed a centreline it did not make
- * (`spline.ts`), pcg-ts turns it into a surface and populates its verges
- * (`graph.ts`), and the page's whole job is to let you judge the result
- * from the two viewpoints that can actually judge it.
+ * the interesting part is everything standing beside it, and what decides
+ * where each of those things goes. So the page is handed a centreline it
+ * did not make (`spline.ts`), pcg-ts turns it into a surface and
+ * populates its verges (`graph.ts`), and the page's whole job is to let
+ * you judge the result from the two viewpoints that can actually judge it.
  *
  * TWO VIEWS IN ONE FRAME, OVER EACH OTHER. A layout is two questions.
  * The MAP answers "is the whole lap dressed, and does the dressing follow
@@ -32,7 +32,7 @@
  * consumed from. They are drawn OVER each other rather than side by side
  * so the two readings share every pixel instead of splitting the screen,
  * and the car is one object in both, so they can never disagree about
- * where the player is.
+ * where the car is.
  *
  * EVERYTHING IS WIREFRAME, and that is not a placeholder for shading. The
  * output of this technique is a COMPOSITION — what is where, at what size,
@@ -162,7 +162,7 @@ const layers: Layer[] = [];
  * How much bigger the car is drawn on the map than in the world.
  *
  * The car is ONE object in both passes, which is what keeps the two views
- * from ever disagreeing about where the player is — but a five-unit wedge
+ * from ever disagreeing about where it is — but a five-unit wedge
  * on a five-thousand-unit lap is a sub-pixel speck from above. So the map
  * pass scales it to a fixed share of the FRAME rather than of the world,
  * which is what every map marker does and what no world-space size can
@@ -190,10 +190,10 @@ const chaseCamera = new PerspectiveCamera(65, 1, 0.1, 4000);
 /**
  * The car — a wedge, drawn in both passes.
  *
- * In the CHASE pass it is the subject; in the MAP pass it is the player
+ * In the CHASE pass it is the subject; in the MAP pass it is the car's
  * position, which is one of the two things the map exists to show. ONE
  * object rather than a car and a separate marker, so the two views can
- * never disagree about where on the lap the player is.
+ * never disagree about where on the lap the car is.
  */
 const car = new Mesh(
   new ConeGeometry(1.8, 5, 3),
@@ -294,7 +294,8 @@ function buildCircuit(circuit: Circuit): void {
 
   // The dressing. Instanced boxes at each placement, because the SIZE is
   // part of what is being judged and a point sprite has none.
-  // PLACEHOLDER GEOMETRY: the spec decides what these become.
+  // PLACEHOLDER GEOMETRY: one box per placement, until a placement rule
+  // decides what each one becomes.
   const P = circuit.props.attrs.point.require("P");
   const n = circuit.props.pointCount;
   const props = new InstancedMesh(

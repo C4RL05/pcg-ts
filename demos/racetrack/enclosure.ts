@@ -3,7 +3,7 @@
  * lengths. NOT the placement — this only ever reads a lap and a set of
  * boxes and answers questions about them.
  *
- * THE DEFINITION IS UPSTREAM'S AND IS NOT NEGOTIABLE. A frame is enclosed
+ * THE DEFINITION IS L-6'S AND IS NOT NEGOTIABLE. A frame is enclosed
  * when art spans the corridor above it: six vertical rays, spread evenly
  * across `-1.5W .. +1.5W`, cast from `h = 1.2W` up to a ceiling at
  * `h = 6W`, and at least half of them have to hit something.
@@ -26,11 +26,11 @@
  * same 1.2W for the corridor's ceiling, and they agree on purpose — but
  * the numbers are restated here rather than imported, because those two
  * are placement rules that may be retuned and this is a measurement whose
- * whole value is that a figure taken today can be compared with one taken
- * upstream. A measurement that moves when a rule is tuned measures the
+ * whole value is that a figure taken today can be compared with the one
+ * L-6 states. A measurement that moves when a rule is tuned measures the
  * tuning.
  *
- * PER FRAME, NOT PER BIN. The median real covered stretch is 1.1W, so
+ * PER FRAME, NOT PER BIN. The median covered stretch is 1.1W, so
  * binning the lap at 1W would quantise the distribution being measured
  * into nothing. A stretch's length here is arc length off the lap's own
  * `s` table.
@@ -41,7 +41,7 @@ import { segmentHitsBox } from "./sightline.js";
 
 type Vec3 = [number, number, number];
 
-/** L-6's numbers. Upstream's, restated rather than imported. */
+/** L-6's numbers, restated rather than imported. */
 export const ENCLOSURE = {
   /** Rays span `-corridorW .. +corridorW`, in half-widths. */
   corridorW: 1.5,

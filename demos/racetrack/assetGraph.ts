@@ -4,9 +4,9 @@
  * WHAT THIS REPLACES. `placeAsset` (`assets.ts`) makes four independent
  * draws per station off one sequential stream: which asset, from a
  * weighted pick whose weights depend on the curvature THERE; how far
- * across, from that asset's own measured lateral distribution; how high,
- * from its height distribution; and which side, from its own measured
- * lean. This module is those four draws as nodes, so the lap level needs
+ * across, from that asset's own lateral distribution; how high, from its
+ * height distribution; and which side, from its own lean.
+ * This module is those four draws as nodes, so the lap level needs
  * no TypeScript prelude to decide what a placement IS — only what
  * `stationGraph` already decided about where placements GO.
  *
@@ -113,7 +113,7 @@ export const ASSET = {
    * asset it is about to resolve, which turns that into a throw.
    */
   id: "assetId",
-  /** How often the asset appeared on the circuit it was measured on. */
+  /** The asset's frequency in the vocabulary. */
   instances: "assetInst",
   affStraight: "affStraight",
   affEasy: "affEasy",
@@ -161,7 +161,7 @@ export const CHOICE = {
   draw: "pickDraw",
   /** Signed offset across the track in W, positive RIGHT of travel. */
   t: "placeT",
-  /** Height in W, on whatever datum the source's `where.height` used. */
+  /** Height in W, on whatever datum `where.height` uses. */
   h: "placeH",
 } as const;
 
@@ -184,7 +184,7 @@ const ARC_ATTR = "arcW";
  * exactly what reading a frame column at a station between two frames is:
  * `transferAlongPath` has no nearest mode, and blending Infinity with a
  * finite radius gives Infinity or NaN across the whole neighbourhood of
- * every straight. Curvature is the same measurement with its degenerate
+ * every straight. Curvature is the same quantity with its degenerate
  * value at the other end — a straight is exactly 0, it blends, and the
  * cuts inverted are the same cuts.
  *
@@ -258,7 +258,7 @@ const KEY = {
  *
  * WHAT IS SANITISED HERE AND WHAT IS NOT. `weightAt` guards a non-finite
  * affinity to zero, and that guard is applied to the COLUMN rather than
- * to the field that reads it: a NaN in the measured JSON is a defect in
+ * to the field that reads it: a NaN in the vocabulary's JSON is a defect in
  * the input, and clamping it once where the input becomes data is honest,
  * whereas a NaN test inside the weight expression would be the graph
  * carrying a workaround for someone else's file. The RULE — instances
@@ -301,7 +301,7 @@ export function assetCloud(pool: readonly PlaceableAsset[]): Geometry {
     // [1, -0.5, 1] over 500 stations was measured to leave 182 of them
     // holding TWO survivors. `placeAsset`'s subtraction loop merely picks
     // oddly in the same case. A count below zero is a defect in the
-    // measured file either way, and this is the honest place to say so.
+    // vocabulary file either way, and this is the honest place to say so.
     inst.set(i, clean(a.instances));
     across.set(i, a.size.across);
     tall.set(i, a.size.tall);
@@ -593,7 +593,7 @@ export function addAssetChoiceStage(
   );
   g.connect(draw, "out", picked, "in");
 
-  // ---- 5. where it stands, from its own measurements -------------------
+  // ---- 5. where it stands, from its own distributions -------------------
   const tMag = quantileField(
     attribute(ASSET.latP10),
     attribute(ASSET.latMed),
@@ -725,7 +725,7 @@ export interface AssetChoice {
   readonly assetId: number;
   /** Signed offset across the track, positive RIGHT of travel, in W. */
   readonly t: number;
-  /** Height in W, on whatever datum the source's `where.height` used. */
+  /** Height in W, on whatever datum `where.height` uses. */
   readonly h: number;
 }
 

@@ -2,7 +2,7 @@
  * The vocabulary the demo PUBLISHES with.
  *
  * WHY THIS IS THE MOST IMPORTANT SUITE IN THE DEMO. Every other road test
- * loads a measured kit from outside the repository and skips when it is
+ * loads a local catalogue from outside the repository and skips when it is
  * absent — which is almost everywhere, including CI. So the entire rule
  * set could be green on this machine and silently do nothing on the live
  * page, and for a while it did exactly that: the published build drew
@@ -136,7 +136,7 @@ describe("the committed vocabulary", () => {
     // a different length with corners in different places — so the
     // sequence lands on geometry it was never made for. What IS dropped
     // is the pair of fields that described that track rather than the
-    // art: the curvature and bank of the original centreline at each
+    // art: the curvature and bank of that centreline at each
     // station, which 362 samples of would have profiled its shape.
     expect(kit.placements.length).toBeGreaterThan(300);
     for (const pl of kit.placements as unknown as Record<string, unknown>[]) {
@@ -204,7 +204,7 @@ describe("the committed vocabulary", () => {
 describe("a lap dressed from the published vocabulary", () => {
   const SEEDS = [1, 2, 3];
 
-  it("satisfies every rule the measured kit is gated on", async () => {
+  it("satisfies every rule the local catalogue is gated on", async () => {
     const l = await theLap();
     const frameAt = frameLookup(l);
     const eyes = defaultEyeStations(l.lengthW);

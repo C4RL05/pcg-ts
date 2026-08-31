@@ -75,8 +75,8 @@ tolerance.ts, rand.ts` = 5,362 lines, ~2,393 non-comment. Deducting
 test-only minimality gates leaves **~2,240 code lines** to become nodes or
 bound data. Of those, ~900 are pure arithmetic (and `dressGraph.ts`
 already ports exactly those five stages), ~700 are set/map/sort/fixed-point
-work with no node story, and ~400 are weighted draws over the measured
-kit.
+work with no node story, and ~400 are weighted draws over the
+vocabulary.
 
 **AND IT ONLY PAYS OFF AT THE END.** Porting a stage shrinks the prelude
 but does not remove it: the remaining lap-global repairs operate on the
@@ -828,8 +828,9 @@ the `over` branch had always done with the height.
 Enclosed kit: twelve rounds and `converged: false` becomes three to seven
 rounds with every band inside its rule. Vegetation kit:
 character-for-character identical — which is why this hid, since the
-vocabulary the demo ships IS that kit's measurements. Guarded now by three
-tests on the enclosed kit, each verified to fail against the old code.
+vocabulary the demo ships IS that catalogue's numbers. Guarded now by
+three tests on the enclosed kit, each verified to fail against the old
+code.
 
 WHAT TO TAKE FROM IT: the first fix satisfied the property that was being
 complained about and broke the one nobody had stated. "It converges" and
@@ -925,7 +926,7 @@ shoves the road surface to the verge.
 
 **So the floor rung is right as written**, and the "sunk piece" it admits is
 `panel-03`, whose own recorded `where.lateral.median` is 0.9323 — it is
-placed at the lateral the source measured for it, at the edge of the
+placed at the lateral the vocabulary gives it, at the edge of the
 corridor, which is where a roadside panel goes. There is no defect here to
 fix, and the shape of the rule is load-bearing: the ceiling asks where a
 piece STARTS because an overhead piece spans from outside, and the floor
@@ -2480,7 +2481,7 @@ properties of the PROCESS, not of a particular draw, so they transfer.
 
 **What the port buys, stated plainly so the cost above is judged against
 something.** The lap level stops needing a TypeScript prelude, which is
-the whole point of the campaign: a game can then generate a track from a
+the whole point of the campaign: a host can then generate a track from a
 serialized graph and a spline, with no demo code in the loop.
 
 ### Two nodes the port needs, and why each is a node rather than a recipe, 2026-08-25
@@ -3331,7 +3332,7 @@ eligibility, mark the minimum set of elements that must leave an over-full
 category and name the under-full category each should join. Nearest edge,
 never centre, for the reason `assets.ts` gives -- driving every lap to the
 middle of each band would make generated laps markedly more uniform than
-the originals, which vary by a factor of five on `over`.
+the rule allows, since `over` spans a factor of five.
 
 **AND ONE CLAIM IN THE DEMO IS SIMPLY WRONG, which this port needs.**
 `dressGraph.ts` says a per-point asset id "has to be WRITTEN by whatever
@@ -3460,7 +3461,7 @@ admission test fail.
 
 **So the rules are done and the ARCHITECTURE is what is left.** This is
 worth stating plainly because the rule list has been the plan for weeks
-and is now finished. What stops a game generating a track from a
+and is now finished. What stops a host generating a track from a
 serialized graph and a spline is no longer a missing rule. It is that the
 lap level's graph is BUILT from a cooked `Lap`: `placementCloudInTrackFrame`
 turns a placement list into a cloud in TypeScript, through the lap's own

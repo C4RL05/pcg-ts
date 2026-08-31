@@ -1,29 +1,24 @@
 /**
- * Which measured circuit a suite draws from, and where to find it.
+ * Which catalogue a suite draws from, and where to find it.
  *
- * WHY THIS IS A NAMED CHOICE AND NOT A PATH IN A TEST. The first exemplar
- * was picked for reuse and coherence and never checked against the
- * population on anything else, and it turned out to sit at or beyond the
- * edge on six separate figures — straightness above p90, density above
- * the median, the worst band mix of the set, and a curvature response
- * twice as steep as typical. Every caveat that arrived for a week was a
- * symptom of that one decision. So the circuit a generator learns from is
- * worth naming, recording the reason for, and being able to change in one
- * place.
+ * WHY THIS IS A NAMED CHOICE AND NOT A PATH IN A TEST. A suite that
+ * hard-codes a path says nothing about WHICH catalogue it needs, and
+ * cannot be pointed at another one without editing the test. So the
+ * catalogue a suite dresses with is named here: the choice is recorded in
+ * one place and can be changed in one place.
  *
- * AND WHY THE PATHS ARE NOT IN THE REPOSITORY. The kits are measurements
- * of a commercial product, taken locally, and neither their filenames nor
- * the machine they sit on belongs in a public checkout — the filenames
- * name the product and the paths named one developer's D: drive. Both
- * were in tracked test files until this file replaced them.
+ * AND WHY THE PATHS ARE NOT IN THE REPOSITORY. They are machine-specific:
+ * a catalogue is an optional local file, and its absolute path named one
+ * developer's D: drive. Those paths were in tracked test files until this
+ * file replaced them.
  *
- * The kits are addressed here by WHAT THEY ARE. A local manifest maps
- * those names to files; without one, every suite that needs a kit skips,
- * which is the case for almost everyone including CI.
+ * Catalogues are addressed here by WHAT THEY ARE. A gitignored local
+ * manifest maps those names to files; without one, every suite that needs
+ * a catalogue skips, which is the case for almost everyone including CI.
  *
  *   road-kits.local.json   (gitignored, at the repository root)
  *   {
- *     "dir": "<absolute directory holding the kit files>",
+ *     "dir": "<absolute directory holding the catalogue files>",
  *     "vegetation": "<filename>",
  *     "street":     "<filename>",
  *     "enclosed":   "<filename>"
@@ -38,34 +33,31 @@ import { fileURLToPath } from "node:url";
 /** The kits a suite may ask for, and what each is good and bad at. */
 export const KITS = {
   /**
-   * A vegetation circuit — palms, bushes, trees. Second-best band mix of
-   * the set, a curvature response of 1.06 straight-to-tight against a
-   * population 1.33, and all four affinity buckets inside the
-   * per-circuit band. Lower reuse (1.58) and fewer repeats than
-   * `street`, which costs a little vocabulary depth.
+   * A vegetation catalogue — palms, bushes, trees. A curvature response
+   * of 1.06 straight-to-tight, and all four affinity buckets inside their
+   * band. Lower reuse (1.58) and fewer repeats than `street`, which costs
+   * a little vocabulary depth.
    */
   vegetation: "the vegetation circuit",
   /**
-   * Street furniture, and a richer kit at 2.15 reuse — but the most
-   * atypical circuit of the set on band mix, and a straight-to-tight of
-   * 2.97 against a population 1.33. Kept for comparison, and because work
-   * was done against it, NOT as the thing to learn from.
+   * Street furniture, and a richer catalogue at 2.15 reuse — but a
+   * straight-to-tight of 2.97, nearly three times `vegetation`'s 1.06.
+   * Kept for comparison, not as the default.
    */
   street: "the street-furniture circuit",
   /**
-   * The most ENCLOSED of the set, at 43% of its lap running under cover
-   * against a population median of 10.5%.
+   * The ENCLOSED catalogue, at 43% of its lap running under cover.
    *
    * Here because neither of the others can exercise L-6 at all: the
-   * vegetation circuit is 2% enclosed with a longest covered stretch of
+   * vegetation catalogue is 2% enclosed with a longest covered stretch of
    * 0.9W, and its eight overhead objects are thin arches. A rule cannot
-   * be developed against a circuit that never triggers it, and a
-   * validator scoring that circuit for enclosure is measuring the
-   * exemplar rather than the generator.
+   * be developed against a catalogue that never triggers it, and a
+   * validator scoring that catalogue for enclosure is measuring the
+   * catalogue rather than the generator.
    *
-   * Atypical in the other direction, and the same caution applies: 43% is
-   * above the rule's own 10-25% ceiling. It is the circuit L-6 is BUILT
-   * against, not the one its target comes from.
+   * Far the other way, and the same caution applies: 43% is well above
+   * L-6's own 10-25% ceiling. It is the catalogue L-6 is BUILT against,
+   * and it sits outside L-6's own range.
    */
   enclosed: "the enclosed circuit",
 } as const;
@@ -102,11 +94,11 @@ function manifest(): Manifest | null {
 }
 
 /**
- * Where this kit is on THIS machine, or undefined if it is not here.
+ * Where this catalogue is on THIS machine, or undefined if it is not here.
  *
- * Undefined is the ordinary case and never an error: the kits are not
- * redistributable, so a checkout that has none is the expected one. Every
- * suite that needs a kit is `describe.skipIf(!kitPath(...))`.
+ * Undefined is the ordinary case and never an error: these are optional
+ * local files, so a checkout that has none is the expected one. Every
+ * suite that needs one is `describe.skipIf(!kitPath(...))`.
  */
 export function kitPath(key: KitKey): string | undefined {
   const m = manifest();

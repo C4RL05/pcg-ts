@@ -7,8 +7,8 @@
  * first produces the second. Tiled pieces either close over the corridor
  * or they do not, and a plan that says "10.5% of lap" while the rays find
  * 2% is a plan that failed — which is precisely the failure mode that
- * made upstream withdraw their first enclosure figure, arrived at from
- * the other direction.
+ * got L-6's first enclosure figure withdrawn, arrived at from the
+ * other direction.
  *
  * MEASURED ON THE ENCLOSURE KIT, NOT THE DEMO'S. The circuit the demo
  * dresses from is 2% enclosed, with a longest covered stretch of nine
@@ -17,10 +17,10 @@
  * triggers it. `ENCLOSURE_KIT` names the exception; see `tests/support/kits.ts`
  * for why that is better than switching the default.
  *
- * AND THE TARGET IS THE POPULATION'S, NOT THAT KIT'S. It is 43%
- * enclosed and the rule asks for 10-25%, with a population median of
- * 10.5%. Building to 43% would be fitting the outlier, which this demo
- * has already done once and paid a week for.
+ * AND THE TARGET IS L-6'S, NOT THAT CATALOGUE'S. That catalogue runs 43%
+ * enclosed where L-6 asks for 10-25%. Building to 43% would be fitting
+ * one catalogue, which this demo has already done once and paid a week
+ * for.
  */
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
@@ -76,7 +76,7 @@ describe("the stretch-length draw", () => {
   });
 
   /**
-   * THE TAIL IS THE RULE. Six per cent of the source's stretches are
+   * THE TAIL IS THE RULE. Six per cent of the catalogue's stretches are
    * longer than 10W and they hold 39% of all covered length: a few real
    * tunnels doing most of the work, among mostly one-frame gantries. A
    * generator that matched the median and lost the tail would look right
@@ -135,7 +135,7 @@ describe.skipIf(!KIT)("enclosure, placed and then measured", () => {
   /**
    * COVER MUST HAVE BEEN COVER, and the test is on its BASE.
    *
-   * The first candidate rule asked whether an asset's measured height
+   * The first candidate rule asked whether an asset's own height
    * MEDIAN cleared the corridor ceiling, which is the bounds-centre
    * mistake this demo has now made three times. A grass bank 2.6W tall
    * whose centre sat at 1.3W has its base on the ground — it is a
@@ -298,7 +298,7 @@ describe.skipIf(!KIT)("enclosure, placed and then measured", () => {
    * there IS room the difference is unmistakable — one run of 44 tiled
    * pieces turns a lap of fifty short gantry-shadows into one with a 33W
    * tunnel in it, and the heavy-tail share goes from nothing to 41%
-   * against the source's 39%.
+   * against the catalogue's 39%.
    *
    * So the check is on the seed that has room, and it is the shape rather
    * than the total: the total was already inside the rule before L-6 ran.
@@ -353,18 +353,16 @@ describe.skipIf(!KIT)("enclosure, placed and then measured", () => {
  * `reduceEnclosure` stops trimming when taking another run would empty
  * Z-3's `over` band below its floor, and reports `blockedByBandMix` so
  * the caller can say which rule yielded. Measured across twelve laps and
- * two vocabularies — including the most overhead-rich circuit in the
- * source, whose own `over` share is half again above Z-3's ceiling — it
+ * two vocabularies — including the most overhead-rich catalogue, whose
+ * own `over` share is half again above Z-3's ceiling — it
  * has stopped the trim exactly zero times.
  *
  * WHICH IS THE PROBLEM. A branch that no lap reaches is a branch that
  * will be wrong the first time it is needed, and by this project's own
- * convention a rule that never fires is not a rule that passed. Upstream
- * settled the question the other way round at the same time: the two
- * circuits satisfying both Z-3 and L-6 rank 2nd and 4th most ORDINARY of
- * the twenty-two, on axes deliberately chosen to exclude the two rules
- * under test — so the ranges describe a real circuit and the fallback
- * should be rare.
+ * convention a rule that never fires is not a rule that passed. The
+ * ranges themselves point the other way: Z-3's 10-21% band predicts
+ * 9-16% enclosure, comfortably inside L-6 — so the ranges describe an
+ * ordinary lap and the fallback should be rare.
  *
  * Rare is not never, and the right response to a path real data cannot
  * reach is to construct one that does, not to delete the path or to

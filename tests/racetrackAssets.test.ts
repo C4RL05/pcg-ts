@@ -1,16 +1,16 @@
 /**
- * Placing from each asset's own measurements, and what band mix that
+ * Placing from each asset's own statistics, and what band mix that
  * produces.
  *
  * THE QUESTION THIS FILE EXISTS TO ANSWER. Z-3 states a band mix and the
  * assets state their own laterals, and the two are different sources for
  * the same quantity. If drawing from `where` lands inside Z-3, they agree
  * and there is nothing to decide. If it does not, one of them is wrong
- * about the circuit they were both measured from — and that is a question
- * for the measurement rather than a licence to repair the output until it
+ * about the reference lap in the vocabulary — and that is a question for
+ * the vocabulary rather than a warrant to repair the output until it
  * matches.
  *
- * Skips without the kit, which lives outside both repositories.
+ * Skips without a catalogue, which is an optional local file.
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
@@ -59,20 +59,15 @@ function stationed(
 }
 
 /**
- * WHICH CIRCUIT, and why it is not the first one.
+ * WHICH CATALOGUE VARIANT, AND WHY.
  *
- * The first exemplar was chosen for reuse and coherence and never checked
- * against the population on anything else. It turned out to be at or past
- * the edge on six figures — the worst band mix of twenty-two, and a
- * curvature response of 2.97 straight-to-tight against a population 1.33.
- * Since that response is exactly the mechanism this module relies on, a
- * generator learning from it would have been faithfully reproducing an
- * outlier.
+ * The street variant has a curvature response of 2.97 straight-to-tight
+ * where the vegetation one has 1.06, and that response is exactly the
+ * mechanism this module relies on. A suite pinned to the street variant
+ * alone would be measuring that variant rather than the mechanism.
  *
- * The vegetation circuit is second-best of the set on band mix and has
- * all four affinity buckets inside the per-circuit band. The street one
- * is kept
- * beside it because the comparison is the evidence.
+ * So the vegetation variant is the default here, and the street one is
+ * kept beside it because the comparison is the evidence.
  */
 const KIT_KEY = DEFAULT_KIT;
 const KIT = kitPath(KIT_KEY);
@@ -98,7 +93,7 @@ describe("drawing from three quantiles", () => {
 
   it("keeps a tail rather than clamping a tenth onto two values", () => {
     // Clamping would put 10% of every asset's instances at exactly p10
-    // and 10% at exactly p90, which is a spike the source cannot have.
+    // and 10% at exactly p90, which is a spike the vocabulary cannot have.
     expect(drawQuantile(q, 0.0)).toBeLessThan(1);
     expect(drawQuantile(q, 1.0)).toBeGreaterThan(9);
   });
@@ -158,17 +153,18 @@ describe.skipIf(!KIT)("placing from the kit's own `where`", () => {
   });
 
   /**
-   * THE MEASUREMENT THIS FILE IS FOR — and the comparison it has to make
-   * carefully.
+   * THE COMPARISON THIS FILE IS FOR — and the care it has to be made
+   * with.
    *
-   * A GENERATED lap is scored against Z-3's pooled rule. A REAL circuit is
-   * compared against the per-circuit spread, which is roughly twice as
-   * wide: the rule is pooled over every object in the source era, and any one
-   * original sits outside it on some band as a matter of course. Scoring
-   * an original against the rule is how a good exemplar gets mistaken for
-   * a bad generator, which is very nearly what happened here.
+   * A GENERATED lap is scored against Z-3's pooled rule. A lap OUT OF THE
+   * CATALOGUE is compared against the per-lap spread, which is roughly
+   * twice as wide: the rule is pooled over every object in the vocabulary,
+   * and a catalogue's own placements sit outside it on some band as a
+   * matter of course. Scoring those against the rule is how a
+   * good catalogue gets mistaken for a bad generator, which is very nearly
+   * what happened here.
    *
-   * BANDED ON THE CENTRE, because every figure upstream publishes is. The
+   * BANDED ON THE CENTRE, because every published Z-3 figure is. The
    * base datum is the physically meaningful one and gives a different
    * answer — it is a different statistic, not a better one, and quoting it
    * against a centre-banded rule compares two things.
@@ -220,14 +216,13 @@ describe.skipIf(!KIT)("placing from the kit's own `where`", () => {
   /**
    * THE REPAIR, AND THE THING IT MUST NOT DO.
    *
-   * Z-3 is not a measurement: the observed range across twenty-two
-   * circuits is `over` 4-40% and `near` 0-56%, so a gate at the full
-   * range is vacuous and a gate at p10-p90 rejects a fifth of real
-   * circuits. The rule is deliberately narrower than the source — the
+   * Z-3 is not a statistic: a catalogue can run `over` anywhere in 4-40%
+   * and `near` in 0-56%, so a gate at that full range is vacuous. The
+   * rule is deliberately narrower than the vocabulary — the
    * same standing as Z-1 — so a generated lap IS repaired into it.
    *
    * But to the NEAREST EDGE. Driving every lap to the centre would make
-   * generated laps more uniform than the originals, which vary by a
+   * generated laps more uniform than the catalogue's own placements, which vary by a
    * factor of five on `over`. That is the density-envelope error again:
    * imposing at the lap level an aggregate the population reaches through
    * variation between laps. So the test checks both halves — inside the
@@ -513,12 +508,12 @@ describe.skipIf(!KIT)("placing from the kit's own `where`", () => {
     console.log(
       `corridor conflicts from \`where\`: ${conflicts} over 8 laps (${lifted} lifted, ${stoodOff} stood off)`,
     );
-    // The whole reason the resolution was extracted from the band sampler.
+    // The whole reason the resolution was lifted out of the band sampler.
     expect(conflicts).toBeGreaterThan(0);
   });
 
   it("keeps each asset on the side its instances were on", () => {
-    // An asset measured entirely on the left stays left. This is where a
+    // An asset whose laterals are entirely on the left stays left. This is where a
     // side lean belongs — not in the corridor sampler, which is even.
     const oneSided = assets.filter(
       (a) => a.where && (a.where.rightOfTravel === 0 || a.where.rightOfTravel === 1),
@@ -558,11 +553,11 @@ describe.skipIf(!KIT)("placing from the kit's own `where`", () => {
       "share-weighted mean affinity: " +
         buckets.map((b, i) => `${b} ${mean[i].toFixed(2)}`).join("  "),
     );
-    // Straight above tight, which is the direction all three games show.
+    // Straight above tight, which is the direction all three kits show.
     expect(mean[0]).toBeGreaterThan(mean[3]);
   });
 
-  it("puts the curvature bucket cuts where upstream puts them", () => {
+  it("puts the curvature bucket cuts where the rules put them", () => {
     expect(bucketOf(60)).toBe("straight");
     expect(bucketOf(40)).toBe("straight");
     expect(bucketOf(39.9)).toBe("easy");
@@ -639,8 +634,8 @@ const ENCLOSED = kitPath(ENCLOSURE_KIT);
  * nearly every draw the mix makes lands in the band it was drawn for.
  *
  * On the enclosed kit it does not. That kit's laterals are wide and
- * overhead-heavy — it is 43% covered against a population median of 10.5%
- * — so a draw from an asset's own distribution misses its own median band
+ * overhead-heavy — it is 43% covered where L-6 asks for 10-25% — so a
+ * draw from an asset's own distribution misses its own median band
  * more often than it hits it. A repair that committed the draw regardless
  * therefore reported a move for a placement that had not moved the shares
  * at all: the same `src` and `dst` were chosen next pass, the same
@@ -650,14 +645,14 @@ const ENCLOSED = kitPath(ENCLOSURE_KIT);
  * seed of the dressed lap, while the vegetation kit settled in two or
  * three and the idempotence test above passed throughout.
  *
- * That is the standing lesson in one object: an exemplar chosen for one
+ * That is the standing lesson in one object: a catalogue chosen for one
  * property will silently fail to exercise rules that depend on the others.
  * The vegetation circuit was chosen for band mix and curvature response.
  * Nobody chose it for the width of its laterals, and the width of its
  * laterals is what this repair lives or dies on.
  *
- * Skips without the kit, like every suite here — a checkout with no local
- * manifest must not fail, only report nothing.
+ * Skips without a catalogue, like every suite here — a checkout with no
+ * local manifest must not fail, only report nothing.
  */
 describe.skipIf(!ENCLOSED)("the band mix, on the kit that makes it work for it", () => {
   const kit = kitOrAbsent<{ assets: PlaceableAsset[] }>(ENCLOSURE_KIT);

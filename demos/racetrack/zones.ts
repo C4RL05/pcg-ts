@@ -8,12 +8,12 @@
  * label ends up driving a lap-scale artefact.
  *
  * THE CORRIDOR IS THE ONE HARD RULE. `|t| < 1W` below `h = 1.2W` carries
- * no geometry. That is a decision to be BETTER THAN THE SOURCE rather
+ * no geometry. That is a decision to be BETTER THAN THE VOCABULARY rather
  * than a description of it, and it has to be labelled that way: 12.3% of
- * the source's objects have geometry inside 1W at driver height, and the
- * median reaches 0.24W from the centreline. It is not a technique, it is
- * a stray — filtered to furniture small enough for the question to mean
- * anything, 1.2% of objects do it — but the source does do it and a
+ * the vocabulary's objects have geometry inside 1W at driver height, and
+ * the median reaches 0.24W from the centreline. It is not a technique, it
+ * is a stray — filtered to furniture small enough for the question to mean
+ * anything, 1.2% of objects do it — but the vocabulary does do it and a
  * generator that claims otherwise is describing something else.
  *
  * AND IT IS HELD BY SIZE, NOT BY OFFSET. Clamping `|t|` to 1W would be
@@ -77,7 +77,7 @@ export const CORRIDOR = { halfWidthW: 1.0, floorW: 0, ceilingW: 1.2 } as const;
  * and the chase view is a tunnel with the sky bricked over. It was
  * invisible until somebody looked from the driver's seat.
  *
- * Six is the ceiling upstream's enclosure measurement uses, for the same
+ * Six is the ceiling L-6's enclosure measurement uses, for the same
  * reason: without one, the skybox is a tunnel.
  */
 export const OVERHEAD = { ceilingW: 6 } as const;
@@ -91,8 +91,8 @@ export const OVERHEAD = { ceilingW: 6 } as const;
  * f32 the same sum lands a few parts in ten million above 6 and the piece
  * becomes a shell, which takes it out of the `over` pool the mix draws
  * from and changes what the band is filled with. The tolerance keeps the
- * f64 answer for a piece sitting on the cut. On the three measured kits
- * the nearest asset to it is 1.5e-2W away, so nothing real is near enough
+ * f64 answer for a piece sitting on the cut. On the three kits the
+ * nearest asset to it is 1.5e-2W away, so nothing real is near enough
  * to be moved by it.
  */
 export function fitsOverhead(tallW: number): boolean {
@@ -141,9 +141,9 @@ export function inCorridor(t: number, h: number): boolean {
  *
  * SEPARATE FROM THE BAND SAMPLER because the band sampler cannot produce
  * a conflict: Z2 starts at exactly 1.0W, so a lateral drawn from a band
- * never reaches inside. The measured DISTRIBUTION does — 9.3% of the
- * reference circuit's placements sit inside 1W — and that distribution
- * arrives with the assets, whose own `where.lateral` is what a later
+ * never reaches inside. The vocabulary's DISTRIBUTION does — 9.3% of its
+ * placements sit inside 1W — and that distribution arrives with the
+ * assets, whose own `where.lateral` is what a later
  * stage draws from. So this is the rule stated where it can be exercised
  * on its own, rather than dead code behind a sampler that never calls it.
  *
@@ -154,11 +154,11 @@ export function inCorridor(t: number, h: number): boolean {
  * placements across a band boundary and collapses the verge, since
  * roughly half of them would have drawn high on their own.
  *
- * WHAT THE REFERENCE CIRCUIT SAYS ABOUT THE SMALL CASE: nothing. All 41
- * of its inside-1W placements are large, at a median height of 3.19W —
- * gantries and spanning shells recorded at their centres. The small-art
+ * WHAT THE REFERENCE LAP SAYS ABOUT THE SMALL CASE: nothing. All 41 of
+ * its inside-1W placements are large, at a median height of 3.19W —
+ * gantries and spanning shells, given at their centres. The small-art
  * figures (53% of small objects inside 1W sit above the ceiling, against
- * 26% of large ones) are the whole source population, not this circuit.
+ * 26% of large ones) are the whole vocabulary, not that one lap.
  */
 export function resolveCorridor(
   t: number,
@@ -193,12 +193,10 @@ export function resolveCorridor(
  * Z-3's band mix, as share of all placements.
  *
  * The bands are the RULE's ranges; the aim points are their centres. The
- * source's own figures are 15 / 8 / 29 / 35 / 13 / 0.5 for
- * over / verge / near / mid / far / distant, which is the LATE era and
- * not the earlier one — the difference between the two is the largest in
- * the whole ruleset, the near band nearly doubling and the far band
- * halving as the mass came in off the horizon to where a driver can read
- * it at speed.
+ * vocabulary's own figures are 15 / 8 / 29 / 35 / 13 / 0.5 for
+ * over / verge / near / mid / far / distant — a near band that carries
+ * nearly twice what a horizon-heavy split would give it, which is what
+ * puts the mass where a driver can read it at speed.
  *
  * `over` covers Z7 and Z8 together, which is how the rule states it.
  */
@@ -257,7 +255,7 @@ const ZONE_WEIGHTS: readonly (readonly [ZoneName, number])[] = (() => {
  * Pick a band for one placement.
  *
  * SAMPLED RATHER THAN QUOTA'D. A quota — take exactly 35% and deal them
- * out — would hit the mix on the nose every lap, which no real circuit
+ * out — would hit the mix on the nose every lap, which nothing real
  * does and which would hide the fact that the mix is a band rather than a
  * point. Sampling lands inside Z-3's ranges with the variation a lap
  * actually has.
@@ -391,11 +389,11 @@ export function lateralFor(
   const band = ZONES[zone];
   const u = rand(seed, index, 0x51);
   // Uniform across the band rather than centred: the bands are already
-  // narrow and the source's own laterals fill them, so a bell would
-  // hollow out each boundary for no reason the measurement supports.
+  // narrow and the vocabulary's own laterals fill them, so a bell would
+  // hollow out each boundary for no reason the figures support.
   let t = band.tMin + u * (band.tMax - band.tMin);
 
-  // Which side. Even, because the population is: the reference circuit
+  // Which side. Even, because the population is: the vocabulary
   // reads 191 right against 251 left, and an asset's own lean lives in
   // its `rightOfTravel` rather than here.
   const right = rand(seed, index, 0x77) < 0.5;
@@ -411,7 +409,7 @@ export function lateralFor(
     // Z-1's conflict, resolved by {@link resolveCorridor}. A lateral drawn
     // from a band never triggers it — Z2 starts at exactly 1.0W — but the
     // call is here rather than at the caller so that a band whose extent
-    // is later widened toward the measured distribution is covered
+    // is later widened toward the vocabulary's distribution is covered
     // without anyone having to remember to add it.
     const fixed = resolveCorridor(t, baseH, acrossW, tallW);
     t = fixed.t;

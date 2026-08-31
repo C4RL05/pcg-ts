@@ -571,11 +571,11 @@ const MARKER_KEY = {
  * different clouds — which is what lets one gather serve both.
  *
  * ONLY THE LATERAL QUANTILES COME ALONG. L-2 draws its magnitude from the
- * marker's own measured lateral and then forces it outside and past
+ * marker's own lateral distribution and then forces it outside and past
  * `MARKER.minLateralW`; nothing here reads the marker's height
  * distribution, because L-2 fixes the height in a band of its own and
  * `legibility.ts` argues at length for why filtering markers on their
- * measured height median is the same constraint counted twice.
+ * height median is the same constraint counted twice.
  */
 export function markerCloud(markers: MarkerKit): Geometry {
   const geo = createPointCloud(3);
@@ -596,7 +596,7 @@ export function markerCloud(markers: MarkerKit): Geometry {
     const w = a.where;
     if (!w) {
       throw new Error(
-        `markerCloud: the reserved marker "${a.name}" (id ${a.id}) carries no measured placement, and L-2 draws its lateral from exactly that. reserveMarkers picks from assets that have one, so this kit was filtered differently somewhere.`,
+        `markerCloud: the reserved marker "${a.name}" (id ${a.id}) carries no placement distribution (\`where\`), and L-2 draws its lateral from exactly that. reserveMarkers picks from assets that have one, so this kit was filtered differently somewhere.`,
       );
     }
     p10.set(i, w.lateral.p10);
@@ -1646,10 +1646,10 @@ export const CANDIDATE = {
  * assembled.
  *
  * `max(1, instances)` IS THE WEIGHT, transcribed. `reserveMarkers` argues
- * for weighting by how often the source used the asset rather than
+ * for weighting by the asset's frequency in the vocabulary rather than
  * uniformly — L-2 puts its marker at every corner of a severity, so
  * whatever is chosen becomes one of the most repeated objects on the lap,
- * and promoting a one-off to that is a bigger departure from the source
+ * and promoting a one-off to that is a bigger departure from the vocabulary
  * than L-2 intends. The floor of 1 is what keeps a never-used candidate
  * reachable at all.
  */
@@ -1922,7 +1922,7 @@ export async function cookReserveMarkers(opts: {
   }
 
   // TALLEST FIRST, which is `reserveMarkers`' rule and not this graph's:
-  // ordering three objects by a measurement they already carry is not a
+  // ordering three objects by a dimension they already carry is not a
   // decision about the lap, and putting it here keeps the graph from
   // publishing a role column that nothing would check.
   const bySize = [...picked].sort((a, b) => b.size.tall - a.size.tall);

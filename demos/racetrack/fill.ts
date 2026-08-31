@@ -1,8 +1,8 @@
 /**
  * Growing mass inside a box region.
  *
- * WHAT THIS IS FOR. The kit this demo dresses with describes each asset
- * as a handful of axis-aligned boxes, and a box is an ENVELOPE rather
+ * WHAT THIS IS FOR. The vocabulary this demo dresses with describes each
+ * asset as a handful of axis-aligned boxes, and a box is an ENVELOPE rather
  * than the thing itself: built solid at its published size, an asset
  * comes out heavier than the art it stands for, and a roadside of those
  * reads as a field of blocks. This is the node chain that fills an
@@ -12,7 +12,7 @@
  *
  * THE TRIM IS SMALLER THAN THE HEADLINE. "A bounding box holds five times
  * the art inside it" is a fact about ONE box round a whole asset. A
- * decomposition into six is already close: measured over this kit, the
+ * decomposition into six is already close: across this vocabulary, the
  * boxes of a `block` asset sum to 21% of its bounding box where the art
  * fills 17%, so the fill's job is to remove about a fifth of the box
  * volume, not four fifths of it. Erode to the headline figure and the
@@ -124,8 +124,8 @@ export const FILL_OUTPUT = "cells";
  * The grid is laid over the BOUNDING BOX and then cut down to the
  * decomposition, rather than one grid per box: a single lattice means
  * cells never overlap, so counting them is measuring volume, and the
- * denominator of the occupancy figure is the same bounding box the kit
- * measures against.
+ * denominator of the occupancy figure is the same bounding box the
+ * vocabulary's own figures are stated against.
  *
  * `jitter: 0`, deliberately. Jitter is what makes a scatter look natural
  * and it is also what makes cells stop tiling — a jittered cell overlaps
@@ -181,7 +181,7 @@ export function buildFillGraph(opts: FillOptions): Graph {
 /**
  * The threshold that keeps `share` of the values in `samples`.
  *
- * Nearest-rank, matching how the kit's own percentiles are computed, so a
+ * Nearest-rank, matching how the vocabulary's own percentiles are stated, so a
  * threshold and a published band are never two conventions apart. Returns
  * a value BELOW the smallest sample when `share` is 1, so "keep
  * everything" is expressible rather than a special case.
@@ -197,7 +197,7 @@ export function calibrateKeep(samples: readonly number[], share: number): number
 /**
  * Fill one asset's envelope as a SHELL — walls around a void.
  *
- * WHY THIS IS A DIFFERENT CHAIN AND NOT A PARAMETER. The kit separates
+ * WHY THIS IS A DIFFERENT CHAIN AND NOT A PARAMETER. The vocabulary separates
  * `block` (solid in all three axes) from `shell` (built of walls around a
  * void) because they are different things to grow, and averaging them
  * produces neither: erode a solid and you get porous rubble, erode a

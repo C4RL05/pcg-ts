@@ -57,9 +57,9 @@ export function lapFor(seed: number): Promise<CookedLap> {
 /**
  * The lap for a seed, dressed from the shipped vocabulary.
  *
- * The shipped vocabulary rather than a measured kit, deliberately: it is
- * the one every suite can reach, since the measured kits are absent from a
- * plain checkout.
+ * The shipped vocabulary rather than a local catalogue, deliberately: it
+ * is the one every suite can reach, since the local catalogues are absent
+ * from a plain checkout.
  */
 export async function dressedLapFor(
   seed: number,

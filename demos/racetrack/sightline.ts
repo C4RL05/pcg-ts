@@ -13,10 +13,10 @@
  * and running them the other way makes the cull and the band mix look
  * incompatible when they are only mis-sequenced.
  *
- * AND IT IS A DECISION TO BE BETTER THAN THE SOURCE. There is no
- * occlusion data behind it — the originals were built by eye and some of
- * their corners are genuinely blind. Same standing as Z-1's corridor,
- * and it has to be labelled that way rather than presented as measured.
+ * AND IT IS A DECISION, NOT A STATISTIC. Nothing in the vocabulary says
+ * what a driver can see, so there is no occlusion data behind it. Same
+ * standing as Z-1's corridor, and it has to be labelled as a choice
+ * rather than presented as a figure.
  *
  * THE TEST IS A CHORD, NOT A RIBBON ALONG THE CENTRELINE. On a straight
  * the two are the same and a track-space test would do. Through a bend

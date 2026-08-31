@@ -40,7 +40,7 @@ export interface StationedPlacement extends AssetPlacement {
    *
    * WHY THEY ARE MARKED RATHER THAN INFERRED. A tunnel rib is structure,
    * not scenery: its lateral is dictated by the tunnel it belongs to and
-   * not drawn from a measured distribution, and it is placed as one of a
+   * not drawn from a lateral distribution, and it is placed as one of a
    * repeated run rather than at a station of its own. Z-3's bands
    * describe where scenery sits across the track, so counting forty ribs
    * as forty `over` placements measures the tunnel instead of the
@@ -64,7 +64,7 @@ export interface StationedPlacement extends AssetPlacement {
  * "archetype", and this kit has no archetype labels by design — the
  * previous attempt's fitted three-way class is what drove a lap-scale
  * artefact. Per-asset is the stricter reading and, for what L-4 is
- * actually for, the better one: a player navigating by scenery
+ * actually for, the better one: a driver navigating by scenery
  * recognises a specific object, not a family it belongs to.
  */
 export function uniqueAssets(placements: readonly StationedPlacement[]): Set<number> {
@@ -148,9 +148,9 @@ export interface LandmarkRepair {
  * L-4: every tenth of the lap gets at least one asset that appears
  * nowhere else on it.
  *
- * WHY IT MATTERS AND WHAT IT PREVENTS: without it a player cannot tell
- * where they are from the scenery, which is exactly the failure of the
- * originals' worst tracks — one family covering 54% of placements. A lap
+ * WHY IT MATTERS AND WHAT IT PREVENTS: without it a driver cannot tell
+ * where they are from the scenery, which is exactly the failure of a lap
+ * dressed from one family — one covering 54% of placements. A lap
  * can satisfy every density and band rule and still be unnavigable.
  *
  * THE REPAIR RE-DRAWS RATHER THAN ADDS, so D-1's budget stays exact: a
@@ -259,10 +259,10 @@ export function landmarkRepairIsMinimal(
  *
  * THE SELECTION IS ON PROPORTIONS, NOT ON CLASS. The rule says "one
  * archetype per corner severity", and this kit has no archetype labels by
- * design. Upstream's reading, which is the one implemented here: any
- * asset whose own `size` is markedly taller than it is wide or long, and
- * whose measured height median already lands where the rule wants the
- * marker, is a vertical object — whatever family it came from.
+ * design. The reading implemented here: any asset whose own `size` is
+ * markedly taller than it is wide or long, and whose height median
+ * already lands where the rule wants the marker, is a vertical object —
+ * whatever family it came from.
  */
 export const MARKER = {
   /** L-2's placement window before the corner entry, in W. */
@@ -271,7 +271,7 @@ export const MARKER = {
   heightW: [1, 2],
   /** `tall` must exceed this multiple of the larger footprint axis. */
   slenderness: 1.5,
-  /** And the asset's own measured height median must land in this band. */
+  /** And the asset's own height median must land in this band. */
   heightMedianW: [1, 2],
   /** Markers are pushed at least this far out, so Z-1 never has to move one. */
   minLateralW: 1.5,
@@ -280,14 +280,14 @@ export const MARKER = {
 /**
  * L-3's numbers.
  *
- * INVENTED, AND MEASURED TO BE SO. Over the 305 corners tighter than
- * R = 8W across all 22 source circuits, 20% have any vertical in this
- * window at all, 4% have three or more, and THE MEDIAN COUNT IS ZERO.
- * Where three do happen to fall there their spacing CV is 0.46 — not a
- * ruler, but not random either. So this rule is a pure addition: it is
- * built here because the demo is allowed to be better than its source,
- * and it is labelled so that nobody later reads a passing L-3 as evidence
- * that the originals did this.
+ * INVENTED, AND LABELLED AS SUCH. The baseline L-3 departs from is in
+ * {@link BRAKING}: in the window before a tight corner the median vertical
+ * count is ZERO, a fifth of those corners have any vertical there at all,
+ * and 4% have three or more. Where three do fall their spacing CV is 0.46
+ * — not a ruler, but not random either. So this rule is a pure addition:
+ * it is built here because the demo is allowed to be better than its
+ * catalogue, and it is labelled so that nobody later reads a passing L-3
+ * as evidence that a catalogue did this.
  */
 export const BRAKING = {
   /** L-3's window before the corner entry, in W. */
@@ -298,10 +298,10 @@ export const BRAKING = {
   count: 3,
   /** The band the ruler's common lateral is drawn from, in W. */
   lateralW: [1.5, 2.5],
-  /** What the originals do in the same window, for the contrast report. */
-  sourceMedianCount: 0,
-  sourceAnyShare: 0.2,
-  sourceThreeShare: 0.04,
+  /** What the catalogue's own placements do there, for the contrast report. */
+  specMedianCount: 0,
+  specAnyShare: 0.2,
+  specThreeShare: 0.04,
 } as const;
 
 /** Is this asset a vertical object, by its own proportions alone? */
@@ -311,8 +311,8 @@ export function isVertical(a: PlaceableAsset): boolean {
 }
 
 /**
- * The stricter reading, which also asks that the asset's instances
- * HISTORICALLY sat at marker height.
+ * The stricter reading, which also asks that the asset's own height
+ * median ALREADY sit at marker height.
  *
  * NOT THE ONE USED, and the reason is worth keeping. On the demo's kit the
  * proportion test alone finds 8 verticals out of 229 placeable assets;
@@ -324,11 +324,11 @@ export function isVertical(a: PlaceableAsset): boolean {
  *
  * And the clause is measuring the wrong thing. L-2 fixes the marker's
  * height at 1-2W and this code sets it there explicitly, so where the
- * asset's instances happened to sit in the source is a property the
+ * asset's own instances happen to sit is a property the
  * placement then OVERRIDES. Filtering on it is the same constraint
  * counted twice, and it costs five eighths of the vocabulary to do it.
  * Kept as a function because the contrast is worth reporting, and because
- * if upstream's validator applies it, the number it will see is here.
+ * if the rule's own check applies it, the number it will see is here.
  */
 export function strictlyVertical(a: PlaceableAsset): boolean {
   if (!isVertical(a)) return false;
@@ -358,7 +358,7 @@ export interface MarkerKit {
  * WHY RESERVATION RATHER THAN SELECTION AFTER THE FACT. L-2 wants a
  * DISTINCT object per severity, used consistently for the whole lap. An
  * object that also appears sixty times as ordinary scenery is not
- * distinct, and a player cannot brake on it. Exclusivity is the property
+ * distinct, and a driver cannot brake on it. Exclusivity is the property
  * that makes the rule work at all, so it is established by construction:
  * these three are removed from the general pool before a single station
  * is dressed, and they appear only where the corner language puts them.
@@ -377,11 +377,11 @@ export function reserveMarkers(
   const cands = markerCandidates(assets);
   if (cands.length < 3) return { pool: [...assets] };
 
-  // WEIGHTED BY HOW OFTEN THE SOURCE USED THE ASSET, not uniform over the
-  // candidates. L-2 puts its marker at every corner of a severity, so
+  // WEIGHTED BY THE ASSET'S FREQUENCY IN THE VOCABULARY, not uniform over
+  // the candidates. L-2 puts its marker at every corner of a severity, so
   // whatever is chosen becomes one of the most repeated objects on the
   // lap — and promoting a one-off to that is a far bigger departure from
-  // the source than L-2 intends. Of this kit's eight verticals one has 18
+  // the vocabulary than L-2 intends. Of this kit's eight verticals one has 18
   // instances and one has 1; a uniform draw treats those as equally
   // plausible corner furniture, which they are not.
   const picked: PlaceableAsset[] = [];
@@ -744,9 +744,9 @@ export function placeCornerLanguage(
     let victimCount = 1;
     for (let i = 0; booked === undefined && i < out.length; i++) {
       const p = out[i];
-      // NEVER CONVERT A MARKER. On a real circuit two corners can be
-      // close enough that one's marker sits inside the next one's
-      // window, and a marker placed at every corner is by then one of
+      // NEVER CONVERT A MARKER. Two corners can be close enough that one's
+      // marker sits inside the next one's window, and a marker placed at
+      // every corner is by then one of
       // the most REPEATED assets on the lap — which is exactly what the
       // victim rule below reaches for. Left unguarded it eats the
       // previous corner's marker and the lap comes up one short, with
@@ -780,7 +780,7 @@ export function placeCornerLanguage(
     const cooked = drawn ? drawn.rulers.slice(ti * BRAKING.count, (ti + 1) * BRAKING.count) : [];
     // EXACTLY EVEN, SPANNING THE WINDOW END TO END — hoisted above the
     // lateral because the lateral now depends on them. Spacing CV is zero
-    // by construction, against the 0.46 the source manages by accident.
+    // by construction, against the 0.46 the vocabulary manages by accident.
     const stations = rulerStations(c, lapW);
     const drawnMag =
       BRAKING.lateralW[0] + rand(seed, ti, 0x3b01) * (BRAKING.lateralW[1] - BRAKING.lateralW[0]);

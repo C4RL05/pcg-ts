@@ -1,20 +1,20 @@
 /**
- * Which asset goes at each station, and where its own measurements put
+ * Which asset goes at each station, and where its own distributions put
  * it.
  *
  * NO ARCHETYPE LABEL. The previous attempt sorted assets into a fitted
  * three-way class and gave each class its own distribution, and the class
- * label ended up driving a lap-scale artefact that no measurement of the
- * source supports. So there is no label here: each asset carries its own
- * measured behaviour — where across the track its instances sat, how
- * high, which side, and how its rate varied with curvature — and that is
- * what places it. An asset is its own archetype.
+ * label ended up driving a lap-scale artefact that nothing in the
+ * vocabulary supports. So there is no label here: each asset carries its
+ * own behaviour — where across the track its instances sit, how high,
+ * which side, and how its rate varies with curvature — and that is what
+ * places it. An asset is its own archetype.
  *
  * CURVATURE ENTERS HERE AND NOWHERE ELSE. D-6's response is per asset:
  * ONE density along the lap, with each asset's share of it modulated by
  * its own curvature preference. The station process upstream of this
  * knows nothing about curvature, and total density is never modulated —
- * `affinity` is measured against LAP LENGTH, so it already carries the
+ * `affinity` is stated against LAP LENGTH, so it already carries the
  * population's own decline in bends, and applying D-6's population curve
  * on top would count it twice.
  *
@@ -27,7 +27,7 @@ import { CORRIDOR, fitsOverhead, resolveCorridor } from "./zones.js";
 import { SAME_PLACE_W, SAME_SHARE } from "./tolerance.js";
 import { mixDonorPriority, rand } from "./rand.js";
 
-/** The per-asset measurements this module places from. */
+/** The per-asset distributions this module places from. */
 export interface AssetWhere {
   readonly lateral: { readonly median: number; readonly p10: number; readonly p90: number };
   readonly height: { readonly median: number; readonly p10: number; readonly p90: number };
@@ -43,7 +43,7 @@ export interface PlaceableAsset {
   readonly id: number;
   readonly name: string;
   readonly shape: string;
-  /** How many times this asset appeared on the circuit it was measured on. */
+  /** This asset's frequency in the vocabulary. */
   readonly instances: number;
   readonly size: { readonly across: number; readonly along: number; readonly tall: number };
   readonly capped?: boolean;
@@ -53,7 +53,7 @@ export interface PlaceableAsset {
 export type CurvatureBucket = "straight" | "easy" | "medium" | "tight";
 
 /**
- * Upstream's cuts, in W. Not guessed — an earlier version here used
+ * The rule set's cuts, in W. Not guessed — an earlier version here used
  * 8/16/30 and the straight edge was well off, which moves a lot of track
  * between buckets for a statistic that is keyed by bucket name.
  */
@@ -73,8 +73,8 @@ export { rand } from "./rand.js";
  * A PIECEWISE-LINEAR INVERSE CDF, which is the most the published summary
  * supports. Three points is not much, and inventing a shape between them
  * — a lognormal fitted to the quantiles, say — would put detail in the
- * output that no measurement backs. Below p10 and above p90 it continues
- * the outer segment's slope rather than clamping, so the tails exist
+ * output that nothing in the vocabulary backs. Below p10 and above p90 it
+ * continues the outer segment's slope rather than clamping, so the tails exist
  * without being invented: clamping would pile a tenth of every asset's
  * instances onto exactly two values.
  */
@@ -94,23 +94,23 @@ export interface AssetPlacement {
   readonly asset: PlaceableAsset;
   /** Signed offset across the track, positive RIGHT of travel, in W. */
   readonly t: number;
-  /** Height in W, on whatever datum the source's `where.height` used. */
+  /** Height in W, on whatever datum `where.height` uses. */
   readonly h: number;
 }
 
 /**
  * The weight an asset carries at a station of the given curvature.
  *
- * `instances` is its natural frequency on the circuit it was measured
- * on — an asset placed twenty times is twenty times as likely as one
- * placed once, which is what "how often does this appear" means. The
- * affinity then modulates that by where the station is.
+ * `instances` is its natural frequency in the vocabulary — an asset
+ * carrying twenty is twenty times as likely as one carrying one, which is
+ * what "how often does this appear" means. The affinity then modulates
+ * that by where the station is.
  *
- * A ONE-OFF STILL GETS A WEIGHT, deliberately: 135 of the 206 assets
- * appeared exactly once, and dropping them would throw away two thirds of
- * the vocabulary in exchange for a slightly better frequency match. L-4
- * wants a landmark in every tenth of the lap and those are where it comes
- * from.
+ * A ONE-OFF STILL GETS A WEIGHT, deliberately: the vocabulary has 135 of
+ * its 206 assets at exactly one, and dropping them would throw away two
+ * thirds of the vocabulary in exchange for a slightly better frequency
+ * match. L-4 wants a landmark in every tenth of the lap and those are
+ * where it comes from.
  */
 export function weightAt(asset: PlaceableAsset, bucket: CurvatureBucket): number {
   if (!asset.where) return 0;
@@ -119,10 +119,10 @@ export function weightAt(asset: PlaceableAsset, bucket: CurvatureBucket): number
 }
 
 /**
- * Choose an asset for one station and place it from its own measurements.
+ * Choose an asset for one station and place it from its own distributions.
  *
  * The lateral is drawn from the asset's OWN distribution rather than from
- * a band, which is what Z-1 means by "draw |t| from the measured
+ * a band, which is what Z-1 means by "draw |t| from the asset's own
  * distribution" — and it is what finally makes the corridor resolution
  * reachable: 32 of the 206 assets have a lateral p10 inside 1W.
  */
@@ -160,17 +160,17 @@ export function placeAsset(
 export type Band = "over" | "verge" | "near" | "mid" | "far" | "distant";
 
 /**
- * Z-3's shares — the POOLED rule, and the per-circuit spread behind it.
+ * Z-3's shares — the POOLED rule, and the per-lap spread beside it.
  *
- * The rule is pooled over every object in the source era, and a single
- * circuit sits outside it on some band as a matter of course: the
- * per-circuit p10-p90 is roughly twice as wide. So Z-3 is a target for a
- * GENERATED lap, not a description any original satisfies, and an
- * original missing it is not evidence against it.
+ * The rule is pooled over every object in the vocabulary, and a single lap
+ * sits outside it on some band as a matter of course: the per-lap p10-p90
+ * is roughly twice as wide. So Z-3 is a target for a GENERATED lap, not a
+ * description every lap satisfies, and one lap missing it is not evidence
+ * against it.
  *
- * A generated lap is scored against `rule`. A real circuit is compared
- * against `spread`, and comparing one to the other is how a good exemplar
- * gets mistaken for a bad generator.
+ * A generated lap is scored against `rule`. A single lap's own wander is
+ * judged against `spread`, and comparing one to the other is how a good
+ * lap gets mistaken for a bad generator.
  */
 export const Z3 = {
   over: { rule: [0.1, 0.21], spread: [0.06, 0.32], median: 0.13 },
@@ -185,14 +185,14 @@ export const Z3 = {
  * Which band a placement falls in.
  *
  * THE DATUM IS A PARAMETER BECAUSE IT CHANGES THE ANSWER, and Z-3 does
- * not state which one it means. Everything upstream publishes is on the
+ * not state which one it means. Every published figure is on the
  * BOUNDS CENTRE — §13's "object centres stand in for placements" — so a
  * gantry over the track is logged at h = 3.19W with its legs on the
  * ground, and `centre` is the only datum that can be compared against
  * those figures.
  *
  * `base` is the physically meaningful one and gives a different answer:
- * on one circuit it moved `over` from 9.5% to 12.7% and `verge` from 9.0%
+ * on one lap it moved `over` from 9.5% to 12.7% and `verge` from 9.0%
  * to 5.9%. It is not more correct, it is a different statistic, and
  * quoting a base-banded figure against a centre-banded rule is a
  * comparison of two things.
@@ -241,7 +241,8 @@ export function bandOfPlacement(
   // reclassifies genuine values inside that sliver too. Measured across
   // four seeds of the dressed lap, the nearest placement to any boundary
   // that was not exactly on one sat 8.9e-4W away — an order of magnitude
-  // clear of it — and on the measured circuits the nearest is 8e-4W.
+  // clear of it — and among the vocabulary's own placements the nearest is
+  // 8e-4W.
   const inside = (limit: number): boolean => a < limit - SAME_PLACE_W;
 
   // ANCHORED INSIDE THE CORRIDOR IS `over`, WHATEVER ITS HEIGHT. Z2's
@@ -251,10 +252,9 @@ export function bandOfPlacement(
   // placements ... which is why 8% of terrain reads as over the track".
   //
   // This was `a < 1.5` for both, which counted the corridor as verge and
-  // put seven points of a 362-placement circuit in the wrong band —
+  // put seven points of a 362-placement lap in the wrong band —
   // `over` 3% against a true 10%, `verge` 13% against 6%. It was caught
-  // by a second measurement of the same circuit disagreeing, not by
-  // anything here.
+  // by a second pass over the same lap disagreeing, not by anything here.
   if (inside(CORRIDOR.halfWidthW)) return "over";
   if (
     inside(1.5) &&
@@ -278,8 +278,8 @@ export function bandOfPlacement(
  * falls in it", and the placement's lateral was then drawn from the whole
  * distribution — which is wide, so the draw landed in a different band as
  * often as not. Overlap is the honest test: an asset belongs to a band if
- * its instances are OBSERVED there, which is what makes placing one there
- * a statement about the source rather than about an average.
+ * its own instances REACH there, which is what makes placing one there a
+ * statement about that asset rather than about an average.
  *
  * A distribution straddling the centreline reaches 0, because |t| does.
  */
@@ -390,21 +390,21 @@ export function mixInsideRule<T extends AssetPlacement>(
  * Bring a lap's band mix inside Z-3 — TO THE NEAREST EDGE, never to the
  * centre.
  *
- * WHY Z-3 IS REPAIRED AT ALL, given that the exemplar misses it. Because
- * it is not a measurement. Across the twenty-two circuits the observed
- * range is `over` 4-40% and `near` 0-56%; a gate at the full range is
- * vacuous and a gate at p10-p90 rejects a fifth of real circuits. Z-3 is
- * deliberately NARROWER than the source — the same standing as Z-1's
- * corridor, a decision to be better than what was measured — so a lap
- * outside it reads wrong even though some original does it.
+ * WHY Z-3 IS REPAIRED AT ALL, given that a catalogue's own placements can
+ * miss it. Because Z-3 does not describe them. A catalogue can run `over`
+ * anywhere in 4-40% and `near` in 0-56%, and a gate at that full range is
+ * vacuous. Z-3 is deliberately NARROWER — the same standing as Z-1's
+ * corridor, a decision to be better than what a catalogue settles for —
+ * so a lap outside it reads wrong even though a catalogued placement
+ * might sit there.
  *
  * AND WHY THE NEAREST EDGE. Driving every lap to the centre of each band
- * would make generated laps markedly more uniform than the originals,
- * which vary by a factor of five on `over`. That is the density-envelope
- * error in different clothes: imposing at the LAP level an aggregate the
- * population reaches through variation BETWEEN laps. Eight laps spread
- * across a band is correct; eight laps all landing on 15% would be worse
- * art while scoring better against the rule.
+ * would make generated laps markedly more uniform than the catalogue's
+ * own placements, which vary by a factor of five on `over`. That is the
+ * density-envelope error in different clothes: imposing at the LAP level
+ * an aggregate the population reaches through variation BETWEEN laps.
+ * Eight laps spread across a band is correct; eight laps all landing on
+ * 15% would be worse art while scoring better against the rule.
  *
  * So: lift a band to its floor, trim it to its ceiling, stop. Enforce the
  * bound, preserve the spread inside it.
@@ -426,7 +426,7 @@ export function mixInsideRule<T extends AssetPlacement>(
  *
  * Eight is enough that a pool holding any piece that fits finds one, and
  * small enough that a pool holding none is abandoned and the donor marked.
- * It is a search resolution and not a quantity anybody measured — but it is
+ * It is a search resolution and not a quantity anything states — but it is
  * load-bearing, not a margin: at one attempt the enclosed kit's mix test
  * fails outright, which is the check that says so.
  */
@@ -460,9 +460,9 @@ export function repairBandMix<T extends AssetPlacement & { readonly station: num
    *
    * L-6's cover uses this. Its pieces are all `over` by geometry and a
    * lap can carry forty of them, which would take the band from a tenth
-   * to a quarter of the population and make Z-3 unsatisfiable on any
-   * circuit that has a tunnel. They are structure rather than dressing,
-   * and the share Z-3 states was measured on dressing.
+   * to a quarter of the population and make Z-3 unsatisfiable on any lap
+   * that has a tunnel. They are structure rather than dressing, and the
+   * share Z-3 states is a statement about dressing.
    */
   exclude: (p: T) => boolean = () => false,
   /**
@@ -522,10 +522,10 @@ export function repairBandMix<T extends AssetPlacement & { readonly station: num
     // slice of it, so most draws miss — that is arithmetic, not bad luck,
     // and retrying it is a lottery rather than a repair. What the rule
     // wants is a placement of THIS asset in THAT band, and the asset was
-    // chosen precisely because its own instances are observed there. So
-    // the drawn lateral is clamped into the intersection of the band and
-    // the asset's own reach, which keeps every placement inside the range
-    // the source measured for it.
+    // chosen precisely because its own instances reach there. So the drawn
+    // lateral is clamped into the intersection of the band and the asset's
+    // own reach, which keeps every placement inside the range the
+    // vocabulary gives it.
     //
     // This is the same move the `over` branch below has always made with
     // the height, for the same reason: the band is what is being repaired,
@@ -534,7 +534,7 @@ export function repairBandMix<T extends AssetPlacement & { readonly station: num
     // where its instances never sat, which is the thing the surrounding
     // comment refuses and still refuses.
     // `where` is present by construction: the pool filter refuses an asset
-    // without one, so there is no band an asset with no measurements could
+    // without one, so there is no band an asset with no distributions could
     // have been drawn for.
     const reach = lateralReach(drawn.asset.where as AssetWhere);
     const [blo, bhi] = BAND_T[dst];
@@ -550,7 +550,7 @@ export function repairBandMix<T extends AssetPlacement & { readonly station: num
     }
     // AN `over` PLACEMENT SPANS THE CORRIDOR; IT DOES NOT SIT IN IT.
     // The band is |t| < 1W — which is the corridor — so filling it from
-    // an asset's own measured height puts an object on the racing line at
+    // an asset's own height puts an object on the racing line at
     // about knee height. Z-1 then either raises it (fine) or stands it off
     // to the corridor edge, which takes it OUT of this band, so the mix
     // refills it and the two rules oscillate: measured at 147 mix moves
@@ -692,10 +692,10 @@ export function repairBandMix<T extends AssetPlacement & { readonly station: num
     }
     if (!donor) break;
 
-    // Re-place the station with an asset whose OWN measurements put it in
+    // Re-place the station with an asset whose OWN distributions put it in
     // the band that needs filling — rather than moving the existing
     // placement's lateral, which would break the link between an asset
-    // and where its instances actually sat.
+    // and where its instances actually reach.
     const [lo, hi] = BAND_T[dst];
     const pool = assets.filter((a) => {
       if (protect.has(a.id)) return false;

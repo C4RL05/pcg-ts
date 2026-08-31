@@ -18,8 +18,8 @@
  * WHAT IS ASSERTED AND WHAT IS ONLY REPORTED. §9 gives L-1 the last word:
  * it runs after the legibility pass and may move or drop a marker that
  * L-2 placed correctly. So L-2 and L-3 are REPORTED after the cull, not
- * asserted — asserting them would be asserting that two rules the source
- * document deliberately ordered never conflict, which is not something
+ * asserted — asserting them would be asserting that two deliberately
+ * ordered rules never conflict, which is not something
  * this pipeline promises or should.
  */
 import { describe, expect, it } from "vitest";
@@ -227,12 +227,12 @@ const ENCLOSED = kitPath(ENCLOSURE_KIT);
  *
  * WHY THIS KIT AND NOT THAT ONE, stated once here because it is the
  * general form of the mistake rather than a fact about tunnels: the mix
- * repair re-draws a placement from an asset whose measured laterals reach
+ * repair re-draws a placement from an asset whose laterals reach
  * into the band being filled, and whether that draw LANDS in the band is a
  * property of how wide the kit's distributions are. The vegetation kit's
  * are narrow, so the repair worked there under a rule that could not work
- * anywhere else, and the suite that gated it was measuring the exemplar.
- * The enclosed kit is 43% covered against a population median of 10.5%,
+ * anywhere else, and the suite that gated it was measuring the catalogue.
+ * The enclosed kit is 43% covered where L-6 asks for 10-25%,
  * its overhead pieces put a third of the raw lap in `over` against a
  * ceiling of 21%, and its laterals are wide enough that a draw misses its
  * own band more often than it hits — so the repair has to actually work.
@@ -358,7 +358,7 @@ describe.skipIf(!ENCLOSED)("the assembled pipeline, on the enclosed circuit", ()
  * WHAT WENT WRONG, because the shape of the bug is the shape of the test.
  * Z-3's `over` band is |t| < 1W, which is the corridor, so its members
  * have to take their height from the band rather than from the asset: a
- * spanning object's measured height is its bounds centre, and a shell's
+ * spanning object's height is its bounds centre, and a shell's
  * bounds centre sits in its own empty middle, which on this kit reads
  * 0.49W — the middle of the road at knee height. Correct so far. But the
  * band's pool was every asset whose lateral sat there, INCLUDING TUNNEL
@@ -415,13 +415,13 @@ function boxProfile(
 /**
  * The DRESSING, without L-6's cover.
  *
- * The silhouette is compared against the reference circuit's own
- * placements, and that circuit is 2% enclosed — its longest covered
+ * The silhouette is compared against the catalogue's own
+ * placements, and that catalogue is 2% enclosed — its longest covered
  * stretch is nine tenths of a half-width. A generator building the
  * POPULATION's 10.5% therefore cannot match it on anything that counts
  * overhead structure, and should not be asked to: it would mean either
- * dropping enclosure or reproducing an exemplar that upstream has now
- * warned about three times. So scenery is compared with scenery, and the
+ * dropping enclosure or reproducing a catalogue already flagged three
+ * times here. So scenery is compared with scenery, and the
  * enclosure share is gated separately, by measurement, against the
  * population figure it actually comes from.
  */
@@ -464,7 +464,7 @@ describe.skipIf(!KIT)("the silhouette", () => {
     });
   }
 
-  it("stands at the same height as the dressing it was measured from", async () => {
+  it("stands at the same height as the reference dressing", async () => {
     const l = await theLap();
     const gen = boxProfile(l, scenery(dressLap(kit, l, 1).boxes));
     const ref = boxProfile(l, await reference());
@@ -481,11 +481,11 @@ describe.skipIf(!KIT)("the silhouette", () => {
       ).toBeLessThan(1);
     }
     // Nothing may stand more than a half-width above the tallest thing
-    // the source itself put on this circuit.
+    // the catalogue itself puts on this lap.
     expect(Math.max(...gen.h)).toBeLessThan(Math.max(...ref.h) + 1);
   }, 300_000);
 
-  it("is built from pieces the same size as the source's", async () => {
+  it("is built from pieces the same size as the reference's", async () => {
     const l = await theLap();
     const gen = boxProfile(l, scenery(dressLap(kit, l, 1).boxes));
     const ref = boxProfile(l, await reference());

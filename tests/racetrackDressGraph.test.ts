@@ -337,7 +337,7 @@ const worstAxis = (want: readonly number[], got: Vector3): number =>
  * already settled, so running the rule over it is a check that nothing
  * moves — necessary, and vacuous on its own. The population that actually
  * exercises both branches is the one at step 2: assets placed from their
- * OWN measured lateral distributions, 32 of which reach inside 1W. This
+ * OWN lateral distributions, 32 of which reach inside 1W. This
  * repeats steps 0 to 2 of `dressLap` from the same exported pieces, which
  * is why it can only be assembled here and not asked for.
  */
@@ -1266,7 +1266,7 @@ describe("racetrack dressing, as a graph", () => {
    * Stripping them is also the honest input. The whole point of porting
    * L-6 is that a caller need not have run it — hand the graph a list that
    * has never seen enclosure and it should build its own, which is exactly
-   * what a game with a spline and a kit would be doing.
+   * what a host with a spline and a catalogue would be doing.
    */
   it("builds enclosure into the lap, and the lap still settles", async () => {
     let totalCover = 0;

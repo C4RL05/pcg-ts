@@ -360,7 +360,7 @@ describe("stationGraph: the process as a graph", () => {
     // Measured 3.775 on this seed, against a Poisson control of 1.335
     // from the same estimator (the test below). The published median at
     // a 16 W window is 5.03 with a p10-p90 of 1.4-17.0, so this sits
-    // inside the source's spread. The bound is set at 2.2 -- above the
+    // inside the published spread. The bound is set at 2.2 -- above the
     // control by a clear margin and below the measurement by one -- so
     // that losing the cluster stage entirely fails it rather than
     // landing in an overlap where neither test says anything.
@@ -554,9 +554,9 @@ describe("stationGraph: D-4's coverage repair", () => {
  * combination went untested — which is the shape of false pass this repo
  * has been caught by before.
  *
- * Gated on the measured kit like every other assembled-pipeline suite:
- * it is derived measurement that lives outside both repositories, so a
- * checkout without it skips rather than fails.
+ * Gated on a local catalogue like every other assembled-pipeline suite:
+ * it is an optional local file, so a checkout without it skips rather
+ * than fails.
  */
 const E2E_KIT = kitPath(DEFAULT_KIT);
 

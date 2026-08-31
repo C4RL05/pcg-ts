@@ -4,7 +4,7 @@
  *
  * WHAT THIS IS FOR. The lap level's graph is built FROM an already-cooked
  * lap today, because `dressGraph` needs a placement list that only
- * TypeScript can produce. That prelude is the reason a game cannot
+ * TypeScript can produce. That prelude is the reason a host cannot
  * generate a track from a serialized graph and a spline alone, and this
  * module is the first half of removing it — the half that decides how
  * many placements there are and where along the lap each one sits.
@@ -247,7 +247,7 @@ export interface StationStageOptions {
  *
  * THE BUDGET IS EXACT, NOT POISSON, deliberately: `stations.ts` says
  * letting the total float "adds variance at the lap scale, which is the
- * one place the source has none". So `total` is `round(density * lapW)`
+ * one place the vocabulary has none". So `total` is `round(density * lapW)`
  * and the clustered population is `total - round(total * background)` —
  * arithmetic on the path's own length, resolved on its primitive domain.
  *
@@ -993,7 +993,7 @@ export const STATION_LENGTH_ATTR = "lapLen";
  * itself. Cooking is async; `dressLap` is sync and is called from a
  * dozen synchronous tests. Making it async to reach a cook would ripple
  * through all of them for no benefit, whereas passing the list in leaves
- * the source pluggable — which is what this campaign is trying to end up
+ * the station provider pluggable — which is what this campaign is trying to end up
  * with anyway.
  */
 export async function cookStations(opts: {

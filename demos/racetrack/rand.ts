@@ -30,7 +30,7 @@ import { hashCombine, hashFloat, hashString } from "pcg-ts";
  *
  * THE END CONDITION, so this is a decision and not an open sore: swap it
  * when something ELSE forces a re-baseline anyway — a change to the
- * station process, the kit, or the fitted density — and take the hash
+ * station process, the vocabulary, or the fitted density — and take the hash
  * with it in the same commit. Doing it alone buys a cleaner import and
  * costs a day of re-reading; doing it alongside costs the diff. Until
  * then this hash IS the demo's stream, and that is the tradeoff on

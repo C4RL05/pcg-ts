@@ -1,20 +1,19 @@
 /**
  * Does the coordinate contract actually transfer?
  *
- * THE ONE END-TO-END CHECK. Everything else in this collaboration rests
- * on one claim: that a station, a signed lateral and a height mean the
- * same thing on both sides. Every occupancy figure exchanged so far could
- * have been right while that claim was false, and a mirrored axis already
- * shipped once on this side without being visible in any render.
+ * THE ONE END-TO-END CHECK. Everything else rests on one claim: that a
+ * station, a signed lateral and a height mean the same thing in the graph
+ * and in the vocabulary. Every occupancy figure could be right while that
+ * claim was false, and a mirrored axis already shipped once without being
+ * visible in any render.
  *
- * So: take 442 placements measured on a real circuit, drop them onto a
- * spline they were never measured from, and ask whether the result reads
+ * So: take 442 placements out of the catalogue, drop them onto a
+ * spline they were never stated against, and ask whether the result reads
  * as a track or as a cloud. The tests below are that question, split into
  * the ways it can fail — placements too far from the road, placements
  * scattered rather than sequenced, both sides of the road empty.
  *
- * SKIPS WITHOUT THE KIT, which lives outside both repositories and is not
- * ours to commit.
+ * SKIPS WITHOUT A CATALOGUE, which is an optional local file.
  */
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
@@ -147,8 +146,8 @@ describe.skipIf(!KIT)("the kit's coordinates on our spline", () => {
    *
    * Comparing the aspect before and after rather than testing the aspect
    * against a number: an absolute threshold would be measuring the KIT
-   * (how flat its boxes are, which is a fact about the source grid and
-   * upstream's business) instead of measuring the transfer. Applying a
+   * (how flat its boxes are, which is a fact about the catalogue and not
+   * about this code) instead of measuring the transfer. Applying a
    * half-width to two axes of three, or mapping across/along/up onto the
    * wrong three, changes this ratio and nothing else here would notice.
    */

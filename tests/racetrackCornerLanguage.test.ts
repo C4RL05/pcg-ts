@@ -261,12 +261,12 @@ describe("cornerLanguage: through the rules that consume it", () => {
 });
 
 describe("cornerLanguage: the marker table", () => {
-  it("refuses a marker with no measured placement, naming which", () => {
+  it("refuses a marker with no placement distribution, naming which", () => {
     const bad = {
       ...markersFor(1),
       open: { ...markersFor(1).open, where: undefined },
     };
-    expect(() => markerCloud(bad)).toThrow(/carries no measured placement/);
+    expect(() => markerCloud(bad)).toThrow(/carries no placement/);
   });
 
   it("gives its three rows distinct identities", () => {
@@ -365,11 +365,11 @@ describe("cornerLanguage: reserving the vocabulary", () => {
     }
   });
 
-  it("weights by how often the source used the asset, not uniformly", async () => {
+  it("weights by an asset's frequency in the vocabulary, not uniformly", async () => {
     // THE MECHANISM `reserveMarkers` ARGUES FOR. L-2 puts its marker at
     // every corner of a severity, so whatever is chosen becomes one of the
     // most repeated objects on the lap -- and promoting a one-off to that
-    // is a bigger departure from the source than L-2 intends. Measured as
+    // is a bigger departure from the vocabulary than L-2 intends. Measured as
     // the mean `instances` of what is picked against the mean over all
     // candidates, over enough seeds for the difference to mean something.
     const cands = markerCandidates(POOL);
