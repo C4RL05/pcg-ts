@@ -499,8 +499,8 @@ describe("describeGraphAssets: the graph corpus", () => {
   );
 
   it("finds every spawner in the corpus, bodies included", () => {
-    expect(new Set(spawners.map((s) => s.file)).size).toBe(24);
-    expect(spawners).toHaveLength(37);
+    expect(new Set(spawners.map((s) => s.file)).size).toBe(25);
+    expect(spawners).toHaveLength(39);
     // Eight of them are inside a `write/instances-by-species` body.
     expect(spawners.filter((s) => s.node.includes(" > "))).toHaveLength(8);
   });

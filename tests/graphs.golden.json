@@ -5,6 +5,164 @@
     "relative": 0.001
   },
   "examples": {
+    "basics-a-draw-that-survives-a-move.json": {
+      "outputs": {
+        "drawn on identity": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 32,
+            "batches": [
+              {
+                "assetId": "prop",
+                "count": 32,
+                "channels": [
+                  {
+                    "name": "color",
+                    "type": "f32",
+                    "itemSize": 3,
+                    "values": {
+                      "min": [
+                        0.0347,
+                        0.12,
+                        0.0557
+                      ],
+                      "max": [
+                        0.9443,
+                        0.12,
+                        0.9653
+                      ],
+                      "mean": [
+                        0.4466,
+                        0.12,
+                        0.5534
+                      ]
+                    }
+                  }
+                ],
+                "translation": {
+                  "min": [
+                    -22.5,
+                    0,
+                    0
+                  ],
+                  "max": [
+                    22.5,
+                    0,
+                    2
+                  ],
+                  "mean": [
+                    0,
+                    0,
+                    1
+                  ]
+                },
+                "scale": {
+                  "min": [
+                    2,
+                    2.4,
+                    1.9
+                  ],
+                  "max": [
+                    2,
+                    2.4,
+                    1.9
+                  ],
+                  "mean": [
+                    2,
+                    2.4,
+                    1.9
+                  ]
+                },
+                "rotation": {
+                  "min": 0,
+                  "max": 0,
+                  "mean": 0
+                }
+              }
+            ]
+          }
+        ],
+        "drawn on station": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 32,
+            "batches": [
+              {
+                "assetId": "prop",
+                "count": 32,
+                "channels": [
+                  {
+                    "name": "color",
+                    "type": "f32",
+                    "itemSize": 3,
+                    "values": {
+                      "min": [
+                        0.0527,
+                        0.12,
+                        0.1495
+                      ],
+                      "max": [
+                        0.8505,
+                        0.12,
+                        0.9473
+                      ],
+                      "mean": [
+                        0.41,
+                        0.12,
+                        0.59
+                      ]
+                    }
+                  }
+                ],
+                "translation": {
+                  "min": [
+                    -22.5,
+                    0,
+                    14
+                  ],
+                  "max": [
+                    22.5,
+                    0,
+                    16
+                  ],
+                  "mean": [
+                    0,
+                    0,
+                    15
+                  ]
+                },
+                "scale": {
+                  "min": [
+                    2,
+                    2.4,
+                    1.9
+                  ],
+                  "max": [
+                    2,
+                    2.4,
+                    1.9
+                  ],
+                  "mean": [
+                    2,
+                    2.4,
+                    1.9
+                  ]
+                },
+                "rotation": {
+                  "min": 0,
+                  "max": 0,
+                  "mean": 0
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
     "basics-attribute-from-noise.json": {
       "outputs": {
         "points": [

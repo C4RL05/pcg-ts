@@ -4,8 +4,9 @@ Generated from the graphs in [`graphs`](../graphs) by `node scripts/gen-graphs.m
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-79 examples, alphabetical by file:
+80 examples, alphabetical by file:
 
+- [basics-a-draw-that-survives-a-move.json](#basics-a-draw-that-survives-a-movejson) — keep a random draw when the point moves
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
 - [basics-compose-primitives.json](#basics-compose-primitivesjson) — compose several primitives into a scatter
@@ -85,6 +86,32 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [pipeline-4-detail.json](#pipeline-4-detailjson) — staged pipeline 4/5 — buildings, wall posts and forest
 - [pipeline-5-roads-edits.json](#pipeline-5-roads-editsjson) — staged pipeline 5/5, edited — the settlement, its roads and authored plots
 - [pipeline-5-roads.json](#pipeline-5-roadsjson) — staged pipeline 5/5 — a road network between the district centres
+
+## basics-a-draw-that-survives-a-move.json
+
+**keep a random draw when the point moves**
+
+TWO DRAWS, ONE NODE EACH, AND THE ONLY DIFFERENCE IS WHAT GETS HASHED. `randomField` keys on a point's IDENTITY — the bit pattern of its stored position folded with its `seed` attribute — so the number belongs to the point and survives reordering, filtering, and being re-derived inside a neighbour's halo. What it does NOT survive is the point MOVING. `randomFrom` keys on a VALUE the graph computes instead, so a draw can be pinned to something that does not move with the point: a station, a lane, a lot index, an arc coordinate.
+
+THE FOUR ROWS ARE ONE CLOUD DRAWN TWICE. A row of 16 points takes a `station` number from `index`, then a copy of it is translated 2 along Z and `mergePoints` concatenates the two — so the near row and the far row are the same 16 stations at different positions. Both draws then run on that merged cloud, ONE NODE apiece. That is what makes the picture honest: a node's seed is `deriveNodeSeed(graph seed, node id)`, so two draw nodes would differ whatever the points did, and the comparison would prove nothing. Here each draw is a single node evaluating a single expression over both rows, and the two rows agree or disagree for one reason only.
+
+WHAT YOU SEE. The near block is coloured by the identity draw and its two rows disagree column by column. The far block is coloured by the keyed draw and its two rows match, column for column. Both expressions carry the same `key: "pose"` salt, so the salt is not the variable — the hashed thing is. A PURE TRANSLATE IS ENOUGH; nothing is jittered here, because "I only moved it" is exactly the assumption this breaks. The far block's own 14-along-Z offset is applied AFTER both draws and changes neither: once a draw is stored in an attribute it is frozen, and it is the RE-EVALUATION at a new position that returns a different number, not the move itself.
+
+THE KEY IS HASHED AS BITS, NOT AS A NUMBER, which is the trap next to the point. The key here is `floor(station / bucket size)`, and the `floor` is the whole of it: at a bucket size of 1 every station keys for itself, at 3 the far block bands into threes that share a colour — five of them and a runt, since 16 stations do not divide by 3 — and `station / 3` WITHOUT the floor names 16 distinct values again and bands nothing. Two keys differing anywhere in their f32 representation are independent draws, so there is no interval that maps to one stream — quantise deliberately when you mean buckets. A whole number needs no rounding — an f32 holds every integer up to 2^24, which is why `station` is an `i32` and a station index hashes straight. A key must also be ONE number per element; a tuple is refused rather than folded, and a key attribute that is not there raises rather than drawing from zero.
+
+WHY IT EXISTS. Anything that settles by moving things needs this: a repair or relaxation loop that nudges placements every round would re-roll every one of them each pass if the draw were keyed on where they sit. Keyed on the station they hold instead, the population keeps its faces while the loop keeps working. `randomField` is still the right answer to "give this point a number" — this is the other question.
+
+**Tags:** `basics`, `fields`, `determinism`, `attributes`, `instancing`
+
+**Seed:** 1063
+
+**Node types:** `mergePoints`, `pointGrid`, `setAttribute`, `spawnInstances`, `transformPoints`
+
+**Primitives:** *(none)*
+
+**Outputs:** `drawn on identity` (from `spawnIdentity`.`instances`), `drawn on station` (from `spawnStation`.`instances`)
+
+Cook it: `pcg cook graphs/basics-a-draw-that-survives-a-move.json --stats`
 
 ## basics-attribute-from-noise.json
 

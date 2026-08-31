@@ -1,0 +1,30 @@
+var e=`{
+  "_comment": "Panel spec — presentation only; the graph cooks identically without it. See shared/graphUi.ts.",
+  "sections": [
+    {
+      "title": "the move",
+      "controls": [
+        {
+          "param": "moved.translate",
+          "label": "offset",
+          "description": "How far the second row is translated off the first. Any non-zero offset re-rolls the near block, because the identity draw hashes the point's stored position; the far block holds whatever it drew at every setting, including a fractional one."
+        },
+        { "param": "row.countX", "label": "stations", "min": 4, "max": 64, "step": 1 }
+      ]
+    },
+    {
+      "title": "the key",
+      "controls": [
+        {
+          "param": "drawOnStation.value.bucketSize",
+          "label": "bucket size",
+          "description": "How many neighbouring stations share one draw. At 1 every station keys for itself; at 3 the far block bands into threes, the last one a runt because 16 stations do not divide by 3. The \`floor\` around the division is what makes this a bucket — without it the same division names one value per station and bands nothing.",
+          "min": 1,
+          "max": 8,
+          "step": 1
+        }
+      ]
+    }
+  ]
+}
+`;export{e as default};
