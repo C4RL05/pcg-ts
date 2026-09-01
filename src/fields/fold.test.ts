@@ -291,6 +291,10 @@ describe("domain-constant folding, differentially", () => {
     vec: { fn: "vec", args: [{ fn: "nodeSeed" }, 1, 2] },
     component: { fn: "component", args: [{ fn: "vec", args: [{ fn: "nodeSeed" }, 1, 2] }], index: 2 },
     ramp: { fn: "ramp", args: [{ fn: "nodeSeed" }], stops: [[0, 0.25], [1e9, -3]] },
+    // The seed is far past the end of any table this fn admits, so the
+    // case reads the last entry — which is the point: a table read is
+    // uniform because its INDEX is, not because the table is short.
+    lookup: { fn: "lookup", args: [{ fn: "nodeSeed" }], table: [0.25, -3, 7] },
     dot: { fn: "dot", args: [{ fn: "vec", args: [1, 2, 3] }, { fn: "vec", args: [{ fn: "nodeSeed" }, 5, 6] }] },
     // `cross` is the one fn the loops below cannot reach: both operands
     // must be width 3, so a bare `nodeSeed` is a width error rather than a
@@ -412,8 +416,15 @@ describe("domain-constant folding, differentially", () => {
       if (p < 0.74) return { fn: "component", args: [gen(r, 3, depth - 1)], index: Math.floor(r() * 3) };
       if (p < 0.79) return { fn: "length", args: [gen(r, 3, depth - 1)] };
       if (p < 0.84) return { fn: "dot", args: [gen(r, 3, depth - 1), gen(r, 3, depth - 1)] };
-      if (p < 0.9) {
+      if (p < 0.88) {
         return { fn: "ramp", args: [gen(r, 1, depth - 1)], stops: [[-1, 0.25], [0, 0.5], [0.5, -3], [2, 7]] };
+      }
+      // `lookup` carries the same trap `ramp` does, and one more besides:
+      // it is classified UNIFORM, so it is the ARGUMENT that has to keep
+      // a per-element index per-element. A generator that never emitted
+      // one could not catch a fold that collapsed the table read itself.
+      if (p < 0.9) {
+        return { fn: "lookup", args: [gen(r, 1, depth - 1)], table: [0.25, -3, 7, 1600, -0.5] };
       }
       return {
         fn: pick(r, NOISES),
@@ -444,6 +455,59 @@ describe("domain-constant folding, differentially", () => {
     expect(rewritten).toBeGreaterThan(500);
     expect(mismatches).toEqual([]);
   }, 60000);
+
+  it("folds a lookup on a constant index and never one on a per-element index", () => {
+    // The trap `lookup` sets, stated on its own rather than left to the
+    // fuzz: the fn is classified UNIFORM because a table read contributes
+    // no variation OF ITS OWN, and the whole per-element case therefore
+    // rests on the fold recursing into `args`. Collapse the argument and
+    // a table read that was picking one entry per point silently becomes
+    // one entry for the entire domain — a wrong answer with nothing
+    // thrown anywhere.
+    const TABLE = [0.25, -3, 7, 1600];
+    const constIndex: FieldSpec = {
+      fn: "lookup",
+      args: [{ fn: "mul", args: [{ fn: "nodeSeed" }, INV_2_32 * 3] }],
+      table: TABLE,
+    };
+    const perElement: FieldSpec = { fn: "lookup", args: [{ fn: "index" }], table: TABLE };
+    const ctx = variedCtx(5, "point", SEED);
+
+    // The uniform one folds, and the folded field answers what the
+    // unfolded one did.
+    const constField = fieldFromJson(structuredClone(constIndex) as FieldSpec);
+    expect(foldDomainConstants(constField, SEED, FOLD_ANY_SIZE)).not.toBe(constField);
+    expect(subject(constIndex, ctx)).toBe(reference(constIndex, ctx));
+
+    // The per-element one is handed back UNTOUCHED — identity, so the
+    // check cannot be satisfied by a rewrite that happens to agree at
+    // this count.
+    const perField = fieldFromJson(structuredClone(perElement) as FieldSpec);
+    expect(foldDomainConstants(perField, SEED, FOLD_ANY_SIZE)).toBe(perField);
+    expect(subject(perElement, ctx)).toBe(reference(perElement, ctx));
+    // And it really does read four different entries, so a collapse would
+    // be visible rather than a distinction without a difference.
+    const col = evaluateField(perField, ctx);
+    expect(Array.from(col.data)).toEqual([0.25, -3, 7, 1600, 1600]);
+
+    // The same argument one level down: a per-element index buried inside
+    // an otherwise domain-constant expression keeps the whole lookup live.
+    const buried: FieldSpec = {
+      fn: "lookup",
+      args: [{ fn: "add", args: [{ fn: "index" }, { fn: "mul", args: [{ fn: "nodeSeed" }, 0] }] }],
+      table: TABLE,
+    };
+    // Identity is the wrong check here — the fold is free to collapse the
+    // `nodeSeed * 0` half — so the claim is the one that matters: the
+    // result still varies, and still matches the unfolded answer.
+    const buriedFolded = foldDomainConstants(
+      fieldFromJson(structuredClone(buried) as FieldSpec),
+      SEED,
+      FOLD_ANY_SIZE,
+    );
+    expect(render(buriedFolded, ctx)).toBe(reference(buried, ctx));
+    expect(new Set(Array.from(evaluateField(buriedFolded, ctx).data)).size).toBeGreaterThan(1);
+  });
 
   it("agrees on every domain and at every degenerate count", () => {
     const spec: FieldSpec = { fn: "add", args: [seedShift(1021, 0.2, 1600), { fn: "index" }] };

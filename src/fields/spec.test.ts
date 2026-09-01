@@ -42,6 +42,7 @@ import {
   lerp,
   log,
   log2,
+  lookup,
   lt,
   max,
   min,
@@ -363,6 +364,12 @@ const CASES: Case[] = [
   { name: "ramp two stops", make: () => ramp(DEN(), [[0, 0], [1, 1]]) },
   { name: "ramp three stops", make: () => ramp(RND(), [[-1, 2], [0, 0.5], [1, -3]]) },
   { name: "ramp single stop", make: () => ramp(S(), [[0.5, 7]]) },
+  { name: "lookup three entries", make: () => lookup(DEN(), [0.4, 1, -2]) },
+  // A negative and a -0-free zero in the table, and an index that clamps
+  // at both ends over the fixture, so the round trip covers the values a
+  // derived table has to carry verbatim.
+  { name: "lookup clamping index", make: () => lookup(mul(RND(), 8), [-1, 0, 3.5, 12]) },
+  { name: "lookup single entry", make: () => lookup(S(), [42]) },
 
   // -- noise ----------------------------------------------------------
   { name: "valueNoise defaults", make: () => valueNoise() },
@@ -504,6 +511,11 @@ describe("derived spec shapes", () => {
       fn: "ramp",
       args: [{ fn: "attribute", name: "density" }],
       stops: [[0, 1], [2, 3]],
+    });
+    expect(getFieldSpec(lookup(attribute("lane"), [0, 0.5, 1]))).toEqual({
+      fn: "lookup",
+      args: [{ fn: "attribute", name: "lane" }],
+      table: [0, 0.5, 1],
     });
     expect(getFieldSpec(vec(constant(1), constant(2)))).toEqual({
       fn: "vec",

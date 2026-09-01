@@ -1131,11 +1131,11 @@ g.<span class="n">output</span>(n, <span class="s">"out"</span>, <span class="s"
     <p>Note the generated id: a code-built node is named <code>&lt;type&gt;_&lt;n&gt;</code>, whereas a node loaded from JSON keeps the id you gave it. Both appear verbatim in error messages and in <code>describe()</code>, so meaningful ids in your documents pay for themselves the first time something fails.</p>
 
     <h3>listFieldFns()</h3>
-    <p>Returns the complete field-expression vocabulary as a sorted array of 62 names. This is the closed set — an <code>fn</code> not in this list is not a field function, and emitting one produces the error in chapter 11.</p>
+    <p>Returns the complete field-expression vocabulary as a sorted array of 63 names. This is the closed set — an <code>fn</code> not in this list is not a field function, and emitting one produces the error in chapter 11.</p>
     <div class="codeblock"><pre><code>[<span class="s">"abs"</span>, <span class="s">"acos"</span>, <span class="s">"add"</span>, <span class="s">"asin"</span>, <span class="s">"atan"</span>, <span class="s">"atan2"</span>, <span class="s">"attribute"</span>, <span class="s">"attributeIs"</span>,
  <span class="s">"byAttribute"</span>, <span class="s">"clamp"</span>, <span class="s">"component"</span>, <span class="s">"constant"</span>, <span class="s">"cos"</span>, <span class="s">"cross"</span>, <span class="s">"distance"</span>,
  <span class="s">"div"</span>, <span class="s">"dot"</span>, <span class="s">"eq"</span>, <span class="s">"exp"</span>, <span class="s">"exp2"</span>, <span class="s">"fbm"</span>, <span class="s">"floor"</span>, <span class="s">"fract"</span>, <span class="s">"fraction"</span>, <span class="s">"ge"</span>,
- <span class="s">"gt"</span>, <span class="s">"index"</span>, <span class="s">"le"</span>, <span class="s">"length"</span>, <span class="s">"lerp"</span>, <span class="s">"log"</span>, <span class="s">"log2"</span>, <span class="s">"lt"</span>, <span class="s">"max"</span>, <span class="s">"min"</span>,
+ <span class="s">"gt"</span>, <span class="s">"index"</span>, <span class="s">"le"</span>, <span class="s">"length"</span>, <span class="s">"lerp"</span>, <span class="s">"log"</span>, <span class="s">"log2"</span>, <span class="s">"lookup"</span>, <span class="s">"lt"</span>, <span class="s">"max"</span>, <span class="s">"min"</span>,
  <span class="s">"mod"</span>, <span class="s">"mul"</span>, <span class="s">"ne"</span>, <span class="s">"nodeSeed"</span>, <span class="s">"normalize"</span>, <span class="s">"param"</span>, <span class="s">"perlinNoise"</span>,
  <span class="s">"position"</span>, <span class="s">"pow"</span>, <span class="s">"ramp"</span>, <span class="s">"randomField"</span>, <span class="s">"randomFrom"</span>, <span class="s">"rem"</span>, <span class="s">"remap"</span>, <span class="s">"select"</span>, <span class="s">"sign"</span>,
  <span class="s">"simplexNoise"</span>, <span class="s">"sin"</span>, <span class="s">"smoothstep"</span>, <span class="s">"sqrt"</span>, <span class="s">"step"</span>, <span class="s">"sub"</span>, <span class="s">"tan"</span>,
@@ -1162,7 +1162,7 @@ pcg nodes                      <span class="c"># -> "58 node types, by category"
 pcg nodes pointGrid
 
 <span class="c"># the field vocabulary, and one fn's allowed keys</span>
-pcg fields                     <span class="c"># -> "62 field fns"</span>
+pcg fields                     <span class="c"># -> "63 field fns"</span>
 pcg fields randomField         <span class="c"># -> usage: { fn: "randomField", key?: 0 | "salt" }</span>
 
 <span class="c"># every command takes --json and prints the machine-readable report instead</span>
@@ -1400,7 +1400,7 @@ graph.<span class="n">setParam</span>(inputHandle, <span class="s">"items"</span
 
     <h3>What an agent can emit — and what it cannot</h3>
     <p>This is the boundary that matters most, because it is asymmetric and easy to get wrong in the safe-looking direction.</p>
-    <p><strong>You can emit any field the grammar describes.</strong> Those 62 functions, nested arbitrarily, are a complete generation target. Fields built from JSON via <code>fieldFromJson</code> carry their spec: <code>getFieldSpec(field)</code> returns it, <code>fieldToJson(field)</code> gives the JSON back, and the round trip is exact — <code>fieldToJson(fieldFromJson(spec))</code> deep-equals <code>spec</code>, verified.</p>
+    <p><strong>You can emit any field the grammar describes.</strong> Those 63 functions, nested arbitrarily, are a complete generation target. Fields built from JSON via <code>fieldFromJson</code> carry their spec: <code>getFieldSpec(field)</code> returns it, <code>fieldToJson(field)</code> gives the JSON back, and the round trip is exact — <code>fieldToJson(fieldFromJson(spec))</code> deep-equals <code>spec</code>, verified.</p>
     <p><strong>You cannot emit a code-authored field, and you cannot serialize one.</strong> A field composed with the code combinators — <code>clamp(add(0.2, mul(worleyNoise(...), 0.9)), 0, 1)</code> — cooks perfectly well but has no spec. <code>getFieldSpec</code> returns <code>undefined</code> for it, and <code>serializeGraph</code> on a graph containing one cannot represent that parameter. There is no specification for arbitrary code-authored fields, and there will not be one, because there is nothing finite to specify.</p>
     <p>Two consequences follow directly, and both are practical rather than theoretical:</p>
     <ul>
@@ -1463,7 +1463,8 @@ GraphValidationError: unknown output <span class="s">"pts"</span>; declared outp
     <div class="codeblock"><pre><code>FieldJsonError: $: unknown field fn <span class="s">"perlin"</span>; valid fns: abs, acos, add, asin,
 atan, atan2, attribute, attributeIs, byAttribute, clamp, component, constant,
 cos, cross, distance, div, dot, eq, exp, exp2, fbm, floor, fract, fraction, ge, gt,
-index, le, length, lerp, log, log2, lt, max, min, mod, mul, ne, nodeSeed, normalize,
+index, le, length, lerp, log, log2, lookup, lt, max, min, mod, mul, ne, nodeSeed,
+normalize,
 param, perlinNoise, position, pow, ramp, randomField, randomFrom, rem, remap, select,
 sign,
 simplexNoise, sin, smoothstep, sqrt, step, sub, tan, trunc, valueNoise, vec,

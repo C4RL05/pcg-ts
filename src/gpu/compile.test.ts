@@ -232,6 +232,38 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 `);
   });
+
+  it("lookup emits the CPU's rounding chain, not an array index", () => {
+    // Descending, and falling through to entry 0 — that is the whole
+    // agreement with the CPU: an index below the table, and an index that
+    // is NaN, both take the first entry. The boundaries are the halves
+    // `Math.round` splits on, and the entries are the same f32 literals
+    // the CPU stores, so there is no float interior to diverge.
+    const k = compileFieldSpec(
+      { fn: "lookup", args: [{ fn: "attribute", name: "density" }], table: [4, -1.5, 6] },
+      LAYOUT,
+    );
+    expect(k.wgsl).toContain(`fn pcg_lookup_0(t: f32) -> f32 {
+  if (t >= 1.5f) {
+    return 6f;
+  }
+  if (t >= 0.5f) {
+    return -1.5f;
+  }
+  return 4f;
+}`);
+    // A chain, not a fixed-size array the index has to be bounded into —
+    // the only `array<f32>` in the module is the storage binding.
+    expect(k.wgsl).not.toContain("array<f32,");
+    // A one-entry table is a constant, and reads `t` not at all.
+    const one = compileFieldSpec(
+      { fn: "lookup", args: [{ fn: "attribute", name: "density" }], table: [7] },
+      LAYOUT,
+    );
+    expect(one.wgsl).toContain(`fn pcg_lookup_0(t: f32) -> f32 {
+  return 7f;
+}`);
+  });
 });
 
 describe("grammar coverage", () => {
@@ -295,6 +327,7 @@ describe("grammar coverage", () => {
     vec: { fn: "vec", args: [1, 2, 3] },
     component: { fn: "component", args: [[1, 2, 3]], index: 1 },
     ramp: { fn: "ramp", args: [1], stops: [[0, 0], [1, 1]] },
+    lookup: { fn: "lookup", args: [1], table: [4, 5, 6] },
     valueNoise: { fn: "valueNoise" },
     perlinNoise: { fn: "perlinNoise" },
     simplexNoise: { fn: "simplexNoise" },

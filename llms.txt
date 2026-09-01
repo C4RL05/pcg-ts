@@ -526,7 +526,7 @@ would be re-printed by the first edit anyway. The syntax reads like the
 TypeScript API: `+ - * /` and `< <= > >= == !=` infix with JS precedence
 and minimal parens; `attribute("density")`, `attribute("tangent", 3)`;
 `byAttribute("part", { rod: 1 }, 1)`; `component(expr, 0)`;
-`ramp(expr, [[4.5, 0.02]])`; a noise takes one object
+`ramp(expr, [[4.5, 0.02]])`; `lookup(expr, [0, 0.5, 1])`; a noise takes one object
 `perlinNoise({ frequency: 0.05, seed: { from: "node", variant: 0 } })`;
 everything else is `name(arg, …)`. `constant(3)` and a bare `3` are
 DIFFERENT text because they are different trees — the corpus holds both —
@@ -612,7 +612,7 @@ asked for, at the seams only.
 
 A field spec is `{ "fn": <name>, ...args }`. Entries in `args` arrays
 may be nested specs, finite numbers, or number arrays (plain values wrap
-into `constant`). All 62 fns (`listFieldFns()`):
+into `constant`). All 63 fns (`listFieldFns()`):
 
 - Inputs:
   - `{ fn: "constant", value: 1 | [1, 2, 3] }`
@@ -842,6 +842,20 @@ into `constant`). All 62 fns (`listFieldFns()`):
   - `{ fn: "ramp", args: [scalarField], stops: [[0, 0], [1, 1]] }` —
     piecewise-linear through [position, value] stops, strictly ascending,
     clamped at the ends
+  - `{ fn: "lookup", args: [indexField], table: [0.4, 1, -2] }` — the
+    table entry at that index, ROUNDED to nearest and CLAMPED into the
+    table (every input answers with an entry; no NaN, and no wrap
+    option). `mod(i, n)` in front of it wraps an INTEGER index exactly;
+    for a FRACTIONAL index it is not a wrap, because the round happens
+    AFTER the mod — `mod` lands in [0, n) and the top half-step
+    [n - 0.5, n) then rounds to n and clamps back to the LAST entry
+    rather than reaching the first (at n = 5, an index in [4.5, 5) reads
+    entry 4, not entry 0). Floor the index before the mod if the seam
+    matters. Literal finite numbers only, at most 32 of them; the table
+    is baked into the GPU kernel as literals, so distinct table VALUES
+    specialize as surely as distinct lengths ([1, 2, 3] and [1, 2, 4]
+    emit two helpers). A bigger table belongs on the geometry, read with
+    `attribute`
 - Noise (scalar fields of the sample position; pure function of seed +
   position — the context seed reaches them only through the tagged
   `opts.seed` below):
@@ -904,9 +918,11 @@ composed over one (the absent spec propagates); a
 tree deeper than 256 levels — derivation refuses at exactly the depth
 `fieldFromJson` parses, so a spec that could not be re-parsed is never
 produced and no graph is written that cannot be read back; and an
-argument the constructor accepts but the grammar's parser rejects (a
+argument the constructor accepts but the grammar cannot carry (a
 fractional `seed`, a non-finite `frequency`/`offset`/`constant`/`ramp`
-stop, an fbm `base` outside the built-in factories, `-0` anywhere).
+stop, an fbm `base` outside the built-in factories, `-0` anywhere — the
+parser TAKES a `-0` and the spec would hold it, but `JSON.stringify(-0)`
+prints `0`, so a reopened graph builds a different field).
 `fieldToJson` names the ONE cause that applied and the fix for it — for
 an opaque leaf it names that leaf's structural key, so a `makeField`
 buried deep in a combinator tree is identified rather than the
@@ -2209,7 +2225,7 @@ goldens never move:
   | family | rangeUlp, 10k → 1M | budget | mean abs budget |
   |---|---|---|---|
   | arith add/sub/mul | 0 | bit-exact | — |
-  | clamp/min/max, floor, trunc, select/compare, step | 0 | bit-exact | — |
+  | clamp/min/max, floor, trunc, select/compare, step, lookup | 0 | bit-exact | — |
   | fract, mod, rem, sign, smoothstep | 0 | bit-exact | — |
   | div | 0.76 → 0.75 | 1 | 2.0e-8 |
   | lerp | 0.50 → 0.50 | 1 | 7.3e-8 |

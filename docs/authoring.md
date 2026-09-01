@@ -143,8 +143,11 @@ at all. Four cases still refuse:
    is coerced with `>>> 0`), but the grammar requires an integer, and a
    spec `fieldFromJson` would reject is worse than none. Same for a
    non-finite `frequency`/`offset`/`constant`/`ramp` stop, an fbm
-   `base` outside the built-in factories, and `-0` anywhere (JSON turns
-   it into `0`, and the two fields differ).
+   `base` outside the built-in factories, and `-0` anywhere. The `-0`
+   case is about the trip, not the spec: a derived spec would hold the
+   `-0` faithfully, but `JSON.stringify(-0)` prints `0`, so the field a
+   reopened graph builds is a different one (`keyNum` keeps the two
+   apart precisely because their columns differ).
 
 `fieldToJson` names the ONE cause that applied, and the offender:
 
@@ -439,7 +442,7 @@ Field-capable params (marked "Field" in [nodes.md](./nodes.md), or
 of a constant: `{ "fn": <name>, ... }`. Wherever a spec takes arguments
 (`args` entries, noise `position`), a finite number or number array is
 also accepted and wraps into `constant`. Specs nest arbitrarily (up to
-256 levels). `listFieldFns()` returns all 62 names at runtime.
+256 levels). `listFieldFns()` returns all 63 names at runtime.
 
 ### Which params accept one
 
@@ -587,6 +590,7 @@ both spellings:
 | `byAttribute` | `byAttribute("part", { rod: 1 }, 1)` |
 | `component` | `component(expr, 0)` |
 | `ramp` | `ramp(expr, [[4.5, 0.02], [14, 0.3]])` |
+| `lookup` | `lookup(expr, [0, 0.5, 1])` |
 | a noise | `perlinNoise({ frequency: 0.05, seed: { from: "node", variant: 0 } })` |
 | everything else | `name(arg, …)` |
 
@@ -1435,6 +1439,7 @@ a single square root.
 | `vec` | `{ fn, args: [x, y, z] }` | 1+ args; concatenates all components into one tuple |
 | `component` | `{ fn, args: [tupleField], index: 0 }` | Extracts one component as a scalar; `index` is a non-negative integer < tuple size |
 | `ramp` | `{ fn, args: [scalarField], stops: [[0, 0], [1, 1]] }` | Piecewise-linear curve through `[position, value]` stops; positions strictly ascending; input clamps to the end values |
+| `lookup` | `{ fn, args: [indexField], table: [0.4, 1, -2] }` | The table entry at that index, rounded to nearest and clamped into the table; literal finite numbers only, at most 32 of them. `mod(i, n)` in front of it wraps an INTEGER index exactly; for a FRACTIONAL index it is not a wrap, because the round happens after the mod — the top half-step `[n - 0.5, n)` rounds to `n` and clamps back to the LAST entry instead of reaching the first (at n = 5, an index in `[4.5, 5)` reads entry 4, not entry 0). Floor the index before the mod if that seam matters. The table is baked into the kernel as literals, so distinct table VALUES specialize as surely as distinct lengths: `[1, 2, 3]` and `[1, 2, 4]` emit two helpers |
 
 ### Noise
 
@@ -5058,7 +5063,7 @@ re-measured at more than one count on every test run.
 | family | rangeUlp, 10k → 1M | budget | mean \|cpu−gpu\| budget |
 |---|---|---|---|
 | arith add/sub/mul | 0 | bit-exact | — |
-| clamp/min/max, floor, trunc, select/compare, step | 0 | bit-exact | — |
+| clamp/min/max, floor, trunc, select/compare, step, lookup | 0 | bit-exact | — |
 | fract, mod, rem, sign, smoothstep | 0 | bit-exact | — |
 | div | 0.76 → 0.75 | 1 | 2.0e-8 |
 | lerp | 0.50 → 0.50 | 1 | 7.3e-8 |

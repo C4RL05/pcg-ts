@@ -121,6 +121,10 @@ const EXAMPLES: Readonly<Record<string, FieldSpec>> = {
       [14, 0.3],
     ],
   },
+  // Hand-written for the reason the comment above says: `exampleFor`
+  // fabricates `args` and nothing else, so a fn with a table key is
+  // enumerated by the registry loop and then has no table to print.
+  lookup: { fn: "lookup", args: [{ fn: "attribute", name: "lane" }], table: [0, 0.5, 1] },
   randomField: { fn: "randomField", key: "thin" },
   // Width 3 only, so the generated `cross(1, 2)` would not build.
   cross: {
@@ -172,6 +176,13 @@ describe("field text: every registered fn", () => {
     expect(printFieldSpec(EXAMPLES.component as FieldSpec)).toBe("component(position(), 0)");
     expect(printFieldSpec(EXAMPLES.ramp as FieldSpec)).toBe(
       'ramp(attribute("height"), [[4.5, 0.02], [14, 0.3]])',
+    );
+    // The one shipped fn whose text shape is DERIVED rather than listed
+    // in SPECIAL_SHAPES: `keys: ["args", "table"]` with a one-arg `args`
+    // is exactly what `defaultShape` builds, so this pins the automatic
+    // path for a keyed fn that nothing else exercises.
+    expect(printFieldSpec(EXAMPLES.lookup as FieldSpec)).toBe(
+      'lookup(attribute("lane"), [0, 0.5, 1])',
     );
     expect(printFieldSpec(EXAMPLES.randomField as FieldSpec)).toBe('randomField("thin")');
     expect(printFieldSpec({ fn: "randomField" })).toBe("randomField()");

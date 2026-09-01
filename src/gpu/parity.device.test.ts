@@ -873,6 +873,152 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
     expect(divergent, "CPU and GPU must agree at these edges").toEqual([]);
   }, DEVICE_MEASUREMENT_TIMEOUT_MS);
 
+  it("lookup agrees at the indices that are not indices — NaN above all", () => {
+    // THIS IS THE PROBE THE `lookup` PARITY ROW CANNOT BE. That row reads
+    // `px` on the corpus geometry, which spans [-8, 8] and holds no NaN,
+    // no infinity and no signed zero — so it exercises the clamp at both
+    // ends and every interior entry, and NOTHING ELSE. Its budget is
+    // therefore satisfied by any lowering that agrees on ordinary reals,
+    // and the emitted chain's DESCENDING order was chosen for a reason
+    // that row cannot see: the fall-through is entry 0, so an index that
+    // fails every `>=` — below the table, or NaN — takes the first entry
+    // with no is-NaN test on either path.
+    //
+    // An ASCENDING chain (`t < k + 0.5`, falling through to the LAST
+    // entry) is identical for every non-NaN input and differs only on
+    // NaN, which is exactly why it slips past the parity table. The rows
+    // below make that substitution fail, at the one lane where it shows.
+    //
+    // FALSIFIED, not asserted: substituting the ascending chain in
+    // `lookupHelperBody` and re-running this file leaves the `lookup`
+    // parity row green and fails exactly here, with exactly one line —
+    // `gpu lookupEdges row 0 (index=NaN): want -2, got -1`.
+    const geo = makeParityGeometry(64);
+    const P = geo.attrs.point.require("P");
+    // NaN first, because it is the reason this probe exists. Then the two
+    // infinities and both signed zeros, then the half-step boundaries
+    // `Math.round` splits on — including the negative ones, where
+    // `Math.round(-0.5)` is -0 and so still clamps low.
+    const ROWS: readonly number[] = [
+      NaN, Infinity, -Infinity, 0, -0, -1, -0.5, -0.4, 0.4, 0.5, 1, 1.5, 2.5, 3.5, 4, 4.5, 4.9, 900,
+      -900,
+    ];
+    ROWS.forEach((x, i) => {
+      P.data[i * 3] = x;
+    });
+
+    const PXP = { fn: "component", args: [{ fn: "position" }], index: 0 } as const;
+    // The same table the `lookup` parity row measures, so this probe is
+    // that row's missing domain rather than a different expression.
+    const TABLE = [-2, 0.5, 3, 8, -1];
+    const probes: Record<string, FieldSpecArg> = {
+      lookupEdges: { fn: "lookup", args: [PXP], table: TABLE },
+      // A one-entry table never reads `t` at all, so every one of these
+      // indices — NaN included — must still answer the single entry.
+      lookupSingle: { fn: "lookup", args: [PXP], table: [7] },
+    };
+    // Hand-computed from the stated rule (round half UP — toward
+    // +Infinity, as `Math.round` does, so `Math.round(-0.5)` is -0 and
+    // NOT -1 — then clamp into [0, 4]), NOT from either implementation.
+    // Deriving it from either would only assert that the two paths agree
+    // with each other, and a lowering that was wrong on both would still
+    // pass.
+    const EXPECTED: readonly number[] = [
+      -2, // NaN is no index at all: the first entry, on both paths
+      -1, // +Infinity clamps high
+      -2, // -Infinity clamps low
+      -2, // +0 -> entry 0
+      -2, // -0 -> entry 0
+      -2, // -1 clamps low
+      -2, // Math.round(-0.5) is -0, so still entry 0
+      -2, // -0.4 rounds to -0
+      -2, // 0.4 rounds down to 0
+      0.5, // 0.5 rounds UP to 1
+      0.5, // exactly 1
+      3, // 1.5 rounds UP to 2
+      8, // 2.5 rounds UP to 3
+      -1, // 3.5 rounds UP to 4
+      -1, // exactly 4
+      -1, // 4.5 rounds to 5 and clamps back to 4
+      -1, // 4.9 likewise
+      -1, // far above
+      -2, // far below
+    ];
+
+    const kernels = Object.fromEntries(
+      Object.entries(probes).map(([name, spec]) => [name, compileFieldSpec(spec, PARITY_LAYOUT)]),
+    );
+    const results = runDeviceTasks(
+      Object.entries(kernels).map(([name, kernel]) => dispatchTask(name, kernel, geo, 64, 1)),
+    );
+    const gpuCols: Record<string, Column> = {};
+    for (const result of results) {
+      expect(result.errors, result.name).toEqual([]);
+      gpuCols[result.name] = decodeRun(kernels[result.name], result.runs![0]);
+    }
+    const cpuCols = Object.fromEntries(
+      Object.entries(probes).map(([name, spec]) => [
+        name,
+        evaluateField(fieldFromJson(spec as FieldSpec), { geo, domain: "point", seed: 1 }),
+      ]),
+    );
+
+    // 1. Both paths against the RULE, lane by lane, so a failure names the
+    //    index that broke rather than only reporting a disagreement.
+    const wrong: string[] = [];
+    for (let i = 0; i < ROWS.length; i++) {
+      const label = `row ${i} (index=${Object.is(ROWS[i], -0) ? "-0" : String(ROWS[i])})`;
+      if (!Object.is(cpuCols.lookupEdges.data[i], EXPECTED[i])) {
+        wrong.push(`cpu lookupEdges ${label}: want ${EXPECTED[i]}, got ${cpuCols.lookupEdges.data[i]}`);
+      }
+      if (!Object.is(gpuCols.lookupEdges.data[i], EXPECTED[i])) {
+        wrong.push(`gpu lookupEdges ${label}: want ${EXPECTED[i]}, got ${gpuCols.lookupEdges.data[i]}`);
+      }
+      if (cpuCols.lookupSingle.data[i] !== 7 || gpuCols.lookupSingle.data[i] !== 7) {
+        wrong.push(
+          `lookupSingle ${label}: cpu=${cpuCols.lookupSingle.data[i]} gpu=${gpuCols.lookupSingle.data[i]}, want 7 on both`,
+        );
+      }
+    }
+
+    // 2. And the two paths against each other on EVERY lane, including the
+    //    45 ordinary hashed indices past the rows above — a table read has
+    //    no interior to round, so the agreement is exact everywhere.
+    const divergent: string[] = [];
+    for (const name of Object.keys(probes)) {
+      for (let i = 0; i < 64; i++) {
+        const c = cpuCols[name].data[i];
+        const g = gpuCols[name].data[i];
+        if (!Object.is(c, g)) divergent.push(`${name} lane ${i}: cpu=${c} gpu=${g}`);
+      }
+    }
+
+    // 3. A table read answers with a table ENTRY for every input there is,
+    //    which is the property the whole design rests on: no lane is NaN,
+    //    on either path, at inputs chosen to break it.
+    const strays: string[] = [];
+    for (const name of Object.keys(probes)) {
+      const allowed = new Set(name === "lookupSingle" ? [7] : TABLE);
+      for (const [path, col] of [
+        ["cpu", cpuCols[name]],
+        ["gpu", gpuCols[name]],
+      ] as const) {
+        for (let i = 0; i < 64; i++) {
+          if (!allowed.has(col.data[i])) strays.push(`${path} ${name} lane ${i}: ${col.data[i]}`);
+        }
+      }
+    }
+
+    console.log(
+      `[lookup edge probe ${testDevice!.label}]\n` +
+        `cpu ${Array.from(cpuCols.lookupEdges.data.slice(0, ROWS.length)).join(", ")}\n` +
+        `gpu ${Array.from(gpuCols.lookupEdges.data.slice(0, ROWS.length)).join(", ")}`,
+    );
+    expect(wrong, "lookup must answer the rounded, clamped entry at every index").toEqual([]);
+    expect(divergent, "CPU and GPU must agree on every lane").toEqual([]);
+    expect(strays, "every lane must hold a table entry, never NaN").toEqual([]);
+  }, DEVICE_MEASUREMENT_TIMEOUT_MS);
+
   it("audit residual probes: NaN min/max, normalize extremes, lattice overflow, subnormals", () => {
     // Deliberately-pathological inputs from the phase-19 audit's residual
     // list. Divergence here is documented GIGO contract, not a defect:

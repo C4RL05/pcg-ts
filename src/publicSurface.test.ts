@@ -90,7 +90,7 @@ const ROOT_SURFACE = [
   "inferWrapperKind",
   "inlineParamMetaOf", "inlineParamSchema", "inlineParamValuesOf", "isDeviceResidentInstances", "isField", "jitterPoints",
   "keyNum", "keyRef", "le", "length", "lerp", "liveParamValueError", "listFieldFnInfos", "listFieldFns",
-  "listNodeTypes", "listSubgraphs", "log", "log2",
+  "listNodeTypes", "listSubgraphs", "log", "log2", "lookup",
   "lt", "makeField",
   "makeGeometryItem", "makeInstancesItem", "makeValueItem", "max", "mergePoints", "mergePrimitives",
   "meshPrimitive", "min", "mod",

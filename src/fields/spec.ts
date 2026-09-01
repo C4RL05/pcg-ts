@@ -63,6 +63,26 @@ export const FIELD_SPEC: unique symbol = Symbol("pcg-ts.fieldSpec");
 export const MAX_SPEC_DEPTH = 256;
 
 /**
+ * Entries one `lookup` table may hold.
+ *
+ * The fn exists for a SMALL constant table read by a computed index, and
+ * the cap is what keeps "small" a rule rather than a hope: the WGSL
+ * lowering unrolls the table into a comparison chain, so the ENTRIES —
+ * not just their count — land in the shader text as literals. Every
+ * distinct table therefore specializes its own pipeline: `[1, 2, 3]` and
+ * `[1, 2, 4]` are the same length and still emit two different helpers,
+ * which is two different shader texts, which is two different kernel
+ * keys. It is the table's VALUES that key the specialization, and the
+ * length is only the bound on how big each one gets.
+ *
+ * Here for {@link MAX_SPEC_DEPTH}'s reason — the constructor refuses to
+ * PRODUCE what the parser refuses to READ, and one constant imported by
+ * both ends is how the two cannot drift. Not exported from
+ * `src/fields/index.ts`: a budget is not a promise.
+ */
+export const MAX_LOOKUP_TABLE = 32;
+
+/**
  * Spec objects composed by a constructor rather than written by an
  * author. Identity-keyed on the spec object itself, so the defensive
  * copy {@link getFieldSpec} hands out is deliberately NOT marked — the

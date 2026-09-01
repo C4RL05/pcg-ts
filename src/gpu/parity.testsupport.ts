@@ -39,6 +39,7 @@ import {
   lerp,
   log,
   log2,
+  lookup,
   max,
   min,
   mod,
@@ -195,6 +196,7 @@ export const MINIMAL_SPECS: Record<string, FieldSpecArg> = {
   vec: { fn: "vec", args: [1, 2, 3] },
   component: { fn: "component", args: [[1, 2, 3]], index: 1 },
   ramp: { fn: "ramp", args: [1], stops: [[0, 0], [1, 1]] },
+  lookup: { fn: "lookup", args: [1], table: [4, 5, 6] },
   valueNoise: { fn: "valueNoise" },
   perlinNoise: { fn: "perlinNoise" },
   simplexNoise: { fn: "simplexNoise" },
@@ -589,6 +591,28 @@ export const PARITY_CASES: ParityCase[] = [
   // segments; maxUlp 9.2e6 at 1M at segment zero crossings.
   // budget 2 = 1.57x the sweep max; meanAbs 3.8e-9 = 1.27x of 3.00e-9.
   { name: "ramp", spec: EXTENDED_SPECS.rampMultiStop, budget: 2, meanAbs: 3.8e-9, countSensitive: true },
+  // Exact BY CONSTRUCTION rather than by a budget, for `step`'s reason
+  // and unlike the `ramp` row above it: a ramp INTERPOLATES between two
+  // baked f32 stops and the CPU does that in f64, whereas a lookup
+  // returns one of its entries unchanged. Both paths round the index with
+  // the same comparisons against the same exactly-representable halves,
+  // over an attribute read that is already bit-identical, and then answer
+  // with an f32 literal the CPU stores verbatim — there is no interior
+  // left to disagree about.
+  // All three regions are populated: x spans [-8, 8] on the corpus
+  // geometry and the table has 5 entries, so lanes clamp low, land on
+  // every interior entry, and clamp high.
+  // WHAT THIS ROW DOES NOT BIND, measured rather than assumed: the
+  // emitted chain's DESCENDING order. An ascending chain (`t < k + 0.5`,
+  // falling through to the LAST entry) answers identically for every
+  // non-NaN index, so it reddens NOT ONE LANE here — this domain holds no
+  // NaN, and the low clamp is reached by ordinary negatives that both
+  // orders agree on. Only a NaN lane separates the two, and the corpus
+  // geometry has none. The ordering is bound by the `lookup` edge probe
+  // in `parity.device.test.ts`, which feeds NaN, both infinities, both
+  // signed zeros and the half-step boundaries; substituting an ascending
+  // chain fails that probe on its NaN row and nowhere else.
+  { name: "lookup", spec: { fn: "lookup", args: [PX], table: [-2, 0.5, 3, 8, -1] }, exact: true, budget: 0, meanAbs: 0 },
   // rangeUlp 0 and maxUlp 0 at every count, away from knife edges.
   { name: "select/compare", spec: EXTENDED_SPECS.selectAway, exact: true, budget: 0, meanAbs: 0 },
   // rangeUlp 0 and maxUlp 0 at every count, and exact BY CONSTRUCTION
@@ -936,6 +960,7 @@ export const DERIVED_FIELDS: Record<string, () => Field> = {
       [3.5, 0.25],
       [6, 0],
     ]),
+  lookup: () => lookup(px(), [-2, 0.5, 3, 8, -1]),
   "select/compare": () => select(ge(density(), 0.25), position(), vec(1, 2, 3)),
   step: () => step(py(), px()),
   fract: () => fract(px()),

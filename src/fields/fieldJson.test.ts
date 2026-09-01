@@ -13,7 +13,9 @@ import {
   evaluateField,
   exp2,
   fraction,
+  index,
   log2,
+  lookup,
   makeField,
   mod,
   mul,
@@ -1470,6 +1472,109 @@ describe("param binding immutability", () => {
     expect(field.key).toBe(constant([1, 2, 3]).key);
     expect(fieldToJson(field)).toEqual(before);
     expect(Array.from(evaluateField(field, testCloud(2)).data)).toEqual([1, 2, 3, 1, 2, 3]);
+  });
+});
+
+/**
+ * The table-lookup fn, covered here rather than only in the round-trip
+ * matrix: its `table` is a hand-validated key, and a hand-validated key
+ * whose refusals nothing asserts is a message that can rot into
+ * uselessness without a test noticing.
+ */
+describe("lookup", () => {
+  const SPEC: FieldSpec = { fn: "lookup", args: [{ fn: "index" }], table: [10, 20, 30, 40] };
+
+  it("round-trips and reads the entry at the rounded, clamped index", () => {
+    const field = fieldFromJson(SPEC);
+    expect(fieldToJson(field)).toEqual(SPEC);
+    expect(field.key).toBe(lookup(index(), [10, 20, 30, 40]).key);
+    // Four exact hits, then the high clamp: indices 4 and 5 have no entry
+    // and read the last one rather than falling off the table.
+    expect(Array.from(evaluateField(field, testCloud(6)).data)).toEqual([10, 20, 30, 40, 40, 40]);
+    // ...and through real JSON, which is the trip a saved graph takes.
+    const viaJson = fieldFromJson(JSON.parse(JSON.stringify(SPEC)) as FieldSpec);
+    expect(viaJson.key).toBe(field.key);
+  });
+
+  it("rounds half UP and clamps at the low end", () => {
+    // `index * 0.5 - 1` is -1, -0.5, 0, 0.5, 1, 1.5: the two below the
+    // table clamp to entry 0, and 0.5 and 1.5 round UP, as `Math.round`
+    // does — half-UP, toward +Infinity, which is also why -0.5 rounds to
+    // -0 rather than to -1. That is the rule the WGSL chain's `>= k - 0.5`
+    // boundaries spell on the other path.
+    const spec: FieldSpec = {
+      fn: "lookup",
+      args: [{ fn: "sub", args: [{ fn: "mul", args: [{ fn: "index" }, 0.5] }, 1] }],
+      table: [10, 20, 30, 40],
+    };
+    expect(Array.from(evaluateField(fieldFromJson(spec), testCloud(6)).data)).toEqual([
+      10, 10, 10, 20, 20, 30,
+    ]);
+  });
+
+  it("answers an index that is no index at all with the first entry", () => {
+    // NaN is not below the table, but it is not in it either, and the
+    // answer has to be a table entry on both paths — a comparison chain
+    // is what the GPU can spell, and NaN fails every comparison.
+    const spec: FieldSpec = {
+      fn: "lookup",
+      args: [{ fn: "div", args: [0, 0] }],
+      table: [10, 20, 30],
+    };
+    expect(Array.from(evaluateField(fieldFromJson(spec), testCloud(3)).data)).toEqual([10, 10, 10]);
+  });
+
+  it("names what is wrong with a table, and the fix", () => {
+    const at = (table: unknown): FieldSpec =>
+      ({ fn: "lookup", args: [{ fn: "index" }], table }) as unknown as FieldSpec;
+    // THREE refusals, not one. Absence, wrong type and emptiness are
+    // three different mistakes with three different fixes, and the single
+    // message they used to share reported the first as `got a undefined`
+    // — ungrammatical, and describing emptiness where the key was simply
+    // not there.
+    expect(() => fieldFromJson(at(undefined))).toThrow(
+      /\$\.table: lookup requires a "table" key and this spec has none; add one holding 1 to 32 finite numbers, e\.g\. table: \[0, 0\.5, 1\]/,
+    );
+    expect(() => fieldFromJson(at([]))).toThrow(
+      /\$\.table: lookup's "table" is empty, and an empty table has no entry for any index to read; give it at least one number/,
+    );
+    expect(() => fieldFromJson(at(0.5))).toThrow(
+      /\$\.table: lookup's "table" must be an array of finite numbers, got a number; a single value is still an array of one/,
+    );
+    expect(() => fieldFromJson(at(null))).toThrow(/must be an array of finite numbers, got null/);
+    expect(() => fieldFromJson(at({ fn: "index" }))).toThrow(
+      /must be an array of finite numbers, got an object/,
+    );
+    // A SPEC in the table is the refusal that matters most: nothing walks
+    // `table`, so an expression there would be invisible to the
+    // domain-constant fold and to the WGSL compiler alike.
+    expect(() => fieldFromJson(at([1, { fn: "index" }]))).toThrow(
+      /\$\.table\[1\]: lookup's table holds LITERAL numbers only.*cannot be a field expression/s,
+    );
+    expect(() => fieldFromJson(at([1, "two"]))).toThrow(/table holds LITERAL numbers only, got a string/);
+    expect(() => fieldFromJson(at([1, Number.POSITIVE_INFINITY]))).toThrow(
+      /\$\.table\[1\]: lookup's table entries must all be finite, got Infinity/,
+    );
+    // The cap names the fn, the length it was given, and the limit.
+    const long = Array.from({ length: 33 }, (_v, i) => i);
+    expect(() => fieldFromJson(at(long))).toThrow(
+      /lookup's table has 33 entries, but at most 32 are allowed/,
+    );
+    expect(() => fieldFromJson(at(long.slice(0, 32)))).not.toThrow();
+    // And the key set is closed, like every other fn's.
+    expect(() =>
+      fieldFromJson({
+        fn: "lookup",
+        args: [{ fn: "index" }],
+        table: [1],
+        stops: [[0, 1]],
+      } as unknown as FieldSpec),
+    ).toThrow(/unknown key "stops" for fn "lookup"/);
+  });
+
+  it("refuses a tuple index at evaluation", () => {
+    const field = fieldFromJson({ fn: "lookup", args: [{ fn: "position" }], table: [1, 2] });
+    expect(() => evaluateField(field, testCloud(3))).toThrow(/lookup: input must be scalar/);
   });
 });
 

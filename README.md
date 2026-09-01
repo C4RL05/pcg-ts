@@ -223,7 +223,7 @@ Inputs (`position()`, `attribute(name)`, `attributeIs(name, value)`,
 `nodeSeed()`, `randomField(key)`),
 combinators (arithmetic, comparisons, trig from `sin` through `atan2`,
 `exp`/`log`, `fract`/`mod`/`sign`, `clamp`/`lerp`/`remap`/`smoothstep`,
-`select`, `ramp`, vector ops including `distance`), and noise
+`select`, `ramp`, `lookup`, vector ops including `distance`), and noise
 (`valueNoise`, `perlinNoise`, `simplexNoise`, `worleyNoise`, `fbm`) all
 return fields, so expressions compose before any geometry exists:
 

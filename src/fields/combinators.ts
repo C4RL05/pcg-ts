@@ -1,6 +1,6 @@
 import { hashCombine, hashFloat, hashString } from "../random/index.js";
 import { resolveField } from "./inputs.js";
-import { attachArgsSpec, isSpecNumber, recordWithheld } from "./spec.js";
+import { MAX_LOOKUP_TABLE, attachArgsSpec, isSpecNumber, recordWithheld } from "./spec.js";
 import {
   type Field,
   type FieldLike,
@@ -875,4 +875,128 @@ export function ramp(
     return field;
   }
   return attachArgsSpec(field, "ramp", [fa], { stops: stops.map((s) => [s[0], s[1]]) });
+}
+
+/**
+ * What a bad table entry IS, with the right article — the twin of the
+ * parser's own `describeValue`, spelled here because `fieldJson` imports
+ * this module and not the other way round.
+ */
+function describeEntry(v: unknown): string {
+  if (v === null) return "null";
+  if (v === undefined) return "undefined";
+  if (Array.isArray(v)) return "an array";
+  const t = typeof v;
+  return `${t === "object" ? "an" : "a"} ${t}`;
+}
+
+/**
+ * The entry of a small CONSTANT table at an index a field computes: the
+ * index is rounded to the nearest integer and CLAMPED into `[0, n - 1]`,
+ * so every input answers with a table entry and none answers with NaN.
+ *
+ * That is {@link ramp}'s edge behaviour with the interpolation taken out,
+ * and it is the reason there is no `outOfRange` option: an index below
+ * the table is the first entry and one above it is the last, exactly as a
+ * ramp clamps to its end values.
+ *
+ * WRAPPING COMPOSES, with one caveat worth stating precisely: `mod(i, n)`
+ * before the lookup wraps an INTEGER index exactly, and a fractional one
+ * only approximately, because the round happens AFTER the mod. `mod`
+ * lands in `[0, n)`; the top half-step `[n - 0.5, n)` then rounds up to
+ * `n` and clamps back to the LAST entry rather than continuing round to
+ * the first. At `n = 5`, an index in `[4.5, 5)` reads entry 4, not entry
+ * 0. Floor the index before the mod if that seam matters.
+ *
+ * The table is LITERAL numbers, never fields. It is the counterpart to
+ * writing one `select` per entry, or to packing digits into an f32 to
+ * make a table readable inside one expression; for a table too big for
+ * {@link MAX_LOOKUP_TABLE}, carry the values as an attribute and read
+ * them with `attribute` instead.
+ *
+ * Throws for an empty or oversized table, and for any entry that is not
+ * a finite number — the grammar refuses those, and a field the grammar
+ * cannot describe is better refused at the call site than handed back
+ * with its spec quietly missing.
+ */
+export function lookup(input: FieldLike, table: readonly number[]): Field<1> {
+  if (table.length === 0) throw new Error("lookup: needs at least one table entry");
+  if (table.length > MAX_LOOKUP_TABLE) {
+    throw new Error(
+      `lookup: table has ${table.length} entries, at most ${MAX_LOOKUP_TABLE} are allowed; ` +
+        "carry a table this size as an attribute and read it with `attribute`",
+    );
+  }
+  // Eagerly, and BEFORE anything is built: the grammar refuses a
+  // non-numeric or non-finite entry, so withholding the spec instead
+  // would hand back a field that evaluates to NaN and cannot be saved,
+  // with nothing said about either. Two causes, named apart — a string is
+  // not "not finite", it is not a number at all.
+  for (let i = 0; i < table.length; i++) {
+    const v: unknown = table[i];
+    if (typeof v !== "number") {
+      throw new Error(
+        `lookup: table[${i}] is ${describeEntry(v)}, ` +
+          "but the table holds LITERAL numbers only; a table entry cannot be a field expression — " +
+          "put the expression in the index argument and let it choose between literals, or use " +
+          "`select` to pick between whole expressions",
+      );
+    }
+    if (!Number.isFinite(v)) {
+      throw new Error(
+        `lookup: table[${i}] is ${String(v)}, but every table entry must be finite; ` +
+          "the field grammar refuses a non-finite entry, so a field built on one could never be " +
+          "serialized — clamp or replace the value before it reaches the table",
+      );
+    }
+  }
+  const fa = resolveField(input);
+  const entries = table.slice();
+  const last = entries.length - 1;
+  const key = `lookup(${keyRef(fa.key)};${entries.map(keyNum).join(",")})`;
+  const field = makeField<1>(key, 1, (ctx) => {
+    const ca = evaluateField(fa, ctx);
+    if (ca.tupleSize !== 1) {
+      throw new Error(`lookup: input must be scalar, got tupleSize ${ca.tupleSize}`);
+    }
+    const n = elementCount(ctx);
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const k = Math.round(ca.data[i]);
+      // `!(k > 0)` rather than `k < 0`, so NaN takes the first entry too:
+      // a comparison chain is what the GPU lowering can spell, and both
+      // ends must answer the same thing for an input that is no index at
+      // all.
+      out[i] = entries[!(k > 0) ? 0 : k > last ? last : k];
+    }
+    return { data: out, tupleSize: 1 };
+  });
+  // Only `-0` can reach here — everything else the grammar refuses threw
+  // above — and it is the one entry that must NOT throw, because the
+  // parser accepts it: `-0` is a finite number. What it does not survive
+  // is the trip through JSON. The spec object would hold the `-0`
+  // faithfully; it is `JSON.stringify` that prints it as `0`, so a
+  // reopened graph would read a different table (and `keyNum` keeps the
+  // two apart precisely because their columns differ). A DERIVED spec
+  // that changes meaning in transit is worse than no spec at all.
+  //
+  // Scoped to this path on purpose, and not a hole in it: an AUTHORED
+  // spec is attached verbatim by `fieldFromJson` whatever a constructor
+  // records, so a hand-written `-0` in a graph file keeps its spec and
+  // loses its sign on the next save. That is the parser's rule for every
+  // fn — `constant` and `ramp` do the same with a `-0` — and this fn
+  // neither adds to it nor is excused by it. What is decided here is only
+  // what a constructor is willing to DERIVE.
+  if (!entries.every(isSpecNumber)) {
+    recordWithheld(field, {
+      kind: "ungrammatical",
+      detail:
+        "lookup's `table` may not hold -0: the spec would carry it, but `JSON.stringify(-0)` is " +
+        "`0`, so the reopened field would read a different table — write 0 if that is what you mean",
+    });
+    return field;
+  }
+  // A copy again, so the spec and the closure cannot be made to disagree
+  // by mutating what a caller can reach through `getFieldSpec`.
+  return attachArgsSpec(field, "lookup", [fa], { table: entries.slice() });
 }

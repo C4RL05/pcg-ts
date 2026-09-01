@@ -27,6 +27,7 @@ import {
   lt,
   log,
   log2,
+  lookup,
   max,
   min,
   mul,
@@ -49,6 +50,7 @@ import {
   vec,
 } from "./combinators.js";
 import { attribute, constant, position } from "./inputs.js";
+import { getFieldSpec } from "./spec.js";
 import { type EvalContext, evaluateField } from "./types.js";
 
 /** Point cloud with P set from a flat xyz array. */
@@ -488,6 +490,104 @@ describe("ramp", () => {
       ]),
     ).toThrow(/ascending/);
     expect(() => evaluateField(ramp(position(), [[0, 1]]), ctx)).toThrow(/scalar/);
+  });
+});
+
+describe("lookup", () => {
+  // Below the table, the two halves either side of the first boundary,
+  // an exact hit, and two past the end.
+  const ctx = cloudCtx([-4, 0, 0, 0.49, 0, 0, 0.5, 0, 0, 2, 0, 0, 2.5, 0, 0, 900, 0, 0]);
+  const x = component(position(), 0);
+  const table = [10, 20, 30, 40];
+
+  it("rounds the index to nearest and clamps into the table", () => {
+    expect(asArray(ctx, lookup(x, table))).toEqual([
+      10, // below the table: clamps to the first entry
+      10, // 0.49 rounds down
+      20, // 0.5 rounds UP, as Math.round does
+      30, // exactly on an index
+      40, // 2.5 rounds UP to 3, not down to 2 — Math.round is half-UP
+      40, // past the end: clamps to the last entry
+    ]);
+  });
+
+  it("supports a single entry as a constant, and is NaN-free", () => {
+    expect(asArray(ctx, lookup(x, [42]))).toEqual([42, 42, 42, 42, 42, 42]);
+    // An index that is no index at all still answers with a table entry —
+    // the first — because the GPU chain can only spell comparisons and
+    // NaN fails every one of them.
+    expect(asArray(ctx, lookup(div(0, 0), table))).toEqual([10, 10, 10, 10, 10, 10]);
+  });
+
+  it("validates the table and the input arity", () => {
+    expect(() => lookup(x, [])).toThrow(/at least one table entry/);
+    expect(() => lookup(x, Array.from({ length: 33 }, (_v, i) => i))).toThrow(
+      /table has 33 entries, at most 32 are allowed/,
+    );
+    expect(() => lookup(x, Array.from({ length: 32 }, (_v, i) => i))).not.toThrow();
+    expect(() => evaluateField(lookup(position(), table), ctx)).toThrow(/scalar/);
+  });
+
+  it("refuses an entry the grammar could not carry, naming the cause and the index", () => {
+    // EAGERLY, and with the actual cause. Withholding the spec instead
+    // handed back a field that evaluated to NaN at every point and said
+    // nothing until serialization; and "must all be finite" is the wrong
+    // complaint about a string, which is not a number at all.
+    expect(() => lookup(x, [1, Number.NaN])).toThrow(
+      /lookup: table\[1\] is NaN, but every table entry must be finite/,
+    );
+    expect(() => lookup(x, [Number.POSITIVE_INFINITY])).toThrow(
+      /lookup: table\[0\] is Infinity, but every table entry must be finite/,
+    );
+    expect(() => lookup(x, [0, Number.NEGATIVE_INFINITY])).toThrow(/table\[1\] is -Infinity/);
+    expect(() => lookup(x, ["two", 1] as unknown as number[])).toThrow(
+      /lookup: table\[0\] is a string, but the table holds LITERAL numbers only/,
+    );
+    expect(() => lookup(x, [1, { fn: "index" }] as unknown as number[])).toThrow(
+      /lookup: table\[1\] is an object, but the table holds LITERAL numbers only/,
+    );
+    expect(() => lookup(x, [1, null] as unknown as number[])).toThrow(/table\[1\] is null/);
+  });
+
+  it("withholds a spec for the one entry the parser takes and JSON does not", () => {
+    // `-0` is the only entry that must NOT throw: it is finite, so
+    // `fieldFromJson` accepts it and the spec would hold it faithfully.
+    // What it does not survive is `JSON.stringify`, which prints `0` — so
+    // the reopened graph would read a different table, and no spec beats
+    // a spec that changes in transit.
+    const negZero = lookup(x, [-0, 1]);
+    expect(getFieldSpec(negZero)).toBeUndefined();
+    // ...and the field itself still works, and still knows -0 from 0.
+    expect(asArray(ctx, negZero)[0]).toBe(-0);
+    expect(negZero.key).not.toBe(lookup(x, [0, 1]).key);
+    expect(getFieldSpec(lookup(x, table))).toEqual({
+      fn: "lookup",
+      args: [{ fn: "component", args: [{ fn: "position" }], index: 0 }],
+      table,
+    });
+  });
+
+  it("wraps with `mod` for an INTEGER index, and not quite for a fractional one", () => {
+    // The documented composition, pinned because the docs used to claim
+    // `mod(i, n)` simply "wraps": it does, for an integer. For a
+    // fractional index the round happens AFTER the mod, so the top
+    // half-step [n - 0.5, n) rounds up to n and clamps back to the LAST
+    // entry instead of reaching the first.
+    const n = 5;
+    const T = [0, 1, 2, 3, 4];
+    const wrapped = (v: number): number => {
+      const c = cloudCtx([v, 0, 0]);
+      return asArray(c, lookup(mod(component(position(), 0), n), T))[0];
+    };
+    // Integers wrap exactly, on both sides of zero.
+    expect([wrapped(0), wrapped(5), wrapped(-5), wrapped(7), wrapped(-3)]).toEqual([0, 0, 0, 2, 2]);
+    // The seam: 4.5 and 4.9 are in [4.5, 5), so `mod` leaves them there
+    // and the round-then-clamp reads entry 4 — NOT entry 0.
+    expect([wrapped(4.5), wrapped(4.9), wrapped(-0.5), wrapped(-0.1)]).toEqual([4, 4, 4, 4]);
+    // Entry 0 is reached only by the half-step ABOVE a multiple of n, so
+    // the period is intact — it is the seam that is off by a half-step,
+    // not the wrap that is broken.
+    expect([wrapped(0.4), wrapped(5.4), wrapped(-4.6)]).toEqual([0, 0, 0]);
   });
 });
 

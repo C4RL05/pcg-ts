@@ -891,6 +891,46 @@ HANDLERS.set("ramp", (spec, path, ctx) => {
   return ctx.emit(`${name}(${a.ref})`, 1);
 });
 
+HANDLERS.set("lookup", (spec, path, ctx) => {
+  const a = compileArg(specArgs(spec)[0], `${path}.args[0]`, ctx);
+  if (a.size !== 1) {
+    throw new GpuCompileError(`${path}: lookup: input must be scalar, got tupleSize ${a.size}`);
+  }
+  const table = spec.table as number[];
+  const name = ctx.helper("lookup", lookupHelperBody(table, `${path}.table`));
+  return ctx.emit(`${name}(${a.ref})`, 1);
+});
+
+/**
+ * Constant-table helper, mirroring the CPU: the index is rounded to the
+ * nearest integer and clamped into the table. Unrolled into a comparison
+ * chain as `ramp`'s stops are, rather than into an `array<f32, N>` — the
+ * lengths this fn admits are small, and a chain has no index to bound.
+ *
+ * DESCENDING, so the fall-through is entry 0: an index that fails every
+ * `>=` is either below the table or NaN, and both take the first entry —
+ * which is what the CPU's `!(k > 0)` clamp answers for the same two, NaN
+ * included, so neither path has to spell an is-NaN test. The boundaries are
+ * `k - 0.5` (exact in f32 for every length this fn admits) and the
+ * entries are f32 literals — the same numbers the CPU stores into its
+ * `Float32Array` — so the two paths agree bit for bit, with no float
+ * interior to round.
+ */
+function lookupHelperBody(table: readonly number[], context: string): string {
+  const L = (v: number): string => wgslF32(v, context);
+  const lines: string[] = ["fn @NAME@(t: f32) -> f32 {"];
+  for (let k = table.length - 1; k >= 1; k--) {
+    lines.push(`  if (t >= ${L(k - 0.5)}) {`);
+    lines.push(`    return ${L(table[k])};`);
+    lines.push("  }");
+  }
+  // A one-entry table is a constant, and `t` goes unread — which WGSL
+  // allows, and which is the honest lowering of what was written.
+  lines.push(`  return ${L(table[0])};`);
+  lines.push("}");
+  return lines.join("\n");
+}
+
 /**
  * Per-instance piecewise-linear ramp helper, mirroring the CPU: clamp
  * outside the stop range, otherwise interpolate the segment whose upper

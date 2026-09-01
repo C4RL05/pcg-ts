@@ -48,6 +48,10 @@
  *   select (3); remap (5); vec (1+)
  * - `{ fn: "component", args: [a], index: 0 }`
  * - `{ fn: "ramp", args: [a], stops: [[0, 0], [1, 1]] }`
+ * - `{ fn: "lookup", args: [a], table: [0.4, 1, -2] }` — the table entry
+ *   at the index `a` names, rounded to nearest and CLAMPED into the
+ *   table. The table is literal numbers (never specs) and holds at most
+ *   32 of them; `mod` in front of it is how a table wraps
  * - `{ fn: "valueNoise" | "perlinNoise" | "simplexNoise", opts?: { seed?,
  *   frequency?, offset?: [x,y,z], position?: spec, normalized?: false } }`
  * - `{ fn: "worleyNoise", opts?: { ...noise opts, output?: "f1" | "f2" | "f2-f1",
@@ -111,6 +115,7 @@ import {
   lt,
   log,
   log2,
+  lookup,
   makeField,
   max,
   min,
@@ -140,6 +145,7 @@ import {
 import {
   type FieldBindingValue,
   type FieldSpec,
+  MAX_LOOKUP_TABLE,
   MAX_SPEC_DEPTH,
   attachAuthoredSpec,
   attachOpaqueParam,
@@ -326,8 +332,13 @@ function buildArg(v: unknown, path: string): Field {
 
 function describeValue(v: unknown): string {
   if (v === null) return "null";
+  if (v === undefined) return "undefined";
   if (Array.isArray(v)) return "an array";
-  return `a ${typeof v}`;
+  // The article follows the word, not the pattern: `a object` and
+  // `a undefined` are what a bare template produces, and an error message
+  // that reads as a typo reads as an unmaintained one.
+  const t = typeof v;
+  return `${t === "object" ? "an" : "a"} ${t}`;
 }
 
 function checkKeys(spec: Record<string, unknown>, def: FnDef, path: string): void {
@@ -1687,6 +1698,98 @@ register(
       buildArg(args[0], `${path}.args[0]`),
       (stops as Array<[number, number]>).map((s) => [s[0], s[1]] as const),
     );
+  },
+);
+
+register(
+  "lookup",
+  // Uniform for `ramp`'s reason: the classification is what the fn
+  // contributes OF ITS OWN, and a table read adds nothing — hand it a
+  // domain-constant index and it answers with one entry for the whole
+  // domain. The per-element case is decided at the call site by the fold,
+  // which recurses into `args`. That is also why the table may not hold
+  // specs: the fold walks `args` and nothing else, so an expression in
+  // `table` would be invisible to it and a per-element node would fold to
+  // one value with no error anywhere.
+  "uniform",
+  ["args", "table"],
+  `{ fn: "lookup", args: [indexField], table: [0.4, 1, -2] }`,
+  {
+    description:
+      "The entry of a small CONSTANT table at an index the graph computes. The index is ROUNDED " +
+      "to the nearest integer and CLAMPED into the table, so an index below 0 reads the first " +
+      "entry, one above the end reads the last, and every input answers with a table entry rather " +
+      "than NaN — `ramp`'s edge behaviour with the interpolation taken out. There is no wrap " +
+      "option because `mod(i, n)` in front of the lookup wraps an INTEGER index exactly; for a " +
+      "FRACTIONAL index it is not a wrap, because the round happens after the mod — `mod` lands " +
+      "in [0, n), and the top half-step [n - 0.5, n) then rounds to n and clamps to the LAST " +
+      "entry rather than reaching the first. At n = 5, an index in [4.5, 5) reads entry 4, not " +
+      "entry 0. Wrap a fractional index by flooring it before the mod if the seam matters. " +
+      "`table` is LITERAL finite numbers and never field expressions (structure cannot hold a " +
+      "field, as `ramp`'s `stops` cannot), and it holds at most " +
+      String(MAX_LOOKUP_TABLE) +
+      " entries — the fn is for a table small enough to read in the spec, and the table is baked " +
+      "into the GPU kernel, so distinct table VALUES specialize as surely as distinct lengths do: " +
+      "[1, 2, 3] and [1, 2, 4] emit two helpers. It is what a graph reaches for instead of nesting " +
+      "one `select` per entry, or packing digits into an f32 to make a table readable inside one " +
+      "expression; a bigger table belongs on the geometry, read with `attribute`. A non-scalar " +
+      "index throws at evaluation.",
+    args: [
+      arg(
+        "indexField",
+        "Which entry to read. Must be tuple size 1; rounded to the nearest integer and clamped into the table.",
+      ),
+    ],
+  },
+  (spec, path) => {
+    const args = requireArgs(spec, path, 1);
+    const table = spec.table;
+    // Three refusals rather than one, because absence, wrong type and
+    // emptiness are three different mistakes with three different fixes,
+    // and one message that reads `got a undefined` names none of them.
+    if (table === undefined) {
+      fail(
+        `${path}.table`,
+        `lookup requires a "table" key and this spec has none; add one holding 1 to ` +
+          `${MAX_LOOKUP_TABLE} finite numbers, e.g. table: [0, 0.5, 1]`,
+      );
+    }
+    if (!Array.isArray(table)) {
+      fail(
+        `${path}.table`,
+        `lookup's "table" must be an array of finite numbers, got ${describeValue(table)}; ` +
+          "a single value is still an array of one, e.g. table: [0.5]",
+      );
+    }
+    if (table.length === 0) {
+      fail(
+        `${path}.table`,
+        "lookup's \"table\" is empty, and an empty table has no entry for any index to read; " +
+          "give it at least one number, e.g. table: [0, 0.5, 1]",
+      );
+    }
+    if (table.length > MAX_LOOKUP_TABLE) {
+      fail(
+        `${path}.table`,
+        `lookup's table has ${table.length} entries, but at most ${MAX_LOOKUP_TABLE} are allowed; ` +
+          "carry a table this size as an attribute and read it with `attribute`, or split the expression",
+      );
+    }
+    for (let i = 0; i < table.length; i++) {
+      const v: unknown = table[i];
+      if (typeof v !== "number") {
+        fail(
+          `${path}.table[${i}]`,
+          `lookup's table holds LITERAL numbers only, got ${describeValue(v)}; a table entry cannot ` +
+            "be a field expression — put the expression in args[0] and let the index choose between " +
+            "literals, or use `select` to pick between whole expressions",
+        );
+      }
+      if (!Number.isFinite(v)) {
+        fail(`${path}.table[${i}]`, `lookup's table entries must all be finite, got ${String(v)}`);
+      }
+    }
+    return lookup(buildArg(args[0], `${path}.args[0]`), table as number[]);
   },
 );
 
