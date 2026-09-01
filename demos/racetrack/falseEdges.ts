@@ -120,6 +120,35 @@ export const FALSE_EDGE = {
  * and that is the better finding. Written down here rather than left in a
  * message thread because a prediction that cannot be found later is not a
  * prediction.
+ *
+ * THE OUTCOME, AND THE PREDICTION IS LEFT ABOVE RATHER THAN CORRECTED.
+ * ONE PRIMITIVE — CONFIRMED. It is `arcTile` (`src/nodes/runs.ts`), which
+ * had already shipped and which `enclosureGraph.ts` already wires as L-6's
+ * tiler. The along-arc spine matches down to the arithmetic: ranges as a
+ * cloud, `ceil(L / spacing)` pieces at sub-interval centres, a symmetric
+ * flare from the nearer mouth, and one choice per run copied onto every
+ * piece — `rangeNames`, whose own description cites the same 17W-to-8W
+ * measurement `tunnels.ts` records. So the guess was right, and what was
+ * missing here was never the primitive, only a caller: `barriers.ts` is it.
+ *
+ * AND THE SEPARATION IS REAL, ON AN AXIS THE PREDICTION DID NOT NAME. It
+ * is not along the arc. NEITHER consumer places ON the curve, which is the
+ * only place `arcTile` places: L-6 needs N pieces ACROSS the span, L-5 one
+ * piece BESIDE the path. A run has ONE way of being TILED and needs a
+ * SECOND, separate operation to be OFFSET — deliberately, because
+ * `pointScatterOnPath` states the same division of labour for the same
+ * reason. That second operation also already ships: `copyToPoints`
+ * composes `P = targetP + targetRot * (targetScale * sourceP)` and
+ * `arcTile`'s `rot` IS the path frame, so ONE source point at the local
+ * lateral and height is L-5's barrier and N points across are L-6's
+ * columns. `barriers.ts` states which way that frame's lateral runs.
+ *
+ * THE CV NEEDED NO JITTER, WHICH IS WHY `arcTile` STILL DRAWS NO RANDOM
+ * NUMBER. 0.37 is pooled over runs of DIFFERING pitches, and a set of
+ * internally uniform runs at the observed pitch spread already pools to
+ * 0.29-0.33 with nothing varying inside a run at all — 0.37 sits well
+ * inside the band seventeen such runs draw from. The assembly signature is
+ * the BETWEEN-run spread, not a within-run wobble.
  */
 export const BARRIER = {
   piecesPerRun: { p10: 3, median: 5, p90: 13, max: 15 },
