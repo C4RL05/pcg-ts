@@ -548,6 +548,30 @@ const SETTLE_ATTR = "moves";
  * constants share is the promise in the first paragraph: equal effort,
  * independently reached answers. Letting them drift apart to save rounds
  * this arm will never take would trade that promise for nothing.
+ *
+ * AND THIS ARM'S HALF OF THE 20 → 16 IS INERT, WHICH THE COMMIT THAT MADE
+ * IT DID NOT SAY. It is worth saying because it is the arm the PAGE runs
+ * — `main.ts` through `levels.ts` reaches `buildDressGraph`, and nothing
+ * outside the tests reaches `dressLap` at all. This body settles in at
+ * most six rounds, and patching the constant back to 20 in the built
+ * bundle gives byte-identical clouds. The lowering moved the page's
+ * hang-stop and nothing the page draws.
+ *
+ * WHICH IS ALSO WHY THE PORTED LATCH MOVES NO SHIPPED FRAME. Measured
+ * afterwards over 1024 seeds, the latch changes the REFERENCE's dressing
+ * on 243 of them — 876 rows, 0.235% of all placements, `assetId`/`t`/`h`
+ * — and it changes nothing here, because this column is where the latch
+ * came FROM. The benefit and the churn both land on `dressLap` and on a
+ * downstream consumer following it. See `MAX_REPAIR_ROUNDS`' comment,
+ * which now carries the whole of that measurement, including the 43 of
+ * 1024 seeds the latch made LONGER.
+ *
+ * AND THE CAP IS THE LAP-NEUTRAL INSTRUMENT, WHERE THE LATCH IS NOT:
+ * latched, the reference at 16 and at 40 is identical on 1024 of 1024
+ * seeds, and unlatched, 20 against 64 is identical on 1023 of 1024. That
+ * is an argument FOR having gone after the mechanism rather than against
+ * it — the harmless instrument was also the one that could not reach the
+ * defect, since the seed it misses is the seed that needed 24 rounds.
  */
 export const MAX_ROUNDS = 16;
 
@@ -837,6 +861,16 @@ export const PLACEMENT = {
    * round to reach. Mean rounds still fell, 3.41 to 3.32, and mean mix
    * moves per lap did not move at all (29.9 to 29.8): what the latch
    * removes is redrawing the SAME placement, not the work.
+   *
+   * WHICH THE TRACE SPELLS OUT: latched, seed 367's five flat rounds
+   * donate to 39 of 39 DISTINCT placements and seed 554's to 32 of 32,
+   * with the placement count constant. The loop walks the band population
+   * one member per round instead of oscillating on one — population, not
+   * placement, is the bound, and that is the whole reason a lap can come
+   * out longer. It also moves laps on the reference, which this column's
+   * own arm does not feel: see `dressLap`'s `MAX_REPAIR_ROUNDS` comment
+   * for the 0.235% of placements that change and why no shipped frame
+   * does.
    */
   mixTried: "mixTried",
   /**

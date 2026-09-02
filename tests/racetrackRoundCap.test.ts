@@ -29,6 +29,20 @@
  * suite CAN see is worth more width than it costs, because the two seeds
  * that found the two defects were one in 256 and one in 1024.
  *
+ * AND THE LATCH IS NOT A PURE IMPROVEMENT, WHICH MATTERS TO WHOEVER READS
+ * THIS SUITE'S NUMBERS NEXT. The seeds named below are the two that got
+ * dramatically shorter, and the commit that ported the latch quoted only
+ * those. Over the full 1024, 900 laps keep their round count, 81 shorten
+ * and **43 lengthen** — worst seed 554, 3 rounds to 8. That is the bound
+ * working, not failing: latched, the mix cannot re-trade a placement it
+ * has already redrawn, so it takes a fresh donor each round and walks the
+ * band population instead of oscillating on one member. So a seed whose
+ * round count RISES after a change here is not by itself a regression,
+ * and this suite deliberately does not assert one: what it asserts is
+ * that every lap settles inside the cap. See `MAX_REPAIR_ROUNDS`'s
+ * comment for the rest of what the port cost, including the 0.235% of
+ * placements it moves.
+ *
  * WHAT IS ASSERTED IS CONVERGENCE, NOT A ROUND COUNT, which is
  * `tests/racetrackDress.test.ts`'s position and holds here for its reason:
  * a threshold on rounds is a number fitted to this kit, this spline and
@@ -111,7 +125,9 @@ describe("the repair loop's round cap", () => {
           `what they want. Rounds flat at cull=1 mix=1 are the cull and the mix trading — but ` +
           `NOTE THAT A FEW OF THOSE ARE NORMAL AND ARE NOT THE OLD DEFECT: seeds 367 and 554 ` +
           `each run five of them and settle, because AssetPlacement.mixTried retires one ` +
-          `placement per round. That latch already exists, so do not "fix" this by adding it. ` +
+          `placement per round — measured, those five rounds donate to 39 of 39 and 32 of 32 ` +
+          `DISTINCT placements, with the placement count flat. That latch already exists, so ` +
+          `do not "fix" this by adding it. ` +
           `What would be the old defect is MANY such rounds on one seed, which means the latch ` +
           `is being lost — check that the mix still writes it on commit, and that dressLap's ` +
           `re-assert after L-4 still fires, since repairLandmarks rebuilds its victim wholesale ` +

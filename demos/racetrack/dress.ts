@@ -236,6 +236,70 @@ import { resolveCorridor } from "./zones.js";
  * fifth off what such a kit would burn before it is stopped and told so,
  * and the 4096 seeds that settle by eleven pay nothing for it either way,
  * because the loop exits the round it stops moving.
+ *
+ * ---------------------------------------------------------------------
+ *
+ * WHAT THE PORT'S NOTE LEFT OUT, measured over the same 1024 seeds
+ * afterwards. Everything above this line still holds; none of it is the
+ * whole account, and three of the four things below were said nowhere in
+ * the repository.
+ *
+ * THE LATCH IS NOT A PURE IMPROVEMENT, AND THIS COMMENT IS WHERE THAT
+ * WENT MISSING. The paragraphs above quote 656 (24 → 4) and 242 (13 → 8)
+ * and no seed that moved the other way, and the commit justified the port
+ * on those alone. Over 1024 seeds, 900 laps keep their round count, 81
+ * shorten and **43 LENGTHEN** — worst seed 554, 3 rounds to 8, against a
+ * best of 656 itself. Mean rounds fell 3.41 → 3.32, so the distribution
+ * moved the way the note claimed; "the latch shortens laps" is what was
+ * quoted and is not what was measured. (The three counts were recorded —
+ * at `dressGraph`'s {@link PLACEMENT.mixTried} and in PLAN.md — just not
+ * at the number they were used to justify, which is the half a reader
+ * checking this cap would have read.)
+ *
+ * AND BOTH SIGNS ARE THE SAME MECHANISM, which is why this is a
+ * correction to the record rather than a doubt about the fix. Latched,
+ * the mix cannot re-trade a placement it has already redrawn, so each
+ * round takes a FRESH donor and the loop walks the band population
+ * instead of oscillating on one member of it: seed 367's five flat
+ * `cull=1 mix=1` rounds donate to 39 of 39 distinct placements, seed
+ * 554's rounds 3..7 to 32 of 32, and the placement count is constant
+ * through both. Population is the bound, not placement — so a lap whose
+ * oscillation happened to resolve early unlatched can take longer
+ * latched, and that is the bound working. It is the same mechanism the
+ * downstream consumer measured on their seed 775.
+ *
+ * IT CHANGES LAPS, AND THE NOTE DID NOT MENTION LAPS. Comparing the
+ * dressed placement list either side of the latch, seeds 1..1024: 781
+ * seeds (76.3%) byte-identical, 243 (23.7%) moved, 876 rows in total —
+ * **0.235% of all placements** — mean 3.6 rows on a seed that moves
+ * (2:120 3:36 4:33 5:15 6:11 7:10 8:8 9:6 10:1 13:1 15:1, plus one
+ * outlier of 29 on seed 504). It is CONTENT rather than count: the count
+ * moved on exactly one seed (621, 374 → 375), and the differing fields
+ * are `assetId`, `t` and `h` — two placements swapping asset and side of
+ * track. Round one is identical on all 1024 seeds, so every one of those
+ * rows is a cross-round effect: the latch changes who is eligible NEXT
+ * round, never what this round does.
+ *
+ * NO SHIPPED FRAME MOVES, AND THE REASON IS WORTH STATING RATHER THAN
+ * ASSUMING. The published page never calls `dressLap`: `main.ts` goes
+ * through `levels.ts` to the graph arm, which has carried this latch
+ * since it met the same wall. So the port's benefit — and its 0.235% —
+ * lands on THIS arm and on any downstream consumer following it, not on
+ * the picture we ship. The same trace makes the other half of that
+ * commit inert: `dressGraph.ts`'s `MAX_ROUNDS` went 20 → 16 on the arm
+ * the page does run, which settles in at most six rounds, and patching
+ * the built bundle's constant back to 20 gives byte-identical clouds.
+ *
+ * AND ONE COMPARISON THE PORT SHOULD HAVE MADE. Raising the cap is
+ * LAP-NEUTRAL here and the latch is not: latched, 16 against 40 is
+ * identical on 1024 of 1024 seeds; unlatched, 20 against 64 is identical
+ * on 1023 of 1024, the exception being 656 — the one seed that wanted
+ * the rounds. So the cheap instrument had no side effects and the
+ * mechanism fix did, which is exactly the trade that makes a raise
+ * tempting. It does not rescue the raise: 656 needs twenty-four rounds
+ * unlatched, so every cap this loop would tolerate ships
+ * `converged: false` on it. An instrument that changes nothing and also
+ * cannot reach the defect is not the cheaper fix; it is the wrong one.
  */
 const MAX_REPAIR_ROUNDS = 16;
 

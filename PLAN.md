@@ -704,19 +704,59 @@ histogram is 321/356/191/72/40/26/15/3 at 2..9 rounds — no gap, no outlier,
 worst nine. Over 1..4096: 1356/1344/752/312/167/99/48/13/4/1 at 2..11,
 worst eleven, and that worst is a pure L-6 ramp with the mix silent from
 round two. Seed 656 settles in 4, seed 242 in 8. Of the 1024, 900 laps kept
-their round count, 81 shortened and 43 lengthened (worst +5, seed 554);
-mean rounds fell 3.41 → 3.32 and mean mix moves did not move (29.9 → 29.8).
-The cap is now **16** — eleven plus five, where the tail's survival runs
-66, 18, 5, 1, 0 over R = 7..11, about a quarter per round, so five rounds
-of headroom is roughly one lap in four million. Recorded at the constant
-and guarded by `tests/racetrackRoundCap.test.ts`.
+their round count, 81 shortened and 43 lengthened (worst seed 554, 3 → 8,
+against the best of 656 at 24 → 4); mean rounds fell 3.41 → 3.32 and mean
+mix moves did not move (29.9 → 29.8). **The commit that ported the latch
+quoted only the improvements**, which was selective — the 43 are in the
+same measurement, and the mechanism below says why they exist. The cap is
+now **16** — eleven plus five, where the tail's survival runs 66, 18, 5, 1,
+0 over R = 7..11, about a quarter per round, so five rounds of headroom is
+roughly one lap in four million. Recorded at the constant and guarded by
+`tests/racetrackRoundCap.test.ts`.
+
+**IT ALSO CHANGES LAPS, AND THE PORT'S NOTE DID NOT MENTION LAPS AT ALL.**
+Diffing the reference's dressed placement list either side of the latch
+over seeds 1..1024: 781 seeds (76.3%) byte-identical, 243 (23.7%) moved,
+**876 rows in total — 0.235% of all placements**, mean 3.6 rows on a seed
+that moves (2:120 3:36 4:33 5:15 6:11 7:10 8:8 9:6 10:1 13:1 15:1, plus one
+outlier of 29 on seed 504). It is CONTENT, not count: the count moved on
+exactly one seed (621, 374 → 375), and the differing fields are
+`assetId`/`t`/`h` — two placements swapping asset and side of track. Round
+one is identical on all 1024 seeds, so all of it is a cross-round effect:
+the latch changes who is eligible NEXT round, never what this round does.
+
+**NO SHIPPED FRAME MOVES, AND THAT IS WORTH STATING RATHER THAN ASSUMING.**
+The published page does not run `dressLap`: `main.ts` → `levels.ts` builds
+`dressGraph`'s arm, which has carried the latch all along, and nothing
+outside the tests imports the reference's entry point. So both the benefit
+and the 0.235% land on the reference arm and on any downstream consumer
+that follows it. Relatedly, the same commit's other change to the page's
+arm — `dressGraph.MAX_ROUNDS` 20 → 16 — is **inert**: that body settles in
+at most six rounds, and patching the built bundle's constant back to 20
+gives byte-identical clouds.
+
+**AND THE COMPARISON THAT SHOULD HAVE BEEN MADE: raising a cap is
+lap-neutral here, and the latch is not.** Latched, the reference at 16 and
+at 40 is identical on 1024 of 1024 seeds; unlatched, 20 against 64 is
+identical on 1023 of 1024, the exception being 656 itself. The cheap
+instrument had no side effects and the mechanism fix did — which is exactly
+the trade that makes a raise tempting, and it still does not rescue one:
+656 needs twenty-four rounds unlatched, so every cap this loop would
+tolerate ships `converged: false` on it. An instrument that changes nothing
+and also cannot reach the defect is not the cheaper fix; it is the wrong
+one.
 
 **What the latch does NOT do, because the trace still looks like the
 defect.** It bounds the chase per placement; it does not remove flat
 `cull=1 mix=1` rounds from the counters. Latched, seed 367 runs rounds 4..8
 and seed 554 rounds 3..7 exactly that way and both settle — the cull and
 the mix still trade, but each trade retires a placement, so the loop is
-bounded by the population instead of running forever on one. The
+bounded by the population instead of running forever on one. Measured,
+those runs donate to **39 of 39** and **32 of 32 DISTINCT** placements with
+the placement count flat throughout: a fresh donor every round, the band
+population walked rather than one member oscillated. Population is the
+bound, not placement — which is also why 43 seeds got longer, and it is the
+same mechanism the downstream consumer measured on their seed 775. The
 extrapolation above rests on five seeds past 9 rounds and one past 10, and
 assuming a geometric tail is precisely the assumption that failed
 pre-latch. 16 is empirically generous, not proven: the structural bound is
