@@ -499,15 +499,35 @@ const SETTLE_ATTR = "moves";
 /**
  * How many rounds the repair may take before it is stopped and told so.
  *
- * TWELVE, WHICH IS `dressLap`'s `MAX_REPAIR_ROUNDS` AND NOT A COINCIDENCE
+ * TWENTY, WHICH IS `dressLap`'s `MAX_REPAIR_ROUNDS` AND NOT A COINCIDENCE
  * — the two loops have to be able to disagree about the ANSWER without
  * disagreeing about how hard they tried. It is a ceiling and not a
  * schedule: these three repairs settle in one round on the shipped
  * vocabulary and two on one of the four seeds, so the cap has never been
- * approached here. `dressLap` reaches it on the enclosed kit, but on a
- * repair that is not in this body.
+ * approached here. `dressLap` runs long on the enclosed kit, but on a
+ * repair that is not in this body. (That sentence said `dressLap` REACHES
+ * the cap on that kit, which was true of twelve and is not true of twenty:
+ * the enclosed kit's worst is nine rounds. Raising a bound quietly falsifies
+ * every comment that described the old one as attainable.)
+ *
+ * RAISED FROM TWELVE WITH `dressLap`, AND FOR ITS REASON RATHER THAN FOR
+ * ONE OF THIS ARM'S. Read `MAX_REPAIR_ROUNDS`'s comment for the
+ * measurement: seed 242 of the shipped vocabulary needs thirteen rounds
+ * there and shipped `converged: false` at twelve. IT CANNOT NEED THEM
+ * HERE, and that is structural rather than lucky: the ramp which produces
+ * them is L-6's top-up feeding its own next budget, and this arm runs that
+ * top-up ONCE, outside the loop, at line 5677 — see the comment there. No
+ * round of this body can add cover, so there is nothing to ramp. The same
+ * survey put this arm's worst at four rounds, which agrees with the
+ * paragraph above and is a bound on what was observed, not on what the
+ * body can do.
+ *
+ * THE NUMBER MOVES ANYWAY, because what the two constants share is the
+ * promise in the first paragraph: equal effort, independently reached
+ * answers. Letting them drift apart to save eight rounds this arm will
+ * never take would trade that promise for nothing.
  */
-const MAX_ROUNDS = 12;
+export const MAX_ROUNDS = 20;
 
 /** The columns this graph reads off the placement cloud it is handed. */
 export const PLACEMENT = {

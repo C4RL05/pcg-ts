@@ -58,6 +58,7 @@ import { Graph, cook, firstGeometry, type DataCollection, type Geometry } from "
 import {
   DRESS_OUTPUTS,
   COVER,
+  MAX_ROUNDS,
   buildDressGraph,
   buildRoundGraph,
   dressLapByGraph,
@@ -584,7 +585,16 @@ function repairReference(
   lap: Lap,
   start: readonly StationedPlacement[],
   immovable: ReadonlySet<number>,
-  maxRounds = 12,
+  // THE GRAPH'S OWN CAP, IMPORTED WHERE THE RULE ABOVE IS RESTATED, and the
+  // difference is deliberate. The settle RULE is restated because the claim
+  // is that two independent statements of it agree. The round BUDGET is not
+  // a statement of anything — `MAX_ROUNDS`' comment says the two loops must
+  // "disagree about the ANSWER without disagreeing about how hard they
+  // tried", so a copy of it here can only ever drift. It was a literal `12`
+  // until the cap moved to 20 and this was the one mirror that did not, at
+  // which point `expect(rounds).toBe(ref.rounds)` would have failed by
+  // blaming the graph for the reference running out of rounds first.
+  maxRounds = MAX_ROUNDS,
 ): { placements: StationedPlacement[]; rounds: number; converged: boolean } {
   // THE SAME NUMBERS THE GRAPH STARTS FROM, WHICH IS NOT THE SAME AS THE
   // SAME LIST. The graph's first act is to store this list in f32 columns,

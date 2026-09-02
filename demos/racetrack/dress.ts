@@ -125,8 +125,43 @@ import { resolveCorridor } from "./zones.js";
  * chase each other — the cull drops what coverage just placed, coverage
  * replaces it, and so on — and a demo that hangs on one seed in a hundred
  * is worse than one that reports it did not settle.
+ *
+ * TWENTY NOW, AND THE TWELVE ABOVE WAS SHIPPING A DEFECT. Measured on the
+ * shipped vocabulary — `shippedVocabulary()`, which is what `main.ts:306`
+ * dresses the published page from — over seeds 1..256 with this bound
+ * lifted out of the way: 255 of the 256 settle in two to eight rounds,
+ * and **seed 242 needs thirteen**. At twelve it shipped
+ * `converged: false`. One seed in 256 of the published page, and the
+ * histogram is 81/91/45/17/7/8/6 seeds at 2/3/4/5/6/7/8 rounds.
+ *
+ * WHY NOT THIRTEEN, and this is the whole of the choice. The range 9..12
+ * is EMPTY — nothing in 256 seeds lands there. So thirteen is not the top
+ * of a tail whose shape was sampled; it is one sample of a different
+ * phenomenon, and setting the ceiling on it re-arms the same defect for
+ * the first lap whose ramp runs one round longer. Seed 242 is a genuine
+ * L-6 ramp rather than a chase: its placements climb 372 → 384 → 389 →
+ * 394 → 400 → 405 → 421 as `cover +=` reads 2,2,1,1,1,1,1, because the
+ * loop appends cover each round (below) and `longCoverBudgetW` sizes the
+ * next increment against a target that rises with what was just added.
+ * Only when that flattens at round seven does the ordinary `cull=1 mix=1`
+ * settling run the remaining six. Ramp plus tail, and 256 seeds say the
+ * ramp is rare without saying how long it can get.
+ *
+ * SO: the observed worst (13) plus the full width of the settled body
+ * (2..8, seven rounds) is twenty — a lap whose ramp runs as long as 242's
+ * and whose tail then runs as long as the worst ordinary seed's ENTIRE
+ * dressing. Headroom is very nearly free, for the reason
+ * `stationGraph.ts`'s `REPAIR_MAX_ROUNDS` gives: the loop stops the round
+ * it stops moving, not when it runs out, so a higher ceiling costs the
+ * 255 seeds that settle by eight exactly nothing.
+ *
+ * AND WHY IT IS NOT LARGER THAN TWENTY. The cost is not zero for a
+ * population that never settles at all, where it is paid in full and
+ * linearly: a kit that chases burns every round the bound allows. One
+ * exists — see PLAN.md, "Raising the round cap does not reach the street
+ * kit". The bound is a hang-stop, and this is where it stops being one.
  */
-const MAX_REPAIR_ROUNDS = 12;
+const MAX_REPAIR_ROUNDS = 20;
 
 /** Knobs a host may turn without rewriting the rules. */
 export interface DressOptions {

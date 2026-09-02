@@ -649,6 +649,62 @@ a decision someone should take on purpose rather than by accumulation.
 Related: `smoke-dist.mjs` never imports `pcg-ts/panels`, so the subpath's
 six exported names are pinned in source and unchecked across the build.
 
+### Raising the round cap does not reach the street kit, 2026-09-02
+
+`dressLap`'s `MAX_REPAIR_ROUNDS` went from 12 to 20 today because seed 242
+of the SHIPPED vocabulary needs thirteen rounds and was shipping
+`converged: false` on the published page. That fix is real and it is
+measured — 256 seeds, `shippedVocabulary()`, cap lifted out of the way:
+255 settle in two to eight rounds, one needs thirteen, and 9..12 is empty.
+It is recorded at the constant, guarded by
+`tests/racetrackRoundCap.test.ts`, and **it does not touch the street
+kit**, which is a different failure and is what this entry is for.
+
+**The street kit does not fail by needing more rounds; it fails by not
+having a fixed point.** Over the same 256 seeds, 45 hit the cap of 12 and
+31 ship unconverged. Lifting the cap does not settle them: their true
+round counts run **46, 73, 102, 163, 175, and two seeds are still
+unsettled at 200**. A population whose worst case is 175 and whose next
+case is unbounded is not a population a ceiling is the wrong height for.
+
+**The tell is what the rounds DO, not how many there are.** Seed 242's
+rounds move placements — 372 → 384 → 389 → 394 → 400 → 405 → 421, `cover
++=` reading 2,2,1,1,1,1,1 — because `dress.ts:1004` appends cover inside
+the loop and `tunnels.ts:396-407` sizes `budgetW` as an increment against
+a target that rises with what was just added. That is L-6 ramping, it
+terminates when the budget closes, and more rounds is exactly what it
+wants. The street kit's rounds move nothing: `cull=1 mix=1` every round
+with the placement count flat. The enclosed kit's worst, seed 120 at 9
+rounds, is the same shape — flat at 370 placements, pure chase, no ramp in
+it at all. A ramp and a chase are both "needs more rounds" at the counter
+and are opposite conditions underneath.
+
+So the bound is the wrong instrument here twice over. It cannot fix a
+chase, and raising it makes the chase strictly more expensive — every one
+of those 31 seeds now burns 20 rounds proving nothing instead of 12. That
+cost is why the cap was set at 20 rather than higher, and it is the only
+thing this fix did to the street kit.
+
+**This is the same shape as "Z-3's band mix does not terminate on the
+enclosed kit" (FIXED 2026-08-24), and should not be assumed to be the same
+cause.** That one was a single repair with no fixed point — the donor was
+selected on an asset's median lateral and the redraw came from its
+distribution — and the fix was a mechanism change in three parts, not a
+threshold. What is unmeasured here is which of the cull and the mix is
+giving ground to the other, and whether it is one repair without a fixed
+point or two repairs with incompatible ones. `ROAD_TRACE=1` prints the
+per-round counters and would answer it on one seed.
+
+**What would settle it:** a trace of the cull's and the mix's per-round
+verdicts on one of the two seeds unsettled at 200, naming which placements
+each moves and whether the sets overlap. Until that exists there is no fix
+to propose, and picking one from the shape of the counters is how the
+first band-mix fix came to satisfy the property being complained about
+while breaking the one nobody had stated. Note also that the street kit is
+an optional local catalogue absent from an ordinary checkout, so the
+numbers above cannot be re-derived without `road-kits.local.json` — the
+shipped-vocabulary half of this entry can.
+
 ### Stretch: intra-node yielding — MEASURED AND REJECTED, 2026-08-28
 
 An external integrator's cook-cost harness, run headless against `dist/`,
