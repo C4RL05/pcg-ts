@@ -78,9 +78,30 @@
  * measurement and not a preference. Placed blind on the shipped dressing,
  * 11.84% of barrier pieces (8.65 per lap over 1461 pieces) stand in the
  * driver's look-ahead cone. Neither repair is acceptable to a RUN: the
- * per-piece push `cullSightlines` performs moved 44.5% of the blocked
- * pieces outside `|t| ∈ [1, 2.5]`, so the line loses members from the band
- * it lives in, and culling whole runs instead costs 2.05 runs a lap.
+ * per-piece push `cullSightlines` performs put 77 of the 173 pieces it
+ * MOVED (44.5%) outside `|t| ∈ [1, 2.5]`, so the line loses members from
+ * the band it lives in, and culling whole runs instead costs 2.05 runs a
+ * lap.
+ *
+ * THE DENOMINATOR IS `moved`, NOT `blocking`. They are different counters
+ * and the difference is not cosmetic: `cullSightlines` answers a blocker
+ * either by pushing it clear (`moved`) or by giving up on it (`dropped`)
+ * — because the caller's `dropRatherThanMove` claimed it, or because the
+ * ladder reached `maxPushW` still blocked. Only a `moved` piece HAS a
+ * final lateral, so only `moved` can be the denominator of "landed outside
+ * the band"; a dropped piece is not somewhere else, it is gone.
+ * `blocking === moved + dropped` exactly, so the two coincide precisely
+ * when `dropped` is 0 — which is what the run above reported: 173 blocked,
+ * 173 moved, 0 dropped, so the same 173 pieces answer to either name and
+ * the figure reads the same against both.
+ *
+ * THAT IS A PROPERTY OF THAT RUN AND NOT OF THE CULL, which is why it is
+ * spelled out rather than left to coincidence. The DRESSING's own call
+ * does pass a `dropRatherThanMove` (see `dress.ts`), and
+ * `racetrackDressGraph.test.ts` asserts a non-zero `dropped` on that
+ * population. Quote 44.5% against `blocking` there and it is simply the
+ * wrong number.
+ *
  * Adding `blocksCone` to the rejection test above places 12 of 12 runs on
  * every seed at about 24 attempts a lap out of 2000, with the span
  * distribution unchanged and nothing left blocking — and it still does at
@@ -403,13 +424,17 @@ export function barrierStations(run: BarrierRun, lapW: number): number[] {
  *
  * RUN-ATOMIC, AND THAT IS THE WHOLE POINT OF ASKING EARLY. The measured
  * alternatives both cost the run: per-piece pushing (what `cullSightlines`
- * does) moved 44.5% of the blocked pieces outside `|t| ∈ [1, 2.5]`, which
- * takes them out of the band the line lives in and leaves a line with a
- * hole in it; run-atomic culling AFTER the fact threw away 2.05 runs per
- * lap. Rejecting the CANDIDATE costs a draw. Measured over the shipped
- * dressing: barriers placed blind put 11.84% of pieces (8.65 per lap) in
- * the cone, and this test places 12 of 12 runs on every seed at about 24
- * attempts per lap out of 2000, spans unchanged (median 8.29W → 8.23W).
+ * does) put 77 of the 173 pieces it MOVED (44.5%) outside `|t| ∈ [1, 2.5]`,
+ * which takes them out of the band the line lives in and leaves a line with
+ * a hole in it; run-atomic culling AFTER the fact threw away 2.05 runs per
+ * lap. `moved` is the denominator and not `blocking`: the two counters
+ * coincide only where `dropped` is 0, as it was on that run and is NOT on
+ * the dressing. The file header works through why.
+ *
+ * Rejecting the CANDIDATE costs a draw. Measured over the shipped dressing:
+ * barriers placed blind put 11.84% of pieces (8.65 per lap) in the cone,
+ * and this test places 12 of 12 runs on every seed at about 24 attempts per
+ * lap out of 2000, spans unchanged (median 8.29W → 8.23W).
  */
 export function runBlocksCone(run: BarrierRun, lapW: number, cone: BarrierConeTest): boolean {
   const size = cone.pieceSize(run.piece);

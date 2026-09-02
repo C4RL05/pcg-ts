@@ -16,12 +16,36 @@
  * this harness (`dressedLapFor`, the shipped vocabulary) before either fix
  * was written:
  *
- *   L-1  barriers placed blind put 11.84% of their pieces (8.65 per lap
- *        over 1461) inside the driver's look-ahead cone. Neither of the
- *        cull's answers is acceptable to a RUN — the per-piece push moves
- *        44.5% of the blocked pieces outside |t| in [1, 2.5], and
- *        run-atomic culling costs 2.05 runs a lap — so the planner asks
+ *   L-1  barriers placed blind put 11.84% of their pieces (173 of 1461,
+ *        8.65 per lap) inside the driver's look-ahead cone. Neither of the
+ *        cull's answers is acceptable to a RUN — the per-piece push takes
+ *        77 of the 173 pieces it MOVED (44.5%) outside |t| in [1, 2.5],
+ *        and run-atomic culling costs 2.05 runs a lap — so the planner asks
  *        `blocksCone` BEFORE accepting a candidate.
+ *
+ *        THE DENOMINATOR IS `moved` AND IT IS WORTH SPELLING OUT, because
+ *        it coincided with `blocking` on that run and the two are not the
+ *        same quantity. `cullSightlines` splits its blockers exactly:
+ *        `blocking == moved + dropped`, where a piece is dropped when the
+ *        caller's `dropRatherThanMove` claims it or when the push ladder
+ *        runs out at `maxPushW` still blocked. Only a MOVED piece has a
+ *        final lateral, so only `moved` can be the denominator of "landed
+ *        outside the band".
+ *
+ *        AND `dropped == 0` IS A PROPERTY OF THE POPULATION, NOT OF THE
+ *        CULL. On the blind sweep below it holds — every one of the twelve
+ *        seeds returns `moved == blocking`, 118 and 0 pooled — which is
+ *        why the two readings agree here. It does NOT hold on the
+ *        dressing: `dress.ts` passes a `dropRatherThanMove` for L-3 and
+ *        `racetrackDressGraph.test.ts` asserts a non-zero `dropped` there.
+ *        So the figure is wrong the moment it is quoted against `blocking`
+ *        on a population that drops.
+ *
+ *        Both counters are QUOTED, NOT ASSERTED, like every other figure
+ *        in this header: the blind branch below reads `blocking` alone,
+ *        because what it controls for is that a blind plan blocks at all.
+ *        (The one `moved`/`dropped` assertion in this file is on the
+ *        AVOIDED plan, where it is entailed by `blocking == 0`.)
  *
  *   L-5  after the merge, 26.7% of the 288 runs clear the 0.02 slope floor
  *        and 7.3% of the barrier-touching ones are accepted by
@@ -607,6 +631,103 @@ describe("L-5 barriers merged onto a settled lap", () => {
     );
   });
 
+  it("takes the candidate that leaves NO run behind, not the nearest one that leaves a short one", () => {
+    // THE EMPTY REMAINDER, AND WHY IT HAS TO BE VACUOUSLY TRUE.
+    // `breaksRun` asks whether lowering the k-th member leaves the run
+    // with no false edge in it, and answers by folding `edgeRuns` over the
+    // sub-population with `.every((r) => !isFalseEdge(r))`. Lowering a
+    // member can leave fragments so short that `edgeRuns` returns NOTHING
+    // — both sides of the hole under `minMembers` — and "no false edge
+    // remains" is then true because there is nothing left that could be
+    // one. That is the BEST outcome the filter can report, not an absent
+    // one: the line was broken so thoroughly that the detector no longer
+    // sees a line at all.
+    //
+    // WHICH IS WHY THE FOLD IS `every` AND NOT `some`. `every([])` is
+    // true, `some([])` is false. The `some` spelling therefore rejects
+    // exactly the member that cleared the run completely and walks on to a
+    // nearer, weaker one that merely leaves a non-diverging remainder —
+    // and both spellings agree on every other shape, which is what let it
+    // hide.
+    //
+    // REPORTED DOWNSTREAM, and this is their minimal repro. A consumer's
+    // mutation run found `every` -> `some` survived this suite along with
+    // eleven other mutations, while diverging from the reference on 4.16%
+    // of 25,000 random clouds. Confirmed here before the fixture was
+    // written: with the mutation applied, all 365 racetrack tests passed.
+    const lapW = 360;
+    // [station, t, h, runId] — the ends assembled, the middle three
+    // station-born, so `repairTarget` takes the joiner branch and has
+    // candidates to walk.
+    const all: RunPlacement[] = (
+      [
+        [10, 1.25, 0.4, 7],
+        [12, 1.85, 0.4, -1],
+        [14, 2.05, 0.4, -1],
+        [16, 2.25, 0.4, -1],
+        [18, 2.1, 0.4, 7],
+      ] as const
+    ).map(([station, t, h, runId]) => ({ station, t, h, runId, asset: pieceAsset(0) }));
+
+    // THE PREMISE. One run, and one the detector condemns — a fixture that
+    // stopped being a false edge would make every assertion below vacuous.
+    const found = edgeRuns(all, lapW);
+    expect(found.length, "the hand-built run was not found as one run").toBe(1);
+    expect(isFalseEdge(found[0]), "the hand-built run is not a false edge").toBe(true);
+    expect(found[0].members, "the run did not take every placement").toEqual([0, 1, 2, 3, 4]);
+
+    // THE SHAPE THAT SEPARATES THE TWO SPELLINGS, asserted directly rather
+    // than inferred from the choice. Lowering member 2 leaves a PAIR on
+    // each side of the hole, both under `minMembers`, so `edgeRuns` returns
+    // nothing at all.
+    const lowered = (k: number): RunPlacement[] =>
+      all.map((p, i) => (i === k ? { ...p, h: FALSE_EDGE.heightW[0] - 0.05 } : p));
+    expect(
+      edgeRuns(lowered(2), lapW).length,
+      "lowering the middle no longer empties the run, so this fixture no longer " +
+        "exercises the vacuous case",
+    ).toBe(0);
+
+    // AND THE CONTROL THAT MAKES THE CHOICE BIND. Member 1 is where the
+    // `some` spelling goes instead, so it must be a member `some` would
+    // ACCEPT — one remaining run, not a false edge. Without this the test
+    // would pass against a rule that rejected both.
+    const after1 = edgeRuns(lowered(1), lapW);
+    expect(after1.length, "lowering member 1 no longer leaves exactly one run").toBe(1);
+    expect(
+      after1.some((r) => isFalseEdge(r)),
+      "member 1 no longer clears the run, so the `some` spelling has nowhere to go",
+    ).toBe(false);
+
+    // THE RULE. Both members clear the run, the walk starts at the middle,
+    // and the middle wins because `every` reports the empty remainder as
+    // the clearance it is.
+    const target = repairTarget(found[0], all, lapW);
+    expect(
+      target.index,
+      "the repair passed over the member that emptied the run and took a nearer one — " +
+        "the empty remainder was read as 'no answer' rather than as 'no false edge'",
+    ).toBe(2);
+    expect(target.stationBorn, "the chosen member is not station-born").toBe(true);
+
+    // WHAT THIS DOES NOT PIN, since the answer here happens to BE the
+    // middle: a `repairTarget` with the candidate walk deleted altogether,
+    // returning `members[mid]` unconditionally, passes everything below.
+    // The walk's own worth — preferring the joiner over the middle — is
+    // pinned by the "0 barrier victims" sweep above, not here. This
+    // fixture is aimed at one thing, which is that the empty remainder
+    // counts as a clearance.
+    //
+    // END TO END, because the move count alone cannot tell the two apart:
+    // both spellings clear the lap in one move and only the VICTIM differs.
+    const rep = repairFalseEdges(all, lapW);
+    expect(rep.before, "the repair did not see the edge").toBe(1);
+    expect(rep.after, "the repair did not clear the edge").toBe(0);
+    expect(rep.moves, "the repair did not terminate in one move").toBe(1);
+    expect(rep.log[0].index, "the repair lowered a different member").toBe(2);
+    expect(rep.log[0].before.station, "the repair lowered a different station").toBe(14);
+  });
+
   it("falls back to the middle when the run has no joiner in it", async () => {
     // THE DOCUMENTED FALLBACK. A run whose every member is assembled has
     // nothing to blame, and the loop's termination argument is that each
@@ -641,11 +762,25 @@ describe("L-5 barriers merged onto a settled lap", () => {
     expect(found.length, "the hand-built run was not found").toBe(1);
     expect(isFalseEdge(found[0]), "the hand-built run is not a false edge").toBe(true);
 
+    // THE "TWO PAIRS" ABOVE, ASSERTED RATHER THAN ONLY DESCRIBED. This
+    // path never reaches `breaksRun` — every member is assembled, so the
+    // candidate walk skips them all and the fallback takes the middle
+    // unconditionally — but it lands on the SAME empty remainder the
+    // filter's vacuous case turns on, and the one-move claim below is only
+    // interesting because of it. `moves === 1` alone does not say so: a
+    // remainder holding one run that merely fails `isFalseEdge` would also
+    // finish in one move. See the test above for the case where the
+    // distinction is load-bearing.
+    const mid = Math.floor(n / 2);
+    const holed = all.map((p, i) => (i === mid ? { ...p, h: FALSE_EDGE.heightW[0] - 0.05 } : p));
+    expect(
+      edgeRuns(holed, lapW).length,
+      "lowering the middle left a run behind, so this is no longer the two-pairs fixture",
+    ).toBe(0);
+
     const target = repairTarget(found[0], all, lapW);
     expect(target.stationBorn, "an all-assembled run reported a station-born target").toBe(false);
-    expect(target.index, "the fallback did not take the old middle").toBe(
-      found[0].members[Math.floor(n / 2)],
-    );
+    expect(target.index, "the fallback did not take the old middle").toBe(found[0].members[mid]);
 
     const rep = repairFalseEdges(all, lapW);
     expect(rep.before, "the repair did not see the edge").toBe(1);

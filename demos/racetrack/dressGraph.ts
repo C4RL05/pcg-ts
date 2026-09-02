@@ -5572,9 +5572,11 @@ function assemble(input: DressGraphInput): { graph: Graph } {
       ...(bar.maxTries !== undefined ? { maxTries: bar.maxTries } : {}),
       // THE CONE, ASKED BEFORE THE RUN EXISTS. `barriers.ts` measured both
       // of the alternatives and neither is acceptable to a RUN: the cull's
-      // per-piece push takes 44.5% of the blocked pieces out of the band
-      // the line lives in, and culling whole runs afterwards costs about
-      // two runs a lap. The piece size is derived here rather than taken,
+      // per-piece push takes 77 of the 173 pieces it MOVED (44.5%) out of
+      // the band the line lives in, and culling whole runs afterwards costs
+      // about two runs a lap. The denominator is `moved`, not `blocking`;
+      // the two were the same 173 on that run only because it dropped
+      // nothing. The piece size is derived here rather than taken,
       // so the planner cannot be asking about a different object from the
       // one this graph is about to place.
       ...(bar.cone !== undefined
