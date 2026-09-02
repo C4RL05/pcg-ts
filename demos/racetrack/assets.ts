@@ -96,6 +96,39 @@ export interface AssetPlacement {
   readonly t: number;
   /** Height in W, on whatever datum `where.height` uses. */
   readonly h: number;
+  /**
+   * 1 once {@link repairBandMix} has redrawn this placement on this lap.
+   *
+   * THE LATCH, AND IT IS WHAT BOUNDS THE OUTER LOOP. It is the reference's
+   * copy of `dressGraph`'s `PLACEMENT.mixTried` column, which that arm has
+   * carried since it met this same wall: the mix refills a band, the NEXT
+   * round's cull pushes the replacement clear of the racing line, the push
+   * changes its band, and the scan — a minimum over a key that is a
+   * FUNCTION OF THE PLACEMENT and of nothing else — hands back the same
+   * donor. Neither repair is wrong and the pair does not settle.
+   *
+   * `failed` (below) does not cover this and never could: it is scoped to
+   * one call and it records only the donors this repair could NOT refill.
+   * A donor it refilled successfully is unmarked, and the next round is a
+   * fresh call, so before this flag existed a placement was redrawable an
+   * unbounded number of times. Measured on the shipped vocabulary over
+   * seeds 1..1024 with the round cap lifted to 64: 3 seeds ran past 9
+   * rounds and seed 656 took 24, every round from its third to its
+   * twenty-third reading `cull=1 mix=1` — one cull, one redraw, the same
+   * placement, until it happened to stop. With the flag the same sweep
+   * tops out at 9 and that seed settles in 4.
+   *
+   * MONOTONE, AND IT RIDES ON THE PLACEMENT. Set on commit and never
+   * cleared, so a placement is redrawn at most ONCE per lap and the mix is
+   * bounded by the population exactly as its own pass loop is. It lives on
+   * the object rather than in a set keyed by index or station because
+   * neither of those is stable across a round: the cull drops placements
+   * and D-4 moves them between stations, while a field spreads along with
+   * everything else the round copies — which is precisely how the graph's
+   * attribute rides its point. That is what keeps the latch invariant
+   * under the order of the list and under where a placement ends up.
+   */
+  readonly mixTried?: 0 | 1;
 }
 
 /**
@@ -679,6 +712,15 @@ export function repairBandMix<T extends AssetPlacement & { readonly station: num
     for (const x of live()) {
       if (x.band !== src) continue;
       if (protect.has(out[x.i]?.asset.id ?? -1)) continue;
+      // ALREADY REDRAWN ONCE ON THIS LAP, AND THEREFORE OFF THE TABLE. The
+      // same gate `writeBandMix` spells as `1 - mixTried` in its
+      // `eligible`, for the same reason and to the same effect. See
+      // {@link AssetPlacement.mixTried}: this is the difference between a
+      // loop that settles and one that chases the same placement round
+      // after round. A pinned or landmark-protected placement stays in the
+      // DENOMINATOR either way — being ineligible as a donor is not being
+      // outside the population Z-3 is stated over.
+      if (out[x.i]?.mixTried) continue;
       if (failed.has(`${x.i}|${dst}`)) continue;
       const key = priorityOf(out[x.i] as T);
       // STRICTLY LESS THAN, so a tie keeps the lower index. Two placements
@@ -767,7 +809,14 @@ export function repairBandMix<T extends AssetPlacement & { readonly station: num
     // hid them from the cull that runs after this, and made D-4's
     // longest gap unreadable. Nothing failed. The lap just quietly lost
     // an eighth of its dressing.
-    out[donor.i] = { ...(out[donor.i] as T), ...replacement };
+    // AND THE LATCH GOES ON WITH IT, in the same statement that commits the
+    // redraw, so there is no path that moves a placement without marking
+    // it. `replacement` carries no `mixTried` of its own — `placeAsset`
+    // knows nothing about this repair — so the flag is written explicitly
+    // and last. The graph writes it in the same place and in the same
+    // order: `${tag}_tried` sits between the gather and the columns it
+    // gates, off the same commit flag.
+    out[donor.i] = { ...(out[donor.i] as T), ...replacement, mixTried: 1 };
     moves++;
   }
   return { placements: out, moves, wasOutside, log, datum, exclude };

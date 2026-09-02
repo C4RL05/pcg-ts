@@ -160,8 +160,84 @@ import { resolveCorridor } from "./zones.js";
  * linearly: a kit that chases burns every round the bound allows. One
  * exists — see PLAN.md, "Raising the round cap does not reach the street
  * kit". The bound is a hang-stop, and this is where it stops being one.
+ *
+ * ---------------------------------------------------------------------
+ *
+ * SIXTEEN, AND EVERY PARAGRAPH ABOVE THIS LINE IS KEPT BECAUSE IT WAS
+ * WRONG. Twenty was reasoned from 256 seeds and did not survive 1024. The
+ * claims are left standing rather than deleted, in this file's usual way,
+ * because the shape of the error is the finding: a bound was set on a
+ * sample of a phenomenon that had been misidentified, and the number came
+ * out too small AND for a reason that was not true.
+ *
+ * WHAT WAS CLAIMED. That the empty range 9..12 meant thirteen was "one
+ * sample of a ramp" and the tail's shape unsampled; that seed 242 is "a
+ * genuine L-6 ramp rather than a chase"; and that twenty therefore clears
+ * the worst by the full width of the body.
+ *
+ * WHAT 1024 SEEDS SHOWED. Same kit, same reference `dressLap`, this bound
+ * lifted to 64, seeds 1..1024. The histogram at 2..24 rounds is
+ * 321/328/197/80/50/29/14/2/0/0/1/1 and then nothing until a single seed
+ * at 24. **Seed 656 needs twenty-four.** So twenty shipped
+ * `converged: false` too — caps of 13 and 20 fail on the same one seed,
+ * and the raise bought exactly nothing the paragraph above credits it
+ * with.
+ *
+ * AND THE GAP WAS NEVER UNDER-SAMPLING. It is the boundary between two
+ * different processes. Read with `ROAD_TRACE=1`, seed 656 is ramp 2 plus
+ * **chase 22** and seed 242 is ramp 7 plus **chase 6** — 242 is not the
+ * ramp it was called. Splitting all 1024 traces at the last round whose
+ * `cover +=` is non-zero puts the ramp lengths at 1:498 2:263 3:138 4:53
+ * 5:36 6:23 7:12 8:1 and NOTHING ABOVE EIGHT, so every round above nine on
+ * every seed in the sweep is chase. The ramp is L-6's top-up feeding its
+ * own next budget and it stops; the chase was `cull=1 mix=1`, one
+ * placement, every round,
+ * constant and then abruptly finished. The population's survival — laps
+ * still repairing after R rounds, R = 2..24 — read 703, 375, 178, 98, 48,
+ * 19, 5, 3, 3, 3, 2, and then 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0: a body
+ * that halves each round down to five, and then ELEVEN consecutive rounds
+ * with exactly one lap still going. A flat tail of ones is what an
+ * unsampled bound looks like. A cap cannot be set on that, and setting one
+ * is what both twelve and twenty were doing.
+ *
+ * THE CAUSE WAS A MISSING LATCH AND IT IS NOW FIXED, so this number is
+ * about a different loop from the one measured above. See
+ * {@link AssetPlacement.mixTried}: `repairBandMix` had no memory of the
+ * placements it had already redrawn, so the cull could push one clear of
+ * the racing line and the mix could redraw the same one, round after
+ * round, forever. `dressGraph`'s arm has carried that latch since it met
+ * the same wall; the reference had not, and owned the whole of the chase.
+ *
+ * SO THE NUMBER IS RE-DERIVED FROM THE POST-LATCH DISTRIBUTION, which is
+ * a different shape. Seeds 1..1024: 321/356/191/72/40/26/15/3 at 2..9
+ * rounds — no gap, no outlier, worst NINE. Seeds 1..4096, because a bound
+ * set on 256 is what produced this entry:
+ * 1356/1344/752/312/167/99/48/13/4/1 at 2..11, worst ELEVEN (seed 3072,
+ * and it is a pure L-6 ramp: `cover +=` fires every round and the mix is
+ * silent from round two). Seed 656 settles in 4 and seed 242 in 8.
+ *
+ * ELEVEN PLUS FIVE. The tail now DECAYS, which is what makes headroom
+ * something that can be priced instead of guessed: the number of seeds
+ * needing more than R rounds runs 66, 18, 5, 1, 0 over R = 7..11, a factor
+ * of about four per round. Five rounds past the observed worst is that
+ * factor five times over — roughly one lap in four million beyond the cap,
+ * against one in 256 and one in 1024 for the two numbers this replaces.
+ * It is not the old "worst plus the width of the body" rule, which was
+ * compensating for an unbounded process and would now read 21.
+ *
+ * AND WHY IT COMES DOWN RATHER THAN STAYING AT TWENTY. The last paragraph
+ * above the line is the one claim here that held up in principle: a
+ * population that never settles pays the bound in full and linearly. The
+ * street kit was that population, but its numbers were taken with the mix
+ * UNLATCHED and cannot be retaken here — it needs `road-kits.local.json`,
+ * which an ordinary checkout does not have, so those suites skip. Whether
+ * it still chases is now an open question rather than a known cost; see
+ * PLAN.md, "An unlatched band mix chases without bound". Sixteen is a
+ * fifth off what such a kit would burn before it is stopped and told so,
+ * and the 4096 seeds that settle by eleven pay nothing for it either way,
+ * because the loop exits the round it stops moving.
  */
-const MAX_REPAIR_ROUNDS = 20;
+const MAX_REPAIR_ROUNDS = 16;
 
 /** Knobs a host may turn without rewriting the rules. */
 export interface DressOptions {
@@ -1061,6 +1137,29 @@ export function dressLap(
     const marks = repairLandmarks(placements, pool, lap.lengthW, seed + rounds, reserved);
     placements = marks.placements;
     landmarkFixes += marks.moves;
+
+    // AND THE ONE PLACE THE MIX'S LATCH CAN LEAK, RE-ASSERTED FROM L-4's
+    // OWN LOG. {@link AssetPlacement.mixTried} is monotone by contract —
+    // that is the whole of what bounds this loop — and every other repair
+    // in the round preserves it for free, being generic in the placement
+    // type and so unable to build one except by spreading. L-4 is not: it
+    // assigns `{ ...drawn, station }`, replacing the victim wholesale, and
+    // a flag it never heard of goes with it. That is the same shape as the
+    // bug `repairBandMix` records under "SPREAD OVER THE DONOR, never
+    // straight onto it", and the fix belongs here rather than there
+    // because the latch is a property of THIS loop: L-4 is a threshold
+    // repair that knows nothing about Z-3, and the graph's body does not
+    // run it at all, so there is no divergence to close in `legibility.ts`.
+    //
+    // `log` carries the victim's index and the placement as it was, which
+    // is exactly the pair needed. A leak here would re-arm the chase for
+    // one placement per landmark move — rare, and unbounded when it fires.
+    for (const m of marks.log) {
+      const now = placements[m.index];
+      if (m.before.mixTried && now && !now.mixTried) {
+        placements[m.index] = { ...now, mixTried: 1 };
+      }
+    }
 
     // L-5, before the mix, because breaking an edge lowers a placement
     // out of the verge band and Z-3 has to see the lap that leaves.

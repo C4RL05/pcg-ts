@@ -499,7 +499,7 @@ const SETTLE_ATTR = "moves";
 /**
  * How many rounds the repair may take before it is stopped and told so.
  *
- * TWENTY, WHICH IS `dressLap`'s `MAX_REPAIR_ROUNDS` AND NOT A COINCIDENCE
+ * SIXTEEN, WHICH IS `dressLap`'s `MAX_REPAIR_ROUNDS` AND NOT A COINCIDENCE
  * — the two loops have to be able to disagree about the ANSWER without
  * disagreeing about how hard they tried. It is a ceiling and not a
  * schedule: these three repairs settle in one round on the shipped
@@ -510,24 +510,46 @@ const SETTLE_ATTR = "moves";
  * the enclosed kit's worst is nine rounds. Raising a bound quietly falsifies
  * every comment that described the old one as attainable.)
  *
- * RAISED FROM TWELVE WITH `dressLap`, AND FOR ITS REASON RATHER THAN FOR
- * ONE OF THIS ARM'S. Read `MAX_REPAIR_ROUNDS`'s comment for the
- * measurement: seed 242 of the shipped vocabulary needs thirteen rounds
- * there and shipped `converged: false` at twelve. IT CANNOT NEED THEM
- * HERE, and that is structural rather than lucky: the ramp which produces
- * them is L-6's top-up feeding its own next budget, and this arm runs that
- * top-up ONCE, outside the loop, at line 5677 — see the comment there. No
- * round of this body can add cover, so there is nothing to ramp. The same
- * survey put this arm's worst at four rounds, which agrees with the
- * paragraph above and is a bound on what was observed, not on what the
- * body can do.
+ * RAISED FROM TWELVE TO TWENTY WITH `dressLap`, AND THEN LOWERED TO
+ * SIXTEEN WITH IT, both times for its reason rather than for one of this
+ * arm's. Read `MAX_REPAIR_ROUNDS`'s comment for the whole of it: the
+ * twenty was set on 256 seeds against a phenomenon that had been
+ * misidentified, and 1024 seeds found a lap needing twenty-four. The cause
+ * was that the reference's band mix had no {@link PLACEMENT.mixTried} —
+ * THIS ARM'S OWN COLUMN, which is why this arm never had the defect — so
+ * the cull and the mix chased one placement round after round. With the
+ * latch ported across, the reference's worst over 4096 seeds is eleven and
+ * sixteen is that plus five.
  *
- * THE NUMBER MOVES ANYWAY, because what the two constants share is the
- * promise in the first paragraph: equal effort, independently reached
- * answers. Letting them drift apart to save eight rounds this arm will
- * never take would trade that promise for nothing.
+ * IT CANNOT NEED EVEN THOSE HERE, and that is structural rather than
+ * lucky, on both counts. Both arms now bound the mix the same way: a
+ * placement is redrawn at most once per lap, so the mix can cost at most
+ * the population. AND THAT IS A BOUND, NOT A DISAPPEARANCE — worth saying
+ * because the trace still LOOKS like the old defect. Latched, seed 367
+ * runs rounds 4..8 and seed 554 rounds 3..7 at a flat `cull=1 mix=1`. What
+ * ended is one placement being chased forever; what remains is the loop
+ * spending a round each on successive DIFFERENT placements, which
+ * terminates because the latch retires one every time. A reader diagnosing
+ * a long lap from the counters should expect to see those rounds and not
+ * read them as the latch having failed.
+ *
+ * And what is left of the reference's tail beyond that is L-6's top-up
+ * feeding its own next budget, where this arm runs that top-up ONCE,
+ * outside the loop — see `assemble`'s "L-6, BETWEEN THE TWO PASSES"
+ * comment, which says why, and which this used to cite by a line number
+ * that has since drifted twice. No round of this body can add cover, so
+ * there is nothing to ramp. The same survey put this arm's worst at four
+ * rounds, which agrees with the paragraph above and is a bound on what was
+ * observed, not on what the body can do. (That figure is `dressLapByGraph`'s
+ * and has not been retaken since the reference was latched; the latch does
+ * not touch this arm, but the number is older than this paragraph.)
+ *
+ * THE NUMBER MOVES ANYWAY, IN BOTH DIRECTIONS, because what the two
+ * constants share is the promise in the first paragraph: equal effort,
+ * independently reached answers. Letting them drift apart to save rounds
+ * this arm will never take would trade that promise for nothing.
  */
-export const MAX_ROUNDS = 20;
+export const MAX_ROUNDS = 16;
 
 /** The columns this graph reads off the placement cloud it is handed. */
 export const PLACEMENT = {
@@ -770,19 +792,29 @@ export const PLACEMENT = {
   /**
    * 1 where Z-3 has already redrawn this placement on this lap.
    *
-   * THE GRAPH'S `failed` SET, AND IT IS WHAT MAKES THE LOOP TERMINATE.
-   * `repairBandMix` remembers the (donor, band) pairs it has tried and
-   * will not offer the same donor twice, without which "the scan for a
-   * donor is a minimum over a FIXED per-placement key, so the same
-   * lowest-priority member of the band is chosen every time and the loop
-   * spends the whole population budget re-deciding the same thing" — its
-   * own words. The graph met the same wall one level up: the mix refills a
-   * band, the NEXT round's cull pushes the replacement clear of the racing
-   * line, the push changes its band, and the quota — which takes the
-   * lowest-priority eligible member of that band, and that is still this
-   * one — marks it again. Measured over twenty seeds without this column,
-   * the graph ran out of rounds on two of them where `dressLap` settled on
-   * every one.
+   * IT IS WHAT MAKES THE LOOP TERMINATE, AND THE REFERENCE NOW HAS IT TOO
+   * — see {@link AssetPlacement.mixTried}, which is this column as a field
+   * on the placement. It began as this arm's answer to a wall the
+   * reference's `failed` set only half covers. That set remembers the
+   * (donor, band) pairs the mix TRIED AND COULD NOT REFILL, and will not
+   * offer those again, without which "the scan for a donor is a minimum
+   * over a FIXED per-placement key, so the same lowest-priority member of
+   * the band is chosen every time and the loop spends the whole population
+   * budget re-deciding the same thing" — its own words. But it is scoped
+   * to one call and it says nothing about a donor that WAS refilled. The
+   * graph met that half one level up: the mix refills a band, the NEXT
+   * round's cull pushes the replacement clear of the racing line, the push
+   * changes its band, and the quota — which takes the lowest-priority
+   * eligible member of that band, and that is still this one — marks it
+   * again. Measured over twenty seeds without this column, the graph ran
+   * out of rounds on two of them where `dressLap` settled on every one.
+   *
+   * AND `dressLap` SETTLING ON EVERY ONE OF TWENTY WAS THE SAMPLE, NOT THE
+   * ANSWER. Over 1024 seeds of the shipped vocabulary with its cap lifted,
+   * the unlatched reference ran a lap to twenty-four rounds — 22 of them
+   * `cull=1 mix=1`, exactly the loop described above, on the arm that had
+   * no column to break it. Latched, the same seed settles in four. The
+   * divergence ran the other way from how it reads here, and it is closed.
    *
    * THE ARGUMENT DOES NOT DEPEND ON WHAT THE ORDER IS, which is why it
    * survived the 2026-08-28 move from station priority to a hashed one
@@ -796,6 +828,15 @@ export const PLACEMENT = {
    * bounds the mix by the population exactly as the reference's own pass
    * loop is bounded. It costs nothing on the seeds that already settled:
    * round one does essentially all of the work and never asks twice.
+   *
+   * IT IS NOT FREE ON THE REFERENCE, WHICH RUNS FOUR MORE REPAIRS. Over
+   * seeds 1..1024, latching `dressLap` left 900 laps on the same round
+   * count, shortened 81 and LENGTHENED 43, the worst of those by five
+   * rounds (seed 554, 3 to 8) — a donor it may no longer take is a donor
+   * it replaces with a second-choice one, and a band can take another
+   * round to reach. Mean rounds still fell, 3.41 to 3.32, and mean mix
+   * moves per lap did not move at all (29.9 to 29.8): what the latch
+   * removes is redrawing the SAME placement, not the work.
    */
   mixTried: "mixTried",
   /**
@@ -1051,10 +1092,15 @@ export interface DressGraphInput {
    * THE HARNESS'S ONE LIMIT, stated because it bounds two of the numbers
    * above. Driving `buildRoundGraph` per round cannot carry
    * {@link PLACEMENT.mixTried} across rounds — `placementCloudInTrackCoords`
-   * zero-fills that column and `StationedPlacement` has no field to hold it
-   * — so rounds two and later see a fuller donor pool than `repeatUntil`
-   * would. The drift and after-round-one figures are therefore UPPER BOUNDS
-   * on what happens in the loop. The zeros are not affected: both arms and
+   * zero-fills that column — so rounds two and later see a fuller donor
+   * pool than `repeatUntil` would. The drift and after-round-one figures
+   * are therefore UPPER BOUNDS on what happens in the loop. (This used to
+   * give a second reason, that `StationedPlacement` had no field to hold
+   * the flag. It has one now: the latch was ported to the reference as
+   * {@link AssetPlacement.mixTried} and rides on the placement. The limit
+   * survives on the first reason alone — the cloud builder still starts
+   * that column at zero — and closing it is now a matter of reading the
+   * field there rather than of inventing somewhere to keep it.) The zeros are not affected: both arms and
    * every control run under the identical condition, so the comparison is
    * exactly isolated, and a fuller donor pool is more opportunity to
    * diverge rather than less.

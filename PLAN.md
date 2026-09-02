@@ -649,61 +649,110 @@ a decision someone should take on purpose rather than by accumulation.
 Related: `smoke-dist.mjs` never imports `pcg-ts/panels`, so the subpath's
 six exported names are pinned in source and unchecked across the build.
 
-### Raising the round cap does not reach the street kit, 2026-09-02
+### An unlatched band mix chases without bound, 2026-09-02
 
-`dressLap`'s `MAX_REPAIR_ROUNDS` went from 12 to 20 today because seed 242
-of the SHIPPED vocabulary needs thirteen rounds and was shipping
-`converged: false` on the published page. That fix is real and it is
-measured — 256 seeds, `shippedVocabulary()`, cap lifted out of the way:
-255 settle in two to eight rounds, one needs thirteen, and 9..12 is empty.
-It is recorded at the constant, guarded by
-`tests/racetrackRoundCap.test.ts`, and **it does not touch the street
-kit**, which is a different failure and is what this entry is for.
+*Titled "Raising the round cap does not reach the street kit" when it was
+written earlier the same day, and comments that cite it by that name are
+citing this. The rename is the finding: the chase was never the street
+kit's private problem, and treating it as one is what let a cap be raised
+against it twice.*
 
-**The street kit does not fail by needing more rounds; it fails by not
-having a fixed point.** Over the same 256 seeds, 45 hit the cap of 12 and
-31 ship unconverged. Lifting the cap does not settle them: their true
-round counts run **46, 73, 102, 163, 175, and two seeds are still
-unsettled at 200**. A population whose worst case is 175 and whose next
-case is unbounded is not a population a ceiling is the wrong height for.
+**FIRST, WHAT THIS ENTRY GOT WRONG, kept because the error is the lesson.**
+It opened by saying `MAX_REPAIR_ROUNDS` went from 12 to 20 "because seed
+242 of the SHIPPED vocabulary needs thirteen rounds", that this was "real
+and measured" over 256 seeds, that 242 is an L-6 ramp, and that the chase
+is something **the street kit** does. Every one of those was drawn from
+256 seeds. At 1024, on the same shipped vocabulary and the same reference
+`dressLap` with the cap lifted to 64:
 
-**The tell is what the rounds DO, not how many there are.** Seed 242's
-rounds move placements — 372 → 384 → 389 → 394 → 400 → 405 → 421, `cover
-+=` reading 2,2,1,1,1,1,1 — because `dress.ts:1004` appends cover inside
-the loop and `tunnels.ts:396-407` sizes `budgetW` as an increment against
-a target that rises with what was just added. That is L-6 ramping, it
-terminates when the budget closes, and more rounds is exactly what it
-wants. The street kit's rounds move nothing: `cull=1 mix=1` every round
-with the placement count flat. The enclosed kit's worst, seed 120 at 9
-rounds, is the same shape — flat at 370 placements, pure chase, no ramp in
-it at all. A ramp and a chase are both "needs more rounds" at the counter
-and are opposite conditions underneath.
+- The histogram at 2..24 rounds is 321/328/197/80/50/29/14/2/0/0/1/1 and
+  then one seed at **24**. **Seed 656 needs twenty-four**, so the cap of 20
+  shipped `converged: false` exactly as 12 did — 13 and 20 fail on the same
+  single seed and the raise bought nothing.
+- Seed 242 is **not** a ramp. `ROAD_TRACE=1` reads it as ramp 7 + chase 6.
+  Seed 656 is ramp 2 + **chase 22**, and seed 549 is ramp 1 + chase 11.
+  Splitting all 1024 traces at the last round with a non-zero `cover +=`,
+  the ramp-length histogram is **1:498 2:263 3:138 4:53 5:36 6:23 7:12
+  8:1 — and nothing above 8**. Every one of the three seeds needing more
+  than nine rounds spends the excess in chase.
+- So the empty range 9..12 was never the under-sampling the raise was
+  argued from. It is the **boundary between a bounded ramp and an unbounded
+  chase**, and a cap set anywhere above it is a cap set on a chase.
+- The chase does not decay while it runs: constant `cull=1 mix=1`, one
+  placement, every round, then an abrupt stop. The population's survival
+  says the same thing — seeds still repairing after R rounds, R = 2..24,
+  ran **703, 375, 178, 98, 48, 19, 5, 3, 3, 3, 2, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 0**. A body that halves each round down to 5, and then eleven
+  consecutive rounds with exactly one lap still going. A flat tail of ones
+  is what "no bound was sampled" looks like, and it is the shape a ceiling
+  cannot be set from.
 
-So the bound is the wrong instrument here twice over. It cannot fix a
-chase, and raising it makes the chase strictly more expensive — every one
-of those 31 seeds now burns 20 rounds proving nothing instead of 12. That
-cost is why the cap was set at 20 rather than higher, and it is the only
-thing this fix did to the street kit.
+**THE CAUSE, and it was one missing line in the reference.** `dressGraph`
+latches with `PLACEMENT.mixTried`: monotone, written on commit, gating
+`quotaRebalance`'s `eligible`, so a placement is redrawn at most once per
+lap. `repairBandMix` had no such thing. Its `failed` set is function-local
+and records only the donors it could **not** refill, so a successfully
+redrawn placement was eligible again the next round — the cull pushes the
+replacement clear of the racing line, that changes its band, and the donor
+scan, a minimum over a key that is a function of the placement alone, hands
+back the same one. The unlatched arm owned the whole of the chase. FIXED:
+the latch is ported to `AssetPlacement.mixTried` and rides on the placement
+the way the graph's attribute rides its point.
 
-**This is the same shape as "Z-3's band mix does not terminate on the
-enclosed kit" (FIXED 2026-08-24), and should not be assumed to be the same
-cause.** That one was a single repair with no fixed point — the donor was
-selected on an asset's median lateral and the redraw came from its
-distribution — and the fix was a mechanism change in three parts, not a
-threshold. What is unmeasured here is which of the cull and the mix is
-giving ground to the other, and whether it is one repair without a fixed
-point or two repairs with incompatible ones. `ROAD_TRACE=1` prints the
-per-round counters and would answer it on one seed.
+**What it cost and what it bought.** Post-latch over seeds 1..1024 the
+histogram is 321/356/191/72/40/26/15/3 at 2..9 rounds — no gap, no outlier,
+worst nine. Over 1..4096: 1356/1344/752/312/167/99/48/13/4/1 at 2..11,
+worst eleven, and that worst is a pure L-6 ramp with the mix silent from
+round two. Seed 656 settles in 4, seed 242 in 8. Of the 1024, 900 laps kept
+their round count, 81 shortened and 43 lengthened (worst +5, seed 554);
+mean rounds fell 3.41 → 3.32 and mean mix moves did not move (29.9 → 29.8).
+The cap is now **16** — eleven plus five, where the tail's survival runs
+66, 18, 5, 1, 0 over R = 7..11, about a quarter per round, so five rounds
+of headroom is roughly one lap in four million. Recorded at the constant
+and guarded by `tests/racetrackRoundCap.test.ts`.
 
-**What would settle it:** a trace of the cull's and the mix's per-round
-verdicts on one of the two seeds unsettled at 200, naming which placements
-each moves and whether the sets overlap. Until that exists there is no fix
-to propose, and picking one from the shape of the counters is how the
-first band-mix fix came to satisfy the property being complained about
-while breaking the one nobody had stated. Note also that the street kit is
-an optional local catalogue absent from an ordinary checkout, so the
-numbers above cannot be re-derived without `road-kits.local.json` — the
-shipped-vocabulary half of this entry can.
+**What the latch does NOT do, because the trace still looks like the
+defect.** It bounds the chase per placement; it does not remove flat
+`cull=1 mix=1` rounds from the counters. Latched, seed 367 runs rounds 4..8
+and seed 554 rounds 3..7 exactly that way and both settle — the cull and
+the mix still trade, but each trade retires a placement, so the loop is
+bounded by the population instead of running forever on one. The
+extrapolation above rests on five seeds past 9 rounds and one past 10, and
+assuming a geometric tail is precisely the assumption that failed
+pre-latch. 16 is empirically generous, not proven: the structural bound is
+the population (310-420 placements, each redrawable once) plus the L-6
+ramp, and it is much larger than 16.
+
+**THE STREET AND ENCLOSED KITS ARE NOT RE-MEASURED AND WERE NOT CHECKED.**
+The figures the earlier version of this entry quoted for them — 45 of 256
+at the bound, 31 unconverged, true counts 46, 73, 102, 163, 175, two still
+unsettled at 200, the placement count flat, and the enclosed kit's seed 120
+at 9 rounds "flat at 370 placements" — were taken with the reference
+unlatched and are **stale by construction**. They cannot be retaken here:
+both kits come from an optional local catalogue and neither
+`road-kits.local.json` nor `ROAD_KITS` exists in this checkout, so those
+suites skip. Nothing below should be read as a claim about their state
+today.
+
+**What is still open, and it is now a narrower question.** The shipped
+kit's chase and the street kit's had the same signature at the counter —
+`cull=1 mix=1`, placement count flat — and the shipped kit's turned out to
+be the missing latch entirely. The obvious hypothesis is that the street
+kit's is too, and that its unbounded round counts were the same defect with
+a vocabulary that hits it far harder. That is a hypothesis and not a
+measurement. It would be settled by re-running the street kit with the
+latch in place and reading whether it settles; if it does not, the trace
+that was wanted before is still what is wanted — the cull's and the mix's
+per-round verdicts on one unsettled seed, naming which placements each
+moves and whether the sets overlap.
+
+**Read alongside "Z-3's band mix does not terminate on the enclosed kit"
+(FIXED 2026-08-24), which is the same repair failing a third way.** That
+one had no fixed point because the donor was chosen on an asset's median
+lateral while the redraw came from its distribution; this one had a fixed
+point and no memory of having reached it. Both were mechanism bugs wearing
+a threshold's clothes, and in both cases the number that looked adjustable
+— attempts, then rounds — was the wrong instrument.
 
 ### Stretch: intra-node yielding — MEASURED AND REJECTED, 2026-08-28
 
