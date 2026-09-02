@@ -190,6 +190,53 @@ export function inEdgeBand(p: StationedPlacement): boolean {
   );
 }
 
+/**
+ * WHICH ASSEMBLED RUN A PLACEMENT CAME OUT OF, or -1 for one that was
+ * scattered at a station of its own.
+ *
+ * WHY THE REPAIR NEEDS TO KNOW. A barrier run is parallel IN ISOLATION and
+ * stops being isolated the moment it lands on a real lap: `edgeRuns` chains
+ * every band member on that side within `gapW`, so a station-born placement
+ * that happens to sit within 3W of an assembled line JOINS it. Measured on
+ * the shipped dressing, 288 runs: |slope| is exactly 0 on all of them
+ * before the merge, 26.7% clear the 0.02 floor after it, and 7.3% of the
+ * barrier-touching runs come back as false edges. The tilt is the joiner's,
+ * not the barrier's.
+ *
+ * SO THE OFFENDING ELEMENT IS THE JOINER AND THE REPAIR SAYS SO. Lowering
+ * `members[floor(n/2)]` blind took a BARRIER piece in 76.2% of moves and
+ * always an INTERIOR one — a hole punched in the middle of an assembled
+ * line, which is the one thing this file exists to build. Preferring the
+ * station-born member clears every false edge with no barrier victims at
+ * the same move count; see {@link repairTarget}.
+ *
+ * WHY AN INTEGER AND NOT A FLAG. A boolean answers "was this assembled"
+ * and nothing else. A run-atomic rule — move the whole line rather than
+ * one member of it — needs to know WHICH line, and the id is already
+ * there to be carried. It also has to be its own column rather than
+ * borrowed: `cover` is asserted against by `racetrackDressGraph.test.ts`
+ * at a base a barrier never reaches, and `mixPinned` means something else.
+ *
+ * NEGATIVE IS NOT THE SAME AS SCATTERED. L-6 numbers its cover pieces
+ * `-2 - index()`, so `-2` and below are ASSEMBLED ids under a different
+ * scheme. Exactly {@link STATION_BORN}, or absent, is the scattered case —
+ * which is why {@link isAssembled} is written as the positive question.
+ */
+export const STATION_BORN = -1;
+
+/** The column {@link STATION_BORN} describes, optional so a lap without one reads as all-scattered. */
+export interface RunTag {
+  readonly runId?: number;
+}
+
+/** A placement that may name the run it was assembled into. */
+export type RunPlacement = StationedPlacement & RunTag;
+
+/** Did something ASSEMBLE this placement, rather than scatter it? */
+export function isAssembled(p: RunPlacement): boolean {
+  return p.runId !== undefined && p.runId !== STATION_BORN;
+}
+
 export interface EdgeRun {
   /** Indices into the placement list, in station order. */
   readonly members: number[];
@@ -381,12 +428,129 @@ export function falseEdges(placements: readonly StationedPlacement[], lapW: numb
   return edgeRuns(placements, lapW).filter(isFalseEdge);
 }
 
-export interface EdgeRepair {
-  readonly placements: StationedPlacement[];
+export interface EdgeRepair<T extends RunPlacement = RunPlacement> {
+  readonly placements: T[];
   readonly moves: number;
   readonly before: number;
   readonly after: number;
-  readonly log: { readonly index: number; readonly before: StationedPlacement }[];
+  readonly log: { readonly index: number; readonly before: T }[];
+}
+
+/**
+ * Would lowering the k-th member leave this run with no false edge in it?
+ *
+ * ASKED ON THE RUN'S OWN MEMBERS AND NOTHING ELSE, which is exact rather
+ * than approximate: every other band member on this side is at least
+ * `gapW` away — that is what ended the run — so no outsider can join what
+ * is left, and members of the other side or outside the band never
+ * participated. Re-running `edgeRuns` over the sub-population therefore
+ * gives the same parts the whole lap would, computed on fifteen
+ * placements instead of five hundred.
+ *
+ * AND IT IS `edgeRuns` RATHER THAN A LOCAL RE-DERIVATION. A second
+ * spelling of "where does a run break" that disagreed with the first is
+ * the exact defect this file's own header is about.
+ */
+function breaksRun(
+  run: EdgeRun,
+  placements: readonly RunPlacement[],
+  lapW: number,
+  k: number,
+): boolean {
+  const sub = run.members.map((i) => placements[i]);
+  sub[k] = { ...sub[k], h: FALSE_EDGE.heightW[0] - 0.05 };
+  return edgeRuns(sub, lapW).every((r) => !isFalseEdge(r));
+}
+
+/**
+ * WHICH MEMBER TO LOWER: the joiner, not the middle of the line.
+ *
+ * WHY THERE IS A CHOICE TO MAKE AT ALL. A barrier run is parallel in
+ * isolation and stops being isolated on a real lap: `edgeRuns` chains
+ * every band member on that side within `gapW`, so a station-born
+ * placement three half-widths from an assembled line joins it and tilts
+ * it. Measured on the shipped dressing, lowering `members[floor(n/2)]`
+ * blind took a BARRIER piece in 76.2% of moves and always an INTERIOR one
+ * — a hole in the middle of the line this rule exists to let a generator
+ * build. The run tilts because a stray placement joined it, so the joiner
+ * is the offending element.
+ *
+ * A RUN WITH NO ASSEMBLED MEMBER TAKES THE OLD MIDDLE, UNCONDITIONALLY
+ * AND FIRST. Everything below only runs where there is something to
+ * prefer against, which is what makes this change INERT on a lap that
+ * carries no runs: no `runId` anywhere means every run takes this branch
+ * and picks exactly what it always did, so `dressGraph.ts`' `runIndex ==
+ * floor(runCount / 2)` still agrees with it there.
+ *
+ * AND IT ONLY AGREES THERE. `dressGraph.ts` runs L-5 as a graph stage and
+ * knows nothing about `runId`, so the moment barrier placements are
+ * routed through THAT path the two spellings pick different members and
+ * `racetrackDressGraph.test.ts`' one-pass comparison goes red. That is
+ * the right failure — it is the graph being told about assembly — and it
+ * is stated here so whoever wires the barriers in knows the stage is
+ * theirs to teach and not a test to loosen.
+ *
+ * OTHERWISE: THE NEAREST STATION-BORN MEMBER THAT ACTUALLY BREAKS THE RUN.
+ * "Nearest the middle" is still the shape of the answer, for the reason it
+ * always was — a line is broken most cheaply where it is least anchored,
+ * and dropping an end leaves a remainder that may still span 4W and fire
+ * the repair again. But a joiner is wherever it happened to land, so
+ * nearest is no longer enough on its own: an end-ward member that leaves
+ * the line whole costs a second move, and then the first can be PUT BACK
+ * with the rule still satisfied — which is `edgeRepairIsMinimal`'s own
+ * definition of a repair that did too much. Measured: without the
+ * {@link breaksRun} filter, seed 1 of the merged sweep leaves two
+ * removable moves. So the candidates are walked outward from the middle
+ * and the first one that splits the line wins.
+ *
+ * TIES GO TO THE LOWER POSITION. Two candidates equidistant from the
+ * middle have nothing to choose between them and the walk takes the lower
+ * first. Stated because "nearest" is not by itself a function, and this
+ * repair has to be one.
+ *
+ * THE FALLBACK IS THE OLD RULE, AND IT HAS TO EXIST. A run whose every
+ * member is assembled has no joiner to blame — two barrier runs merged, or
+ * one built with a tilt in it — and so does one where no single joiner
+ * splits the line. The loop's termination argument is that every pass
+ * lowers at least one member OUT of the band, so declining to move would
+ * break it and spin. Both cases therefore take the original middle member
+ * and pay the hole, which is the honest cost of a line that diverges on
+ * its own. `planBarriers` is what makes the first unreachable in practice:
+ * one lateral per run puts the slope at exactly 0, and
+ * `BARRIER_SEPARATION_W` (`barriers.ts`) keeps two runs on a side from
+ * chaining. `stationBorn` is reported so a caller can see which of the two
+ * rules fired rather than infer it.
+ */
+export function repairTarget(
+  run: EdgeRun,
+  placements: readonly RunPlacement[],
+  lapW: number,
+): { index: number; stationBorn: boolean } {
+  const n = run.members.length;
+  const mid = Math.floor(n / 2);
+  const joined = run.members.some((i) => isAssembled(placements[i]));
+  if (!joined) return { index: run.members[mid], stationBorn: true };
+
+  // Outward from the middle, lower position first at equal distance.
+  const order: number[] = [];
+  for (let d = 0; d < n; d++) {
+    for (const k of d === 0 ? [mid] : [mid - d, mid + d]) {
+      if (k >= 0 && k < n) order.push(k);
+    }
+  }
+  for (const k of order) {
+    if (isAssembled(placements[run.members[k]])) continue;
+    if (breaksRun(run, placements, lapW, k)) {
+      return { index: run.members[k], stationBorn: true };
+    }
+  }
+  // `stationBorn` describes the member that was CHOSEN, not the branch
+  // that chose it: the fallback takes the middle whatever the middle is,
+  // and a caller counting barrier victims needs to know which it got.
+  return {
+    index: run.members[mid],
+    stationBorn: !isAssembled(placements[run.members[mid]]),
+  };
 }
 
 /**
@@ -404,18 +568,22 @@ export interface EdgeRepair {
  * still spanning 4W, and the repair then fires again on what is left. The
  * middle splits it into two runs, each too short to read as an edge.
  *
+ * THE MIDDLE OF THE JOINERS, once a lap carries assembled runs. See
+ * {@link repairTarget}: on a lap with no `runId` anywhere the two are the
+ * same member and this is the rule it always was.
+ *
  * IT LOWERS RATHER THAN WIDENS. Below 0.2W is ground detail — a kerb
  * stone, a marking — which is what the rule says such a thing should be.
  * Pushing it past 2.5W would move it two bands out and take it away from
  * the road entirely.
  */
-export function repairFalseEdges(
-  placements: readonly StationedPlacement[],
+export function repairFalseEdges<T extends RunPlacement>(
+  placements: readonly T[],
   lapW: number,
   maxPasses = 8,
-): EdgeRepair {
+): EdgeRepair<T> {
   const out = [...placements];
-  const log: EdgeRepair["log"] = [];
+  const log: EdgeRepair<T>["log"] = [];
   const before = falseEdges(out, lapW).length;
   let moves = 0;
 
@@ -423,7 +591,7 @@ export function repairFalseEdges(
     const bad = falseEdges(out, lapW);
     if (bad.length === 0) break;
     for (const run of bad) {
-      const mid = run.members[Math.floor(run.members.length / 2)];
+      const { index: mid } = repairTarget(run, out, lapW);
       const p = out[mid];
       // NO GUARD AGAINST A MEMBER THAT IS ALREADY BELOW THE BAND, because
       // there cannot be one, and the guard that used to stand here said
@@ -439,7 +607,10 @@ export function repairFalseEdges(
       // lowers at least one member out of the band, so the repair
       // terminates on its own and `maxPasses` is a ceiling, not a brake.
       log.push({ index: mid, before: p });
-      out[mid] = { ...p, h: FALSE_EDGE.heightW[0] - 0.05 };
+      // `as T` for the reason `cullSightlines` spells it the same way: a
+      // spread of a generic is not provably that generic, and the only
+      // field this rewrites is one every `T` already has.
+      out[mid] = { ...p, h: FALSE_EDGE.heightW[0] - 0.05 } as T;
       moves++;
     }
   }
@@ -450,8 +621,8 @@ export function repairFalseEdges(
  * Minimality, by the criterion every repair here is held to: no single
  * move may be put back with the rule still satisfied.
  */
-export function edgeRepairIsMinimal(
-  repair: EdgeRepair,
+export function edgeRepairIsMinimal<T extends RunPlacement>(
+  repair: EdgeRepair<T>,
   lapW: number,
 ): { minimal: boolean; removable: number[] } {
   const removable: number[] = [];

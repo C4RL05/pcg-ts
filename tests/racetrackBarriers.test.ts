@@ -128,6 +128,8 @@ interface Piece {
   readonly t: number;
   readonly h: number;
   readonly run: number;
+  /** The PLAN's id for the run, which is not the same column as `run`. */
+  readonly runId: number;
   readonly tile: number;
   readonly piece: number;
   readonly P: number[];
@@ -139,6 +141,7 @@ function readPieces(geo: Geometry): Piece[] {
   const t = p.require("trackT");
   const h = p.require("trackH");
   const run = p.require(BARRIER_RUN.run);
+  const runId = p.require(BARRIER_RUN.runId);
   const tile = p.require(BARRIER_RUN.tile);
   const piece = p.require(BARRIER_RUN.piece);
   const P = p.require("P");
@@ -149,6 +152,7 @@ function readPieces(geo: Geometry): Piece[] {
       t: t.get(i),
       h: h.get(i),
       run: run.get(i),
+      runId: runId.get(i),
       tile: tile.get(i),
       piece: piece.get(i),
       P: P.getTuple(i),
@@ -193,9 +197,16 @@ const cv = (xs: readonly number[]): number => {
  * thing here: determinism in this repo is bit-exact, so two cooks that
  * agree at all agree exactly, and the rounding is what keeps a printed
  * key readable rather than a tolerance being spent.
+ *
+ * `runId` IS IN IT AND `run` IS NOT, which is the distinction the two
+ * columns exist for. `run` is `arcTile`'s range index — a POSITION in the
+ * ranges cloud, so it MUST move when the cloud is shuffled and a key
+ * carrying it would fail the order-invariance test for being correct.
+ * `runId` is what the plan decided, so it must NOT move, and the same
+ * shuffle is what proves it does not.
  */
 const rowKey = (q: Piece): string =>
-  `${q.station.toFixed(4)}|${q.t.toFixed(4)}|${q.h.toFixed(4)}|${q.piece}|${q.tile}|` +
+  `${q.station.toFixed(4)}|${q.t.toFixed(4)}|${q.h.toFixed(4)}|${q.piece}|${q.tile}|${q.runId}|` +
   q.P.map((v) => v.toFixed(4)).join(",");
 
 describe("L-5 barrier runs, built", () => {
@@ -367,6 +378,47 @@ describe("L-5 barrier runs, built", () => {
     // More than one piece is in play, so "one per run" is a finding rather
     // than a vocabulary of size one.
     expect(new Set([...groups.values()].map((l) => l[0].piece)).size).toBeGreaterThan(1);
+  });
+
+  it("names the run that assembled each piece, on a column that is not its place in the cloud", async () => {
+    // WHY A PIECE HAS TO SAY THIS AT ALL. `falseEdges.ts`' repair reads
+    // one column to tell an ASSEMBLED member from a station-born one,
+    // because a barrier run is parallel only in isolation: on a real lap
+    // a stray placement within `gapW` joins the run and tilts it, and the
+    // repair lowering the tilted line's middle punches a hole in the
+    // barrier instead of moving the joiner. See
+    // `tests/racetrackBarrierMerge.test.ts` for that measurement; this is
+    // only the claim that the column exists and carries the plan's answer.
+    const { runs, geo } = await build(SEED);
+    // Zero-based, in station order, no gaps — and never negative, since
+    // `STATION_BORN` is -1 and L-6's cover ids are `-2 - index()`. All
+    // three are read off one column and none of them may collide.
+    expect(
+      runs.map((r) => r.runId),
+      "the plan's ids are not its own positions",
+    ).toEqual(runs.map((_, i) => i));
+    for (const q of readPieces(geo)) {
+      expect(q.runId, "a piece carries an id no run has").toBe(runs[q.run].runId);
+      expect(q.runId, "a barrier piece read as station-born").toBeGreaterThanOrEqual(0);
+    }
+
+    // AND THE TWO COLUMNS COME APART UNDER A SHUFFLE, which is the whole
+    // reason they are two. `run` is `arcTile`'s `rangeIndexAttr` and has
+    // to be the cloud's position, because that is the key `copyToPoints`
+    // pairs the offsets on. `runId` is the plan's, and travels with the
+    // run. Without the perturbation "they agree" would be a statement
+    // about one being a copy of the other.
+    const shuffled = await build(SEED, (rs) => rs.reverse());
+    const pieces = readPieces(shuffled.geo);
+    expect(
+      pieces.some((q) => q.run !== q.runId),
+      "the shuffle did not separate the two columns, so nothing was tested",
+    ).toBe(true);
+    for (const q of pieces) {
+      expect(q.runId, "a shuffled piece took the id of whoever sat in its slot").toBe(
+        shuffled.runs[q.run].runId,
+      );
+    }
   });
 
   it("has no jitter inside a run and all of its spread between them", async () => {

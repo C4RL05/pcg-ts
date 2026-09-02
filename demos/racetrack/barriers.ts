@@ -74,6 +74,36 @@
  * detector: the runs it makes come back through `edgeRuns` parallel and
  * tight, and `isFalseEdge` refuses every one of them.
  *
+ * IT AVOIDS L-1's CONE RATHER THAN BEING REPAIRED BY IT, and that is a
+ * measurement and not a preference. Placed blind on the shipped dressing,
+ * 11.84% of barrier pieces (8.65 per lap over 1461 pieces) stand in the
+ * driver's look-ahead cone. Neither repair is acceptable to a RUN: the
+ * per-piece push `cullSightlines` performs moved 44.5% of the blocked
+ * pieces outside `|t| ∈ [1, 2.5]`, so the line loses members from the band
+ * it lives in, and culling whole runs instead costs 2.05 runs a lap.
+ * Adding `blocksCone` to the rejection test above places 12 of 12 runs on
+ * every seed at about 24 attempts a lap out of 2000, with the span
+ * distribution unchanged and nothing left blocking — and it still does at
+ * a deliberately oversized 2.0x1.1x2.5W piece, at about 52. The sampler
+ * stays BOUNDED: a lap that cannot fit a run degrades to fewer runs, the
+ * way it already did.
+ *
+ * `tests/racetrackBarrierMerge.test.ts` RE-MEASURES THAT AT ITS OWN PIECE
+ * SIZE and gets 13.50% (9.83 a lap) blind against 0 avoided, with the
+ * median span moving 8.70W to 8.17W. The blocked fraction is a property of
+ * how big a piece is, so the two figures are the same finding at two
+ * sizes rather than a disagreement; what does not move is that the blind
+ * number is an eighth of the pieces and the avoided one is zero.
+ *
+ * AND A PIECE SAYS WHICH RUN ASSEMBLED IT. `runId` is `falseEdges.ts`'
+ * column, carried from the plan through `rangeNames` onto every tile,
+ * because L-5's repair has to be able to tell an assembled member from a
+ * station-born one: a barrier run is parallel in isolation and a stray
+ * scattered placement within `gapW` of it joins the run and tilts it. The
+ * joiner is the offending element, and without the id the repair punches
+ * the hole in the barrier instead. See {@link BARRIER_RUN.runId} for why
+ * it is not the same number as `run`.
+ *
  * WHAT IT DELIBERATELY DOES NOT DO. No flare: `arcTile`'s two-mouth ramp
  * is a tunnel's business and a barrier has no mouth, so `flare` is left at
  * its default rather than set to zero for emphasis. No taper, for the same
@@ -103,6 +133,7 @@ import {
 import { BARRIER, FALSE_EDGE } from "./falseEdges.js";
 import { TRACK_FRAME } from "./graph.js";
 import { rand } from "./rand.js";
+import { type Frame, blocksCone } from "./sightline.js";
 
 /**
  * The columns a barrier run carries.
@@ -135,6 +166,20 @@ export const BARRIER_RUN = {
   run: "l5Run",
   /** 0-based position within the run — `arcTile`'s `tileIndexAttr`. */
   tile: "l5Tile",
+  /**
+   * The run's own identity, as `falseEdges.ts`' `runId` column reads it.
+   *
+   * NOT THE SAME COLUMN AS {@link BARRIER_RUN.run}, and the difference is
+   * load-bearing. `run` is `arcTile`'s `rangeIndexAttr` — a POSITION in
+   * the ranges cloud, which is what `copyToPoints` has to key on because
+   * that is the key the node itself writes. `runId` is what the plan
+   * decided, carried through `rangeNames` unchanged, so it survives the
+   * cloud being handed over in a different order. They are equal for a
+   * plan passed in the order {@link planBarriers} returned it, which is
+   * every caller; they stop being equal exactly when something shuffles,
+   * and that is when the distinction earns its keep.
+   */
+  runId: "l5RunId",
   /**
    * The same range in WORLD units, which is what `arcTile` tiles in.
    *
@@ -185,6 +230,14 @@ const PITCH_CEILING_W = FALSE_EDGE.gapW - 0.1;
 
 /** One planned barrier run, before it is a cloud. */
 export interface BarrierRun {
+  /**
+   * The run's identity, and what a piece of it carries as `runId`.
+   *
+   * ASSIGNED AFTER THE SORT, so it is the run's position in the returned
+   * plan. It is never negative, which is what keeps it clear of
+   * `STATION_BORN` (-1) and of L-6's `-2 - index()` cover ids.
+   */
+  readonly runId: number;
   /** Arc from the start line to the start of the RANGE, in W. */
   readonly startW: number;
   /** The range, in W: `pieces * pitchW`. */
@@ -277,6 +330,38 @@ export function drawBarrierPieces(u: number): number {
   );
 }
 
+/** Extents in W, along the track frame's three axes. What a piece occupies. */
+export interface PieceSize {
+  readonly across: number;
+  readonly along: number;
+  readonly tall: number;
+}
+
+/**
+ * Everything {@link planBarriers} needs to ask L-1's question in advance.
+ *
+ * `eyes` IS PASSED IN, for `blocksCone`'s own stated reason: the placer
+ * must ask the SAME set the cull will, and `defaultEyeStations` allocates
+ * a lap's worth per call. One list, built once by the caller, read by
+ * both — which is also what makes "planned clear" and "culled clear" the
+ * same claim rather than two that happen to agree.
+ *
+ * `pieceSize` IS A FUNCTION OF THE PIECE because `piece` is an opaque
+ * index this file never interprets. The caller's vocabulary owns what a
+ * piece is; it also owns how big one is, and the cone test is the first
+ * thing here that has to know.
+ */
+export interface BarrierConeTest {
+  /** The lap's own frame lookup, in W — `dress.ts`' `frameLookup(lap)`. */
+  readonly frameAt: (stationW: number, lateralW: number, heightW: number) => Frame;
+  /** Half the road width in world units, which is what `blocksCone` scales the extents by. */
+  readonly halfWidth: number;
+  /** Where the cull will stand. `defaultEyeStations(lapW)`, built once. */
+  readonly eyes: readonly number[];
+  /** How big a piece of the given index is, in W. */
+  readonly pieceSize: (piece: number) => PieceSize;
+}
+
 /** What {@link planBarriers} is allowed to do. */
 export interface BarrierPlanOptions {
   /** How many runs to place. The lap may not fit them all; see the return. */
@@ -285,6 +370,70 @@ export interface BarrierPlanOptions {
   readonly pieceCount: number;
   /** Bounded, like `planEnclosure`'s. A lap that cannot hold `count` runs stops early. */
   readonly maxTries?: number;
+  /**
+   * L-1's cone, so a run is never PLANNED into it.
+   *
+   * OPTIONAL BECAUSE A CALLER MAY HAVE NO LAP TO ASK. The builder's own
+   * suite cooks barriers against a path and nothing else; a caller with a
+   * dressing has `frameLookup` and the eye set already. Left out, this is
+   * the sampler that shipped.
+   */
+  readonly avoidCone?: BarrierConeTest;
+}
+
+/**
+ * Where the pieces of a planned run stand, in W of arc from the start line.
+ *
+ * THE SAME ARITHMETIC {@link writeBarriers} WRITES AS A FIELD, and it has
+ * to be: a station computed one way here and another way there would let
+ * the planner clear a cone the built piece stands in. `arcTile` places its
+ * tiles at sub-interval centres, so the i-th of `pieces` over a range of
+ * `lengthW` sits half a pitch in.
+ */
+export function barrierStations(run: BarrierRun, lapW: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < run.pieces; i++) {
+    out.push((run.startW + ((i + 0.5) * run.lengthW) / run.pieces) % lapW);
+  }
+  return out;
+}
+
+/**
+ * Would ANY piece of this run stand in the driver's cone?
+ *
+ * RUN-ATOMIC, AND THAT IS THE WHOLE POINT OF ASKING EARLY. The measured
+ * alternatives both cost the run: per-piece pushing (what `cullSightlines`
+ * does) moved 44.5% of the blocked pieces outside `|t| ∈ [1, 2.5]`, which
+ * takes them out of the band the line lives in and leaves a line with a
+ * hole in it; run-atomic culling AFTER the fact threw away 2.05 runs per
+ * lap. Rejecting the CANDIDATE costs a draw. Measured over the shipped
+ * dressing: barriers placed blind put 11.84% of pieces (8.65 per lap) in
+ * the cone, and this test places 12 of 12 runs on every seed at about 24
+ * attempts per lap out of 2000, spans unchanged (median 8.29W → 8.23W).
+ */
+export function runBlocksCone(run: BarrierRun, lapW: number, cone: BarrierConeTest): boolean {
+  const size = cone.pieceSize(run.piece);
+  for (const station of barrierStations(run, lapW)) {
+    if (
+      blocksCone(
+        {
+          station,
+          t: run.t,
+          h: run.h,
+          across: size.across,
+          along: size.along,
+          tall: size.tall,
+        },
+        lapW,
+        cone.frameAt,
+        cone.halfWidth,
+        cone.eyes,
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -292,10 +441,19 @@ export interface BarrierPlanOptions {
  *
  * A BOUNDED REJECTION SAMPLER, the same shape as `planEnclosure`, because
  * the accept test reads the set of runs already accepted and there is no
- * closed form for that. It rejects on ONE predicate — a run may not come
+ * closed form for that. It rejects on TWO predicates — a run may not come
  * within {@link BARRIER_SEPARATION_W} of another run on its own side,
  * measured on the loop so a run across the start line is tested against
- * both of its neighbours.
+ * both of its neighbours; and, when the caller hands over a lap to ask on,
+ * no piece of it may stand in L-1's look-ahead cone.
+ *
+ * THE CONE TEST IS LAST BECAUSE IT IS THE EXPENSIVE ONE. Separation is a
+ * walk of the accepted list; the cone is a fan of chords per piece per eye
+ * in range. Ordering them the other way would pay for the geometry on
+ * every candidate the cheap test was going to refuse anyway. Neither
+ * predicate draws a random number, so the order changes the cost and not
+ * the plan — every draw is made before either runs, and a rejected attempt
+ * consumes its draws either way.
  *
  * THE PITCH AND THE PIECE COUNT ARE NOT INDEPENDENT AND MUST NOT BE. The
  * three published marginals cannot all hold at once — a median run of 5
@@ -371,11 +529,35 @@ export function planBarriers(
     }
     if (!clear) continue;
 
-    out.push({ startW, lengthW, spanW, pitchW, pieces, t, h, piece });
+    // `runId` IS PROVISIONAL HERE and rewritten below the sort. A run
+    // needs one to be asked about at all, and the id it ends up with is
+    // its place in the finished plan.
+    const cand: BarrierRun = {
+      runId: out.length,
+      startW,
+      lengthW,
+      spanW,
+      pitchW,
+      pieces,
+      t,
+      h,
+      piece,
+    };
+
+    // L-1, ASKED BEFORE THE RUN EXISTS RATHER THAN AFTER. `blocksCone` is
+    // the cull's own verdict, lifted for exactly this, so a run this
+    // accepts is one `cullSightlines` will not touch.
+    if (opts.avoidCone && runBlocksCone(cand, lapW, opts.avoidCone)) continue;
+
+    out.push(cand);
   }
   // In station order, which is the order everything downstream reads a lap
   // in and costs nothing to give here.
   out.sort((a, b) => a.startW - b.startW);
+  // And the ids follow the sort, so `runId` is the run's position in what
+  // this returns — which is the ranges cloud's own index for any caller
+  // that does not reorder the plan.
+  for (let i = 0; i < out.length; i++) out[i] = { ...out[i], runId: i };
   return out;
 }
 
@@ -402,6 +584,7 @@ export function barrierRanges(runs: readonly BarrierRun[], halfWidth: number): G
   const lengthW = p.add(BARRIER_RUN.lengthW, "f32", 1);
   const pieces = p.add(BARRIER_RUN.pieces, "f32", 1);
   const piece = p.add(BARRIER_RUN.piece, "i32", 1);
+  const runId = p.add(BARRIER_RUN.runId, "i32", 1);
   const startK = p.add(BARRIER_RUN.startK, "f32", 1);
   const lengthK = p.add(BARRIER_RUN.lengthK, "f32", 1);
   const pitchK = p.add(BARRIER_RUN.pitchK, "f32", 1);
@@ -411,6 +594,10 @@ export function barrierRanges(runs: readonly BarrierRun[], halfWidth: number): G
     lengthW.set(i, r.lengthW);
     pieces.set(i, r.pieces);
     piece.set(i, r.piece);
+    // FROM THE RUN, NOT FROM `i`. The position is `arcTile`'s business
+    // and it writes that itself; this column is the plan's own answer, so
+    // a reordered cloud carries the same ids to the same pieces.
+    runId.set(i, r.runId);
     startK.set(i, r.startW * halfWidth);
     lengthK.set(i, r.lengthW * halfWidth);
     pitchK.set(i, (r.lengthW * halfWidth) / (r.pieces - 0.5));
@@ -528,6 +715,7 @@ export function writeBarriers(
         BARRIER_RUN.lengthW,
         BARRIER_RUN.pieces,
         BARRIER_RUN.piece,
+        BARRIER_RUN.runId,
       ],
     },
     `${tag}_tile`,
@@ -549,6 +737,7 @@ export function writeBarriers(
         BARRIER_RUN.pieces,
         BARRIER_RUN.piece,
         BARRIER_RUN.tile,
+        BARRIER_RUN.runId,
       ],
       sourceGroupAttr: BARRIER_RUN.run,
       targetGroupAttr: BARRIER_RUN.run,

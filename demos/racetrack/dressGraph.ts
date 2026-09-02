@@ -131,6 +131,7 @@ import {
   attribute,
   attributeReduce,
   clamp,
+  component,
   copyToPoints,
   cook,
   createPointCloud,
@@ -156,6 +157,7 @@ import {
   orientAlongVector,
   pathCoverage,
   pathScan,
+  pathShift,
   pointsToPath,
   promoteAttribute,
   quotaRebalance,
@@ -187,7 +189,14 @@ import {
   addCornerLanguage,
 } from "./cornerGraph.js";
 import { cornersOf, type Corner } from "./corners.js";
-import { FALSE_EDGE } from "./falseEdges.js";
+import {
+  BARRIER_RUN,
+  type BarrierConeTest,
+  type BarrierRun,
+  planBarriers,
+  writeBarriers,
+} from "./barriers.js";
+import { FALSE_EDGE, STATION_BORN } from "./falseEdges.js";
 import { SIGHTLINE } from "./sightline.js";
 import { SAME_PLACE_W } from "./tolerance.js";
 import { BAND_T, Z3, lateralReach, type Band } from "./assets.js";
@@ -248,6 +257,89 @@ const L6_ATTEMPTS = 256;
 
 /** Scratch the cover conversion writes and strips again. */
 const SCRATCH_POSE = "l6PoseScratch";
+
+/**
+ * The score of a member L-5 may NOT lower, which is every member something
+ * assembled.
+ *
+ * A NUMBER RATHER THAN A SECOND COLUMN, because the choice is a MINIMUM and
+ * a minimum needs one key. `1e6` is exact in f32 and three orders above the
+ * largest rank a run can produce (twice its member count), so a candidate
+ * can never reach it and `edgeBest` still holding it means "this run has no
+ * candidate at all" — the fallback {@link writeFalseEdges} needs.
+ */
+const EDGE_NO_CANDIDATE = 1e6;
+
+/**
+ * Every column the assembly-aware target rule writes and takes off again.
+ *
+ * A LIST AND NOT A HABIT. `writeEdgeTarget` is thirteen nodes deep and
+ * almost all of it is working — two shifts, three scans, three promotes and
+ * their sources — and `mergePoints` unions columns, so ONE forgotten name
+ * rides onto every settled placement on the lap as a default that is then
+ * somebody's to explain three stages downstream. The strip is driven off
+ * this array rather than off a hand-written argument list so that adding a
+ * scratch column and forgetting to remove it is not possible in two edits;
+ * `tests/racetrackBarrierGraph.test.ts` pins the PUBLISHED set exactly, in
+ * both domains, so a name that escapes this list fails there rather than in
+ * a demo.
+ *
+ * `PLACEMENT.runId` IS THE ONLY THING THE GATE ADDS. Everything else here
+ * — including `PLACEMENT.edgeRunId`, `PLACEMENT.edgeScore` and
+ * `PLACEMENT.edgeBest`, which have names in {@link PLACEMENT} because the
+ * stage's own prose names them — is consumed inside the stage and gone
+ * before the placement list leaves it.
+ */
+const EDGE_SCRATCH_POINT = [
+  /** The running minimum `pathScan` writes beside its per-run total. */
+  "edgeScoreScan",
+  /** The previous member's station, from `pathShift` at -1. */
+  "edgePrevStation",
+  /** 1 where that shift landed: 0 on the first member of every run. */
+  "edgeHasPrev",
+  /** Arc from the previous member, wrapped across the lap's seam. */
+  "edgeGapPrev",
+  /** The same column read one position further along: the gap AHEAD. */
+  "edgeGapNext",
+  /** Run-local arc, 0 at the run's first member — `fitRun`'s own abscissa. */
+  "edgeArc",
+  /** That run's whole span, promoted back off the primitive. */
+  "edgeArcTotal",
+  /** This member's own [s, s², t, s·t], the regression's four moments. */
+  "edgeMoment",
+  /** Their inclusive prefix along the run. */
+  "edgeMomentScan",
+  /** Their run total, promoted back off the primitive. */
+  "edgeMomentTotal",
+  /** The running maximum beside the "does this run hold a barrier" total. */
+  "edgeRunIdScan",
+  /** That total: >= 0 exactly where something assembled a member of the run. */
+  "edgeJoined",
+] as const;
+
+/**
+ * The primitive-domain half of the same working: every `totalAttr`.
+ *
+ * `edgeBest` IS ONE OF THEM, and it is the one that got away. A `pathScan`
+ * total lands on the PRIMITIVE domain and `promoteAttribute` COPIES it to
+ * the points rather than moving it, so stripping the point column leaves
+ * the primitive one exactly where it was — invisible to any assertion
+ * written against `attrs.point`, which is every assertion anyone writes.
+ */
+const EDGE_SCRATCH_PRIM = ["edgeArcTotal", "edgeMomentTotal", "edgeJoined"] as const;
+
+const EDGE_SCAN = EDGE_SCRATCH_POINT[0];
+const EDGE_PREV_STATION = EDGE_SCRATCH_POINT[1];
+const EDGE_HAS_PREV = EDGE_SCRATCH_POINT[2];
+const EDGE_GAP_PREV = EDGE_SCRATCH_POINT[3];
+const EDGE_GAP_NEXT = EDGE_SCRATCH_POINT[4];
+const EDGE_ARC = EDGE_SCRATCH_POINT[5];
+const EDGE_ARC_TOTAL = EDGE_SCRATCH_POINT[6];
+const EDGE_MOMENT = EDGE_SCRATCH_POINT[7];
+const EDGE_MOMENT_SCAN = EDGE_SCRATCH_POINT[8];
+const EDGE_MOMENT_TOTAL = EDGE_SCRATCH_POINT[9];
+const EDGE_RUNID_SCAN = EDGE_SCRATCH_POINT[10];
+const EDGE_JOINED = EDGE_SCRATCH_POINT[11];
 
 /** The named outputs a cook of this graph produces. */
 export const DRESS_OUTPUTS = {
@@ -571,6 +663,48 @@ export const PLACEMENT = {
   span: "edgeSpan",
   runIndex: "edgeIndex",
   runCount: "edgeCount",
+  /**
+   * `runFit`'s own run ORDINAL, numbered across the whole geometry.
+   *
+   * THE GROUP KEY THE ASSEMBLY-AWARE TARGET RULE NEEDS, and the one thing
+   * it could not get anywhere else: `PLACEMENT.group` names a SIDE, and a
+   * side carries as many runs as its gaps leave it with, so a reduction
+   * over the group would let one run's joiner answer for another's. The
+   * node numbers these ACROSS the geometry rather than per path — its own
+   * `idAttr` says so, and says why: "so those nodes see distinct groups
+   * without having to combine two columns" — which is what makes this the
+   * whole key rather than half of one.
+   *
+   * WRITTEN ONLY WHERE THE RULE THAT READS IT IS BUILT, and that is the
+   * gate being a real gate rather than nearly one. `runFit`'s empty
+   * default writes no column and is byte-identical to a cook without the
+   * param, so a lap that asked for no barriers carries exactly the columns
+   * it carried before.
+   *
+   * AND IT IS STRIPPED BEFORE THE LIST LEAVES L-5, like the rest of that
+   * rule's working — see {@link EDGE_SCRATCH_POINT}. It has a name here
+   * because the stage's prose names it, not because anything downstream
+   * reads it.
+   */
+  edgeRunId: "edgeRun",
+  /**
+   * How badly a member wants to be the one L-5 lowers, lower is better,
+   * and `EDGE_NO_CANDIDATE` where it may not be chosen at all.
+   *
+   * See {@link writeFalseEdges}: `repairTarget`'s walk outward from the
+   * middle is an ORDER, and an order is a minimum over a key.
+   *
+   * SCRATCH, AND STRIPPED WITH THE REST — see {@link EDGE_SCRATCH_POINT}.
+   */
+  edgeScore: "edgeScore",
+  /**
+   * The best {@link PLACEMENT.edgeScore} anywhere in this member's run.
+   *
+   * SCRATCH ON BOTH DOMAINS: `pathScan` writes it on the PRIMITIVE and
+   * `promoteAttribute` copies it to the points, so both copies are
+   * stripped. See {@link EDGE_SCRATCH_PRIM}.
+   */
+  edgeBest: "edgeBest",
   /** 1 on the one placement per qualifying run that L-5 lowers. */
   drop: "edgeDrop",
   /**
@@ -654,6 +788,24 @@ export const PLACEMENT = {
    * two numbers side by side for the same reason.
    */
   coverRun: "coverRun",
+  /**
+   * Which ASSEMBLED run this placement came out of, or `STATION_BORN` (-1)
+   * for one that was scattered at a station of its own.
+   *
+   * THE SAME STRING `BARRIER_RUN.runId` WRITES, DELIBERATELY, so a barrier
+   * piece arrives already carrying this column and nothing has to rename
+   * it at the merge. `tests/racetrackBarrierGraph.test.ts` asserts the two
+   * spellings are one string rather than two that happen to match.
+   *
+   * PRESENT ONLY ON A LAP THAT HAS AN ASSEMBLER IN IT, which is what
+   * {@link DressGraphInput.barriers} switches on. A column nothing writes
+   * is a column `mergePoints` would fill with its default, and the default
+   * for an i32 is 0 — a REAL run id, not "no run". So rather than give
+   * every placement a column that means nothing, the tag is written on
+   * both sides of the merge or on neither, and {@link writeFalseEdges}
+   * reads it only when it was told the lap carries one.
+   */
+  runId: "l5RunId",
   /** 1 where Z-1 moved this placement this round. See {@link writeCorridor}. */
   corridorMoved: "corridorMoved",
   /**
@@ -942,6 +1094,70 @@ export interface DressGraphInput {
    * yet; add it when something wants it.
    */
   readonly densityScale?: number;
+  /**
+   * L-5's barrier runs, or ABSENT for a lap with no assembler in it.
+   *
+   * OFF BY DEFAULT AND THAT IS LOAD-BEARING, not caution. Every whole-lap
+   * comparison in `tests/racetrackDressGraph.test.ts` pins an exact
+   * population size against a reference that has no barriers in it — the
+   * survivor count at the first pass, the box count against `buildBoxes`,
+   * L-5's own population — and a stage that always ran would move all
+   * three. `DressOptions.enclosure: "deferred"` and
+   * {@link buildRepairBody}'s `trim` are the same door: a rule that can
+   * stand aside says so in one field, and every caller that does not name
+   * it gets the lap that shipped.
+   *
+   * WHAT SWITCHING IT ON DOES, in order: {@link planBarriers} draws the
+   * runs host-side, {@link writeBarriers} tiles them into pieces,
+   * {@link writeBarrierPlacements} turns a piece into something
+   * indistinguishable from a station-born placement, and the pieces are
+   * merged into the list BEFORE the first repair pass. It also tags the
+   * whole list with {@link PLACEMENT.runId} and switches L-5's target rule
+   * to {@link writeEdgeTarget}, because a lap that carries runs and does
+   * not say so is a lap whose barriers L-5 puts holes in.
+   */
+  readonly barriers?: BarrierDressOptions;
+}
+
+/**
+ * What {@link DressGraphInput.barriers} asks for.
+ *
+ * A PLAN'S OPTIONS AND A VOCABULARY, and not a plan: the runs are drawn
+ * from `seed` inside `assemble`, so the same input builds the same lap and
+ * a caller cannot hand in a plan that disagrees with the seed it also
+ * handed in.
+ */
+export interface BarrierDressOptions {
+  /** How many runs to ask for. The lap may not fit them all; the sampler is bounded. */
+  readonly count: number;
+  /**
+   * The vocabulary a run's `piece` index selects from.
+   *
+   * ORDINARY PLACEABLE ASSETS, drawn from the same kit as everything else,
+   * because `BARRIER_RUN.piece` is an opaque index and the caller owns
+   * what a piece IS. `tests/racetrackVocabulary.test.ts` pins an
+   * exhaustive set of asset name stems, so a barrier that invented its own
+   * name would be a new stem; reusing the kit's adds none.
+   */
+  readonly pieces: readonly PlaceableAsset[];
+  /** Bounded, like `planEnclosure`'s. A lap that cannot hold `count` runs stops early. */
+  readonly maxTries?: number;
+  /**
+   * L-1's cone, so a run is never PLANNED into it — MINUS the piece sizes.
+   *
+   * THE SIZES ARE NOT THE CALLER'S TO STATE, and that is the one thing
+   * this shape changes about `BarrierConeTest`. The planner has to ask
+   * about the piece it is actually going to place; taking `pieceSize`
+   * here would let a caller answer the cone question about one object and
+   * dress the lap with another, and the disagreement would show up as
+   * barriers standing in the driver's view with every assertion green.
+   * So it is derived from {@link BarrierDressOptions.pieces}.
+   *
+   * OPTIONAL BECAUSE A CALLER MAY HAVE NO LAP TO ASK ON. Left out, this is
+   * the sampler with no cone test in it, which is what the builder's own
+   * suite cooks against a bare path.
+   */
+  readonly cone?: Omit<BarrierConeTest, "pieceSize">;
 }
 
 /**
@@ -2936,7 +3152,31 @@ function writeSightlineCull(
  * and says which. A subgraph that re-cooks until an output settles is the
  * missing capability, and it is the same one L-6 and the whole tail need.
  */
-function writeFalseEdges(g: Graph, target: NodeHandle, lapW: number, tag: string): NodeHandle {
+function writeFalseEdges(
+  g: Graph,
+  target: NodeHandle,
+  lapW: number,
+  tag: string,
+  /**
+   * Read {@link PLACEMENT.runId} and run `repairTarget`'s rule — prefer the
+   * JOINER, and only one that BREAKS THE RUN — rather than
+   * `members[floor(n/2)]`. See {@link writeEdgeTarget}.
+   *
+   * OFF UNLESS THE LAP HAS AN ASSEMBLER IN IT, and the flag is what says
+   * so rather than a test on the column: `mergePoints` fills a missing
+   * column with its DEFAULT, and the default for an i32 is 0 — a real run
+   * id. A stage that decided for itself whether the tag was there would
+   * read every placement on an untagged lap as a member of run 0.
+   *
+   * INERT WHERE IT IS ON AND NOTHING IS ASSEMBLED, which is the property
+   * that makes it safe to leave on for a whole lap: a run with no joiner
+   * in it takes `repairTarget`'s own short circuit — no filter, the middle
+   * scores 0, 0 is the minimum, and the rule picks exactly the member it
+   * always did. Asserted, not assumed — see
+   * `tests/racetrackBarrierGraph.test.ts`.
+   */
+  assembled = false,
+): NodeHandle {
   const t = attribute(PLACEMENT.t);
   const h = attribute(PLACEMENT.h);
 
@@ -3040,6 +3280,14 @@ function writeFalseEdges(g: Graph, target: NodeHandle, lapW: number, tag: string
       spanAttr: PLACEMENT.span,
       indexAttr: PLACEMENT.runIndex,
       countAttr: PLACEMENT.runCount,
+      // THE RUN'S OWN ORDINAL, AND ONLY WHERE SOMETHING READS IT. The
+      // assembly-aware target rule below needs a group key for a reduction
+      // over ONE RUN's members and `PLACEMENT.group` is not one — it names
+      // a side, and a side carries as many runs as its gaps leave it with.
+      // The empty default writes no column and is byte-identical to a cook
+      // without the param, which is what keeps a lap that asked for no
+      // barriers carrying exactly the columns it carried before.
+      idAttr: assembled ? PLACEMENT.edgeRunId : "",
     },
     `${tag}_runs`,
   );
@@ -3089,10 +3337,11 @@ function writeFalseEdges(g: Graph, target: NodeHandle, lapW: number, tag: string
   // of finite catalogue values, and a NaN would already have taken Z-1's
   // leave-it-alone branch and the cull's. Stated so that a future stage
   // writing a computed lateral knows what it has to keep true.
-  const isMiddle = eq(
-    attribute(PLACEMENT.runIndex),
-    floor(div(attribute(PLACEMENT.runCount), 2)),
-  );
+  const mid = floor(div(attribute(PLACEMENT.runCount), 2));
+  const isMiddle = eq(attribute(PLACEMENT.runIndex), mid);
+  const chosen = assembled
+    ? writeEdgeTarget(g, runs, mid, isMiddle, lapW, tag)
+    : { tail: runs, isTarget: isMiddle };
   const drop = g.add(
     setAttribute,
     {
@@ -3100,11 +3349,11 @@ function writeFalseEdges(g: Graph, target: NodeHandle, lapW: number, tag: string
       tupleSize: 1,
       // The band term is what keeps the non-member path out: its points
       // carry runs too, computed and never meant to be read.
-      value: mul(mul(attribute(PLACEMENT.band), qualifies), isMiddle),
+      value: mul(mul(attribute(PLACEMENT.band), qualifies), chosen.isTarget),
     },
     `${tag}_drop`,
   );
-  g.connect(runs, "out", drop, "in");
+  g.connect(chosen.tail, "out", drop, "in");
 
   // BELOW THE BAND, NOT OUTSIDE IT. The rule lowers the member to
   // `heightW[0] - 0.05` rather than pushing it past 2.5W, because moving
@@ -3121,7 +3370,480 @@ function writeFalseEdges(g: Graph, target: NodeHandle, lapW: number, tag: string
     `${tag}_lower`,
   );
   g.connect(drop, "out", lower, "in");
-  return lower;
+  // AND THE TARGET RULE'S WORKING COMES OFF HERE, at the one place where
+  // every column it wrote has been read for the last time. It cannot come
+  // off inside {@link writeEdgeTarget}: `edgeScore` and `edgeBest` are what
+  // `chosen.isTarget` compares, and that field is resolved by the `drop`
+  // node above.
+  //
+  // BOTH DOMAINS, because three of the columns are `pathScan` TOTALS and a
+  // total is a fact about a path. A strip that named only the point domain
+  // would leave `edgeJoined` and two others on the primitives — invisible
+  // to any assertion written against `attrs.point`, and carried onto the
+  // settled lap all the same.
+  if (!assembled) return lower;
+  const stripPoints = g.add(
+    removeAttribute,
+    { names: [...EDGE_SCRATCH_POINT, PLACEMENT.edgeRunId, PLACEMENT.edgeScore, PLACEMENT.edgeBest], strict: false },
+    `${tag}_targetStrip`,
+  );
+  g.connect(lower, "out", stripPoints, "in");
+  const stripPrims = g.add(
+    removeAttribute,
+    { names: [...EDGE_SCRATCH_PRIM, PLACEMENT.edgeBest], domain: "primitive", strict: false },
+    `${tag}_targetStripPrim`,
+  );
+  g.connect(stripPoints, "out", stripPrims, "in");
+  return stripPrims;
+}
+
+/**
+ * WHICH MEMBER OF A QUALIFYING RUN L-5 LOWERS, once the lap carries runs
+ * something ASSEMBLED — `falseEdges.ts`' `repairTarget`, as a stage.
+ *
+ * WHY THE MIDDLE STOPS BEING THE RIGHT ANSWER. A barrier run is parallel
+ * IN ISOLATION and stops being isolated the moment it lands on a real lap:
+ * `runFit` chains every band member on that side within `gapW`, so a
+ * station-born placement three half-widths from an assembled line joins
+ * the run and tilts it. The tilt is the joiner's, and lowering
+ * `members[floor(n/2)]` blind takes a BARRIER piece in 76.2% of moves and
+ * always an interior one — a hole punched in the middle of the line the
+ * assembler exists to build. So the offending element is the joiner and
+ * this says so.
+ *
+ * A WALK IS A MINIMUM OVER A KEY, which is the whole of how it is
+ * expressible here. `repairTarget` walks `mid, mid-1, mid+1, mid-2,
+ * mid+2 …` and takes the first member it accepts; `2*|k - mid| + (k >
+ * mid)` is exactly that walk written as an ascending key, and it is
+ * INJECTIVE over k, so the minimum names one member and never two. An
+ * assembled member scores {@link EDGE_NO_CANDIDATE} instead, which is
+ * "may not be chosen" rather than "chosen last".
+ *
+ * THE REDUCTION IS OVER THE RUN AND NOT OVER THE SIDE, which is why
+ * `runFit`'s `idAttr` had to be taken. `PLACEMENT.group` names a side and
+ * a side holds as many runs as its gaps leave it with, so a minimum over
+ * the group would let one run's joiner answer for another's. The key is
+ * the pair, and `pointsToPath` + `pathScan` + `promoteAttribute` is this
+ * repo's grouped reduction — `assetGraph.ts` uses the same three nodes for
+ * the same reason.
+ *
+ * IT IS INERT ON A LAP WITH NOTHING ASSEMBLED, which is not a hedge but the
+ * property that lets it be switched on for a whole lap. Every member
+ * station-born puts the middle at score 0, 0 is the minimum, and the rule
+ * picks the member the old one did. A run whose every member IS assembled
+ * has no candidate at all, `edgeBest` stays at the sentinel, and the
+ * fallback takes the middle — which is `repairTarget`'s documented
+ * fallback and, for the same reason it gives, has to exist: the loop
+ * terminates because every pass lowers at least one member out of the
+ * band, so declining to move would spin.
+ *
+ * AND THE `breaksRun` FILTER IS PORTED TOO, WHICH IT WAS NOT. This function
+ * used to stop at the preference and say the filter "needs neighbour
+ * stations, and no shift operator exists in the field grammar". The first
+ * half is true and the second is not: a FIELD cannot read a neighbour —
+ * every prefix fold includes its own element — but a NODE can, and
+ * `pathShift` is the node, reading a path's own point attributes from the
+ * point ±N positions along its walk. The stage was already composing
+ * `pointsToPath` + `pathScan` + `promoteAttribute` for a grouped minimum
+ * two dozen lines below the sentence that said the neighbour was
+ * unreachable.
+ *
+ * WHAT THE FILTER IS. `repairTarget` does not take the nearest station-born
+ * member; it takes the nearest one that BREAKS THE RUN — it lowers that
+ * member out of the band and re-asks `edgeRuns` over what is left, which is
+ * exact rather than approximate because every other band member on this side
+ * is at least `gapW` away. So it is: cut the run at the candidate, and ask
+ * `isFalseEdge` of each remaining piece.
+ *
+ * AND IT IS FIVE QUANTITIES, EACH OF WHICH HAS A NODE.
+ *
+ *   - THE RUN'S OWN ABSCISSA. `pathShift` at -1 gives every member the
+ *     previous member's station; the difference, corrected across the seam
+ *     by `lapW` exactly as `fitRun`'s caller corrects it, is the gap behind
+ *     it; a `pathScan` sum of that gap is run-local arc, 0 at the first
+ *     member. That is `fitRun`'s rebased `s` — the SAME line through the
+ *     same points, computed where the numbers are small — and its
+ *     `totalAttr` is the run's span.
+ *   - WHETHER THE CUT SPLITS THE LINE. `edgeRuns` ends a run at a gap of
+ *     `gapW`, so removing member k splits it exactly when
+ *     `arc(k+1) - arc(k-1)` reaches `gapW` — and that is the gap behind
+ *     plus the gap ahead, the second being the first read one position
+ *     along by a second `pathShift`.
+ *   - THE FIT OF EACH PIECE. A least-squares slope is four sums, and a
+ *     `pathScan` over the tuple `[s, s², t, s·t]` reports the INCLUSIVE
+ *     prefix on the point domain and the run TOTAL on the primitive. The
+ *     left piece is the prefix minus this member's own row, the right piece
+ *     is the total minus the prefix, and the un-split remainder is the total
+ *     minus the row. Three fits, no loop, one scan.
+ *   - EACH PIECE'S SPAN AND MEMBER COUNT, which fall out of the same three
+ *     columns and `runFit`'s `indexAttr`.
+ *   - WHETHER THE RUN HOLDS AN ASSEMBLED MEMBER AT ALL, which is a
+ *     `pathScan` maximum of `PLACEMENT.runId` over the run. It is not
+ *     decoration: `repairTarget` SHORT-CIRCUITS to the middle on a run with
+ *     no joiner in it, before the filter is ever consulted, so a stage that
+ *     filtered unconditionally would pick a different member on a lap that
+ *     carries a tag and nothing assembled — and the inertness case in
+ *     `tests/racetrackBarrierGraph.test.ts` is what says so.
+ *
+ * THE PER-RUN PATH IS ORDERED ON `runIndex` AND NOT ON `station`, and that
+ * is the seam. `runFit` rotates its walk onto the first real break, so on a
+ * run straddling the start line member 0 sits BEFORE the seam and the
+ * stations descend once across it. Ordering the path on the raw station
+ * column would hand `pathShift` a different sequence than the one `mid` and
+ * the rank are counted in. `indexAttr` is that walk, which is why the node
+ * reports it.
+ *
+ * ONE TERM OF FOUR IS NOT PORTED, AND THE DIRECTION IS THE POINT.
+ * `isFalseEdge` is a conjunction of member count, span, WORST RESIDUAL and
+ * divergence; a max-residual excluding one member is a different line per
+ * candidate, so it is the one quantity no sum recovers. Dropping a
+ * conjunct makes `isFalseEdge` easier to satisfy, so it makes "this
+ * candidate breaks the run" HARDER: the stage can only ever decline a
+ * candidate the reference accepted and move on to the next one. It cannot
+ * lower a member the reference refused. Measured over seeds 1..12 on the
+ * population the graph's own cull leaves, the residual is never the term
+ * that decides — every accepted candidate is accepted on the slope
+ * collapsing (a 6-member remainder at |slope| 0.0000 where the run was at
+ * 0.0391) or on a split piece falling under `minMembers` or `minSpanW`, and
+ * the worst residual seen on any remainder is 0.27 against a 0.3 bound.
+ *
+ * SO THE STAGE AND THE RULE NOW AGREE MEMBER FOR MEMBER: 9 of 9 qualifying
+ * runs over those twelve seeds, where the preference alone agreed on 7.
+ * `tests/racetrackBarrierGraph.test.ts` asserts the equality against
+ * `repairTarget` itself rather than against a second spelling of half of it.
+ */
+function writeEdgeTarget(
+  g: Graph,
+  runs: NodeHandle,
+  mid: Field,
+  isMiddle: Field,
+  lapW: number,
+  tag: string,
+): { readonly tail: NodeHandle; readonly isTarget: Field } {
+  const k = attribute(PLACEMENT.runIndex);
+  const n = attribute(PLACEMENT.runCount);
+
+  // THE RUN ID IS THE WHOLE KEY AND NOT HALF OF ONE. `runFit` numbers its
+  // runs ACROSS the geometry rather than per path, and its own description
+  // says that is exactly so a grouping node needs no second column — so
+  // pairing this with `PLACEMENT.group` would be combining a key with
+  // something the key already implies. Every point no polyline reached
+  // carries -1 and they all land in one group, which is harmless: the gate
+  // above refuses them on `runCount` before this is ever consulted.
+  //
+  // OPEN AND `skip`, WHICH IS THE OPPOSITE OF THE SIDE PATHS ABOVE AND FOR
+  // A DIFFERENT REASON. Those are closed because `runFit` takes its wrap
+  // from the topology; this one is only a grouping, so it needs no seam —
+  // and a run of one member is a group of one point, which no polyline can
+  // be. A skipped point keeps the column defaults, reads `runCount` 0, and
+  // is refused by the gate above on its own.
+  //
+  // ORDERED ON `runIndex`, WHICH IS THE SEAM AND NOT A PREFERENCE. See the
+  // header: a run that straddles the start line has `runFit`'s member 0
+  // BEFORE the seam, so its raw stations descend once. `pathShift` reads the
+  // WALK, so the walk it is handed has to be the walk the rank is counted
+  // in, and `indexAttr` is the only column that states it.
+  //
+  // AND IT REPLACES THE SIDE PATHS, WHICH IS WORTH SAYING BECAUSE IT IS
+  // VISIBLE. A barriered lap's placement cloud comes out carrying one open
+  // polyline per RUN where a bare one carries one closed polyline per
+  // SIDE. Nothing downstream of L-5 reads either — `writeLift`, Z-3 and
+  // the box build are all per-point, and the next round rebuilds both —
+  // and no point is moved or renumbered, which is the property
+  // {@link PLACEMENT.group} actually depends on.
+  const perRun = g.add(
+    pointsToPath,
+    {
+      groupAttr: PLACEMENT.edgeRunId,
+      orderAttr: PLACEMENT.runIndex,
+      closed: false,
+      shortGroups: "skip",
+    },
+    `${tag}_runPaths`,
+  );
+  g.connect(runs, "out", perRun, "in");
+
+  // `miss` AND A HIT FLAG RATHER THAN `wrap`, because the first member of a
+  // run has no predecessor and the run is not a ring: wrapping would hand it
+  // the LAST member's station and invent a gap of nearly the whole run.
+  const prevStation = g.add(
+    pathShift,
+    {
+      attributes: [PLACEMENT.station],
+      outNames: [EDGE_PREV_STATION],
+      offset: -1,
+      outOfRange: "miss",
+      hitAttr: EDGE_HAS_PREV,
+    },
+    `${tag}_prevStation`,
+  );
+  g.connect(perRun, "out", prevStation, "in");
+
+  // THE GAP TAKEN ON THE LOOP, like every other station difference in this
+  // demo. The station column wraps at `lapW`, so inside a run that crosses
+  // the start line the raw difference is a large NEGATIVE number — which
+  // would sail under every threshold below and quietly turn one run's
+  // abscissa into nonsense.
+  const rawGap = sub(attribute(PLACEMENT.station), attribute(EDGE_PREV_STATION));
+  const gapPrev = g.add(
+    setAttribute,
+    {
+      name: EDGE_GAP_PREV,
+      tupleSize: 1,
+      value: select(
+        attribute(EDGE_HAS_PREV),
+        select(lt(rawGap, 0), add(rawGap, lapW), rawGap),
+        0,
+      ),
+    },
+    `${tag}_gapPrev`,
+  );
+  g.connect(prevStation, "out", gapPrev, "in");
+
+  // THE GAP AHEAD IS THE GAP BEHIND, READ ONE POSITION ALONG. No hit flag
+  // is needed: the source column's default is 0, so the LAST member of a run
+  // reads a gap-ahead of 0, and 0 is what "there is nothing after me" has to
+  // contribute to the split test below.
+  const gapNext = g.add(
+    pathShift,
+    {
+      attributes: [EDGE_GAP_PREV],
+      outNames: [EDGE_GAP_NEXT],
+      offset: 1,
+      outOfRange: "miss",
+      hitAttr: "",
+    },
+    `${tag}_gapNext`,
+  );
+  g.connect(gapPrev, "out", gapNext, "in");
+
+  // RUN-LOCAL ARC: `fitRun`'s own abscissa, as a prefix sum of the gaps. The
+  // first member reads 0 because its gap-behind is 0, and the total is the
+  // run's span.
+  const arcScan = g.add(
+    pathScan,
+    {
+      name: EDGE_GAP_PREV,
+      outName: EDGE_ARC,
+      reduce: "sum",
+      mode: "inclusive",
+      totalAttr: EDGE_ARC_TOTAL,
+    },
+    `${tag}_arcScan`,
+  );
+  g.connect(gapNext, "out", arcScan, "in");
+  const arcTotal = g.add(
+    promoteAttribute,
+    { name: EDGE_ARC_TOTAL, from: "primitive", to: "point", mode: "first" },
+    `${tag}_arcTotal`,
+  );
+  g.connect(arcScan, "out", arcTotal, "in");
+
+  // THE REGRESSION'S FOUR MOMENTS, PACKED INTO ONE TUPLE so that one scan
+  // reports all four prefixes and all four totals. `pathScan` folds a tuple
+  // COMPONENTWISE, which is exactly four independent sums.
+  const s = attribute(EDGE_ARC);
+  const t = attribute(PLACEMENT.absT);
+  const moments = g.add(
+    setAttribute,
+    { name: EDGE_MOMENT, tupleSize: 4, value: vec(s, mul(s, s), t, mul(s, t)) },
+    `${tag}_moments`,
+  );
+  g.connect(arcTotal, "out", moments, "in");
+
+  const momentScan = g.add(
+    pathScan,
+    {
+      name: EDGE_MOMENT,
+      outName: EDGE_MOMENT_SCAN,
+      reduce: "sum",
+      mode: "inclusive",
+      totalAttr: EDGE_MOMENT_TOTAL,
+    },
+    `${tag}_momentScan`,
+  );
+  g.connect(moments, "out", momentScan, "in");
+  const momentTotal = g.add(
+    promoteAttribute,
+    { name: EDGE_MOMENT_TOTAL, from: "primitive", to: "point", mode: "first" },
+    `${tag}_momentTotal`,
+  );
+  g.connect(momentScan, "out", momentTotal, "in");
+
+  // DOES THIS RUN HOLD A JOINER. A maximum of the tag over the run: >= 0
+  // exactly where at least one member was assembled. It gates the filter
+  // rather than decorating it — see the header.
+  const joinScan = g.add(
+    pathScan,
+    {
+      name: PLACEMENT.runId,
+      outName: EDGE_RUNID_SCAN,
+      reduce: "max",
+      mode: "inclusive",
+      totalAttr: EDGE_JOINED,
+    },
+    `${tag}_joinScan`,
+  );
+  g.connect(momentTotal, "out", joinScan, "in");
+  const joined = g.add(
+    promoteAttribute,
+    { name: EDGE_JOINED, from: "primitive", to: "point", mode: "first" },
+    `${tag}_joined`,
+  );
+  g.connect(joinScan, "out", joined, "in");
+
+  const own = (i: number): Field => component(attribute(EDGE_MOMENT), i);
+  const pre = (i: number): Field => component(attribute(EDGE_MOMENT_SCAN), i);
+  const tot = (i: number): Field => component(attribute(EDGE_MOMENT_TOTAL), i);
+
+  /**
+   * `isFalseEdge` over a piece described by its member count, its span and
+   * its four moments. The residual conjunct is the one that is missing; see
+   * the header for why, and for which way that leans.
+   *
+   * `max(count, 1)` GUARDS THE DIVISION AND NOTHING ELSE: an empty piece
+   * (the candidate was an end) is refused on `minMembers` whatever the
+   * arithmetic said, and the guard is there so that what it said is a number
+   * rather than a NaN riding through a comparison.
+   */
+  const pieceIsEdge = (
+    count: Field,
+    span: Field,
+    sa: Field,
+    sb: Field,
+    sc: Field,
+    sd: Field,
+  ): Field => {
+    const m = max(count, 1);
+    // `fitRun`'s own guard and its own epsilon: a run whose members share an
+    // arc position has no line through them and reports a slope of 0.
+    const sss = sub(sb, div(mul(sa, sa), m));
+    const sst = sub(sd, div(mul(sa, sc), m));
+    const slope = abs(select(gt(sss, 1e-9), div(sst, sss), 0));
+    return mul(
+      mul(ge(count, FALSE_EDGE.minMembers), ge(span, FALSE_EDGE.minSpanW)),
+      mul(ge(slope, FALSE_EDGE.divergence[0]), le(slope, FALSE_EDGE.divergence[1])),
+    );
+  };
+
+  const gapBehind = attribute(EDGE_GAP_PREV);
+  const gapAhead = attribute(EDGE_GAP_NEXT);
+  const spanAll = attribute(EDGE_ARC_TOTAL);
+  const last = sub(n, 1);
+  // Removing an END never splits anything — there is nothing on one side of
+  // it — which is why the two ordinal terms are here and not only the gap.
+  const splits = mul(
+    mul(gt(k, 0), lt(k, last)),
+    ge(add(gapBehind, gapAhead), FALSE_EDGE.gapW),
+  );
+
+  const leftIsEdge = pieceIsEdge(
+    k,
+    sub(s, gapBehind),
+    sub(pre(0), own(0)),
+    sub(pre(1), own(1)),
+    sub(pre(2), own(2)),
+    sub(pre(3), own(3)),
+  );
+  const rightIsEdge = pieceIsEdge(
+    sub(last, k),
+    sub(spanAll, add(s, gapAhead)),
+    sub(tot(0), pre(0)),
+    sub(tot(1), pre(1)),
+    sub(tot(2), pre(2)),
+    sub(tot(3), pre(3)),
+  );
+  // The remainder keeps the run's span unless the member removed was an end,
+  // in which case it loses that end's own gap.
+  const wholeSpan = select(
+    eq(k, 0),
+    sub(spanAll, gapAhead),
+    select(eq(k, last), sub(spanAll, gapBehind), spanAll),
+  );
+  const wholeIsEdge = pieceIsEdge(
+    last,
+    wholeSpan,
+    sub(tot(0), own(0)),
+    sub(tot(1), own(1)),
+    sub(tot(2), own(2)),
+    sub(tot(3), own(3)),
+  );
+  const breaks = select(
+    splits,
+    mul(sub(1, leftIsEdge), sub(1, rightIsEdge)),
+    sub(1, wholeIsEdge),
+  );
+
+  const scored = g.add(
+    setAttribute,
+    {
+      name: PLACEMENT.edgeScore,
+      tupleSize: 1,
+      value: select(
+        max(
+          // THE POSITIVE QUESTION, WHICH IS THE SHAPE `isAssembled` TAKES AND
+          // FOR ITS REASON. The rule is not "is this -1": every builder that
+          // assembles something writes a row of its own plan here, so
+          // "assembled" is `runId >= 0`, and everything else — the settled
+          // list's `STATION_BORN`, and L-6's cover pieces, which `l6placeTag`
+          // writes `STATION_BORN` into for exactly this reason — is
+          // scattered as far as L-5 is concerned. Spelled as an inequality
+          // rather than as `!= -1` so that a second assembler arriving with a
+          // second negative sentinel cannot be read as a member of somebody's
+          // run.
+          ge(attribute(PLACEMENT.runId), 0),
+          // AND THE FILTER, GATED ON THE RUN HAVING A JOINER. A run with none
+          // takes `repairTarget`'s short circuit, which is the middle and no
+          // filter at all; `max` is the grammar's disjunction, both terms
+          // being 0 or 1.
+          mul(ge(attribute(EDGE_JOINED), 0), sub(1, breaks)),
+        ),
+        EDGE_NO_CANDIDATE,
+        add(mul(2, abs(sub(k, mid))), gt(k, mid)),
+      ),
+    },
+    `${tag}_score`,
+  );
+  g.connect(joined, "out", scored, "in");
+
+  const scan = g.add(
+    pathScan,
+    {
+      name: PLACEMENT.edgeScore,
+      outName: EDGE_SCAN,
+      reduce: "min",
+      totalAttr: PLACEMENT.edgeBest,
+    },
+    `${tag}_bestScan`,
+  );
+  g.connect(scored, "out", scan, "in");
+
+  // A total is a fact about a PATH, so it lands on the primitive domain
+  // and a field reads the point domain. One point of one run is in exactly
+  // one path, so 'first' is not a choice between candidates.
+  const best = g.add(
+    promoteAttribute,
+    { name: PLACEMENT.edgeBest, from: "primitive", to: "point", mode: "first" },
+    `${tag}_best`,
+  );
+  g.connect(scan, "out", best, "in");
+
+  return {
+    // EVERY COLUMN ABOVE IS STILL ON THE CLOUD HERE, and that is deliberate:
+    // `isTarget` reads two of them and is resolved by the `drop` node in
+    // {@link writeFalseEdges}, which is where the strip goes.
+    tail: best,
+    // `le` RATHER THAN `eq` ON PURPOSE: the best is the minimum of these
+    // very values, so "at most" and "equal to" name the same member, and
+    // the inequality does not depend on a float surviving two columns
+    // unchanged. Uniqueness comes from the rank being injective, not from
+    // the comparison.
+    isTarget: select(
+      lt(attribute(PLACEMENT.edgeBest), EDGE_NO_CANDIDATE),
+      le(attribute(PLACEMENT.edgeScore), attribute(PLACEMENT.edgeBest)),
+      isMiddle,
+    ),
+  };
 }
 
 /**
@@ -4084,6 +4806,16 @@ export function buildRepairBody(
    * not.
    */
   trim = false,
+  /**
+   * Build L-5 with {@link writeEdgeTarget}'s rule instead of the middle.
+   *
+   * ON EXACTLY WHERE THE CARRY HAS A {@link PLACEMENT.runId} COLUMN ON IT,
+   * which is what {@link DressGraphInput.barriers} arranges — and a flag
+   * rather than a probe, for `writeFalseEdges`' own stated reason: a
+   * missing column is filled by a default, and the default for a run id is
+   * a real run.
+   */
+  assembled = false,
 ): {
   graph: Graph;
   inputs: ExposedPin[];
@@ -4098,7 +4830,7 @@ export function buildRepairBody(
   const z1 = writeCorridor(b, "z1");
   const oriented = writeWorldTransform(b, z1.tail, lap.halfWidth, "z1");
   const seen = writeSightlineCull(b, oriented, lap.halfWidth, "l1");
-  const edged = writeFalseEdges(b, seen.tail, lap.lengthW, "l5");
+  const edged = writeFalseEdges(b, seen.tail, lap.lengthW, "l5", assembled);
   const settled = writeLift(b, edged, lap.halfWidth, "l5");
   // Z-3 LAST, WHICH IS `dressLap`'s ORDER AND IS LOAD-BEARING. The mix has
   // to see the lap the other repairs left: a mix balanced before the cull
@@ -4480,7 +5212,29 @@ export function buildRoundGraph(
    * gap from 20.0% is that and how much was the figure already stale was
    * not separated.
    */
-  opts: { readonly trim?: boolean } = {},
+  opts: {
+    readonly trim?: boolean;
+    /**
+     * Which assembled run each handed placement came out of, parallel to
+     * `input.placements`, or absent for a lap where nothing assembled
+     * anything.
+     *
+     * THE DOOR THE `trim` FLAG'S OWN ARGUMENT ASKS FOR, ONE RULE ALONG.
+     * L-5's assembly-aware target rule cannot be held to `repairTarget` on
+     * a whole lap: `assemble` decides the barrier plan from the seed, so a
+     * whole-lap comparison would be measuring the planner and the graph at
+     * once, and the reference would have to be handed a population it did
+     * not build. One round over a list the caller TAGGED is where the rule
+     * can be held to its reference member for member, which is exactly the
+     * argument `trim` makes for itself.
+     *
+     * A VALUE PER PLACEMENT AND NOT A SET OF IDS, because `runId` is not a
+     * property of an asset — two runs may be built from the same piece, and
+     * telling them apart is the whole reason the column is an integer
+     * rather than a flag.
+     */
+    readonly runIds?: readonly number[];
+  } = {},
 ): Graph {
   // A BODY OF ITS OWN, not the one `assemble` built. Wrapping a body
   // CONNECTS its exposed input pins to the portals the wrapper injects, so
@@ -4498,15 +5252,25 @@ export function buildRoundGraph(
       poseIds: mixPoseIds(lib),
     },
     opts.trim ?? false,
+    opts.runIds !== undefined,
   );
   const g = body.graph;
 
   // The portals `repeatUntil` would have injected, added by hand — which
   // is all a wrapper does to an input pin, minus the loop.
   const carry = g.add(dataInput, {}, "roundCarry");
-  g.setParam(carry, "items", [
-    makeGeometryItem(placementCloudInTrackCoords(placements, lib, seed, immovable, mixPinned)),
-  ]);
+  const carryCloud = placementCloudInTrackCoords(placements, lib, seed, immovable, mixPinned);
+  if (opts.runIds !== undefined) {
+    // WRITTEN ONTO THE CLOUD RATHER THAN AS A STAGE, which is what
+    // `dataInput` is for: this is the one place in the file where the tag
+    // is DATA about a list somebody else built, not something the graph
+    // decided. `assemble` writes it as a `setAttribute` because there it
+    // IS a decision — every placement it makes is station-born.
+    const tags = opts.runIds;
+    const col = carryCloud.attrs.point.add(PLACEMENT.runId, "i32", 1);
+    for (let i = 0; i < placements.length; i++) col.set(i, tags[i] ?? STATION_BORN);
+  }
+  g.setParam(carry, "items", [makeGeometryItem(carryCloud)]);
   const sight = g.add(dataInput, {}, "roundSight");
   g.setParam(sight, "items", [makeGeometryItem(input.frames)]);
   // The frame, before the body rather than inside it: it is a function of
@@ -4687,11 +5451,23 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   // is handed is the question, and the placements were the answer. Binding
   // the first has never been the problem.
   let placementsIn: NodeHandle;
+  // HOISTED, BECAUSE BOTH BRANCHES MAY NEED IT NOW. L-5's tiler wants the
+  // same closed single-polyline lap the stations scatter on, and a lap
+  // handed a placement list still has one. Built lazily so a graph that
+  // asks for neither carries no path node at all.
+  let pathIn: NodeHandle | undefined;
+  const lapPath = (): NodeHandle => {
+    if (pathIn === undefined) {
+      const node = g.add(dataInput, {}, "lapPath");
+      g.setParam(node, "items", [makeGeometryItem(lapAsPath(lap))]);
+      pathIn = node;
+    }
+    return pathIn;
+  };
   if (placements === undefined) {
     const assetsIn = g.add(dataInput, {}, "assetTable");
     g.setParam(assetsIn, "items", [makeGeometryItem(assetCloud(pool))]);
-    const pathIn = g.add(dataInput, {}, "lapPath");
-    g.setParam(pathIn, "items", [makeGeometryItem(lapAsPath(lap))]);
+    const pathNode = lapPath();
     // THE LOOKUP TABLE IS THE POOL PLUS THE RESERVED THREE, and it is not
     // `mixAssetsIn`. See `AddLapPlacements`' `tables.lookup`: the redraw's
     // pool must not contain a marker and a converted placement must be able
@@ -4705,7 +5481,7 @@ function assemble(input: DressGraphInput): { graph: Graph } {
     g.setParam(lookupPosesIn, "items", [makeGeometryItem(placementPoseCloud(rows, lib))]);
     placementsIn = addLapPlacements(
       g,
-      { node: pathIn, pin: "out" },
+      { node: pathNode, pin: "out" },
       {
         assets: { node: assetsIn, pin: "out" },
         lookup: { node: lookupIn, pin: "out" },
@@ -4732,10 +5508,131 @@ function assemble(input: DressGraphInput): { graph: Graph } {
 
   g.output(placementsIn, "out", DRESS_OUTPUTS.placementsInput);
 
-  const body = buildRepairBody(lap, {
-    bandPools: mixBandPools(pool, lib, mixPinned),
-    poseIds: mixPoseIds(lib),
-  });
+  // ---- L-5's BARRIERS, BEFORE THE FIRST PASS -----------------------------
+  //
+  // AFTER `placementsInput` AND BEFORE THE FIRST `repeatUntil`, and both
+  // halves of that are load-bearing.
+  //
+  // AFTER, because that output is pinned against the TypeScript reference
+  // as an exact population and an exact column set. What the graph is
+  // handed, or decides, is the list; what it then ASSEMBLES onto the lap
+  // is a different statement and belongs on the other side of the wire.
+  //
+  // BEFORE THE FIRST PASS, AND NOT BETWEEN THE PASSES WHERE L-6 SPLICES.
+  // Z-3's shares are computed over the whole population and a barrier
+  // lands in the verge and near bands, so ~60 pieces are a large,
+  // concentrated share shift. Spliced late, the first pass would settle a
+  // mix against a population the second pass immediately invalidates —
+  // which is `dress.ts`' own "a mix repaired before a cull is a mix
+  // repaired against a lap that no longer exists", one level up. L-6 is
+  // late because its BUDGET is a lap-wide measurement that has to be taken
+  // on a population neither pass has changed; `planBarriers` reads nothing
+  // but the lap length and the seed, so nothing buys the deferral. Going
+  // in first also gives the pieces two full fixed points of Z-1, L-1, L-5
+  // and Z-3 rather than one, which is what the placements most exposed to
+  // the cull should get.
+  //
+  // AND IT CANNOT BE A STAGE INSIDE THE BODY. `repeatUntil` sets ONE seed
+  // for every round — a fixed point exists only if the body is the same
+  // function each time — so a builder in there would draw the identical
+  // plan every round and append it again: strictly duplication, never
+  // variation, and a body that grows its own input has no fixed point at
+  // all.
+  let carryIn: NodeHandle = placementsIn;
+  const bar = input.barriers;
+  if (bar !== undefined) {
+    // THE WHOLE LIST IS TAGGED, NOT ONLY THE PIECES. `mergePoints` fills a
+    // column one side lacks with the attribute's DEFAULT, and the default
+    // for an i32 is 0 — which is a real run id, so an untagged settled
+    // placement would read as a member of run 0 and L-5 would refuse to
+    // lower it. `STATION_BORN` is the one value that says "nothing
+    // assembled this".
+    const tagged = g.add(
+      setAttribute,
+      { name: PLACEMENT.runId, tupleSize: 1, type: "i32", value: STATION_BORN },
+      "l5barTag",
+    );
+    g.connect(placementsIn, "out", tagged, "in");
+    carryIn = tagged;
+
+    // NAMED, BECAUSE THE SILENT ANSWER IS WORSE THAN THE LOUD ONE. With no
+    // vocabulary `planBarriers` draws `piece` out of a range of zero and
+    // the lookup below indexes past the end of the table, which surfaces
+    // three stages later as a pose nobody can explain.
+    if (bar.pieces.length === 0) {
+      throw new Error(
+        "buildDressGraph: barriers.pieces is empty; L-5's runs are built from the kit's own " +
+          "assets, so give it at least one PlaceableAsset to tile with (the demo picks the " +
+          "narrowest few of the dressing pool), or leave `barriers` out to dress without them",
+      );
+    }
+    const runs = planBarriers(lap.lengthW, seed, {
+      count: bar.count,
+      pieceCount: bar.pieces.length,
+      ...(bar.maxTries !== undefined ? { maxTries: bar.maxTries } : {}),
+      // THE CONE, ASKED BEFORE THE RUN EXISTS. `barriers.ts` measured both
+      // of the alternatives and neither is acceptable to a RUN: the cull's
+      // per-piece push takes 44.5% of the blocked pieces out of the band
+      // the line lives in, and culling whole runs afterwards costs about
+      // two runs a lap. The piece size is derived here rather than taken,
+      // so the planner cannot be asking about a different object from the
+      // one this graph is about to place.
+      ...(bar.cone !== undefined
+        ? {
+            avoidCone: {
+              ...bar.cone,
+              pieceSize: (piece: number) => {
+                const a = bar.pieces[Math.min(bar.pieces.length - 1, Math.max(0, piece))];
+                return { across: a.size.across, along: a.size.along, tall: a.size.tall };
+              },
+            } satisfies BarrierConeTest,
+          }
+        : {}),
+    });
+
+    // A LAP THAT FITS NO RUN IS A LAP WITH NO BARRIERS ON IT, which is the
+    // bounded sampler's own documented degradation and not an error. The
+    // tag still goes on, so L-5 runs its assembly-aware rule over a lap
+    // where nothing is assembled — where it is exactly the rule that
+    // shipped.
+    if (runs.length > 0) {
+      const tiled = writeBarriers(
+        g,
+        lapPath(),
+        runs,
+        { lapW: lap.lengthW, halfWidth: lap.halfWidth },
+        "l5bar",
+      );
+      const pieces = writeBarrierPlacements(
+        g,
+        tiled,
+        runs,
+        lib,
+        bar.pieces,
+        mixPoseIds(lib),
+        seed,
+        "l5bar",
+      );
+      const merged = g.add(mergePoints, {}, "l5barMerge");
+      // THE SETTLED LIST FIRST, which is L-6's order at its own merge and
+      // for its reason: `mergePoints` concatenates, so the placements keep
+      // the indices they came in with and the pieces follow.
+      g.connect(carryIn, "out", merged, "in");
+      g.connect(pieces, "out", merged, "in");
+      carryIn = merged;
+    }
+  }
+  const assembled = bar !== undefined;
+
+  const body = buildRepairBody(
+    lap,
+    {
+      bandPools: mixBandPools(pool, lib, mixPinned),
+      poseIds: mixPoseIds(lib),
+    },
+    false,
+    assembled,
+  );
   const repair = g.add(
     repeatUntilNode(body.graph, body.inputs, body.outputs),
     { maxRounds: MAX_ROUNDS, settleAttr: SETTLE_ATTR },
@@ -4745,7 +5642,7 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   // of the station and no repair moves a placement along the lap. Inside
   // the body it would be a constant recomputed a dozen times over a
   // thousand-frame path.
-  g.connect(sampleTrackFrame(g, framesIn, placementsIn, lap.halfWidth, "dress"), "out", repair, "carry");
+  g.connect(sampleTrackFrame(g, framesIn, carryIn, lap.halfWidth, "dress"), "out", repair, "carry");
   g.connect(framesIn, "out", repair, "sight");
   g.connect(mixAssetsIn, "out", repair, "mixAssets");
   g.connect(mixPosesIn, "out", repair, "mixPoses");
@@ -4809,7 +5706,30 @@ function assemble(input: DressGraphInput): { graph: Graph } {
   // The frame, on the pieces, exactly as the placement list got it: they
   // arrive holding a station and nothing about the world, which is the
   // whole claim `placementCloudInTrackCoords` makes about a placement.
-  const placedPieces = sampleTrackFrame(g, framesIn, pieces.tail, lap.halfWidth, "l6place");
+  let placedPieces = sampleTrackFrame(g, framesIn, pieces.tail, lap.halfWidth, "l6place");
+  if (assembled) {
+    // L-6's PIECES CARRY THE TAG TOO, AND THE VALUE IS THE SCATTERED ONE.
+    // Not because a tunnel is scattered — it is as assembled as a barrier
+    // — but because `PLACEMENT.runId` names L-5's runs and a cover piece
+    // belongs to none of them: its own run is `PLACEMENT.coverRun`, under
+    // a scheme this column would misread. Left off, `mergePoints` would
+    // fill the column with an i32 default of 0 and every rib on the lap
+    // would claim membership of barrier run 0.
+    //
+    // IT IS UNREACHABLE EITHER WAY AND WRITTEN ANYWAY. A cover piece's
+    // centre is floored at `1.2 + tall/2` W while L-5's band tops out at
+    // 0.6W, so no rib is ever a run member and the value could not change
+    // an answer today. That is a coincidence of two constants, which is
+    // the same reason L-1's cover exemption was added while it was still
+    // unreached.
+    const tag = g.add(
+      setAttribute,
+      { name: PLACEMENT.runId, tupleSize: 1, type: "i32", value: STATION_BORN },
+      "l6placeTag",
+    );
+    g.connect(placedPieces, "out", tag, "in");
+    placedPieces = tag;
+  }
 
   const merged = g.add(mergePoints, {}, "l6merge");
   // ORDER MATTERS AND IT IS THIS ONE: `mergePoints` concatenates, so the
@@ -4840,6 +5760,11 @@ function assemble(input: DressGraphInput): { graph: Graph } {
     // the one that sees the finished list, which is what the ceiling is a
     // statement about.
     true,
+    // AND THE SAME L-5 AS THE FIRST PASS. The tag rides the carry, L-6's
+    // cover pieces arrive between the passes carrying it through the
+    // merge's default, and a second pass that read the middle where the
+    // first read the joiner would undo the first pass's answer.
+    assembled,
   );
   const second = g.add(
     repeatUntilNode(secondBody.graph, secondBody.inputs, secondBody.outputs),
@@ -5685,4 +6610,227 @@ function writeCoverPlacements(
   );
   g.connect(named, "out", cleaned, "in");
   return { tail: cleaned, poses: posed };
+}
+
+/**
+ * The per-RUN table a barrier piece is looked up in. Scratch: written just
+ * before the placement columns and stripped with the tiler's own.
+ *
+ * PER RUN AND NOT PER PIECE INDEX, which is the same decision
+ * `barrierRanges` makes and for the same reason: every choice a run makes
+ * is made once, on the one element that exists per run. A pose drawn per
+ * TILE would be a different barrier every two metres.
+ */
+const BARRIER_ASSET = {
+  pose: "l5BarPose",
+  across: "l5BarAcross",
+  along: "l5BarAlong",
+  tall: "l5BarTall",
+} as const;
+
+/**
+ * One point per planned run: the pose its pieces wear and how big they are.
+ *
+ * INDEXED BY {@link BARRIER_RUN.runId}, which is the run's position in the
+ * plan — so the lookup is `transferByIndex` on a column the tiler already
+ * carried onto every piece, with no second key to keep in step.
+ */
+function barrierAssetCloud(
+  runs: readonly BarrierRun[],
+  lib: PoseLibrary,
+  pieces: readonly PlaceableAsset[],
+  seed: number,
+): Geometry {
+  const geo = createPointCloud(runs.length);
+  const p = geo.attrs.point;
+  const pose = p.add(BARRIER_ASSET.pose, "f32", 1);
+  const across = p.add(BARRIER_ASSET.across, "f32", 1);
+  const along = p.add(BARRIER_ASSET.along, "f32", 1);
+  const tall = p.add(BARRIER_ASSET.tall, "f32", 1);
+  for (const r of runs) {
+    // THE ID IS THE ROW, WHICH IS THE ONE THING THIS TABLE ASSUMES.
+    // `planBarriers` numbers its runs by their place in what it returns,
+    // and the lookup downstream is `transferByIndex` on that number — so a
+    // plan whose ids are not 0..n-1 would silently hand pieces another
+    // run's asset. Checked here rather than trusted, because the cost of
+    // being wrong is a lap that looks fine.
+    if (!(r.runId >= 0 && r.runId < runs.length)) {
+      throw new Error(
+        `barrierAssetCloud: run id ${r.runId} is not a row of a ${runs.length}-run plan; ` +
+          "the ids planBarriers assigns are its own sort order and must not be rewritten",
+      );
+    }
+    const asset = pieces[Math.min(pieces.length - 1, Math.max(0, r.piece))];
+    const poses = lib.posesOf.get(asset.id) ?? [];
+    // ONE DRAW PER RUN, KEYED ON THE RUN AND NOT ON THE ROW, which is
+    // `rand.ts`' rule stated for a population that has no station: a run
+    // IS its id, the id follows the plan's own sort, and a caller that
+    // reorders the plan carries the ids with it.
+    //
+    // A KIT THAT CARRIES NO POSE FOR THIS ASSET SENDS ROW -1, exactly as
+    // the cover conversion does: -1 names `pose:-1`, which no asset map
+    // has, so it fails by name rather than wearing somebody else's mesh.
+    pose.set(
+      r.runId,
+      poses.length === 0
+        ? -1
+        : poses[Math.floor(rand(seed, r.runId, 0x5b1e) * poses.length) % poses.length],
+    );
+    across.set(r.runId, asset.size.across);
+    along.set(r.runId, asset.size.along);
+    tall.set(r.runId, asset.size.tall);
+  }
+  return geo;
+}
+
+/**
+ * A tiled barrier piece, turned into something no stage can tell from a
+ * station-born placement.
+ *
+ * MODELLED ON {@link writeCoverPlacements} LINE FOR LINE, because the
+ * problem is the same one: a cloud built by a tiler carries the tiler's
+ * working and none of the fifteen columns a placement is, and
+ * `mergePoints` UNIONS columns — so a name one side forgets is filled
+ * with a default on every row of the other, silently.
+ * `tests/racetrackPlacementAssembly.test.ts` records what that costs when
+ * it goes wrong: the corner language leaked 22 columns before anything
+ * looked.
+ *
+ * THE FLAG PAIR IS `cover: 0`, `mixPinned: 1`, AND IT IS NOT THE OTHER WAY
+ * ROUND. A barrier is DRESSING, so it belongs in Z-3's denominator — the
+ * shares it shifts are real shares and the mix has to see them, which is
+ * exactly what `cover` would take away. It must never be REDRAWN, which is
+ * what `mixPinned` says: the piece was chosen once per run, and Z-3
+ * replacing one member of a line is the same hole L-5 was taught not to
+ * punch. `cover` is also asserted against directly — a lap's lowest cover
+ * base is pinned at 1.199W and a barrier's is under 0.55W — so borrowing
+ * the flag would fail loudly, which is the good case rather than the
+ * argument.
+ *
+ * `locked: 1` FOR L-3's REASON, ONE GRANULARITY UP. A row of marks with
+ * one shoved out of line reads as a mistake; a barrier with one piece
+ * pushed clear of the racing line reads as a broken barrier, and it is
+ * also the exact divergence L-5 then detects. Locked converts L-1's push
+ * into a drop, which SHORTENS a line rather than bending it — a run below
+ * `minMembers` stops being a run, which is the safe failure. With
+ * `BarrierDressOptions.cone` set nothing should reach it: the planner
+ * already refused every candidate the cull would touch. Asserted, not
+ * assumed.
+ *
+ * THE ID BLOCK IS ITS OWN AND MUST BE. L-6 counts down from -2, and two
+ * schemes sharing a block would collide — `racetrackDressGraph.test.ts`
+ * builds a `Map` keyed on this column, so a collision silently drops a row
+ * and then fails somewhere else entirely. Counting down from -100000 is
+ * disjoint from both L-6's and the list's own 0..n-1, and every value is
+ * an exact f32 integer far under 2^24.
+ */
+function writeBarrierPlacements(
+  g: Graph,
+  tiles: NodeHandle,
+  runs: readonly BarrierRun[],
+  lib: PoseLibrary,
+  pieces: readonly PlaceableAsset[],
+  poseIds: readonly string[],
+  seed: number,
+  tag: string,
+): NodeHandle {
+  const table = g.add(dataInput, {}, `${tag}_assets`);
+  g.setParam(table, "items", [makeGeometryItem(barrierAssetCloud(runs, lib, pieces, seed))]);
+
+  const looked = g.add(
+    transferByIndex,
+    {
+      index: attribute(BARRIER_RUN.runId),
+      attributes: [
+        BARRIER_ASSET.pose,
+        BARRIER_ASSET.across,
+        BARRIER_ASSET.along,
+        BARRIER_ASSET.tall,
+      ],
+      outOfRange: "clamp",
+    },
+    `${tag}_asset`,
+  );
+  g.connect(tiles, "out", looked, "in");
+  g.connect(table, "out", looked, "source");
+
+  let out: NodeHandle = looked;
+  const writes: [string, Field | number][] = [
+    [PLACEMENT.pose, attribute(BARRIER_ASSET.pose)],
+    [PLACEMENT.sizeAcross, attribute(BARRIER_ASSET.across)],
+    [PLACEMENT.sizeAlong, attribute(BARRIER_ASSET.along)],
+    [PLACEMENT.sizeTall, attribute(BARRIER_ASSET.tall)],
+    [PLACEMENT.cover, 0],
+    [PLACEMENT.locked, 1],
+    [PLACEMENT.mixPinned, 1],
+    [PLACEMENT.mixTried, 0],
+    // READ ALWAYS, SPENT NEVER, exactly as it is on a cover piece: the
+    // redraw's `poseSlot` is half this column and half the target band, and
+    // `mixPinned` keeps the target at -1 for every barrier, so the gathered
+    // pose is discarded before it lands.
+    [PLACEMENT.poseU, 0],
+    // NOT AN ENCLOSURE RUN. -1 is the "no such thing" every other builder
+    // writes here, and the merge default of 0 would say "the tunnel that
+    // starts at the start line".
+    [PLACEMENT.coverRun, -1],
+    [PLACEMENT.id, sub(-100000, index())],
+  ];
+  for (const [name, value] of writes) {
+    const n = g.add(setAttribute, { name, tupleSize: 1, value }, `${tag}_w_${name}`);
+    g.connect(out, "out", n, "in");
+    out = n;
+  }
+
+  // THE NON-COVER HALF OF THE POSE TABLE, `pose + 1` past the -1 row. The
+  // cover conversion adds the half-table offset here and a barrier is not
+  // cover; getting this wrong throws in `toInstancedMeshes` by name, which
+  // is the failure mode worth having.
+  const named = g.add(
+    setAttribute,
+    {
+      name: PLACEMENT.asset,
+      tupleSize: 1,
+      type: "string",
+      values: poseIds as string[],
+      value: add(attribute(PLACEMENT.pose), 1),
+    },
+    `${tag}_assetId`,
+  );
+  g.connect(out, "out", named, "in");
+
+  // EVERYTHING THE TILER LEFT, AND `BARRIER_RUN.runId` IS NOT IN IT. That
+  // one column is the whole point of the tag: L-5 reads it to tell an
+  // assembled member from a joiner, and `PLACEMENT.runId` is the same
+  // string so it needs no rename. The rest is the planner's working.
+  const cleaned = g.add(
+    removeAttribute,
+    {
+      names: [
+        BARRIER_ASSET.pose,
+        BARRIER_ASSET.across,
+        BARRIER_ASSET.along,
+        BARRIER_ASSET.tall,
+        BARRIER_RUN.run,
+        BARRIER_RUN.tile,
+        BARRIER_RUN.startW,
+        BARRIER_RUN.lengthW,
+        BARRIER_RUN.pieces,
+        BARRIER_RUN.piece,
+        BARRIER_RUN.startK,
+        BARRIER_RUN.lengthK,
+        BARRIER_RUN.pitchK,
+        // `arcTile` writes both onto its tiles. Neither reaches the copies
+        // today — `copyToPoints` carries the SOURCE's columns and only the
+        // target names it was given — and both are named anyway, for the
+        // reason the cover strip is not strict: a column that starts
+        // riding along should not be found three stages downstream.
+        "tangent",
+        "curveU",
+      ],
+      strict: false,
+    },
+    `${tag}_strip`,
+  );
+  g.connect(named, "out", cleaned, "in");
+  return cleaned;
 }
