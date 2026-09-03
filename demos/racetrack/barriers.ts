@@ -256,7 +256,9 @@ export interface BarrierRun {
    *
    * ASSIGNED AFTER THE SORT, so it is the run's position in the returned
    * plan. It is never negative, which is what keeps it clear of
-   * `STATION_BORN` (-1) and of L-6's `-2 - index()` cover ids.
+   * `STATION_BORN` (-1) — the only other value this column takes. L-6's
+   * `-2 - index()` numbering is `PLACEMENT.id`, a different column, and
+   * collides with nothing here.
    */
   readonly runId: number;
   /** Arc from the start line to the start of the RANGE, in W. */

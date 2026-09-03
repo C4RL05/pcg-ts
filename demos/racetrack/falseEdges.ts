@@ -217,10 +217,31 @@ export function inEdgeBand(p: StationedPlacement): boolean {
  * borrowed: `cover` is asserted against by `racetrackDressGraph.test.ts`
  * at a base a barrier never reaches, and `mixPinned` means something else.
  *
- * NEGATIVE IS NOT THE SAME AS SCATTERED. L-6 numbers its cover pieces
- * `-2 - index()`, so `-2` and below are ASSEMBLED ids under a different
- * scheme. Exactly {@link STATION_BORN}, or absent, is the scattered case —
- * which is why {@link isAssembled} is written as the positive question.
+ * WHAT LANDS IN THIS COLUMN, AND IT IS ONLY THIS ONE. `runId` holds a row
+ * of an assembler's own plan — non-negative, `0..n-1`, the run's position
+ * in the sorted list — or {@link STATION_BORN}, or nothing at all. No
+ * other negative is written to it by anything here: L-6's cover pieces are
+ * as assembled as a barrier and still take {@link STATION_BORN}, because
+ * they belong to none of L-5's runs and their own run is `coverRun`. That
+ * is a fact about today's writers and NOT an enforced invariant —
+ * `buildRoundGraph`'s host-supplied `runIds` lands in the column unchecked,
+ * where `barrierAssetCloud` range-checks the plan's ids before it writes
+ * them.
+ *
+ * `-2 - index()` IS A DIFFERENT COLUMN. It is how L-6 numbers its cover
+ * pieces in `PLACEMENT.id`, over in `dressGraph.ts`, where barrier pieces
+ * take `-100000 - index()`; neither number ever reaches `runId`. Read as a
+ * claim about run ids it is false, and nothing catches it, because
+ * {@link isAssembled} answers the same under either reading.
+ *
+ * SO THE QUESTION IS `runId >= 0`. That is how the graph arm spells it and
+ * for the reason stated there — a second assembler arriving with a second
+ * negative sentinel must not read as a member of somebody's run.
+ * {@link isAssembled} excludes {@link STATION_BORN} by name instead, which
+ * is the same answer only while -1 is the column's one negative. The two
+ * spellings agree on everything this file produces; they part on any host
+ * `runId` of -2 or below, which the graph arm calls scattered and this one
+ * calls assembled.
  */
 export const STATION_BORN = -1;
 

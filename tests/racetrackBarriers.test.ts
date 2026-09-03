@@ -391,8 +391,9 @@ describe("L-5 barrier runs, built", () => {
     // only the claim that the column exists and carries the plan's answer.
     const { runs, geo } = await build(SEED);
     // Zero-based, in station order, no gaps — and never negative, since
-    // `STATION_BORN` is -1 and L-6's cover ids are `-2 - index()`. All
-    // three are read off one column and none of them may collide.
+    // `STATION_BORN` is -1 and shares this column. L-6's `-2 - index()`
+    // cover ids do NOT: those are `PLACEMENT.id`, and a cover piece's
+    // `runId` is `STATION_BORN` like any other non-member.
     expect(
       runs.map((r) => r.runId),
       "the plan's ids are not its own positions",
