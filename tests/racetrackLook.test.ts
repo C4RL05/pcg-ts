@@ -15,7 +15,8 @@
  * their edge cases, and a later "simplification" of the `& 0xffffff` mask
  * into a `Math.min`/`Math.max` pair would break the NaN handling with
  * nothing to notice. They live in `shared/`, so this is the suite that
- * owns them.
+ * owns them — and it kept them after the panel that prompted them was
+ * removed, because the control kind is still there for the next panel.
  */
 import { describe, expect, it } from "vitest";
 import { cssToHex, hexToCss } from "../shared/controls.js";
@@ -36,13 +37,6 @@ import {
   mixHex,
   readAssetId,
 } from "../demos/racetrack/look.js";
-import {
-  LOOK_SECTIONS,
-  RESTYLE_KEYS,
-  readLook,
-  writeLook,
-  type LookValues,
-} from "../demos/racetrack/lookPanel.js";
 import { BOX_ROLES, boxAssetIds } from "../demos/racetrack/spawn.js";
 import type { AssetMap } from "pcg-ts/three";
 import type { Material } from "three";
@@ -325,64 +319,6 @@ describe("the presets", () => {
     live.background = 0x040506;
     expect(MONUMENT.roles.leg).not.toBe(0x010203);
     expect(MONUMENT.background).not.toBe(0x040506);
-  });
-});
-
-describe("the panel's record", () => {
-  const keysOf = (look: Look): string[] => Object.keys(look).filter((k) => k !== "roles").sort();
-
-  it("round-trips every preset without dropping or renaming a field", () => {
-    for (const { id, look } of PRESETS) {
-      const live = cloneLook(MONUMENT);
-      writeLook(live, readLook(look, id));
-      expect(live, `${id} did not survive the panel record`).toEqual(look);
-    }
-  });
-
-  it("covers every scalar key of Look, so nothing is silently unreachable", () => {
-    // A key added to `Look` and forgotten in `readLook`/`writeLook` is
-    // not a type error — the record is its own interface — and the
-    // symptom is a control that exists and does nothing.
-    const values = readLook(MONUMENT, "monument") as unknown as Record<string, unknown>;
-    for (const key of keysOf(MONUMENT)) {
-      expect(values[key], `Look.${key} has no panel field`).toBeDefined();
-    }
-    for (const role of BOX_ROLES) {
-      expect(values[role], `Look.roles.${role} has no panel field`).toBeDefined();
-    }
-  });
-
-  it("gives every control a key the record actually holds", () => {
-    const values = readLook(MONUMENT, "monument") as unknown as Record<string, unknown>;
-    for (const section of LOOK_SECTIONS) {
-      for (const control of section.controls) {
-        const keys =
-          "key" in control ? [String(control.key)] : control.items.map((i) => String(i.key));
-        for (const key of keys) {
-          expect(values[key], `${section.title} → "${key}" is not a LookValues key`).toBeDefined();
-        }
-      }
-    }
-  });
-
-  it("names a restyle key for every setting that picks a material class", () => {
-    // These three are the only ones no property write can express, and
-    // two files act on the answer — the panel decides whether to report a
-    // restyle and the page decides whether to rebuild.
-    expect(RESTYLE_KEYS).toEqual(new Set(["surface", "mapSurface", "edges"]));
-    const live = cloneLook(MONUMENT);
-    const values: LookValues = readLook(live, "monument");
-    for (const key of RESTYLE_KEYS) {
-      expect(
-        (values as unknown as Record<string, unknown>)[key],
-        `restyle key "${key}" is not on the record`,
-      ).toBeDefined();
-    }
-  });
-
-  it("uses section titles that are unique, because they are also the tab labels", () => {
-    const titles = LOOK_SECTIONS.map((s) => s.title);
-    expect(new Set(titles).size).toBe(titles.length);
   });
 });
 

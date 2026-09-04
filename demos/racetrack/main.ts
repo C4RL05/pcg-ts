@@ -107,7 +107,6 @@ import { createOverlay } from "../../shared/overlay.js";
 import { makeRecooker } from "../../shared/recook.js";
 import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/panel.js";
 import { attachWordmark } from "../../shared/wordmark.js";
-import { attachLookPanel } from "./lookMount.js";
 import { OUTPUTS, buildRoadGraph } from "./graph.js";
 import type { PlaceableAsset } from "./assets.js";
 import { cookReserveMarkers } from "./cornerGraph.js";
@@ -1605,8 +1604,8 @@ const overlay = createOverlay({
     "the result is ever consumed from. They are drawn over each other and the car is one object in " +
     "both. Nothing is art: the fill is flat and half-transparent with depth writing off, so " +
     "overlap accumulates and brightness reads as how much structure is stacked along a ray. " +
-    "The look panel, top right, changes only how it is drawn — no value on it can move a " +
-    "placement — and its `monument` preset spends the same channel on structural role instead.",
+    "Nothing about how it is drawn can move a placement — see `look.ts`, which is where the " +
+    "colours, the light and the four other looks live.",
 });
 
 const state = {
@@ -1864,14 +1863,6 @@ function showLapStats(): void {
 // The slot is claimed HERE, where the panel is built, so this page decides
 // where in its own panel the graph sits — under the readouts.
 const graphSlot = overlay.addSlot();
-
-// THE PLAYGROUND IS NOT IN THIS PANEL AT ALL, and that is the point. It
-// took a slot here first, which appends — so forty controls opened below
-// eleven readouts and were off the bottom of the window. It has its own
-// card in the opposite corner now; see `lookMount.ts`. This overlay keeps
-// what it is good at: the prose, the eight knobs that change the LAP, and
-// the numbers those produce.
-const lookPanel = attachLookPanel(look, { onRetint: retint, onRestyle: restyle });
 
 attachWordmark();
 
@@ -2171,12 +2162,6 @@ window.pcgRacetrack = {
     if (roles) Object.assign(look.roles, roles);
     if (structural) restyle();
     else retint();
-    // AND THE PANEL, which is not repainting anything — it is being told
-    // that the record it is rendering is out of date. Without this a shot
-    // driven through the probe carries a panel describing the look it had
-    // before the patch, which is worse than no panel: it is a caption
-    // that disagrees with the picture it is on.
-    lookPanel.sync();
   },
 };
 
