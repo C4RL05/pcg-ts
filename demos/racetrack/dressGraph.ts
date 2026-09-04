@@ -5386,7 +5386,27 @@ export function buildRoundGraph(
     // IS a decision — every placement it makes is station-born.
     const tags = opts.runIds;
     const col = carryCloud.attrs.point.add(PLACEMENT.runId, "i32", 1);
-    for (let i = 0; i < placements.length; i++) col.set(i, tags[i] ?? STATION_BORN);
+    // RANGE-CHECKED, BECAUSE THIS IS THE ONE RUN ID THE LIBRARY DID NOT
+    // ASSIGN. Every other value in the column is `STATION_BORN` or a row of
+    // a plan built in this file, and `barrierAssetCloud` already checks its
+    // own; a caller's array is the only way another number reaches it. It
+    // has to be checked rather than trusted because `col.set` truncates to
+    // i32 in silence: -1.5 lands as -1 and reads as a sentinel nobody
+    // wrote, 3e9 wraps negative and reads as one too, and NaN lands as 0,
+    // which is a REAL RUN. The reference arm would see the number passed
+    // and the graph the truncation, which is the one way the two spellings
+    // of "assembled" can still disagree.
+    for (let i = 0; i < placements.length; i++) {
+      const v = tags[i] ?? STATION_BORN;
+      if (!(Number.isInteger(v) && (v === STATION_BORN || (v >= 0 && v <= 0x7fffffff)))) {
+        throw new Error(
+          `buildRoundGraph: runIds[${i}] is ${v}; a run id is a non-negative integer ` +
+            `up to 2147483647, or STATION_BORN (${STATION_BORN}) for a placement ` +
+            "nothing assembled",
+        );
+      }
+      col.set(i, v);
+    }
   }
   g.setParam(carry, "items", [makeGeometryItem(carryCloud)]);
   const sight = g.add(dataInput, {}, "roundSight");

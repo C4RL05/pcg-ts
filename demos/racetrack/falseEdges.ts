@@ -234,14 +234,18 @@ export function inEdgeBand(p: StationedPlacement): boolean {
  * claim about run ids it is false, and nothing catches it, because
  * {@link isAssembled} answers the same under either reading.
  *
- * SO THE QUESTION IS `runId >= 0`. That is how the graph arm spells it and
- * for the reason stated there — a second assembler arriving with a second
- * negative sentinel must not read as a member of somebody's run.
- * {@link isAssembled} excludes {@link STATION_BORN} by name instead, which
- * is the same answer only while -1 is the column's one negative. The two
- * spellings agree on everything this file produces; they part on any host
- * `runId` of -2 or below, which the graph arm calls scattered and this one
- * calls assembled.
+ * SO THE QUESTION IS `runId >= 0`, AND BOTH ARMS ASK IT THAT WAY. The graph
+ * arm always did (`writeEdgeTarget`, `dressGraph.ts`), for the reason
+ * stated there — a second assembler arriving with a second negative
+ * sentinel must not read as a member of somebody's run.
+ * {@link isAssembled} asked `!== STATION_BORN` until the two were put side
+ * by side: the same answer on every value either arm produces, and a
+ * different one on -2 or below, which no writer here emits and only
+ * `buildRoundGraph`'s caller-supplied tag array could deliver. Both halves
+ * are closed rather than one — the predicate below is the inequality, and
+ * that door range-checks what it is handed, because an i32 column takes a
+ * bad number silently and the two arms would then be reading the value and
+ * its truncation.
  */
 export const STATION_BORN = -1;
 
@@ -253,9 +257,19 @@ export interface RunTag {
 /** A placement that may name the run it was assembled into. */
 export type RunPlacement = StationedPlacement & RunTag;
 
-/** Did something ASSEMBLE this placement, rather than scatter it? */
+/**
+ * Did something ASSEMBLE this placement, rather than scatter it?
+ *
+ * THE INEQUALITY AND NOT `!== STATION_BORN`. An assembler writes a row of
+ * its own plan here, so a run id is non-negative by construction and every
+ * negative is somebody's sentinel — asking for -1 by name answers "yes" to
+ * a sentinel that is not -1. Deliberately the same spelling as the graph
+ * arm's `ge(attribute(PLACEMENT.runId), 0)`, since the two are held to each
+ * other member for member and a rule that differs in its FIRST question
+ * cannot be.
+ */
 export function isAssembled(p: RunPlacement): boolean {
-  return p.runId !== undefined && p.runId !== STATION_BORN;
+  return p.runId !== undefined && p.runId >= 0;
 }
 
 export interface EdgeRun {

@@ -206,6 +206,40 @@ async function inputFor(seed: number): Promise<DressGraphInput & { readonly lap:
   };
 }
 
+/**
+ * ONE SETTLED LAP FOR THE FOUR TAG CASES, built at most once.
+ *
+ * `dressedLapFor` memoizes the cook, which is not what this is for:
+ * {@link inputFor} builds a fresh kit and a fresh input object every call,
+ * and the four cases below want the SAME list, so that an index a refusal
+ * names is the same row in all of them.
+ */
+let taggableLap: Promise<DressGraphInput & { readonly lap: Lap }> | undefined;
+function tagFixture(): Promise<DressGraphInput & { readonly lap: Lap }> {
+  if (!taggableLap) taggableLap = inputFor(SEEDS[0]);
+  return taggableLap;
+}
+
+/**
+ * What a call threw, or the empty string if it returned.
+ *
+ * NOT `expect(...).toThrow`, because the claim is about the MESSAGE and not
+ * about the throw: a door that refuses without saying which row it refused
+ * hands a caller with a five-hundred-entry array nothing to act on, and
+ * `toThrow` with a pattern reports "did not match" rather than what was
+ * actually said. The empty string is a distinguishable failure — it means
+ * the call RETURNED — so a door that stopped refusing reads differently
+ * from one that refused with the wrong words.
+ */
+function messageOf(fn: () => unknown): string {
+  try {
+    fn();
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+  return "";
+}
+
 /** Every scalar column of a cloud this file reads, by name. */
 function col(geo: Geometry, name: string): (i: number) => number {
   const c = geo.attrs.point.require(name);
@@ -271,6 +305,191 @@ describe("L-5 barriers, spliced into the dress graph", () => {
     // its runs from 0 after the sort.
     expect(STATION_BORN).toBe(-1);
   });
+
+  it(
+    "calls every negative scattered, so a second assembler's sentinel is not a run",
+    async () => {
+      // THE PREDICATE ON A REAL ROW RATHER THAN ON A LITERAL. `isAssembled`
+      // is handed whole placements by `repairTarget`, off the settled list,
+      // so a hand-built object would be pinning the rule against a shape
+      // this demo does not produce. This is the lap's own first placement
+      // with a tag spread onto it, which is exactly how the tag arrives.
+      const base = await tagFixture();
+      const list = base.placements ?? [];
+      expect(list.length, "the shared lap settled no placement to tag").toBeGreaterThan(8);
+      const p = list[0];
+
+      expect(
+        isAssembled({ ...p, runId: STATION_BORN }),
+        "a station-born placement read as assembled",
+      ).toBe(false);
+      // -2 IS THE CASE THAT CHANGED AND IT IS THE REASON THIS CASE EXISTS.
+      // The reference arm asked `!== STATION_BORN` until now, so -2 came
+      // back TRUE and read as membership of a run numbered -2 — which no
+      // plan in this repo numbers, because a run id is a ROW of a plan and
+      // rows count from 0. Every negative is therefore somebody's SENTINEL,
+      // and the moment a second assembler wants one it cannot have -1: it
+      // reaches for -2, and the old predicate silently enrolled its
+      // placements in L-5's runs. The graph arm never had that reading —
+      // `ge(attribute(PLACEMENT.runId), 0)` has always called -2 scattered —
+      // so the two arms answered a DIFFERENT FIRST QUESTION while every
+      // comparison in this file held them to each other member for member.
+      expect(
+        isAssembled({ ...p, runId: -2 }),
+        "a second assembler's sentinel read as run membership",
+      ).toBe(false);
+      // A lap that carries no tag at all: the column is optional so that a
+      // dressing nobody assembled reads as all-scattered rather than as
+      // run 0.
+      expect(isAssembled({ ...p }), "an untagged placement read as assembled").toBe(false);
+      expect(isAssembled({ ...p, runId: 0 }), "run 0 read as scattered").toBe(true);
+      expect(isAssembled({ ...p, runId: 7 }), "run 7 read as scattered").toBe(true);
+    },
+    LAP_MS,
+  );
+
+  it(
+    "asks the reference arm's question in the graph arm's own words",
+    async () => {
+      // THE TWO ARMS HELD TO EACH OTHER AT THEIR FIRST QUESTION, WHICH IS
+      // THE ONE NO COMPARISON IN THIS FILE CAN CATCH. "The graph lowered
+      // the same member `repairTarget` did" is a statement about two rules
+      // reading ONE population — and if the two spellings of "who assembled
+      // this" disagree, they are reading two different populations and
+      // agreeing about the wrong thing. `dressGraph.ts` spells it
+      // `ge(attribute(PLACEMENT.runId), 0)`; this pins the TypeScript side
+      // to that inequality rather than to any particular value.
+      //
+      // AND IT COOKS NOTHING. The graph arm's spelling is a source line and
+      // the cases below already cook it at length; what was missing is the
+      // statement that the reference arm asks the same thing, and that is
+      // arithmetic over the values an i32 column can hold.
+      const base = await tagFixture();
+      const p = (base.placements ?? [])[0];
+      const values: readonly (number | undefined)[] = [
+        undefined,
+        STATION_BORN,
+        -2,
+        -3,
+        -0x80000000,
+        0,
+        1,
+        RUN_COUNT - 1,
+        0x7fffffff,
+      ];
+      for (const runId of values) {
+        expect(
+          isAssembled({ ...p, runId }),
+          `runId ${runId}: the reference arm's predicate is not the graph arm's >= 0`,
+        ).toBe(runId !== undefined && runId >= 0);
+      }
+    },
+    LAP_MS,
+  );
+
+  it(
+    "refuses a caller's run id the column would truncate, and says which row",
+    async () => {
+      // THE ONE RUN ID THE LIBRARY DID NOT ASSIGN. Every other value in
+      // this column is `STATION_BORN` or a row of a plan built in
+      // `dressGraph.ts`, and `barrierAssetCloud` range-checks its own;
+      // `buildRoundGraph`'s `runIds` is the only way a number from outside
+      // reaches an i32 attribute column.
+      //
+      // AND IT HAS TO BE CHECKED RATHER THAN TRUSTED BECAUSE THE FAILURE IS
+      // SILENT AND LOOKS LIKE SUCCESS. `col.set` truncates to i32 without
+      // saying so, so a bad number does not arrive as a bad number — it
+      // arrives as a PERFECTLY GOOD one, and the reference arm then reads
+      // the value the caller passed while the graph reads its truncation,
+      // which is the last way left for the two spellings above to disagree.
+      // Value by value: -1.5 lands as -1, a sentinel nobody wrote; 3e9 and
+      // 2**31 wrap NEGATIVE and read as sentinels too; NaN lands as 0 and
+      // 0.5 lands as 0, which is a REAL RUN, so a settled placement joins
+      // somebody's line and L-5 then refuses to lower it; and -2 survives
+      // the write intact and is still not a run id — the exact value the
+      // predicate above changed its mind about.
+      //
+      // ON A NON-ZERO INDEX FOR ALL BUT ONE OF THEM, because the index is
+      // half of what the message is for: a caller handed a five-hundred-row
+      // array needs the row, and a check that only ever failed at 0 would
+      // pass for a message that hard-coded it.
+      const base = await tagFixture();
+      const list = base.placements ?? [];
+      expect(list.length, "the shared lap settled no placement to tag").toBeGreaterThan(8);
+
+      const refused: readonly (readonly [number, number])[] = [
+        [0, -2],
+        [3, -1.5],
+        [1, 3e9],
+        [7, NaN],
+        [2, 0.5],
+        [5, 2 ** 31],
+      ];
+      for (const [at, v] of refused) {
+        const runIds = list.map(() => STATION_BORN);
+        runIds[at] = v;
+        const msg = messageOf(() => buildRoundGraph(base, { runIds }));
+        expect(
+          msg,
+          `runIds[${at}] = ${v}: the door wrote a value the column cannot hold`,
+        ).not.toBe("");
+        expect(msg, `runIds[${at}] = ${v}: the refusal does not name the row`).toContain(
+          `runIds[${at}]`,
+        );
+        expect(msg, `runIds[${at}] = ${v}: the refusal does not name the value`).toContain(
+          `is ${v}`,
+        );
+      }
+    },
+    LAP_MS,
+  );
+
+  it(
+    "takes every run id the column can hold, and fills the rows the caller left out",
+    async () => {
+      // THE OTHER HALF OF A DOOR, AND WITHOUT IT THE REFUSALS ABOVE ARE
+      // SATISFIED BY A FUNCTION THAT THROWS ON EVERYTHING. Each of these is
+      // a shape the tag arrives in today: the L-5 comparison in this file
+      // hands an all-`STATION_BORN` prefix followed by a plan's own rows,
+      // and the inert case hands nothing but `STATION_BORN`.
+      //
+      // THE ENDS OF THE RANGE ARE HERE ON PURPOSE. 0 is the first row of
+      // every plan and is the value NaN and 0.5 truncate TO, so a guard
+      // written as `v > 0` would pass the refusals above and lock out run 0;
+      // 2147483647 is the largest id the column holds and is what `2 ** 31`
+      // is one past, so a guard written with the wrong comparison there
+      // fails here rather than in a year.
+      //
+      // AND A SHORT ARRAY IS VALID, NOT MERELY TOLERATED. An absent entry
+      // means "nothing assembled this row", which is the same statement as
+      // `STATION_BORN` and the same as the column's own default — so a
+      // caller who knows only about the rows an assembler touched need not
+      // pad the array out to the population.
+      //
+      // CONSTRUCTION ONLY. The door is in `buildRoundGraph` itself, so
+      // cooking these would be measuring the round rather than the door,
+      // and the round is measured at length further down.
+      const base = await tagFixture();
+      const list = base.placements ?? [];
+      const accepted: readonly (readonly [string, readonly number[]])[] = [
+        ["a lap where nothing assembled anything", list.map(() => STATION_BORN)],
+        ["a plan's own rows", list.map((_, i) => i % RUN_COUNT)],
+        ["run 0 on every row", list.map(() => 0)],
+        [
+          "the largest id an i32 holds",
+          list.map((_, i) => (i === 4 ? 0x7fffffff : STATION_BORN)),
+        ],
+        ["a short array, the rest of the lap unassembled", [0, 1, 2]],
+      ];
+      for (const [what, runIds] of accepted) {
+        expect(
+          messageOf(() => buildRoundGraph(base, { runIds })),
+          `${what}: the door refused a run id it has to take`,
+        ).toBe("");
+      }
+    },
+    LAP_MS,
+  );
 
   it(
     "is absent unless it is asked for, and present when it is",
