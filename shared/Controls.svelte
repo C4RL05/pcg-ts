@@ -23,10 +23,7 @@
   import {
     clampToRange,
     formatNumber,
-    hexToCss,
-    cssToHex,
     visibleSections,
-    type ColorControl,
     type Control,
     type ControlCommit,
     type ControlSection,
@@ -159,30 +156,6 @@
     const commit: ControlCommit<P> = { kind: "select", control, key: control.key, value };
     onInput(commit);
     onCommit(commit);
-  }
-
-  /**
-   * The same two-event split a slider drag has, and wired the same way:
-   * `input` moves the readout, `change` is the one the host acts on. A
-   * colour input fires `input` for every step of a pick, so without the
-   * split one trip through the picker would be dozens of commits.
-   *
-   * WORTH KNOWING: `change` is the settled event by spec, but the engines
-   * do not agree on when a colour is settled — one waits for the picker to
-   * close, another has fired it per movement. So this coalesces a gesture
-   * where the browser lets it and degrades to "as often as input" where it
-   * does not; it is not a guarantee to build an expensive recook on. A
-   * host that must have exactly one is the one that should debounce.
-   *
-   * `cssToHex` here and nowhere else: the packed number is what the panel
-   * stores, so the string turns back into one at the edge of the component
-   * rather than travelling any further in.
-   */
-  function pickColor(control: ColorControl<P>, css: string, settled: boolean): void {
-    const value = cssToHex(css);
-    const commit: ControlCommit<P> = { kind: "color", control, key: control.key, value };
-    onInput(commit);
-    if (settled) onCommit(commit);
   }
 
   function flag(control: FlagsControl<P>, key: FlagKey<P>, value: boolean): void {
@@ -320,22 +293,6 @@
               <option value={option.value}>{option.label}</option>
             {/each}
           </select>
-        </label>
-      {:else if control.kind === "color"}
-        <!-- The readout is not decoration. The swatch shows a colour but
-             cannot be read back out of, and a hex is what gets pasted
-             between a palette, a graph and this panel — so the row states
-             the value the way a slider states its number. -->
-        <label class="row" title={control.description}>
-          <span>{control.label}</span>
-          <input
-            class="swatch"
-            type="color"
-            value={hexToCss(asNumber(control.key))}
-            aria-label={control.label}
-            oninput={(e) => pickColor(control, e.currentTarget.value, false)}
-            onchange={(e) => pickColor(control, e.currentTarget.value, true)} />
-          <em class="hex">{hexToCss(asNumber(control.key))}</em>
         </label>
       {:else if control.kind === "flags"}
         <div class="row" title={control.description}>
@@ -572,64 +529,6 @@
      width. */
   .row > em.unit {
     flex: 0 0 auto;
-    text-align: left;
-  }
-  /**
-   * The swatch.
-   *
-   * A colour input is a bevelled plate wrapping an inset well, and none of
-   * that is reachable from the outside — so `appearance: none` drops the
-   * plate and the well is unpadded and unbordered on both engines, leaving
-   * the colour to fill a box this file draws. The same move the slider
-   * makes a few rules up, and for the same reason: the engines' own parts
-   * cannot be made to agree, so neither engine's parts are used.
-   *
-   * `border-radius` follows `--ed-radius` rather than rounding on its own.
-   * The token ships at 0 and the panel is square throughout, and a swatch
-   * that rounded regardless would be the one soft corner on the page — a
-   * page that sets the token gets a rounded swatch along with everything
-   * else, which is what the token is for.
-   *
-   * 22px BORDER-BOX is the typed field's outer height at this font — a
-   * ~14px line box, 3px of padding twice, 1px of border twice — which is
-   * never written down anywhere because every other control derives it.
-   * A square has to state it, and `box-sizing` is what keeps the number
-   * meaning the same thing the others compute.
-   */
-  .swatch {
-    -webkit-appearance: none;
-    appearance: none;
-    flex: 0 0 auto;
-    box-sizing: border-box;
-    width: 22px;
-    height: 22px;
-    padding: 0;
-    background: var(--ed-well, #0c0c0c);
-    border: 1px solid var(--ed-edge, #3f3f3f);
-    border-radius: var(--ed-radius, 0);
-    cursor: pointer;
-  }
-  .swatch::-webkit-color-swatch-wrapper {
-    padding: 0;
-  }
-  .swatch::-webkit-color-swatch {
-    border: 0;
-    border-radius: var(--ed-radius, 0);
-  }
-  .swatch::-moz-color-swatch {
-    border: 0;
-    border-radius: var(--ed-radius, 0);
-  }
-  .swatch:focus-visible {
-    outline: 1px solid var(--ed-focus, var(--ed-accent));
-    outline-offset: 2px;
-  }
-  /* The hex sits against the swatch it describes rather than out at the
-     readout column: there is no track between them to span, and a number
-     flung to the right edge would read as belonging to the next row. It
-     takes the slack so the row still ends flush. */
-  .row > em.hex {
-    flex: 1 1 auto;
     text-align: left;
   }
   .vec {

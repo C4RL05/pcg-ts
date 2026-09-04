@@ -388,7 +388,16 @@ function passTint(
       tint.opacity = look.edgeOpacity;
       return tint;
     case "map":
-      tint.color = posed ? mixHex(WHITE, look.mapTint, look.mapMix) : mapColor(look, id, population);
+      // VERTEX COLOURS OFF, WHICH IS THE ONLY WAY THE MAP CAN MEAN WHAT
+      // IT SAYS. A merged pose carries a per-box colour attribute and a
+      // material that read it could only MULTIPLY by it — so a map colour
+      // of red over a pose baked at 0x404040 lands on a dark red, and no
+      // value in the look could reach the red that was asked for. The map
+      // is a flat plan of two populations; the attribute has nothing to
+      // tell it. Turning it off here is what lets `mapGenerated` be a
+      // stated colour rather than a starting point.
+      tint.vertexColors = false;
+      tint.color = mapColor(id, look, population);
       tint.opacity = look.mapOpacity;
       return tint;
   }

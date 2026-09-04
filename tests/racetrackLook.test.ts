@@ -1,33 +1,27 @@
 /**
- * The look, and the two conversions the panel hangs off.
+ * The look the racetrack draws, and the arithmetic behind its colours.
  *
  * WHY A SUITE FOR WHAT LOOKS LIKE PRESENTATION. A look decides no
  * placement — that is the property `demos/racetrack/look.ts` is built to
  * guarantee — so nothing here can catch a wrong lap. What it catches is
  * the OTHER failure mode, which is worse to debug precisely because the
- * lap is fine: a colour that arrives as `NaN` lands in a material, comes
- * out black, and the hunt starts at the mesh rather than at the string
- * that caused it. Every assertion below is on a value that reaches a
- * `Color.setHex` or an `<input type="color">`.
+ * lap is fine: a colour that arrives wrong lands in a material, comes out
+ * as a plausible picture, and nothing says so.
  *
- * THE TWO CONVERSIONS HAVE NO OTHER TEST. `hexToCss` and `cssToHex` are
- * the whole contract of the shared `color` control kind, their contract IS
- * their edge cases, and a later "simplification" of the `& 0xffffff` mask
- * into a `Math.min`/`Math.max` pair would break the NaN handling with
- * nothing to notice. They live in `shared/`, so this is the suite that
- * owns them — and it kept them after the panel that prompted them was
- * removed, because the control kind is still there for the next panel.
+ * IT USED TO COVER FIVE LOOKS AND A CONTROL PANEL. Both are in the git
+ * history (`6edc1d7`, `27e00db`); what is left is the one look the page
+ * ships plus the folds it is built out of.
+ *
+ * THE FOLDS ARE TESTED THROUGH A FIXTURE, NOT THROUGH `LOOK`. Every fold
+ * `assetColor` performs is a no-op in the shipped look — one grey on
+ * every role, `coverMix` at 0, `referenceMix` at 1 — so a suite that only
+ * ever asked `LOOK` would pass with the arithmetic gutted. {@link BY_ROLE}
+ * exists to make the folds observable, and is deliberately not a preset:
+ * nothing ships it.
  */
 import { describe, expect, it } from "vitest";
-import { cssToHex, hexToCss } from "../shared/controls.js";
 import {
-  BLUEPRINT,
-  DEFAULT_PRESET,
-  MONUMENT,
-  PLAN,
-  PRESETS,
-  SMOKE,
-  XRAY,
+  LOOK,
   type Look,
   type Surface,
   assetColor,
@@ -45,82 +39,31 @@ import {
   makeAssetMap,
   makeEdgeAssetMap,
   makeMapMaterials,
+  makeStreamedMapMaterial,
   retintAssetMap,
   retintEdgeAssetMap,
   retintMapMaterials,
 } from "../demos/racetrack/assets3d.js";
 
-describe("hexToCss / cssToHex", () => {
-  it("always emits seven characters, whatever it is handed", () => {
-    // The padding is the whole job: `0x0088ff` renders as "88ff"
-    // unpadded, and a colour input handed a value it cannot parse does
-    // not complain — it shows black. A swatch silently disagreeing with
-    // the number behind it is what this prevents.
-    for (const n of [0, 1, 0x0088ff, 0xffffff, 0x123456]) {
-      expect(hexToCss(n), `hexToCss(${n})`).toMatch(/^#[0-9a-f]{6}$/);
-    }
-  });
-
-  it("never emits 'nan', for any of the four ways a number goes bad", () => {
-    for (const n of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 1.5]) {
-      const css = hexToCss(n);
-      expect(css, `hexToCss(${n})`).toMatch(/^#[0-9a-f]{6}$/);
-      expect(css).not.toContain("nan");
-    }
-  });
-
-  it("masks rather than overflows above 0xffffff", () => {
-    expect(hexToCss(0x1000000)).toBe("#000000");
-    expect(hexToCss(0x1abcdef)).toBe("#abcdef");
-  });
-
-  it("reads a colour back with or without the hash", () => {
-    expect(cssToHex("#abcdef")).toBe(0xabcdef);
-    expect(cssToHex("abcdef")).toBe(0xabcdef);
-    expect(cssToHex("  #ABCDEF  ")).toBe(0xabcdef);
-  });
-
-  it("answers 0 on garbage and NEVER NaN", () => {
-    // Black is wrong too, but it is wrong IDENTICALLY every time, which
-    // is the difference between a bug with a first suspect and one
-    // without.
-    for (const s of ["", "#", "nonsense", "#abc", "#abcdefg", "#gggggg", "0x123456"]) {
-      const n = cssToHex(s);
-      expect(Number.isNaN(n), `cssToHex(${JSON.stringify(s)}) is NaN`).toBe(false);
-      expect(n, `cssToHex(${JSON.stringify(s)})`).toBe(0);
-    }
-    // AND THE CONTROL, because a check that only ever sees garbage cannot
-    // tell "rejects everything" from "rejects the right things" — the
-    // first spelling of this test compared the answer against an
-    // expression derived from the same input and could not fail.
-    expect(cssToHex("#000000")).toBe(0);
-    expect(cssToHex("#000001")).toBe(1);
-  });
-
-  it("round-trips every colour a shipped preset carries", () => {
-    for (const { id, look } of PRESETS) {
-      const swatches = [
-        ...Object.values(look.roles),
-        look.cover,
-        look.reference,
-        look.road,
-        look.centreline,
-        look.car,
-        look.sky,
-        look.ground,
-        look.key,
-        look.fill,
-        look.background,
-        look.horizon,
-        look.fog,
-        look.mapTint,
-      ];
-      for (const hex of swatches) {
-        expect(cssToHex(hexToCss(hex)), `${id}: ${hexToCss(hex)}`).toBe(hex);
-      }
-    }
-  });
-});
+/** A look whose folds are all live, so the arithmetic can be seen. */
+const BY_ROLE: Look = {
+  ...cloneLook(LOOK),
+  surface: "solid",
+  opacity: 1,
+  roles: {
+    panel: 0xdccbb8,
+    mass: 0xc0b2c6,
+    leg: 0x565080,
+    post: 0xe87f63,
+    span: 0x3f9d99,
+    head: 0xd4658a,
+  },
+  cover: 0xf0b13d,
+  coverMix: 0.5,
+  reference: 0x8d8399,
+  referenceMix: 0.8,
+  hemi: 1.35,
+};
 
 describe("mixHex", () => {
   it("is the identity at both ends", () => {
@@ -163,136 +106,72 @@ describe("readAssetId", () => {
   });
 });
 
-describe("assetColor", () => {
-  it("gives each role its own colour in MONUMENT, which is the look that codes by role", () => {
-    // NAMED RATHER THAN "the shipped look", which it was until the
-    // default changed under it. `SMOKE` ships monochrome ON PURPOSE —
-    // role colour and accumulated alpha are the same channel — so a test
-    // asserting six distinct colours of whatever happens to be default
-    // would fail for a reason that is not a bug.
-    const seen = new Set(BOX_ROLES.map((r) => assetColor(MONUMENT, r, "generated")));
-    expect(seen.size, "two roles share a colour, so the coding says less than it claims").toBe(
-      BOX_ROLES.length,
-    );
-  });
-
-  it("keeps SMOKE monochrome, which is the point of it rather than an oversight", () => {
-    // Six hues summing through each other at alpha 0.5 make a fourth
-    // colour meaning neither of the two it came from. `SMOKE` spends the
-    // channel on density instead, and a later "fix" that gave it role
-    // colours would quietly undo that.
-    const seen = new Set(boxAssetIds().map((id) => assetColor(SMOKE, id, "generated")));
-    expect(seen.size, "SMOKE has picked up a second colour").toBe(1);
+describe("assetColor's folds", () => {
+  it("gives each role its own colour when the roles differ", () => {
+    const seen = new Set(BOX_ROLES.map((r) => assetColor(BY_ROLE, r, "generated")));
+    expect(seen.size, "two roles share a colour, so the fold lost one").toBe(BOX_ROLES.length);
   });
 
   it("moves a cover id away from its bare role, and only when coverMix asks", () => {
     for (const role of BOX_ROLES) {
-      const bare = assetColor(MONUMENT, role, "generated");
-      const cover = assetColor(MONUMENT, `cover:${role}`, "generated");
+      const bare = assetColor(BY_ROLE, role, "generated");
+      const cover = assetColor(BY_ROLE, `cover:${role}`, "generated");
       expect(cover, `cover:${role} is indistinguishable from ${role}`).not.toBe(bare);
     }
-    const flat: Look = { ...cloneLook(MONUMENT), coverMix: 0 };
+    const off: Look = { ...cloneLook(BY_ROLE), coverMix: 0 };
     for (const role of BOX_ROLES) {
-      expect(assetColor(flat, `cover:${role}`, "generated")).toBe(
-        assetColor(flat, role, "generated"),
+      expect(assetColor(off, `cover:${role}`, "generated")).toBe(
+        assetColor(off, role, "generated"),
       );
     }
   });
 
   it("folds the reference layer to exactly one colour at referenceMix 1", () => {
-    const one: Look = { ...cloneLook(MONUMENT), referenceMix: 1 };
+    const one: Look = { ...cloneLook(BY_ROLE), referenceMix: 1 };
     const seen = new Set(boxAssetIds().map((id) => assetColor(one, id, "reference")));
     expect(seen).toEqual(new Set([one.reference]));
   });
 
   it("codes both populations identically at referenceMix 0", () => {
-    const both: Look = { ...cloneLook(MONUMENT), referenceMix: 0 };
+    const both: Look = { ...cloneLook(BY_ROLE), referenceMix: 0 };
     for (const id of boxAssetIds()) {
       expect(assetColor(both, id, "reference")).toBe(assetColor(both, id, "generated"));
     }
   });
 
   it("falls back to mass for an id it cannot read a role from", () => {
-    expect(assetColor(MONUMENT, "pose:3", "generated")).toBe(MONUMENT.roles.mass);
-  });
-
-  it("mapColor is assetColor folded toward the map tint, and equal at mapMix 0", () => {
-    const none: Look = { ...cloneLook(MONUMENT), mapMix: 0 };
-    for (const id of boxAssetIds()) {
-      expect(mapColor(none, id, "generated")).toBe(assetColor(none, id, "generated"));
-    }
-    const all: Look = { ...cloneLook(MONUMENT), mapMix: 1 };
-    expect(mapColor(all, "leg", "generated")).toBe(all.mapTint);
+    expect(assetColor(BY_ROLE, "pose:3", "generated")).toBe(BY_ROLE.roles.mass);
   });
 });
 
-describe("the presets", () => {
-  it("reproduces BLUEPRINT's colours exactly, which is what it claims", () => {
-    // The old palette was `generated` 0x404040 and `reference` 0x999999.
-    // The alpha is NOT reproduced and `look.ts` says why; the colours
-    // are, and this is what pins them.
-    for (const id of boxAssetIds()) {
-      expect(assetColor(BLUEPRINT, id, "generated"), id).toBe(0x404040);
-      expect(assetColor(BLUEPRINT, id, "reference"), id).toBe(0x999999);
-    }
+describe("the shipped look", () => {
+  it("is monochrome, which is the point of it rather than an oversight", () => {
+    // Accumulated alpha and hue are the same channel: six role colours
+    // summing through each other at half alpha make a muddy seventh that
+    // means neither fact it came from. A later "fix" giving the lap role
+    // colours back would quietly undo the whole reading.
+    const seen = new Set(boxAssetIds().map((id) => assetColor(LOOK, id, "generated")));
+    expect(seen.size, "the shipped look has picked up a second colour").toBe(1);
+    expect([...seen][0]).toBe(0x404040);
   });
 
-  it("never pairs an unlit look with a lit material class", () => {
-    // A lit material with no light returns black, not a flat colour —
-    // which is how `PLAN` shipped for one revision, once in the chase
-    // pass and once in the map pass. BOTH surfaces have to agree with
-    // the lights, and `mapSurface` is decided independently of `surface`.
-    for (const { id, look } of PRESETS) {
-      const anyLight = look.hemi > 0 || look.keyIntensity > 0 || look.fillIntensity > 0;
-      if (anyLight) continue;
-      expect(look.surface, `${id}: an unlit look with a lit surface draws black`).not.toBe("solid");
-      expect(look.surface, `${id}: an unlit look with a lit surface draws black`).not.toBe(
-        "translucent",
-      );
-      expect(look.mapSurface, `${id}: an unlit look with a lit map surface draws black`).not.toBe(
-        "solid",
-      );
-      expect(look.mapSurface, `${id}: an unlit look with a lit map surface draws black`).not.toBe(
-        "translucent",
-      );
-    }
+  it("keeps the reference layer one flat colour of its own", () => {
+    const seen = new Set(boxAssetIds().map((id) => assetColor(LOOK, id, "reference")));
+    expect(seen).toEqual(new Set([0x999999]));
   });
 
-  it("agrees with isLit about which presets are lit", () => {
-    expect(isLit(MONUMENT)).toBe(true);
-    expect(isLit(XRAY)).toBe(true);
-    expect(isLit(PLAN)).toBe(false);
-    expect(isLit(BLUEPRINT)).toBe(false);
-    expect(isLit(SMOKE)).toBe(false);
+  it("is unlit, and says so through its surface rather than its intensities", () => {
+    expect(isLit(LOOK)).toBe(false);
+    expect(LOOK.surface).toBe("flat");
   });
 
-  it("SMOKE is BLUEPRINT with the surface filled, and differs in nothing else", () => {
-    // The claim `look.ts` makes about it. Written as a diff rather than
-    // as a value list so that a later edit to BLUEPRINT's palette carries
-    // to SMOKE, which is the relationship the comment describes.
-    const changed = new Set(["surface", "opacity", "edges", "edgeOpacity", "edgeTint",
-      "mapSurface", "mapOpacity", "mapTint", "mapMix"]);
-    for (const key of Object.keys(BLUEPRINT) as (keyof Look)[]) {
-      if (changed.has(key) || key === "roles") continue;
-      expect(SMOKE[key], `SMOKE.${key} drifted from BLUEPRINT`).toEqual(BLUEPRINT[key]);
-    }
-    expect(SMOKE.roles).toEqual(BLUEPRINT.roles);
-    expect(SMOKE.surface).toBe("flat");
-    expect(SMOKE.opacity).toBe(0.5);
-  });
-
-  it("opens on PRESETS[0], so the page and the dropdown cannot disagree", () => {
-    expect(DEFAULT_PRESET).toBe(PRESETS[0]);
-    expect(DEFAULT_PRESET.id).toBe("smoke");
-    expect(DEFAULT_PRESET.look).toBe(SMOKE);
-  });
-
-  it("accumulates rather than occludes in the shipped default", () => {
-    // THE ONE PROPERTY THE DEFAULT IS CHOSEN FOR. `flat` below alpha 1
-    // turns depth writing off, which is what makes overlap read as
-    // brightness; at alpha 1 it would write depth and the whole reading
-    // would be gone with no other value changing.
-    const map = makeAssetMap(SMOKE, "generated");
+  it("accumulates rather than occludes", () => {
+    // THE ONE PROPERTY THE LOOK IS CHOSEN FOR. `flat` below alpha 1 turns
+    // depth writing off, which is what makes overlap read as brightness;
+    // at alpha 1 it would write depth and the whole reading would be gone
+    // with no other value changing.
+    expect(LOOK.opacity).toBeLessThan(1);
+    const map = makeAssetMap(LOOK, "generated");
     for (const id of Object.keys(map)) {
       const m = map[id].material as Material;
       expect((m as unknown as { depthWrite: boolean }).depthWrite, id).toBe(false);
@@ -300,25 +179,88 @@ describe("the presets", () => {
     }
     disposeAssetMap(map);
   });
+});
 
-  it("carries every role in every preset, so no lookup can be undefined", () => {
-    for (const { id, look } of PRESETS) {
-      for (const role of BOX_ROLES) {
-        expect(look.roles[role], `${id} has no colour for "${role}"`).toBeTypeOf("number");
-      }
+describe("the overhead pass", () => {
+  it("separates the two populations rather than the six roles", () => {
+    for (const id of boxAssetIds()) {
+      expect(mapColor(id, LOOK, "generated"), id).toBe(0xff0000);
+      expect(mapColor(id, LOOK, "reference"), id).toBe(0x999999);
     }
+    // A merged pose has no role and must answer the same as anything else.
+    expect(mapColor("pose:7", LOOK, "generated")).toBe(0xff0000);
+    expect(mapColor("cover:pose:7", LOOK, "generated")).toBe(0xff0000);
   });
 
-  it("clones deeply enough that editing one look cannot edit a preset", () => {
-    // The panel mutates the live look in place, and the live look starts
-    // as a clone of a module-level constant. A shallow copy would share
-    // `roles`, so "reset to monument" would restore whatever the last
-    // colour drag left behind.
-    const live = cloneLook(MONUMENT);
+  it("draws the generated dressing solid red, with no blending at all", () => {
+    const ids = boxAssetIds();
+    const materials = makeMapMaterials(LOOK, "generated", ids);
+    for (const id of ids) {
+      const m = materials[id] as unknown as {
+        color: { getHex(): number };
+        opacity: number;
+        transparent: boolean;
+        wireframe: boolean;
+        vertexColors: boolean;
+      };
+      expect(m.color.getHex(), id).toBe(0xff0000);
+      expect(m.opacity, id).toBe(1);
+      expect(m.transparent, `${id} is blended, so the plan smears`).toBe(false);
+      expect(m.wireframe, id).toBe(true);
+      // VERTEX COLOURS OFF OR THE RED IS NOT RED. A merged pose carries a
+      // per-box colour attribute and the material could only MULTIPLY by
+      // it, landing on red times 0x404040 — a dark red that no value in
+      // the look could correct.
+      expect(m.vertexColors, `${id} would multiply the stated colour away`).toBe(false);
+    }
+    for (const id of ids) materials[id].dispose();
+  });
+
+  it("draws the STREAMED dressing solid red, which is the one that matters", () => {
+    // THE GENERATED DRESSING IS THE STREAMED POSES, not the box path
+    // above. Every pose mesh borrows this single material for the length
+    // of the map render, and a merged pose is the ONLY geometry on the
+    // page carrying a per-box colour attribute — so this is the one
+    // material where leaving vertex colours on would silently multiply
+    // the stated red down to red times 0x404040. A test that only
+    // covered the box ids could not see that, because no box id is a
+    // pose id and the attribute is off there anyway.
+    const m = makeStreamedMapMaterial(LOOK, "generated") as unknown as Material & {
+      color: { getHex(): number };
+      opacity: number;
+      transparent: boolean;
+      wireframe: boolean;
+      vertexColors: boolean;
+    };
+    expect(m.color.getHex()).toBe(0xff0000);
+    expect(m.opacity).toBe(1);
+    expect(m.transparent).toBe(false);
+    expect(m.wireframe).toBe(true);
+    expect(m.vertexColors, "the pose attribute would multiply the red away").toBe(false);
+    m.dispose();
+  });
+
+  it("leaves the reference layer grey, so the two are told apart", () => {
+    const ids = boxAssetIds();
+    const materials = makeMapMaterials(LOOK, "reference", ids);
+    for (const id of ids) {
+      expect((materials[id] as unknown as { color: { getHex(): number } }).color.getHex(), id).toBe(
+        0x999999,
+      );
+    }
+    for (const id of ids) materials[id].dispose();
+  });
+});
+
+describe("cloneLook", () => {
+  it("is deep enough that editing a copy cannot edit the module constant", () => {
+    // The page mutates the live look in place, and the live look starts
+    // as a clone of `LOOK`. A shallow copy would share `roles`.
+    const live = cloneLook(LOOK);
     live.roles.leg = 0x010203;
     live.background = 0x040506;
-    expect(MONUMENT.roles.leg).not.toBe(0x010203);
-    expect(MONUMENT.background).not.toBe(0x040506);
+    expect(LOOK.roles.leg).not.toBe(0x010203);
+    expect(LOOK.background).not.toBe(0x040506);
   });
 });
 
@@ -330,16 +272,15 @@ describe("the presets", () => {
  * material and once in the writer that repaints a live one — and the two
  * cannot be collapsed, because a constructor picks a CLASS and a repaint
  * may not. Two separate statements of one rule is exactly the shape that
- * rots, and it rotted twice before this test existed: the retint left
- * `depthWrite` alone, so dragging one always-visible alpha slider on a
- * `flat` look produced a blended material that still wrote depth and
- * could not be got back without a rebuild; and it wrote `look.opacity`
- * onto a `solid` material the constructor pins at 1.
+ * rots, and it rotted three times before this test existed: the retint
+ * left `depthWrite` alone, so a `flat` look dragged below alpha 1 blended
+ * but still wrote depth; it wrote the opacity onto a `solid` material the
+ * constructor pins at 1; and the first `depthWrite` rule written into it
+ * was wrong for the wireframe arm.
  *
- * NEITHER WAS CAUGHT BY A TYPE OR BY A RENDER. The first is invisible
- * until geometry happens to overlap; the second is invisible always. What
- * catches both is asking whether a material retinted INTO a look is the
- * material that look would have BUILT.
+ * NONE WAS CAUGHT BY A TYPE OR BY A RENDER. What catches them is asking
+ * whether a material retinted INTO a look is the material that look would
+ * have BUILT.
  */
 describe("build and retint agree", () => {
   const SURFACES = ["solid", "translucent", "flat", "wireframe"] as const;
@@ -379,12 +320,12 @@ describe("build and retint agree", () => {
   }
 
   /**
-   * A look worth retinting INTO: every scalar moved off the default and
-   * every alpha put on the far side of 1, which is the boundary both
-   * shipped bugs lived at.
+   * A look worth retinting INTO: every scalar moved off the shipped one
+   * and every alpha put on the far side of 1, which is the boundary all
+   * three shipped divergences lived at.
    */
   function target(surface: Surface): Look {
-    const look = cloneLook(MONUMENT);
+    const look = cloneLook(BY_ROLE);
     look.surface = surface;
     look.mapSurface = surface;
     look.opacity = 0.37;
@@ -395,8 +336,16 @@ describe("build and retint agree", () => {
     look.coverMix = 0.7;
     look.referenceMix = 0.3;
     look.roles.leg = 0x112233;
-    look.mapTint = 0x445566;
-    look.mapMix = 0.6;
+    look.mapGenerated = 0x445566;
+    look.mapReference = 0x778899;
+    return look;
+  }
+
+  /** Built under a different look, so a retint has real work to do. */
+  function origin(surface: Surface): Look {
+    const look = cloneLook(LOOK);
+    look.surface = surface;
+    look.mapSurface = surface;
     return look;
   }
 
@@ -404,11 +353,7 @@ describe("build and retint agree", () => {
     for (const population of ["generated", "reference"] as const) {
       it(`fill materials: ${surface}, ${population}`, () => {
         const to = target(surface);
-        // Built under a DIFFERENT look, then retinted into the target.
-        const from = cloneLook(BLUEPRINT);
-        from.surface = surface;
-        from.mapSurface = surface;
-        const retinted = makeAssetMap(from, population);
+        const retinted = makeAssetMap(origin(surface), population);
         retintAssetMap(retinted, to, population);
         const built = makeAssetMap(to, population);
         expect(shapesOf(retinted)).toEqual(shapesOf(built));
@@ -418,11 +363,8 @@ describe("build and retint agree", () => {
 
       it(`map materials: ${surface}, ${population}`, () => {
         const to = target(surface);
-        const from = cloneLook(BLUEPRINT);
-        from.surface = surface;
-        from.mapSurface = surface;
         const ids = boxAssetIds();
-        const retinted = makeMapMaterials(from, population, ids);
+        const retinted = makeMapMaterials(origin(surface), population, ids);
         retintMapMaterials(retinted, to, population);
         const built = makeMapMaterials(to, population, ids);
         for (const id of ids) {
@@ -437,10 +379,7 @@ describe("build and retint agree", () => {
 
     it(`edge materials stay a wireframe whatever the fill is: ${surface}`, () => {
       const to = target(surface);
-      const from = cloneLook(BLUEPRINT);
-      from.surface = surface;
-      const fill = makeAssetMap(from, "generated");
-      const retinted = makeEdgeAssetMap(from, "generated");
+      const retinted = makeEdgeAssetMap(origin(surface), "generated");
       retintEdgeAssetMap(retinted, to, "generated");
       const built = makeEdgeAssetMap(to, "generated");
       expect(shapesOf(retinted)).toEqual(shapesOf(built));
@@ -450,14 +389,13 @@ describe("build and retint agree", () => {
       for (const id of Object.keys(built)) {
         expect(shapesOf(built)[id].wireframe, id).toBe(true);
       }
-      disposeAssetMap(fill);
       disposeAssetMap(retinted);
       disposeAssetMap(built);
     });
   }
 
   it("pins a solid fill opaque, whatever the opacity slider says", () => {
-    const look = cloneLook(MONUMENT);
+    const look = cloneLook(BY_ROLE);
     look.surface = "solid";
     look.opacity = 0.2;
     const map = makeAssetMap(look, "generated");
@@ -475,7 +413,7 @@ describe("build and retint agree", () => {
     // with depth writing left on is not a see-through lap, it is a faint
     // lap that still hides its own far side.
     for (const opacity of [0.1, 0.5, 1]) {
-      const look = cloneLook(MONUMENT);
+      const look = cloneLook(BY_ROLE);
       look.surface = "translucent";
       look.opacity = opacity;
       const map = makeAssetMap(look, "generated");

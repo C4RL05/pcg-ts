@@ -50,17 +50,18 @@
      `--road` is 0x333333, and it is the figures' choice AND the demo's
      again. It was both once, stopped being both while the shipped look
      drew its road as a lit surface with a hue in it, and is both again
-     now that `demos/racetrack/look.ts` ships `SMOKE` — whose road is
+     now that `demos/racetrack/look.ts` ships one look — whose road is
      `BLUEPRINT`'s 0x333333 at full alpha, over black. So the plan view
      at the top of the page and the key at the bottom of it are drawing
      the same road in the same grey, which is worth having and is not
      something to disclaim.
      IT TRACKS THE DEMO ONLY WHILE THE SHIPPED LOOK STAYS GREYSCALE.
-     `MONUMENT`'s road is 0x6e6480, and that is a HUE, which this page
-     has nowhere to put: site.css commits to pure greyscale plus the
-     three pure primaries. If the default ever moves to a look with
-     colour in its road, this value stays where it is and stops
-     matching.
+     site.css commits to pure greyscale plus the three pure primaries, so
+     a road with a hue in it is a value this page has nowhere to put. The
+     demo's map pass already draws the generated dressing in 0xff0000 —
+     which this palette CAN hold, being one of the three — but its road
+     is still 0x333333. If that ever moves, this value stays where it is
+     and stops matching.
      `--rule-2` is likewise new — it is the FAINTER of two rules, the one
      drawn between rows of a list.
 
@@ -237,11 +238,11 @@
   }
   /* THE ONE FIGURE THAT MUST NOT FOLLOW THE PAGE INK. It is a picture of
      the demo’s own screen, so the ground and every swatch in it are the
-     demo’s true values — `SMOKE`, the look `demos/racetrack/look.ts`
+     demo’s true values — `LOOK`, the one look `demos/racetrack/look.ts`
      ships as the default — and not this page’s greyscale.
 
      THE LABELS NO LONGER TAKE AN INK OF THEIR OWN, and the rule that gave
-     them one is gone rather than recoloured. `SMOKE`’s ground is
+     them one is gone rather than recoloured. Its ground is
      0x000000, which is the ground this page is already set on, so
      site.css’s blanket `.plate svg text` puts the labels in --ink and
      they read. The override existed only because the default was a pale
@@ -259,10 +260,10 @@
      the direct children only, so a stacked strip is outlined once rather
      than coat by coat.
 
-     EACH POPULATION IS ONE COLOUR NOW, DRAWN THREE DEEP. Six bands said
-     something under a by-role look and say nothing here: every role in
-     `SMOKE` is the same 0x404040, so the only thing between the two
-     layers is `reference` 0x999999 against it. What is worth the picture
+     EACH POPULATION IS ONE COLOUR, DRAWN THREE DEEP. Six bands would say
+     something under a by-role palette and say nothing here: every role in
+     the shipped look is the same 0x404040, so the only thing between the
+     two layers is `reference` 0x999999 against it. What is worth the picture
      instead is why either is ever brighter than the fill it was given.
      `flat` below alpha 1 turns depth writing off (see `blendFor` in
      `demos/racetrack/assets3d.ts`), so the strips are that one fill laid
@@ -872,11 +873,11 @@
               </g>
             </svg>
           </div>
-          <figcaption><b>The key.</b> The look the demo ships with, and it is monochrome on purpose. Both layers are one flat grey and the reference is the lighter one; each is drawn at half alpha with depth writing off, so it stacks — the strips are the same fill one, two and three boxes deep. Four other looks sit beside it in <code>look.ts</code>, the wireframe this page was first written against and a by-role colouring among them.</figcaption>
+          <figcaption><b>The key.</b> The look the demo ships with, and it is monochrome on purpose. Both layers are one flat grey and the reference is the lighter one; each is drawn at half alpha with depth writing off, so it stacks — the strips are the same fill one, two and three boxes deep. From above it is not monochrome: the overhead pass draws the generated dressing in flat red and the reference in grey, because a plan has no accumulation to protect and can spend its one channel on telling the two apart.</figcaption>
         </figure>
         <div class="sec-body" style="gap:14px">
           <p>Both layers are on screen at once, drawn by the same renderer at the same half alpha. The lighter grey drops the vocabulary's own poses straight onto the lap, placed by nothing but their three numbers. The darker one is what the rules built from nothing. One value against another is the whole difference between them.</p>
-          <p>Below full alpha a flat fill writes no depth, so a box in front does not hide the box behind it — they add. Brightness is how much structure stands along the line of sight. That is also why nothing here is coloured by what it is: accumulated alpha and hue are the same channel, and six colours summing through each other make a muddy one that means neither. This look spends the channel on density, and the by-role look beside it spends it on role. Neither is the honest one.</p>
+          <p>Below full alpha a flat fill writes no depth, so a box in front does not hide the box behind it — they add. Brightness is how much structure stands along the line of sight. That is also why nothing here is coloured by what it is: accumulated alpha and hue are the same channel, and six colours summing through each other make a muddy one that means neither. The look spends the channel on density instead. The overhead pass, which is a line drawing rather than an accumulation, is free to spend its own on the thing the chase view cannot say — which of the two populations a box belongs to.</p>
           <p>They stand side by side on purpose. Statistics can say the generated set matches the vocabulary on every single figure, and it can still look wrong at eye level. The only test that catches that is a person looking at it.</p>
           <p class="note">There is also a density slider, because “how much stuff” is taste as much as measurement — the rule gives a range, not a number.</p>
         </div>

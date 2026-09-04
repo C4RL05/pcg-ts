@@ -151,66 +151,6 @@ export interface SelectControl<P> extends ControlNote {
 }
 
 /**
- * A colour swatch.
- *
- * THE VALUE IS A PACKED `0xRRGGBB` NUMBER, NOT A CSS STRING. That is what
- * three.js takes (`setHex`, and every `Color` constructor that is not a
- * parser) and what the demo palettes already hold, so a string here would
- * buy one readable spec line and charge for it at every mesh that reads the
- * value — a parse per instance, per cook, to get back to the number the
- * panel started from. It is also why the key is a {@link NumberKey}: a
- * colour IS a number to everything downstream, and only the renderer ever
- * needs to see `#rrggbb`. {@link hexToCss} and {@link cssToHex} are that
- * one hop, and nothing else should be writing it.
- *
- * No `min`/`max`, because a colour has no range to clamp: every one of the
- * 24 bits is in range by construction. Nothing runs this through
- * {@link clampToRange} or {@link formatNumber} — a colour rounded to a
- * step, or printed to two decimals, would be neither.
- */
-export interface ColorControl<P> extends ControlNote {
-  kind: "color";
-  key: NumberKey<P>;
-  label: string;
-}
-
-/**
- * A packed colour as CSS, zero-padded to six digits.
- *
- * The padding is the whole job: `0x0088ff` renders as `88ff` unpadded, and
- * an `<input type="color">` handed a value it cannot parse does not
- * complain — it shows black. A swatch silently disagreeing with the value
- * behind it is the bug this prevents.
- *
- * `& 0xffffff` is the coercion as well as the mask: it is `ToInt32` first,
- * so a NaN, an infinity or a fraction arrives as something six digits can
- * hold rather than reaching `toString(16)` and producing "nan".
- */
-export function hexToCss(n: number): string {
-  return `#${(n & 0xffffff).toString(16).padStart(6, "0")}`;
-}
-
-/**
- * `#rrggbb` back to a packed number. The `#` is optional, because a value
- * pasted or read out of a palette does not always carry one.
- *
- * ZERO ON GARBAGE, NEVER NaN. A NaN colour is not an error anyone gets to
- * see: it lands in a material, comes out black, and the hunt starts at the
- * mesh rather than at the string that caused it. Black is wrong too, but it
- * is wrong identically every time, which is the difference between a bug
- * with a first suspect and one without.
- *
- * Six digits exactly — no `#rgb` shorthand. Nothing in the panel path
- * produces it (a colour input always hands back the long form), so
- * accepting it would only widen what counts as valid on the way IN, where
- * the strict answer is the useful one.
- */
-export function cssToHex(s: string): number {
-  const digits = s.trim().replace(/^#/, "");
-  return /^[0-9a-fA-F]{6}$/.test(digits) ? parseInt(digits, 16) : 0;
-}
-
-/**
  * A labelled row of independent flags, each its own top-level key —
  * "draw: [x] wireframe [x] grid". Use {@link FlagGridControl} when the
  * flags are members of one record instead.
@@ -251,7 +191,6 @@ export type Control<P> =
   | TextControl<P>
   | VectorControl<P>
   | SelectControl<P>
-  | ColorControl<P>
   | FlagsControl<P>
   | FlagGridControl<P>
   | NumberGridControl<P>;
@@ -342,8 +281,6 @@ export type ControlCommit<P> =
       value: readonly number[];
     }
   | { kind: "select"; control: SelectControl<P>; key: ChoiceKey<P>; value: string }
-  /** Packed `0xRRGGBB`, straight to the key — see {@link ColorControl}. */
-  | { kind: "color"; control: ColorControl<P>; key: NumberKey<P>; value: number }
   | { kind: "flag"; control: FlagsControl<P>; key: FlagKey<P>; value: boolean }
   | {
       kind: "flagGrid";

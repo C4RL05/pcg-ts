@@ -224,185 +224,83 @@ export interface Look {
   mapSurface: Surface;
   /** The map pass's alpha. */
   mapOpacity: number;
-  /** A colour the map's roles fold toward, so the plan reads as one layer. */
-  mapTint: number;
-  /** How far the map folds into {@link Look.mapTint}, 0..1. */
-  mapMix: number;
+  /**
+   * The generated dressing's colour in the overhead pass.
+   *
+   * FLAT, AND NOT A FOLD OF THE ROLE COLOURS. The map pass used to mix
+   * each id's chase colour toward a tint by a ratio, which is machinery
+   * for a question the map does not ask: from above, the layout is the
+   * only thing this view is for, and what it has to separate is the two
+   * POPULATIONS rather than the six roles. Two flat colours say that;
+   * a fold could only say it by accident, and could not say it at all
+   * once the chase palette went monochrome — both populations fold to
+   * the same place from the same grey.
+   *
+   * IT IS ALSO WHY THE MAP DROPS VERTEX COLOURS. A merged pose carries a
+   * per-box colour attribute, and a material that multiplied by it could
+   * not reach a stated colour — red times 0x404040 is a dark red. The map
+   * materials switch the attribute off and mean exactly what they say;
+   * see `passTint` in `assets3d.ts`.
+   */
+  mapGenerated: number;
+  /** The reference layer's colour in the overhead pass. */
+  mapReference: number;
 }
 
 /**
- * THE LAP AS A DIAGRAM. The default, and what the page ships as.
+ * THE LOOK THE PAGE DRAWS. There is exactly one, and it was found rather
+ * than designed.
  *
- * WARM GROUND, COOL SKY, SATURATED PARTS. The background sits between the
- * two so nothing on the lap is the same value as the air behind it, which
- * is the one constraint a flat-colour picture has that a wireframe did
- * not: a wireframe over black separates by luminance for free, and a fill
- * has to be given a value that separates.
+ * THE FILL IS FLAT, UNLIT, AND HALF-TRANSPARENT WITH DEPTH WRITING OFF,
+ * which is the whole picture in one sentence. Overlapping boxes ADD
+ * instead of occluding, so brightness stops meaning "which way is this
+ * face pointing" and starts meaning "how much structure is stacked along
+ * this ray". The lap hides nothing behind anything and still reads as a
+ * lap.
  *
- * THE ROLE COLOURS ARE ASSIGNED BY HOW MUCH OF THE FRAME EACH ROLE FILLS,
- * WHICH IS NOT HOW MANY BOXES IT HAS. The shipped vocabulary's 2200
- * library boxes are 638 legs, 619 masses, 530 panels, 171 heads, 160
- * posts and 82 spans — so `leg` is the commonest and `panel` only third.
- * Coloured to that count, the lap came out an almost solid wall of one
- * hue, because a leg is a stick and a panel is a SHEET: panels and masses
- * are what a viewer at eye level is actually looking at, and the six
- * counts say nothing about it.
+ * IT IS MONOCHROME ON PURPOSE, and that is the one thing about it worth
+ * defending. Accumulated alpha and hue are the same channel: six role
+ * colours summing through each other at half alpha make a muddy seventh
+ * that means neither of the two facts it came from. So the channel is
+ * spent on density, and role is simply not shown. Every `roles` entry
+ * below is the same grey for that reason, not because the palette was
+ * never filled in.
  *
- * SO THE BULK IS RECESSIVE AND THE RARE THINGS CARRY THE COLOUR. Panel
- * and mass are two low-saturation neutrals a shade apart — enough to tell
- * a sheet from a volume, not enough to shout — and post, span and head
- * get coral, teal and rose, which is affordable precisely because there
- * are 413 of them against 1149. Leg keeps indigo: it is numerous but
- * almost always thin, so a saturated colour on it reads as detail rather
- * than as a field.
+ * FOUR OTHER LOOKS USED TO SIT BESIDE THIS ONE — a by-role colouring
+ * under a hemisphere, an x-ray, a flat plan, and the wireframe this page
+ * drew for its whole life before any of this. They are in the git history
+ * (`6edc1d7`) together with the panel that was built to choose between
+ * them; what survived the choosing is this. The renderer still supports
+ * every mode they used, so `window.pcgRacetrack.setLook` can still reach
+ * them — {@link Surface} is four modes wide for that reason and not by
+ * accident.
  *
- * Nothing about a leg is indigo. The point is that a leg is the SAME
- * indigo everywhere, so a person can ask "where does this structure carry
- * load" and get an answer from the picture rather than from a readout.
+ * THE VALUES ARE A RESOLVED SPREAD, not a fresh set. This was
+ * `{...BLUEPRINT, surface: "flat", opacity: 0.5}` and `BLUEPRINT` was
+ * `{...MONUMENT, ...}`; with the other two gone the chain is written out
+ * so that reading one object tells you the whole look. The greys, the
+ * green centreline and the black are the wireframe page's own, to the
+ * number.
  */
-export const MONUMENT: Look = {
-  surface: "solid",
-  opacity: 0.82,
-  // OFF, AND NOT BECAUSE IT LOOKS BAD IN PRINCIPLE. The overlay is a
-  // `wireframe` material, and a wireframe of a box is its TRIANGULATION —
-  // twelve edges plus a diagonal across each of the six faces. On a lap of
-  // sheets that reads as a hatch rather than as an outline, which is worse
-  // than no outline at all. It stays a knob because the hatch is exactly
-  // what someone asking "how is this tessellated" wants; a true
-  // silhouette would need instanced line segments, which three has no
-  // built-in for.
-  edges: false,
-  edgeOpacity: 0.3,
-  edgeTint: 0.15,
-
-  roles: {
-    panel: 0xdccbb8,
-    mass: 0xc0b2c6,
-    leg: 0x565080,
-    post: 0xe87f63,
-    span: 0x3f9d99,
-    head: 0xd4658a,
-  },
-  cover: 0xf0b13d,
-  coverMix: 0.5,
-  reference: 0x8d8399,
-  referenceMix: 0.8,
-
-  road: 0x6e6480,
-  roadOpacity: 1,
-  centreline: 0xffe6a8,
-  car: 0xfff4e2,
-
-  sky: 0xd8c8e4,
-  ground: 0xe8c8a6,
-  hemi: 1.35,
-
-  key: 0xfff0d8,
-  keyIntensity: 0.7,
-  keyAzimuth: 135,
-  keyElevation: 42,
-
-  fill: 0x9fb8e0,
-  fillIntensity: 0.35,
-
-  roughness: 1,
-  metalness: 0,
-  exposure: 1.05,
-
-  background: 0xcbb8d4,
-  horizon: 0xf3dcc4,
-  fogNear: 70,
-  fogFar: 620,
-  fog: 0xe3d0d2,
-
-  // WIREFRAME, WHICH IS THE SETTING THE OLD PAGE ALREADY HAD AND THE ONE
-  // THIS FILE NEARLY THREW AWAY. Drawn solid, the overhead pass is an
-  // opaque plate of boxes laid over the chase view — it does not overlay
-  // the picture, it replaces the middle of it. The map is a PLAN, and a
-  // plan is a line drawing; `makeMapMaterials` has made the neighbouring
-  // argument about transparency since before this file existed.
-  mapSurface: "wireframe",
-  mapOpacity: 0.85,
-  mapTint: 0x2a2438,
-  // FOLDED NEARLY ALL THE WAY, WHICH IS A CONSEQUENCE OF THE SKY. The
-  // old page drew this pass in white over black, so it separated by
-  // luminance for free. Over a pale sky the same lines have to go DARK
-  // to do the same job, and a half fold leaves them mid-grey — the one
-  // value that reads against neither the sand nor the lilac, so the plan
-  // dissolves into the picture it is supposed to be drawn on. `XRAY`
-  // folds the other way toward a light tint, for the same reason
-  // inverted.
-  mapMix: 0.85,
-};
-
-/**
- * THE LAP AS AN X-RAY. Depth off, alpha low, edges up.
- *
- * WHAT IT IS FOR is the question the solid look cannot answer: whether a
- * rule placed something INSIDE something else. A solid lap hides its own
- * interior by construction, and the density rules are all about what
- * happens where two placements meet.
- */
-export const XRAY: Look = {
-  ...MONUMENT,
-  surface: "translucent",
-  opacity: 0.28,
-  edges: true,
-  edgeOpacity: 0.45,
-  edgeTint: 0.35,
-  hemi: 1.35,
-  keyIntensity: 0.5,
-  background: 0x1b1a2a,
-  horizon: 0x2b2740,
-  fog: 0x232036,
-  fogNear: 90,
-  fogFar: 760,
-  road: 0x3b3552,
-  centreline: 0x7cf0a8,
-  mapMix: 0.35,
-  mapTint: 0xd8d0e4,
-};
-
-/**
- * THE PAGE AS IT WAS. The wireframe.
- *
- * NOT A NOSTALGIA SETTING. `main.ts`'s header is still right that a
- * wireframe states the composition and claims nothing else, and there are
- * questions — is that one object or two, is that box inside that box —
- * where it is simply the better picture.
- *
- * THE COLOURS ARE EXACT AND ONE ALPHA IS NOT, which is worth stating
- * rather than rounding off. The old palette was `generated` `0x404040` at
- * 0.95 and `reference` `0x999999` at 0.85 over a black clear colour. Every
- * colour below reproduces: six roles at `0x404040` with `coverMix` at 0
- * gives the generated layer one flat `0x404040`, and `referenceMix` at 1
- * folds the reference to exactly `0x999999`. The alpha does not, because
- * `Look` has ONE `opacity` and the two populations had two — so the
- * reference draws at 0.95 here rather than 0.85.
- *
- * AND IT STAYS THAT WAY UNTIL SOMETHING NEEDS THE DIFFERENCE. The
- * symmetric fix is a per-population alpha fold beside `referenceMix`,
- * which is a knob, a panel row and a branch in every material factory to
- * reproduce one tenth of an alpha on one preset. What that 0.85 was FOR
- * is telling the two populations apart at a glance, and `referenceMix`
- * does that job better and is already here. Recorded so the claim is not
- * quietly wrong; not fixed, because the fix costs more than the fact.
- */
-export const BLUEPRINT: Look = {
-  ...MONUMENT,
-  surface: "wireframe",
-  opacity: 0.95,
+export const LOOK: Look = {
+  surface: "flat",
+  opacity: 0.5,
   edges: false,
   edgeOpacity: 0,
   edgeTint: 0,
 
+  // ONE GREY FOR EVERY ROLE, which is a decision and not a placeholder —
+  // see the header. `assetColor` still folds cover and population on top
+  // of these, and both folds are no-ops here: `coverMix` at 0 and
+  // `referenceMix` at 1. That is what makes the whole lap exactly two
+  // colours rather than nearly two.
   roles: {
     panel: 0x404040,
+    mass: 0x404040,
     leg: 0x404040,
     post: 0x404040,
     span: 0x404040,
     head: 0x404040,
-    mass: 0x404040,
   },
   cover: 0x404040,
   coverMix: 0,
@@ -410,139 +308,73 @@ export const BLUEPRINT: Look = {
   referenceMix: 1,
 
   road: 0x333333,
-  roadOpacity: 1,
+  // HALF-TRANSPARENT, WHICH ON THIS BACKGROUND MEANS HALF AS DARK-GREY
+  // AGAINST BLACK. The road is the one large continuous surface in
+  // frame; at full alpha it is a flat plate that the accumulating
+  // dressing sits ON, and at half it recedes into the black and reads as
+  // a surface the lap is drawn OVER. It is also the only page-owned
+  // drawable with an alpha of its own — the fill's `opacity` does not
+  // reach it, because a see-through floor would show the far side of the
+  // circuit through the near side of the tarmac.
+  roadOpacity: 0.5,
   centreline: 0x00ff00,
   car: 0xffffff,
 
+  // THE LIGHT IS ALL AT ZERO AND ITS COLOURS ARE STILL HERE. `flat` is an
+  // unlit mode, so none of these reaches the screen as the page ships.
+  // They are the rig's parameters, kept because the rig is real and
+  // `setLook` can turn it on; deleting them would mean deleting the
+  // hemisphere, the key, the fill and the lit material arms along with
+  // them, which is a different and much larger change than "the shipped
+  // look does not use them".
+  sky: 0xd8c8e4,
+  ground: 0xe8c8a6,
   hemi: 0,
+
+  key: 0xfff0d8,
   keyIntensity: 0,
+  keyAzimuth: 135,
+  keyElevation: 42,
+
+  fill: 0x9fb8e0,
   fillIntensity: 0,
+
+  roughness: 1,
+  metalness: 0,
   exposure: 1,
 
   background: 0x000000,
   horizon: 0x000000,
-  fog: 0x000000,
   fogNear: 60,
   fogFar: 420,
+  fog: 0x000000,
 
+  // THE OVERHEAD PASS IS THE ONE PLACE THIS LOOK IS NOT MONOCHROME, and
+  // it can afford to be because it has no accumulation to protect. The
+  // chase view spends its single channel on density and therefore cannot
+  // also say which population a box belongs to; the map is a line drawing
+  // of a layout, so it answers that question instead — which is most of
+  // what an overhead view of two populations is for. Red is the generated
+  // dressing, grey is the reference catalogue drawn beside it.
+  //
+  // OPAQUE, AND A `wireframe` KEEPS WRITING DEPTH. A plan drawn in
+  // accumulating half-alpha would be exactly the smear this pass exists
+  // to avoid.
   mapSurface: "wireframe",
   mapOpacity: 1,
-  mapTint: 0x000000,
-  mapMix: 0,
+  mapGenerated: 0xff0000,
+  mapReference: 0x999999,
 };
 
 /**
- * THE LAP AS A PLAN. Flat fills, no light at all, hard edges.
+ * A look's own copy, deep enough for `roles`.
  *
- * THE LIMIT CASE OF THE ARGUMENT this file opens with: if the picture is a
- * diagram, then shading is decoration and can go. What is left separates
- * purely by hue and by outline, which is what a printed plan does. It is
- * genuinely harder to read in three dimensions and genuinely easier to
- * read as a legend, and having both makes the trade visible instead of
- * arguable.
+ * THE PAGE MUST NOT HOLD {@link LOOK} ITSELF. `setLook` mutates the live
+ * look in place — every material and light holds the reference — so an
+ * alias would edit the module constant and leave nothing to reset to.
  */
-export const PLAN: Look = {
-  ...MONUMENT,
-  surface: "flat",
-  opacity: 1,
-  edges: false,
-  edgeOpacity: 0.55,
-  edgeTint: 0,
-  hemi: 0,
-  keyIntensity: 0,
-  fillIntensity: 0,
-  exposure: 1,
-  background: 0xf4efe6,
-  horizon: 0xf4efe6,
-  fog: 0xf4efe6,
-  fogNear: 200,
-  fogFar: 1400,
-  road: 0xded5c8,
-  centreline: 0xc4553f,
-  car: 0x2a2438,
-  reference: 0xb4aca4,
-  referenceMix: 0.9,
-  // `flat`, NOT `solid`, AND THE TWO PASSES DO NOT SHARE THE ANSWER.
-  // `mapSurface` picks its own material class, so a `solid` map under a
-  // look with the lights at zero is a lit material with nothing to
-  // return — a black plate over the middle of the frame — even though
-  // the chase pass beside it is unlit and fine. This preset shipped that
-  // way for one revision. Any look that turns the lights off has to say
-  // so in BOTH surfaces.
-  mapSurface: "flat",
-  mapOpacity: 1,
-  mapMix: 0.7,
-  mapTint: 0x2a2438,
-};
-
-/**
- * THE LAP AS ACCUMULATED DEPTH. The default, and what the page ships as.
- *
- * IT IS `BLUEPRINT`'s PALETTE WITH THE SURFACE FILLED IN, to the number:
- * the same 0x404040 on every role, the same 0x999999 reference, the same
- * 0x333333 road and green centreline over the same black. The one change
- * is `surface` — `wireframe` becomes `flat` at half alpha — and it turns
- * out to be the whole picture.
- *
- * WHAT THAT ONE CHANGE BUYS, and it is the reason this is the default
- * rather than a fifth preset. `flat` below alpha 1 turns depth writing
- * off, so overlapping boxes ACCUMULATE: brightness stops meaning "which
- * way is this face pointing" and starts meaning "how much structure is
- * stacked along this ray". The wireframe stated the composition and left
- * density to be counted; this states density directly, as a value, while
- * still hiding nothing behind anything.
- *
- * WHICH IS ALSO WHY IT IS MONOCHROME AND THAT IS NOT A REGRESSION. Role
- * colour and accumulated alpha are the same channel — six hues summing
- * through each other make a muddy fourth colour that means neither of
- * the two things it came from. So this look spends the channel on
- * density and {@link MONUMENT} spends it on role, and they are a
- * dropdown apart. Neither is the honest one; they answer different
- * questions.
- *
- * FOUND IN THE PLAYGROUND RATHER THAN DESIGNED, which is the entire
- * point of there being one. Every value below arrived as a paste from
- * its `copy JSON` button.
- */
-export const SMOKE: Look = {
-  ...BLUEPRINT,
-  surface: "flat",
-  opacity: 0.5,
-  edges: false,
-  edgeOpacity: 0,
-  edgeTint: 0,
-  mapSurface: "wireframe",
-  mapOpacity: 1,
-  mapTint: 0x000000,
-  mapMix: 0,
-};
-
-/** The looks the playground offers, in the order it offers them. */
-export const PRESETS: readonly { readonly id: string; readonly label: string; readonly look: Look }[] =
-  [
-    // THE DEFAULT FIRST, which is a claim the page has to keep: `main.ts`
-    // opens on `PRESETS[0]` rather than naming a look of its own, so
-    // there is no second place for "what does this ship as" to be
-    // answered differently.
-    { id: "smoke", label: "smoke", look: SMOKE },
-    { id: "monument", label: "monument — by role", look: MONUMENT },
-    { id: "xray", label: "x-ray", look: XRAY },
-    { id: "plan", label: "plan", look: PLAN },
-    { id: "blueprint", label: "blueprint (was)", look: BLUEPRINT },
-  ];
-
-/** The look the page opens on, and the id the panel reports for it. */
-export const DEFAULT_PRESET = PRESETS[0];
-
-/** A look's own copy, so the playground can edit it without editing a preset. */
 export function cloneLook(look: Look): Look {
   return { ...look, roles: { ...look.roles } };
-}
-
-/** Overwrite `into` in place, so every holder of the live look sees it. */
-export function assignLook(into: Look, from: Look): void {
-  Object.assign(into, from);
-  into.roles = { ...from.roles };
 }
 
 /**
@@ -617,7 +449,16 @@ export function assetColor(look: Look, id: string, population: Population): numb
   return c;
 }
 
-/** The same colour, folded toward the map's tint. */
-export function mapColor(look: Look, id: string, population: Population): number {
-  return mixHex(assetColor(look, id, population), look.mapTint, look.mapMix);
+/**
+ * The colour one population wears in the overhead pass.
+ *
+ * IT IGNORES THE ASSET ID, which is why it still takes one: every other
+ * colour on this page is a function of the id, and a reader comparing
+ * this with {@link assetColor} should be able to see that the map
+ * deliberately is not. The map separates the two POPULATIONS and nothing
+ * finer — {@link Look.mapGenerated} says why the role fold that used to
+ * live here could not survive a monochrome chase palette.
+ */
+export function mapColor(_id: string, look: Look, population: Population): number {
+  return population === "generated" ? look.mapGenerated : look.mapReference;
 }

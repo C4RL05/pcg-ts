@@ -147,7 +147,7 @@ import {
   retintStreamedMapMaterial,
 } from "./assets3d.js";
 import {
-  DEFAULT_PRESET,
+  LOOK,
   type Look,
   type Population,
   assetColor,
@@ -210,13 +210,11 @@ async function cookCircuit(seed: number): Promise<Circuit> {
  * this alias, so "reset to preset" would restore whatever the last drag
  * left behind.
  *
- * AND THE DEFAULT IS NAMED ONCE, IN `look.ts`. This file used to name it
- * — `cloneLook(MONUMENT)` — while the panel's `preset` prop named it a
- * second time, so changing what the page ships as meant changing two
- * files that could not be type-checked against each other. The failure
- * is a page that opens on one look with a dropdown claiming another.
+ * AND THERE IS ONLY ONE LOOK TO COPY. `look.ts` exports exactly
+ * {@link LOOK}; the four it used to choose between, and the panel that
+ * chose, are in the git history.
  */
-const look: Look = cloneLook(DEFAULT_PRESET.look);
+const look: Look = cloneLook(LOOK);
 
 const renderer = new WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -1604,8 +1602,9 @@ const overlay = createOverlay({
     "the result is ever consumed from. They are drawn over each other and the car is one object in " +
     "both. Nothing is art: the fill is flat and half-transparent with depth writing off, so " +
     "overlap accumulates and brightness reads as how much structure is stacked along a ray. " +
-    "Nothing about how it is drawn can move a placement — see `look.ts`, which is where the " +
-    "colours, the light and the four other looks live.",
+    "Nothing about how it is drawn can move a placement — see `look.ts`. From above the " +
+    "generated dressing is red and the reference catalogue grey, which is the one thing the " +
+    "accumulating chase view cannot also say.",
 });
 
 const state = {
