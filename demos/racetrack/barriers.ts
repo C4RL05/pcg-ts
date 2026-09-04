@@ -624,6 +624,28 @@ export function barrierRanges(runs: readonly BarrierRun[], halfWidth: number): G
     // FROM THE RUN, NOT FROM `i`. The position is `arcTile`'s business
     // and it writes that itself; this column is the plan's own answer, so
     // a reordered cloud carries the same ids to the same pieces.
+    //
+    // AND CHECKED HERE, WHICH IS UPSTREAM OF THE WRITE. `barrierAssetCloud`
+    // asks the same question, but it is private, it is reached only through
+    // `buildDressGraph`, and it asks AFTER this cloud exists -- so a plan
+    // that never goes through the dressing reaches `l5RunId` unread, and
+    // one that does has already been written by the time anything throws.
+    // This is an exported entry taking an unbranded `readonly runId:
+    // number`, so a hand-built or caller-rewritten plan is the one way a
+    // number nobody planned lands in the column. It has to be an integer
+    // for the same reason `buildRoundGraph`'s door does: the column is i32
+    // and `set` truncates in silence, TOWARD ZERO. So 3.7 becomes a row of
+    // some other run, -1.5 becomes `STATION_BORN` and reads as a piece
+    // nothing assembled, and the whole of `(-1, 0)` -- -0.5 as much as NaN
+    // -- lands on 0, which is a REAL RUN and the worst of the three: the
+    // piece joins run 0's line rather than merely leaving its own.
+    if (!(Number.isInteger(r.runId) && r.runId >= 0 && r.runId < runs.length)) {
+      throw new Error(
+        `barrierRanges: run id ${r.runId} at row ${i} is not a row of a ${runs.length}-run ` +
+          "plan; the ids planBarriers assigns are its own sort order, non-negative and " +
+          "whole, and must not be rewritten",
+      );
+    }
     runId.set(i, r.runId);
     startK.set(i, r.startW * halfWidth);
     lengthK.set(i, r.lengthW * halfWidth);

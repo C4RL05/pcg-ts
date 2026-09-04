@@ -32,7 +32,9 @@
  *   - the same seed cooks the same runs, and shuffling the ranges cloud's
  *     order changes nothing about where a piece lands — where "where"
  *     includes the WORLD POSITION and not only the track coordinates,
- *     since `P` is what this builder actually produces.
+ *     since `P` is what this builder actually produces;
+ *   - and `barrierRanges` REFUSES a run id its i32 column would corrupt,
+ *     while still taking every plan a caller may legitimately hand it.
  *
  * THE BUILDER IS NOT WIRED INTO THE DRESSING and this suite is why it does
  * not need to be: it cooks the barrier graph on the reference lap by
@@ -46,7 +48,14 @@ import {
   planBarriers,
   writeBarriers,
 } from "../demos/racetrack/barriers.js";
-import { BARRIER, FALSE_EDGE, edgeRuns, inEdgeBand, isFalseEdge } from "../demos/racetrack/falseEdges.js";
+import {
+  BARRIER,
+  FALSE_EDGE,
+  STATION_BORN,
+  edgeRuns,
+  inEdgeBand,
+  isFalseEdge,
+} from "../demos/racetrack/falseEdges.js";
 import { TRACK_FRAME } from "../demos/racetrack/graph.js";
 import type { Lap } from "../demos/racetrack/lap.js";
 import type { StationedPlacement } from "../demos/racetrack/legibility.js";
@@ -122,6 +131,55 @@ async function build(seed: number, order?: (runs: BarrierRun[]) => BarrierRun[])
   if (!geo) throw new Error("the barrier graph produced no geometry");
   return { lap, runs, geo };
 }
+
+/**
+ * The pinned seed's plan and cloud, built once for the door's tests.
+ *
+ * The refusals below never reach a cook — `writeBarriers` calls
+ * `barrierRanges` before it builds a node — so the one thing they need from
+ * a real build is HOW MANY ROWS the plan has, which decides both the
+ * non-zero rows a bad id can be put on and what "one off the end" is. One
+ * build answers that for all of them, and the acceptance test reads the
+ * same cloud as its unrewritten baseline.
+ */
+let doorPlan: Promise<Built> | undefined;
+const doorFixture = (): Promise<Built> => (doorPlan ??= build(SEED));
+
+/**
+ * What an awaited call threw, or the empty string if it returned.
+ *
+ * NOT `rejects.toThrow`, and the reason is the one
+ * `tests/racetrackBarrierGraph.test.ts` states on the sibling door: the
+ * claim is about the MESSAGE and not about the throw. A door that refuses
+ * without naming the row hands a caller with a twelve-row plan nothing to
+ * act on, and a pattern match reports "did not match" rather than what was
+ * actually said. The empty string is a distinguishable failure — it means
+ * the call RETURNED — so a door that stopped refusing reads differently
+ * from one that refused with the wrong words.
+ */
+async function messageOf(fn: () => Promise<unknown>): Promise<string> {
+  try {
+    await fn();
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+  return "";
+}
+
+/**
+ * The plan with one row's id rewritten: the caller-rewrite the door exists for.
+ *
+ * THROUGH `build`'s OWN HOOK, which is what makes this a test of the
+ * shipped path rather than of a hand-built cloud — the same hook the
+ * order-invariance tests use, handed a rewrite instead of a reordering.
+ * `BarrierRun.runId` is an unbranded `readonly number`, so a spread with
+ * one field replaced is exactly what a caller can produce and the type
+ * system has nothing to say about it.
+ */
+const withId =
+  (row: number, id: number) =>
+  (rs: BarrierRun[]): BarrierRun[] =>
+    rs.map((r, i) => (i === row ? { ...r, runId: id } : r));
 
 interface Piece {
   readonly station: number;
@@ -627,5 +685,165 @@ describe("L-5 barrier runs, built", () => {
     ).not.toEqual(first.runs.map((r) => r.startW));
     const c = readPieces(shuffled.geo).map(rowKey).sort();
     expect(c, "a piece moved when its run changed places in the cloud").toEqual(a);
+  });
+
+  it("refuses a run id its i32 column would corrupt, and says which row", async () => {
+    // WHY THIS DOOR IS ON `barrierRanges` AND NOT SOMEWHERE DOWNSTREAM.
+    // `barrierRanges` and `writeBarriers` are EXPORTED, and this was the one
+    // column write in the module with nothing checking it. `dressGraph.ts`'
+    // `barrierAssetCloud` asks the same question of the same field, but it is
+    // module-private, it is reached only through `buildDressGraph`, and it
+    // asks AFTER this cloud is built — so a plan cooked the way this suite
+    // cooks one never meets it, and a plan that does has already written the
+    // column by the time anything throws. `BarrierRun.runId` is an unbranded
+    // `readonly runId: number`, so a hand-built or caller-rewritten plan is
+    // the way a number nobody planned reaches an i32 attribute.
+    //
+    // AND THE FAILURE IT PREVENTS IS SILENT AND LOOKS LIKE SUCCESS, which is
+    // why the non-integers are refused rather than rounded: `col.set`
+    // truncates to i32 without saying so, so a bad number does not arrive as
+    // a bad number — it arrives as a PERFECTLY GOOD one. Value by value:
+    //
+    //   -2 survives the write intact and is still not a row of any plan, so
+    //     the piece carries an id no run has and `isAssembled`'s `>= 0` reads
+    //     a barrier piece as unassembled (L-6's `-2 - index()` cover numbering
+    //     is `PLACEMENT.id`, a different column, and is not this);
+    //   -1 is `STATION_BORN` itself — a legal value of this column elsewhere
+    //     and NOT a run id here: it would make a barrier piece station-born,
+    //     which is exactly the class L-5's repair is allowed to lower, so the
+    //     repair would punch a hole in the barrier;
+    //   3.7 truncates to 3, ANOTHER RUN'S ROW, and the piece silently joins
+    //     somebody else's line;
+    //   -1.5 truncates to -1, so it lands as `STATION_BORN` — a sentinel
+    //     nobody wrote;
+    //   NaN lands as 0, which is a REAL RUN: row 0's id, on a piece that has
+    //     nothing to do with row 0;
+    //   and `runs.length` is off the end by one — the column holds it
+    //     perfectly and no run answers to it.
+    //
+    // ON A NON-ZERO ROW FOR ALL BUT ONE OF THEM, because the row is half of
+    // what the message is for: a caller reading a refusal needs to know WHICH
+    // entry of their plan is the offending one, and a check that only ever
+    // failed at 0 would pass for a message that hard-coded it.
+    const { runs } = await doorFixture();
+    const n = runs.length;
+    expect(n, "the pinned lap planned too few runs to put a bad id off row 0").toBeGreaterThan(5);
+
+    const refused: readonly (readonly [number, number])[] = [
+      [0, -2],
+      [3, STATION_BORN],
+      [5, 3.7],
+      [2, -1.5],
+      [1, NaN],
+      [4, n],
+    ];
+    for (const [at, v] of refused) {
+      const msg = await messageOf(() => build(SEED, withId(at, v)));
+      expect(msg, `row ${at} = ${v}: the door wrote a value the column cannot hold`).not.toBe("");
+      expect(msg, `row ${at} = ${v}: the refusal does not name the row`).toContain(`at row ${at}`);
+      expect(msg, `row ${at} = ${v}: the refusal does not name the value`).toContain(
+        `run id ${v}`,
+      );
+      expect(msg, `row ${at} = ${v}: the refusal does not say how big the plan is`).toContain(
+        `${n}-run plan`,
+      );
+      expect(msg, `row ${at} = ${v}: the refusal does not say what a plan's ids are`).toContain(
+        "must not be rewritten",
+      );
+    }
+  });
+
+  it("takes every legitimate plan, including one whose ids are not its rows", async () => {
+    // THE OTHER HALF OF A DOOR, AND WITHOUT IT THE REFUSALS ABOVE ARE
+    // SATISFIED BY A FUNCTION THAT THROWS ON EVERYTHING. Three shapes a
+    // legitimate plan arrives in, and the door has to take all three:
+    // `planBarriers`' own output; the REVERSED plan, which is not re-cooked
+    // here because "names the run that assembled each piece" already runs
+    // `build(SEED, (rs) => rs.reverse())` through this same call and would
+    // have gone red on a door that refused it; and a RELABELLING, below.
+    //
+    // WHAT THE PLAN'S OWN IDS ARE IS NOT RE-ASSERTED HERE EITHER: the test
+    // named above already pins `runId === i` on `planBarriers`' output and
+    // that every piece carries its run's id. This one asks the door's
+    // question and only the door's — did it let the call through — which is
+    // the assertion the refusals above cannot make about themselves.
+    expect(
+      await messageOf(() => doorFixture()),
+      "the door refused planBarriers' own unrewritten output",
+    ).toBe("");
+    const base = await doorFixture();
+    const n = base.runs.length;
+    const rows = base.runs.map((_, i) => i);
+    const pieces = readPieces(base.geo);
+    expect(pieces.length, "the accepted plan built nothing, so nothing came through").toBe(
+      base.runs.reduce((a, r) => a + r.pieces, 0),
+    );
+
+    // AND IT IS A RANGE CHECK, NOT AN IDENTITY CHECK, which is the line the
+    // relabelling draws. `planBarriers` numbers its runs by its own sort
+    // order, but `barrierRanges` takes a plan from a CALLER and cannot
+    // demand `runId === i`: the reversed plan above is a legal one whose ids
+    // are not its rows, and a door spelled `runId === i` would refuse it. So
+    // a permutation of 0..n-1 — every id still a row, none of them its own —
+    // is the widest legal shape, and it must pass.
+    const permuted = await build(SEED, (rs) => rs.map((r, i) => ({ ...r, runId: (i + 1) % n })));
+
+    // THE IDS REACHING THE COLUMN ARE THE PLAN'S, NOT THE ROW'S, and the
+    // relabelling is what separates the two: `run` is `arcTile`'s range
+    // index and MUST stay the cloud's position, `runId` is what the plan
+    // decided and must travel with the run whatever number it holds.
+    //
+    // BOTH OF THESE ARE READ OFF THE COOKED CLOUD AND NOT OFF THE PLAN
+    // ARRAY, which is the difference between a test and a restatement:
+    // `(i + 1) % n` is a permutation of the rows by arithmetic alone, so
+    // asserting THAT against the array it was just built from would only
+    // check this file. What came back through the column is the question —
+    // every row's id present, none lost to a truncation and none arriving
+    // twice — and `every` rather than `some`, because this relabelling
+    // moves EVERY id off its own row and a single piece that kept its row's
+    // number is a piece that read the cloud instead of the plan.
+    const moved = readPieces(permuted.geo);
+    expect(
+      [...new Set(moved.map((q) => q.runId))].sort((a, b) => a - b),
+      "the ids that came back off the column are not the plan's rows",
+    ).toEqual(rows);
+    expect(
+      moved.every((q) => q.run !== q.runId),
+      "a relabelled piece kept its row's number, so the two columns never came apart",
+    ).toBe(true);
+    for (const q of moved) {
+      expect(q.runId, "a relabelled piece took the id of the row it sits on").toBe(
+        permuted.runs[q.run].runId,
+      );
+      expect(q.runId, "a barrier piece read as station-born").toBeGreaterThan(STATION_BORN);
+    }
+
+    // AND NOTHING ELSE MOVED. `runId` is carried, never consumed, so a
+    // relabelled plan must build the SAME pieces in the same places — which
+    // is the "same cloud contents as before" claim, made against a key that
+    // has the id neutralised out of it rather than against a second key.
+    const flat = (qs: readonly Piece[]): string[] =>
+      qs.map((q) => rowKey({ ...q, runId: 0 })).sort();
+    expect(flat(moved), "relabelling the run ids moved a piece").toEqual(flat(pieces));
+
+    // AND NO SEED OF THE STATED POPULATION PLANS A RUN THE DOOR WOULD
+    // REFUSE. The refusals are worth nothing if the door also turns away the
+    // planner, and one pinned seed cannot say it does not. No cook here: the
+    // predicate is about the PLAN, and `planBarriers` is what makes one.
+    for (let seed = 1; seed <= SWEEP_SEEDS; seed++) {
+      const { lap } = await lapFor(seed);
+      const planned = planBarriers(lap.lengthW, seed, {
+        count: RUN_COUNT,
+        pieceCount: PIECE_COUNT,
+      });
+      for (let i = 0; i < planned.length; i++) {
+        const id = planned[i].runId;
+        expect(
+          Number.isInteger(id) && id >= 0 && id < planned.length,
+          `seed ${seed} of the swept 1..${SWEEP_SEEDS}: row ${i} of its own plan holds ` +
+            `${id}, which its own door would refuse`,
+        ).toBe(true);
+      }
+    }
   });
 });

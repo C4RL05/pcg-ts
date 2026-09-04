@@ -402,12 +402,19 @@ describe("L-5 barriers, spliced into the dress graph", () => {
       // arrives as a PERFECTLY GOOD one, and the reference arm then reads
       // the value the caller passed while the graph reads its truncation,
       // which is the last way left for the two spellings above to disagree.
-      // Value by value: -1.5 lands as -1, a sentinel nobody wrote; 3e9 and
-      // 2**31 wrap NEGATIVE and read as sentinels too; NaN lands as 0 and
-      // 0.5 lands as 0, which is a REAL RUN, so a settled placement joins
-      // somebody's line and L-5 then refuses to lower it; and -2 survives
-      // the write intact and is still not a run id — the exact value the
-      // predicate above changed its mind about.
+      // Value by value, measured against a real `Int32Array` rather than
+      // reasoned about: everything in `(-1, 0)` truncates TOWARD ZERO onto
+      // 0, so -0.5 joins NaN and 0.5 in landing on a REAL RUN, and a
+      // settled placement then reads as a member of somebody's line and
+      // L-5 refuses to lower it; 3e9 and 2**31 wrap NEGATIVE and read as
+      // sentinels; -2 survives the write intact and is still not a run id,
+      // the exact value the predicate above changed its mind about.
+      //
+      // -1.5 IS REFUSED WITHOUT SPLITTING THE ARMS, and it is here to say
+      // so. It lands on -1, which both arms call scattered — it split them
+      // only while the reference arm asked `!== STATION_BORN`. A door is
+      // allowed to refuse more than the divergence needs; what it must not
+      // do is let a value through that the two arms would read apart.
       //
       // ON A NON-ZERO INDEX FOR ALL BUT ONE OF THEM, because the index is
       // half of what the message is for: a caller handed a five-hundred-row
@@ -424,6 +431,7 @@ describe("L-5 barriers, spliced into the dress graph", () => {
         [7, NaN],
         [2, 0.5],
         [5, 2 ** 31],
+        [6, -0.5],
       ];
       for (const [at, v] of refused) {
         const runIds = list.map(() => STATION_BORN);
@@ -454,8 +462,9 @@ describe("L-5 barriers, spliced into the dress graph", () => {
       // and the inert case hands nothing but `STATION_BORN`.
       //
       // THE ENDS OF THE RANGE ARE HERE ON PURPOSE. 0 is the first row of
-      // every plan and is the value NaN and 0.5 truncate TO, so a guard
-      // written as `v > 0` would pass the refusals above and lock out run 0;
+      // every plan and is the value NaN, 0.5 and -0.5 all truncate TO, so a
+      // guard written as `v > 0` would pass the refusals above and lock out
+      // run 0;
       // 2147483647 is the largest id the column holds and is what `2 ** 31`
       // is one past, so a guard written with the wrong comparison there
       // fails here rather than in a year.

@@ -5391,11 +5391,18 @@ export function buildRoundGraph(
     // a plan built in this file, and `barrierAssetCloud` already checks its
     // own; a caller's array is the only way another number reaches it. It
     // has to be checked rather than trusted because `col.set` truncates to
-    // i32 in silence: -1.5 lands as -1 and reads as a sentinel nobody
-    // wrote, 3e9 wraps negative and reads as one too, and NaN lands as 0,
-    // which is a REAL RUN. The reference arm would see the number passed
-    // and the graph the truncation, which is the one way the two spellings
-    // of "assembled" can still disagree.
+    // i32 in silence, and the arms then read two different numbers: the
+    // reference arm the value passed, the graph its truncation.
+    //
+    // MEASURED AGAINST A REAL `Int32Array`, because the cases prose reaches
+    // for are not the ones that bite. Everything in `(-1, 0)` truncates
+    // TOWARD ZERO onto 0, so -0.5 and NaN alike become RUN 0 -- a real run,
+    // read as membership of somebody's line; 3e9 and 2^31 wrap negative and
+    // are scattered to the graph while the caller's own number is not.
+    // -1.5 is refused with them and does NOT split the arms: it lands on -1
+    // and both call it scattered. It split them under `!== STATION_BORN`
+    // and stopped when the predicate became `>= 0` -- which is how a line
+    // like this goes stale without failing.
     for (let i = 0; i < placements.length; i++) {
       const v = tags[i] ?? STATION_BORN;
       if (!(Number.isInteger(v) && (v === STATION_BORN || (v >= 0 && v <= 0x7fffffff)))) {
