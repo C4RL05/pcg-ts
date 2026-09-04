@@ -47,11 +47,22 @@
   /* The aliases. These sit on :root and not on a wrapper because the
      plan view reads them off document.documentElement when it draws.
 
-     `--road` is the one genuinely new value, and it is not invented:
-     0x333333 is the grey `demos/racetrack/main.ts` draws its own road
-     wireframe in, so the plan view here and the running demo agree on
-     what a road looks like. `--rule-2` is likewise new — it is the
-     FAINTER of two rules, the one drawn between rows of a list.
+     `--road` is 0x333333, and it is the figures' choice AND the demo's
+     again. It was both once, stopped being both while the shipped look
+     drew its road as a lit surface with a hue in it, and is both again
+     now that `demos/racetrack/look.ts` ships `SMOKE` — whose road is
+     `BLUEPRINT`'s 0x333333 at full alpha, over black. So the plan view
+     at the top of the page and the key at the bottom of it are drawing
+     the same road in the same grey, which is worth having and is not
+     something to disclaim.
+     IT TRACKS THE DEMO ONLY WHILE THE SHIPPED LOOK STAYS GREYSCALE.
+     `MONUMENT`'s road is 0x6e6480, and that is a HUE, which this page
+     has nowhere to put: site.css commits to pure greyscale plus the
+     three pure primaries. If the default ever moves to a look with
+     colour in its road, this value stays where it is and stops
+     matching.
+     `--rule-2` is likewise new — it is the FAINTER of two rules, the one
+     drawn between rows of a list.
 
      BOTH RULES SIT ONE STEP ABOVE WHERE THEY LOOK LIKE THEY BELONG.
      These figures were drawn against a ground lifted off black, so a
@@ -225,19 +236,39 @@
     letter-spacing: -0.01em; max-width: 34ch; text-wrap: balance;
   }
   /* THE ONE FIGURE THAT MUST NOT FOLLOW THE PAGE INK. It is a picture of
-     the demo’s own screen, and the gap between two greys IS the argument
-     that section makes. The SWATCHES carry the demo’s true values
-     (0x999999 for the vocabulary’s own poses, 0x404040 for what the rules
-     built); the label beside a swatch is lifted to #8a8a8a, because
-     0x404040 on the demo’s own #111 ground measures about 1.6:1 and is
-     not readable as text. Painted through classes rather than fill=
-     because the blanket rule above is !important and a presentation
-     attribute cannot outrank it — which is exactly how both greys came
-     out white the first time. */
-  .plate .demo-key .k-ref  { fill: #999999 !important; }
-  .plate .demo-key .k-gen  { fill: #8a8a8a !important; }
-  .plate .demo-key .k-line { fill: #00ff00 !important; }
-  .plate .demo-key .k-car  { fill: #dddddd !important; }
+     the demo’s own screen, so the ground and every swatch in it are the
+     demo’s true values — `SMOKE`, the look `demos/racetrack/look.ts`
+     ships as the default — and not this page’s greyscale.
+
+     THE LABELS NO LONGER TAKE AN INK OF THEIR OWN, and the rule that gave
+     them one is gone rather than recoloured. `SMOKE`’s ground is
+     0x000000, which is the ground this page is already set on, so
+     site.css’s blanket `.plate svg text` puts the labels in --ink and
+     they read. The override existed only because the default was a pale
+     sky; a dark ink over this ground would be the same mistake pointing
+     the other way.
+
+     THE HAIRLINE ROUND A PATCH IS THE FIGURE’S OWN, not the demo’s — it
+     draws no edges in this look. Monochrome over black is what makes one
+     necessary, and the ratios are worse than the fills suggest, because
+     no strip is drawn at its own fill: one coat at half alpha is half of
+     it. The road is 0x333333 at full alpha and measures 1.66:1 against
+     the ground. The generated fill 0x404040 measures 2.03:1 and its
+     first coat 1.29:1. Even the reference fill, 7.37:1 unaided, opens at
+     about 2.5:1. So every patch takes the outline, and the rule sits on
+     the direct children only, so a stacked strip is outlined once rather
+     than coat by coat.
+
+     EACH POPULATION IS ONE COLOUR NOW, DRAWN THREE DEEP. Six bands said
+     something under a by-role look and say nothing here: every role in
+     `SMOKE` is the same 0x404040, so the only thing between the two
+     layers is `reference` 0x999999 against it. What is worth the picture
+     instead is why either is ever brighter than the fill it was given.
+     `flat` below alpha 1 turns depth writing off (see `blendFor` in
+     `demos/racetrack/assets3d.ts`), so the strips are that one fill laid
+     one, two and three coats deep — the ramp the demo builds out of
+     overlapping boxes, stated in the small. */
+  .plate svg .demo-key > rect { stroke: #ededed; stroke-opacity: 0.28; stroke-width: 0.6; }
 
   .note { font-size: 14.5px; color: var(--muted); }
   .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
@@ -321,7 +352,7 @@
       <li><a href="#dice-rolls-and-repairs">Dice and repairs</a></li>
       <li><a href="#the-order-is-the-design">The pipeline</a></li>
       <li><a href="#round-until-nothing-moves">The loop</a></li>
-      <li><a href="#two-greys">Two greys</a></li>
+      <li><a href="#two-layers">Two layers</a></li>
       <li><a href="#where-to-go-from-here">Next</a></li>
     </ul>
   </div>
@@ -809,32 +840,43 @@
   <section>
     <div class="sec-head">
       <p class="eyebrow">What you see when you run it</p>
-      <h2 id="two-greys" data-toc="Two greys">Two greys, and the whole argument is between them.</h2>
+      <h2 id="two-layers" data-toc="Two layers">Two layers, and the whole argument is between them.</h2>
     </div>
     <div class="sec-body">
       <div class="two">
         <figure>
-          <div class="plate" style="background:#111;border-color:#333">
-            <svg viewBox="0 0 460 200" role="img" aria-label="The demo's own colour key on its black background">
-              <rect x="0" y="0" width="460" height="200" fill="#111"/>
+          <div class="plate" style="background:#000000;border-color:var(--line-hi)">
+            <svg viewBox="0 0 460 200" role="img" aria-label="The demo's own key: two flat greys for the two layers, each shown one, two and three boxes deep, over the black the demo draws them against">
+              <rect x="0" y="0" width="460" height="200" fill="#000000"/>
               <g class="demo-key" style="font-family:var(--f-mono);font-size:12px">
-                <rect x="28" y="30" width="26" height="14" fill="none" stroke="#999999" stroke-width="1.2"/>
-                <text x="70" y="42" class="k-ref">the vocabulary's own poses</text>
-                <rect x="28" y="66" width="26" height="14" fill="none" stroke="#404040" stroke-width="1.2"/>
-                <text x="70" y="78" class="k-gen">what the rules generated</text>
-                <rect x="28" y="102" width="26" height="14" fill="none" stroke="#333333" stroke-width="1.2"/>
-                <text x="70" y="114" class="k-gen">the road</text>
+                <g>
+                  <rect x="28" y="30" width="26" height="14" fill="#999999" fill-opacity="0.5"/>
+                  <rect x="36.67" y="30" width="17.33" height="14" fill="#999999" fill-opacity="0.5"/>
+                  <rect x="45.33" y="30" width="8.67" height="14" fill="#999999" fill-opacity="0.5"/>
+                </g>
+                <rect x="28" y="30" width="26" height="14" fill="none"/>
+                <text x="70" y="42">the vocabulary's own poses</text>
+                <g>
+                  <rect x="28" y="66" width="26" height="14" fill="#404040" fill-opacity="0.5"/>
+                  <rect x="36.67" y="66" width="17.33" height="14" fill="#404040" fill-opacity="0.5"/>
+                  <rect x="45.33" y="66" width="8.67" height="14" fill="#404040" fill-opacity="0.5"/>
+                </g>
+                <rect x="28" y="66" width="26" height="14" fill="none"/>
+                <text x="70" y="78">what the rules generated</text>
+                <rect x="28" y="102" width="26" height="14" fill="#333333"/>
+                <text x="70" y="114">the road</text>
                 <line x1="28" y1="145" x2="54" y2="145" stroke="#00ff00" stroke-width="2"/>
-                <text x="70" y="150" class="k-line">the centreline you gave it</text>
+                <text x="70" y="150">the centreline you gave it</text>
                 <path d="M34,170 l16,8 l-16,8 z" fill="#ffffff"/>
-                <text x="70" y="184" class="k-car">the car</text>
+                <text x="70" y="184">the car</text>
               </g>
             </svg>
           </div>
-          <figcaption><b>The key.</b></figcaption>
+          <figcaption><b>The key.</b> The look the demo ships with, and it is monochrome on purpose. Both layers are one flat grey and the reference is the lighter one; each is drawn at half alpha with depth writing off, so it stacks — the strips are the same fill one, two and three boxes deep. Four other looks sit behind a dropdown, the wireframe this page was first written against and a by-role colouring among them.</figcaption>
         </figure>
         <div class="sec-body" style="gap:14px">
-          <p>Both layers are on screen at once. The lighter wireframe drops the vocabulary's own poses straight onto the lap, placed by nothing but their three numbers. The darker wireframe is what the rules built from nothing.</p>
+          <p>Both layers are on screen at once, drawn by the same renderer at the same half alpha. The lighter grey drops the vocabulary's own poses straight onto the lap, placed by nothing but their three numbers. The darker one is what the rules built from nothing. One value against another is the whole difference between them.</p>
+          <p>Below full alpha a flat fill writes no depth, so a box in front does not hide the box behind it — they add. Brightness is how much structure stands along the line of sight. That is also why nothing here is coloured by what it is: accumulated alpha and hue are the same channel, and six colours summing through each other make a muddy one that means neither. This look spends the channel on density, and the by-role look in the dropdown spends it on role. Neither is the honest one.</p>
           <p>They stand side by side on purpose. Statistics can say the generated set matches the vocabulary on every single figure, and it can still look wrong at eye level. The only test that catches that is a person looking at it.</p>
           <p class="note">There is also a density slider, because “how much stuff” is taste as much as measurement — the rule gives a range, not a number.</p>
         </div>
@@ -846,8 +888,10 @@
     <p class="eyebrow">Next</p>
     <h2 id="where-to-go-from-here" data-toc="Next">Where to go from here</h2>
     <p>The demo itself is at <a href="../demos/racetrack/">demos/racetrack</a>, and
-    <a href="../demos/road/">demos/road</a> is the same page with none of the rules in it — the
-    diff between them is what this guide describes. <a href="../architecture.html">Architecture</a>
+    <a href="../demos/road/">demos/road</a> dresses a road with none of these placement rules in
+    it. They are two independent demos that share a spline and a naming scheme, not one page
+    with the rules switched off, so read road as the other answer rather than as a diff.
+    <a href="../architecture.html">Architecture</a>
     is how the library underneath is put together, and the
     <a href="../gallery.html">corpus gallery</a> is every graph in the repository, cooked and
     shot.</p>

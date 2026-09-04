@@ -51,6 +51,7 @@ import {
   placementCloud,
 } from "../demos/racetrack/spawn.js";
 import { makeAssetMap } from "../demos/racetrack/assets3d.js";
+import { MONUMENT } from "../demos/racetrack/look.js";
 
 /**
  * How far apart two matrix elements may be, once the shear is out.
@@ -196,7 +197,7 @@ describe("racetrack spawn seam", () => {
 
   it("emits an asset id the asset map can answer for, whatever the kit says", async () => {
     const { dressing } = await dressOnce();
-    const assets = makeAssetMap("generated");
+    const assets = makeAssetMap(MONUMENT, "generated");
     const seen = new Set<string>();
     for (const b of dressing.boxes) seen.add(boxAssetId(b));
     expect(seen.size).toBeGreaterThan(0);

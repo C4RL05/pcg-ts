@@ -347,6 +347,21 @@ const DEMOS = [
     // awaited here: the frame loop keeps streaming while paused and
     // `settleAt` waits for pixel stability regardless, so awaiting would
     // add a second readiness rule saying the same thing.
+    //
+    // AND THE PAIR NO LONGER DIFFERS ONLY BY THE RULES, which the
+    // paragraph above claims and which was true until this page gained a
+    // look system. `racetrack` now ships `SMOKE` — a flat half-alpha fill
+    // that accumulates — and `road` still draws the wireframe both pages
+    // once shared, so the two shots differ in how they are DRAWN as well
+    // as in what is on them. The station is still the same and the
+    // comparison is still worth making; it just is not the clean
+    // single-variable one it used to be, and reading it as one would
+    // credit the placement rules with a change of material.
+    //
+    // NOT FIXED HERE because there is no cheap fix: `demos/road` has its
+    // own renderer and no `Look`, so matching it means porting the look
+    // system to a second page or holding `racetrack` at a look it was not
+    // chosen for. Recorded so the next person to quote the pair knows.
     path: "demos/racetrack/",
     settleWait: () => !!window.pcgRacetrack,
     settle: () => {

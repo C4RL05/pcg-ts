@@ -22,10 +22,23 @@
  * and the car is one object in both, so they can never disagree about
  * where the car is.
  *
- * EVERYTHING IS WIREFRAME, and that is not a placeholder for shading. The
- * output of this technique is a COMPOSITION — what is where, at what size,
- * facing which way. Solid boxes with a light on them would read as bad
- * art; a wireframe reads as what it is, which is the composition.
+ * NOTHING HERE IS ART, AND THE PICTURE SAYS SO. The output of this
+ * technique is a COMPOSITION — what is where, at what size, facing which
+ * way — so the page draws a DIAGRAM of that composition rather than a
+ * rendering of it. This used to mean one thing, wireframe, and the header
+ * argued that solid boxes with a light on them would read as bad art.
+ * That argument was right about the failure it named and wrong that
+ * wireframe was the only escape from it: `look.ts` now draws flat colour
+ * coded BY STRUCTURAL ROLE under a hemisphere, which claims no more than
+ * the wireframe did and gives the boxes back their silhouettes — the
+ * thing the wireframe loses at exactly the density these rules are
+ * interesting at, because at 2200 boxes the edges of what is behind you
+ * are indistinguishable from the edges of what is in front.
+ *
+ * THE WIREFRAME IS STILL A PRESET AND IS PRESERVED TO THE NUMBER. See
+ * `look.ts`, which also owns every colour, light and fog parameter on
+ * this page — none of which feeds the cook, so the lap under two looks is
+ * the same lap, and the playground restyles it without recooking.
  *
  * THE DRESSING ARRIVES IN SECTORS. The rules still settle the WHOLE lap at
  * once — they have to, because a corner's marker is a statement about the
@@ -55,27 +68,38 @@ import {
 } from "pcg-ts";
 import {
   WorldThreeBinding,
+  materialListOf,
   ownsGeometry,
+  ownsMaterial,
   toBufferGeometry,
   toInstancedMeshes,
   toLineGeometry,
   type AssetMap,
 } from "pcg-ts/three";
 import {
+  ACESFilmicToneMapping,
+  BufferAttribute,
+  BufferGeometry,
+  Color,
   ConeGeometry,
+  DirectionalLight,
   Euler,
   Fog,
   Group,
+  HemisphereLight,
   InstancedMesh,
   LineBasicMaterial,
   LineSegments,
   type Material,
   Mesh,
   MeshBasicMaterial,
+  MeshStandardMaterial,
+  NoToneMapping,
   type Object3D,
   OrthographicCamera,
   PerspectiveCamera,
   Scene,
+  ShaderMaterial,
   WebGLRenderer,
 } from "three";
 import { createFpsMeter } from "../../shared/fps.js";
@@ -83,7 +107,7 @@ import { createOverlay } from "../../shared/overlay.js";
 import { makeRecooker } from "../../shared/recook.js";
 import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/panel.js";
 import { attachWordmark } from "../../shared/wordmark.js";
-import { BACKGROUND } from "../../shared/scene.js";
+import { attachLookPanel } from "./lookMount.js";
 import { OUTPUTS, buildRoadGraph } from "./graph.js";
 import type { PlaceableAsset } from "./assets.js";
 import { cookReserveMarkers } from "./cornerGraph.js";
@@ -111,14 +135,27 @@ import {
   buildRacetrackLevels,
 } from "./levels.js";
 import {
-  type Population,
   disposeAssetMap,
   disposePoseAssetMap,
   makeAssetMap,
+  makeEdgeAssetMap,
   makeMapMaterials,
   makePoseAssetMap,
   makeStreamedMapMaterial,
+  retintMapMaterials,
+  retintMaterial,
+  retintPoseAssetMap,
+  retintStreamedMapMaterial,
 } from "./assets3d.js";
+import {
+  DEFAULT_PRESET,
+  type Look,
+  type Population,
+  assetColor,
+  cloneLook,
+  isLit,
+  mixHex,
+} from "./look.js";
 
 // ------------------------------------------------------------------ //
 // The cook.
@@ -160,6 +197,28 @@ async function cookCircuit(seed: number): Promise<Circuit> {
 // The page.
 // ------------------------------------------------------------------ //
 
+/**
+ * THE LIVE LOOK — one mutable object every material and light reads.
+ *
+ * MUTATED IN PLACE RATHER THAN REPLACED, which is the whole reason
+ * `assignLook` exists. Half a dozen closures and the playground all hold
+ * this reference; swapping the binding would leave every one of them
+ * describing the previous look, and the failure is silent — a page whose
+ * fog is from the preset you just left.
+ *
+ * A COPY OF THE PRESET, NEVER THE PRESET ITSELF. The presets are
+ * module-level constants that the playground would otherwise edit through
+ * this alias, so "reset to preset" would restore whatever the last drag
+ * left behind.
+ *
+ * AND THE DEFAULT IS NAMED ONCE, IN `look.ts`. This file used to name it
+ * — `cloneLook(MONUMENT)` — while the panel's `preset` prop named it a
+ * second time, so changing what the page ships as meant changing two
+ * files that could not be type-checked against each other. The failure
+ * is a page that opens on one look with a dropdown claiming another.
+ */
+const look: Look = cloneLook(DEFAULT_PRESET.look);
+
 const renderer = new WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 // Two full-screen passes per frame, so clearing is manual: the second
@@ -171,12 +230,56 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 // it on the scene means the map pass wipes the chase image a moment
 // before drawing over it.
 renderer.autoClear = false;
-renderer.setClearColor(BACKGROUND, 1);
+renderer.setClearColor(look.background, 1);
 document.body.appendChild(renderer.domElement);
 
-// No lights: nothing here is lit. See the header — the wireframe IS the
-// output, and a lit wireframe is a contradiction.
 const scene = new Scene();
+
+/**
+ * The light, and there is deliberately very little of it.
+ *
+ * A HEMISPHERE IS THE MODEL; the two directionals are a correction to it.
+ * A hemisphere shades a face by which way it points and by nothing else —
+ * no position, no falloff, no shadow — so the SAME BOX READS THE SAME
+ * ANYWHERE ON THE LAP, which is the property a diagram needs and the
+ * first property a lighting rig destroys. What it cannot do is tell two
+ * adjacent vertical faces apart, because both point sideways; the key
+ * supplies exactly that much direction and no more, and the fill keeps
+ * the side facing away from it from going to the hemisphere's floor.
+ *
+ * NO SHADOWS, AND NOT FOR PERFORMANCE. A shadow is a statement about
+ * where the sun is, and this page has no sun and no time of day — it has
+ * a lap. A shadow map would also make an identical box read differently
+ * at two points on the circuit, which is the one thing the hemisphere is
+ * chosen to prevent.
+ */
+const hemiLight = new HemisphereLight(look.sky, look.ground, look.hemi);
+scene.add(hemiLight);
+const keyLight = new DirectionalLight(look.key, look.keyIntensity);
+scene.add(keyLight);
+const fillLight = new DirectionalLight(look.fill, look.fillIntensity);
+scene.add(fillLight);
+
+/**
+ * Point the two directionals from the look's azimuth and elevation.
+ *
+ * DIRECTION ONLY — the distance is arbitrary and large. A directional
+ * light in three takes its direction from `position` minus `target`, and
+ * the target is the origin by default, so the vector below IS the
+ * direction and its length means nothing. The fill is the key mirrored
+ * through the vertical axis and lifted to a shallow angle, rather than a
+ * second pair of knobs: a fill a person can aim independently is a
+ * lighting rig, and a lighting rig is what the comment above declines.
+ */
+function aimLights(): void {
+  const az = (look.keyAzimuth * Math.PI) / 180;
+  const el = (look.keyElevation * Math.PI) / 180;
+  const r = 1000;
+  const flat = Math.cos(el) * r;
+  keyLight.position.set(Math.sin(az) * flat, Math.sin(el) * r, Math.cos(az) * flat);
+  fillLight.position.set(-Math.sin(az) * r * 0.9, r * 0.28, -Math.cos(az) * r * 0.9);
+}
+aimLights();
 
 /**
  * Fog for the chase pass only.
@@ -187,7 +290,378 @@ const scene = new Scene();
  * pass legible erases the other. Swapped per pass rather than compromised
  * into a distance that suits neither.
  */
-const CHASE_FOG = new Fog(BACKGROUND, 60, 420);
+const CHASE_FOG = new Fog(look.fog, look.fogNear, look.fogFar);
+
+// ------------------------------------------------------------------ //
+// The sky.
+// ------------------------------------------------------------------ //
+
+/**
+ * A gradient behind everything, drawn as a screen-filling quad.
+ *
+ * NOT `scene.background`, AND THAT IS FORCED. A scene with a background
+ * clears the colour buffer at the start of EVERY render regardless of
+ * `autoClear` — the note on the clear colour above records why — so a
+ * background on this scene means the map pass wipes the chase image a
+ * moment before drawing over it. Its own scene and its own camera keep it
+ * out of both passes' business entirely, and cost one quad a frame.
+ *
+ * AND IT IS WHY THE CLEAR COLOUR STILL MATTERS. This quad is drawn first
+ * and covers the frame, so the clear colour is never seen — except that
+ * `renderer.clear()` still has to happen for the depth buffer, and a
+ * clear colour matching the sky's lower end means a frame that somehow
+ * skips this pass degrades to a flat sky rather than to black.
+ *
+ * TWO EQUAL COLOURS ARE A FLAT SKY, not a special case: `look.horizon`
+ * equal to `look.background` is the diagrammatic setting and the gradient
+ * is the atmospheric one, and neither is derivable from the other.
+ */
+const skyScene = new Scene();
+const skyCamera = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const skyMaterial = new ShaderMaterial({
+  uniforms: {
+    top: { value: new Color(look.background) },
+    bottom: { value: new Color(look.horizon) },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
+  `,
+  // SMOOTHSTEP RATHER THAN THE RAW COORDINATE, because a linear ramp
+  // between two close pastels bands visibly on an 8-bit buffer and the
+  // eased one does not put its steepest part where the eye is looking.
+  // THE TWO INCLUDES ARE NOT DECORATION, and leaving them off is a bug
+  // that looks like a palette mistake. `Color.setHex` converts sRGB to
+  // the renderer's linear working space on the way in — every material on
+  // the page relies on that — so a shader that writes its uniform
+  // straight to `gl_FragColor` emits a LINEAR value into a buffer read as
+  // sRGB, and every sky comes out visibly darker than the swatch that
+  // picked it. `colorspace_fragment` is the conversion back that a
+  // built-in material gets for free. `tonemapping_fragment` compiles to
+  // nothing under `toneMapped: false` and is here so the sky follows if
+  // that is ever turned on, rather than silently diverging from the fog.
+  fragmentShader: `
+    uniform vec3 top;
+    uniform vec3 bottom;
+    varying vec2 vUv;
+    void main() {
+      gl_FragColor = vec4(mix(bottom, top, smoothstep(0.0, 1.0, vUv.y)), 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }
+  `,
+  depthTest: false,
+  depthWrite: false,
+  // NOT TONE-MAPPED. A sky the tone curve has pulled toward white is no
+  // longer the colour that was picked, and the fog — which IS tone-mapped
+  // — then fails to meet it at the horizon, which is the one place the
+  // two have to agree or the far side of the lap gets an outline.
+  toneMapped: false,
+});
+{
+  // A triangle-pair in clip space. `position` is written straight to
+  // `gl_Position` above, so no camera transform touches it; the
+  // orthographic camera exists only because `render` requires one.
+  const geo = new BufferGeometry();
+  geo.setAttribute(
+    "position",
+    new BufferAttribute(
+      new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]),
+      3,
+    ),
+  );
+  geo.setAttribute("uv", new BufferAttribute(new Float32Array([0, 0, 2, 0, 0, 2]), 2));
+  const quad = new Mesh(geo, skyMaterial);
+  quad.frustumCulled = false;
+  skyScene.add(quad);
+}
+
+// ------------------------------------------------------------------ //
+// Applying a look.
+// ------------------------------------------------------------------ //
+
+/**
+ * THE SPLIT THIS FILE CODES TO, and it is what makes the playground feel
+ * live rather than stuttery.
+ *
+ * A RETINT IS EVERY COLOUR AND EVERY SCALAR, and allocates nothing: it
+ * writes into materials, lights and fog that already exist, including the
+ * merged poses' vertex-colour buffers. That is the path a slider drag and
+ * a colour picker take, sixty times a second, over hundreds of streamed
+ * meshes, and it costs a few thousand float writes.
+ *
+ * A RESTYLE IS A CHANGE OF MATERIAL CLASS — `surface`, `mapSurface`,
+ * `edges` — and it does allocate: a wireframe is a `MeshBasicMaterial`
+ * and a lit fill is a `MeshStandardMaterial`, and no property write turns
+ * one into the other. It is reachable only from a select and a checkbox,
+ * never from a drag, which is why it is allowed to be the expensive one.
+ *
+ * NEITHER RECOOKS. Nothing in a look feeds the cook, so the lap under two
+ * looks is the same lap down to the placement — see `look.ts`, which
+ * makes that a property of the file rather than a promise about it.
+ */
+function retintSky(): void {
+  // `setHex` does the sRGB-to-working conversion; the shader's
+  // `colorspace_fragment` does it back. Converting again here would be
+  // the double application that turns a pastel into a mud.
+  (skyMaterial.uniforms.top.value as Color).setHex(look.background);
+  (skyMaterial.uniforms.bottom.value as Color).setHex(look.horizon);
+}
+
+/** Push the look at everything that is not a spawned population. */
+function retintPage(): void {
+  renderer.setClearColor(look.horizon, 1);
+  // TONE MAPPING GOES OFF ENTIRELY WHEN NOTHING IS LIT. `blueprint` and
+  // `plan` state their colours as literals and mean them; a tone curve
+  // over an unlit `MeshBasicMaterial` would quietly desaturate every one
+  // of them, so the look that asks for flat colour gets flat colour
+  // rather than a filmic approximation of it. `isLit` reads the SURFACE
+  // rather than the three intensities, which is the same question
+  // `assets3d.ts` asks when it picks the class — see `look.ts`.
+  renderer.toneMapping = isLit(look) ? ACESFilmicToneMapping : NoToneMapping;
+  renderer.toneMappingExposure = look.exposure;
+
+  hemiLight.color.setHex(look.sky);
+  hemiLight.groundColor.setHex(look.ground);
+  hemiLight.intensity = look.hemi;
+  keyLight.color.setHex(look.key);
+  keyLight.intensity = look.keyIntensity;
+  fillLight.color.setHex(look.fill);
+  fillLight.intensity = look.fillIntensity;
+  aimLights();
+
+  CHASE_FOG.color.setHex(look.fog);
+  CHASE_FOG.near = look.fogNear;
+  CHASE_FOG.far = look.fogFar;
+
+  retintSky();
+  retintPageLayers();
+}
+
+/**
+ * The four drawables this page owns outright: car, centreline, road.
+ *
+ * BY INDEX INTO `layers`, WHICH IS WHY THEY ARE NAMED. `layers` holds
+ * every mesh on the page including the spawned populations, and those are
+ * coloured from their asset id; these three are coloured from a named
+ * field of the look and there is no id to look them up by. Remembering
+ * the material pairs directly is the smallest thing that works and does
+ * not depend on where in the list they landed.
+ */
+interface PageMaterials {
+  readonly chase: Material;
+  readonly map: Material;
+  readonly hex: () => number;
+  readonly opacity?: () => number;
+  /**
+   * Follow the look's surface into wireframe.
+   *
+   * A LIVE PROPERTY, UNLIKE EVERY OTHER SURFACE DECISION ON THE PAGE, and
+   * that is a fact about three rather than an inconsistency. `wireframe`
+   * picks the primitive a draw call submits — lines instead of triangles
+   * — so it costs no recompile and no new material, where `transparent`
+   * and `vertexColors` are shader defines and do. It is set here for the
+   * two drawables a recook does NOT rebuild: the car survives every cook
+   * as layer 0, so a rebuild-on-restyle would never reach it.
+   */
+  readonly wireframe?: () => boolean;
+}
+const pageMaterials: PageMaterials[] = [];
+
+/**
+ * The car's material.
+ *
+ * UNLIT IN EVERY LOOK, on purpose and unlike everything else on the page.
+ * The car is not part of the composition being judged — it is the
+ * VIEWPOINT, drawn so the map can say where the viewpoint is — so it is
+ * the one thing that should read identically whichever way the key is
+ * pointing, and a lit wedge changes value as it goes round the lap.
+ */
+function carMaterial(): MeshBasicMaterial {
+  return new MeshBasicMaterial({
+    color: look.car,
+    wireframe: look.surface === "wireframe",
+    toneMapped: false,
+  });
+}
+
+/**
+ * The road's material, which is the one page-owned surface that is lit.
+ *
+ * TRANSLUCENT DOES NOT APPLY TO IT. The road is the floor everything else
+ * stands on; a see-through floor in an x-ray look means the far side of
+ * the circuit shows through the near side of the tarmac, which reads as a
+ * bug rather than as an x-ray. `roadOpacity` is its own knob for anyone
+ * who wants it anyway, and the surface mode only decides lit-or-wireframe
+ * here.
+ */
+function roadMaterial(): Material {
+  if (!isLit(look)) {
+    // `flat` and `wireframe` are both unlit, and differ here only in
+    // whether the fill is drawn. See `look.ts` on why an unlit surface
+    // material is black rather than flat.
+    return new MeshBasicMaterial({
+      color: look.road,
+      wireframe: look.surface === "wireframe",
+      toneMapped: false,
+      transparent: look.roadOpacity < 1,
+      opacity: look.roadOpacity,
+    });
+  }
+  return new MeshStandardMaterial({
+    color: look.road,
+    roughness: look.roughness,
+    metalness: look.metalness,
+    transparent: look.roadOpacity < 1,
+    opacity: look.roadOpacity,
+  });
+}
+
+function retintPageLayers(): void {
+  for (const m of pageMaterials) {
+    const hex = m.hex();
+    for (const one of [m.chase, m.map]) {
+      const c = one as unknown as {
+        color?: Color;
+        opacity: number;
+        transparent: boolean;
+        wireframe?: boolean;
+      };
+      c.color?.setHex(hex);
+      if (m.opacity) {
+        c.opacity = m.opacity();
+        c.transparent = m.opacity() < 1;
+      }
+      if (m.wireframe && "wireframe" in c) c.wireframe = m.wireframe();
+      one.needsUpdate = true;
+    }
+  }
+}
+
+/** The edge overlay exists only over a fill, so a wireframe look has none. */
+function edgesWanted(): boolean {
+  return look.edges && look.surface !== "wireframe";
+}
+
+/**
+ * Repaint every spawned mesh from the live look, allocating nothing.
+ *
+ * WALKS THE MESHES, NOT THE ASSET MAP, and the difference is ownership.
+ * `toInstancedMeshes` clones the map's template per mesh and the CLONE is
+ * what renders; for the box populations the templates are disposed the
+ * instant the meshes exist, so a retint aimed at the map would write into
+ * dead objects and change nothing on screen. The mesh's own `name` is the
+ * asset id it was built from, which is the one fact the palette needs.
+ *
+ * EVERY COLOUR IS `assets3d.ts`'s ANSWER, NOT ONE COMPUTED HERE, and that
+ * is a correction rather than a preference. This loop resolved the fold
+ * itself for one revision — colour, alpha, depth writing, the edge's pull
+ * toward black — which made it a FOURTH copy of a rule stated three times
+ * already, and it had drifted before it was ever run: at `translucent`
+ * with the opacity slider at 1 the build path gives `transparent: true,
+ * depthWrite: false` and the copy here gave the opposite, so a lap dragged
+ * to full alpha stopped being see-through and could not be got back
+ * without a rebuild. `retintMaterial` takes the asset id and the pass and
+ * answers from the same `passTint` the constructor used.
+ */
+function retintSpawned(): void {
+  for (const layer of spawnedLayers) {
+    for (const mesh of layer.meshes) {
+      retintMaterial(mesh.material, mesh.name, "fill", look, layer.population);
+    }
+    for (const mesh of layer.edgeMeshes) {
+      retintMaterial(mesh.material, mesh.name, "edge", look, layer.population);
+    }
+    retintMapMaterials(layer.mapMaterials, look, layer.population);
+  }
+}
+
+/**
+ * The streamed dressing, which needs BOTH halves and is the one place
+ * that is not obvious.
+ *
+ * THE TEMPLATES ARE STILL ALIVE HERE, unlike the box populations': the
+ * binding mints a mesh every time a sector arrives, so `rig.assets` has
+ * to be right for meshes that do not exist yet. And the meshes that DO
+ * exist hold clones taken before the change, so they have to be walked
+ * too. Doing only one of the two gives a lap whose colour depends on
+ * which sectors happened to be resident when the slider moved, which
+ * reads as a streaming bug rather than as a missed repaint.
+ *
+ * THE VERTEX COLOURS NEED NEITHER, and that is why they are worth the
+ * machinery in `assets3d.ts`. Geometry is shared BY REFERENCE between the
+ * map and every mesh built from it, so rewriting a pose's colour buffer
+ * lands on every instance of it at once, resident or not.
+ */
+function retintStreamed(): void {
+  const rig = streamed;
+  if (!rig) return;
+  retintPoseAssetMap(rig.assets, look, "generated");
+  // THE BORROWED MAP MATERIAL TOO, which is easy to miss because nothing
+  // holds it between map passes: it is lent to every streamed mesh for
+  // the length of pass two and handed back. Left out, the overhead view
+  // keeps whatever tint it was BUILT with, so a `map` section that
+  // repaints the box populations and not the dressing reads as the
+  // streaming being broken rather than as a missed repaint.
+  retintStreamedMapMaterial(rig.mapMaterial, look, "generated");
+  for (const cell of rig.group.children) {
+    for (const mesh of cell.children) {
+      // The map pass may be borrowing this mesh's material right now, in
+      // which case its own is in `chaseOf` — retinting the borrowed one
+      // would paint the whole population the map's colour. Outside that
+      // window `chaseOf` holds the same material the mesh does, so the
+      // lookup is correct either way.
+      const own = (chaseOf.get(mesh) ?? (mesh as Mesh).material) as Material;
+      const template = rig.assets[mesh.name]?.material;
+      if (!template || Array.isArray(template)) continue;
+      // COPIED FROM THE TEMPLATE RATHER THAN RECOMPUTED, so the policy —
+      // which look wears vertex colours, which wants a white base, what
+      // an opacity means for depth writing — lives in `assets3d.ts` and
+      // exists once. `retintPoseAssetMap` has just made the template
+      // current; this is the same answer reaching the meshes that were
+      // cloned before it.
+      own.copy(template);
+      own.needsUpdate = true;
+    }
+  }
+}
+
+/**
+ * Everything, from the live look. The playground's one entry point.
+ *
+ * ALWAYS SAFE TO CALL, including before the first cook and between a
+ * teardown and the world that replaces it: every branch below is a loop
+ * over a list that is simply empty then.
+ */
+function retint(): void {
+  retintPage();
+  retintSpawned();
+  retintStreamed();
+}
+
+/**
+ * A change that no property write can express, and the only expensive one.
+ *
+ * `surface`, `mapSurface` and `edges` decide a material's CLASS — a
+ * wireframe is a `MeshBasicMaterial` and a lit fill is a
+ * `MeshStandardMaterial` — and whether the edge population exists at all.
+ * None of those is reachable by assignment, so this rebuilds through the
+ * path that already knows how to build them.
+ *
+ * IT RECOOKS, WHICH IS MORE THAN IT NEEDS AND IS THE HONEST TRADE. The
+ * streamed dressing's meshes are minted by the binding from templates it
+ * holds, so restyling them in place means walking live cells and swapping
+ * clones on a schedule the page does not own — several hundred lines to
+ * save about a second on a control that is a dropdown. The lap is
+ * deterministic, so the lap that comes back is the lap that left, down to
+ * the placement: nothing about the CONTENT depends on which look was
+ * showing. That is the property `look.ts` is built to guarantee and the
+ * reason this shortcut is available at all.
+ */
+function restyle(): void {
+  retintPage();
+  recook();
+}
 
 /**
  * One drawable this page owns, and the two looks it has.
@@ -230,6 +704,13 @@ let mapMarkerScale = 1;
 function setPass(pass: "chase" | "map"): void {
   for (const l of layers) {
     (l.obj as Mesh).material = pass === "chase" ? l.chase : l.map;
+  }
+  // The outline is a chase-view device only; see {@link addSpawned}.
+  // `referenceOn` still wins, so hiding a population hides its edges with
+  // it rather than leaving an outline round nothing.
+  for (const layer of spawnedLayers) {
+    const on = pass === "chase" && (layer.population !== "reference" || state.referenceOn);
+    for (const m of layer.edgeMeshes) m.visible = on;
   }
   paintStreamed(pass);
   car.scale.setScalar(pass === "map" ? mapMarkerScale : 1);
@@ -361,17 +842,25 @@ const chaseCamera = new PerspectiveCamera(65, 1, 0.1, 4000);
  * object rather than a car and a separate marker, so the two views can
  * never disagree about where on the lap the car is.
  */
-const car = new Mesh(
-  new ConeGeometry(1.8, 5, 3),
-  new MeshBasicMaterial({ color: 0xffffff, wireframe: true }),
-);
+const car = new Mesh(new ConeGeometry(1.8, 5, 3), carMaterial());
 car.frustumCulled = false;
 scene.add(car);
-layers.push({
-  obj: car,
-  chase: car.material,
-  map: new MeshBasicMaterial({ color: 0xffffff, wireframe: true }),
-});
+{
+  const map = carMaterial();
+  layers.push({ obj: car, chase: car.material, map });
+  pageMaterials.push({
+    chase: car.material,
+    map,
+    hex: () => look.car,
+    // FILLED IN EVERY LOOK BUT THE WIREFRAME ONE. A filled wedge is the
+    // better map marker — a wireframe triangle over a wireframe circuit
+    // is one more outline among thousands — but `blueprint` claims to be
+    // the page as it was, and the page as it was drew the car in
+    // wireframe like everything else. Following the surface is what
+    // makes that claim true rather than nearly true.
+    wireframe: () => look.surface === "wireframe",
+  });
+}
 
 // ------------------------------------------------------------------ //
 // Building the drawables from a cook.
@@ -409,6 +898,13 @@ function disposeBuilt(): void {
     scene.remove(obj);
     if (obj instanceof InstancedMesh) {
       obj.dispose();
+      // NOT ITS MATERIAL, AND THAT IS STILL RIGHT HERE. Every instanced
+      // mesh this loop reaches is also a LAYER, and the `layers` walk
+      // below disposes each layer's pair — freeing it here as well would
+      // be the double dispose that re-fires three's `dispose` event on a
+      // program already released. The one population that is NOT a layer
+      // is the edge overlay, and it is freed by name below, where the
+      // list knows which meshes those are.
       if (ownsGeometry(obj)) obj.geometry.dispose();
       continue;
     }
@@ -422,7 +918,50 @@ function disposeBuilt(): void {
   // The car is layer 0 and survives every recook; everything after it
   // belongs to the cook that has just been replaced.
   layers.length = 1;
+  // AND THE SAME CUT IN THE RETINT LIST, which is a separate list and
+  // therefore a separate chance to get this wrong. Its first entry is the
+  // car's, for the same reason; the centreline's and the road's are
+  // pushed by `buildCircuit` and describe materials this function has
+  // just disposed. Leaving them would have the next colour drag write
+  // into freed materials — which does not throw, and shows up as a page
+  // where two things stopped following the palette.
+  pageMaterials.length = 1;
+  // THE EDGE OVERLAY'S MATERIALS, WHICH NOTHING ELSE OWNS. The fill
+  // meshes are layers and are freed by the walk above; the edge meshes
+  // are deliberately not (the outline has no business in the map pass —
+  // see {@link addSpawned}), which makes them the one population in
+  // `built` that no other loop reaches.
+  //
+  // AND THE COST OF MISSING IT IS A GPU PROGRAM, not merely an object.
+  // Three pins a material's compiled program until that material's
+  // `dispose` fires, so every recook — a seed typed, a density dragged —
+  // pinned another; and `edgeOpacity` crossing 1 flips `transparent`,
+  // which is part of the program cache key, so a drag across that
+  // boundary pinned a second variant on top.
+  //
+  // ASKED RATHER THAN ASSUMED, the same pair `shared/draw.ts` and
+  // `demos/lanterns` run: a page that supplies its own `materialFor`
+  // owns what it supplied, and `ownsMaterial` is what keeps adopting one
+  // later from becoming a silent double free.
+  for (const layer of spawnedLayers) {
+    for (const mesh of layer.edgeMeshes) {
+      if (ownsMaterial(mesh)) for (const m of materialListOf(mesh.material)) m.dispose();
+    }
+  }
+  spawnedLayers.length = 0;
 }
+
+/**
+ * The spawned populations, kept so a retint can reach their materials.
+ *
+ * NOT `layers`, WHICH ALREADY HOLDS THESE MESHES. A retint needs the
+ * ASSET ID a material was coloured from, and `layers` has thrown that
+ * away — it holds an `Object3D` and two materials, which is exactly what
+ * the pass swap needs and one fact short of what the palette needs.
+ * Keeping the spawned layers whole is cheaper than reconstructing the id
+ * from `mesh.name` at every entry and cannot drift from what was built.
+ */
+const spawnedLayers: SpawnedLayer[] = [];
 
 /**
  * Draw the catalogue's own placements on THIS spline.
@@ -457,8 +996,24 @@ function buildReference(circuit: Circuit): SpawnedLayer | undefined {
 
 /** One population's meshes, and the map-pass material each of them swaps to. */
 interface SpawnedLayer {
+  readonly population: Population;
   readonly meshes: readonly InstancedMesh[];
-  readonly mapMaterials: Readonly<Record<string, MeshBasicMaterial>>;
+  readonly mapMaterials: Readonly<Record<string, Material>>;
+  /**
+   * The wireframe drawn OVER the fill, as its own meshes.
+   *
+   * A SECOND SET OF MESHES RATHER THAN A SECOND MATERIAL ON THE SAME ONE,
+   * because three draws one material per mesh and the edge has to land on
+   * top of a fill that has already written depth. They share the fill's
+   * geometry by reference and carry their own instance matrices, copied
+   * once at build; nothing about them is per-frame.
+   *
+   * EMPTY WHEN `look.edges` IS OFF, rather than built-and-hidden. The
+   * overlay doubles this population's draw calls, and a look that does
+   * not want it should not pay for it — which also means turning it on is
+   * a restyle rather than a retint, and `rebuildStyle` says so.
+   */
+  readonly edgeMeshes: readonly InstancedMesh[];
   /** Total instances across the meshes — what the readout used to count. */
   readonly count: number;
 }
@@ -492,20 +1047,46 @@ function spawnBoxes(boxes: readonly PlacedBox[], population: Population): Spawne
   // disposing them here is bookkeeping rather than GPU work — and it
   // leaves every live material owned by exactly one mesh, which is what
   // makes `disposeBuilt` correct without a special case.
-  const assets = makeAssetMap(population);
+  const assets = makeAssetMap(look, population);
   let meshes: InstancedMesh[];
   try {
     meshes = toInstancedMeshes(batches, assets);
   } finally {
     disposeAssetMap(assets);
   }
+  // THE EDGE PASS IS THE SAME BATCHES A SECOND TIME, which is what makes
+  // it exact rather than approximate: identical asset ids, identical
+  // instance matrices, so an edge can never be drawn around a box that is
+  // not there or miss one that is. It costs a second upload of the same
+  // transforms, which is the honest price of drawing the outline as
+  // geometry instead of inventing one in a shader.
+  let edgeMeshes: InstancedMesh[] = [];
+  if (edgesWanted()) {
+    const edges = makeEdgeAssetMap(look, population);
+    try {
+      edgeMeshes = toInstancedMeshes(batches, edges);
+    } finally {
+      disposeAssetMap(edges);
+    }
+  }
   // Frustum culling stays off, as it was: the map pass frames the whole
   // circuit at once and the chase pass wants the lap ahead, so there is
   // nothing here a per-mesh sphere test can usefully reject.
   for (const m of meshes) m.frustumCulled = false;
+  for (const m of edgeMeshes) {
+    m.frustumCulled = false;
+    // AFTER THE FILL, ALWAYS. Both write into the same depth values, so
+    // whichever is drawn second and does not write depth is the one on
+    // top; three sorts opaque front-to-back by default and would happily
+    // put the outline behind the thing it outlines.
+    m.renderOrder = 1;
+  }
   return {
+    population,
     meshes,
+    edgeMeshes,
     mapMaterials: makeMapMaterials(
+      look,
       population,
       meshes.map((m) => m.name),
     ),
@@ -515,6 +1096,7 @@ function spawnBoxes(boxes: readonly PlacedBox[], population: Population): Spawne
 
 /** Add a spawned population to the scene, one layer per mesh. */
 function addSpawned(layer: SpawnedLayer): void {
+  spawnedLayers.push(layer);
   for (const mesh of layer.meshes) {
     scene.add(mesh);
     built.push(mesh);
@@ -526,6 +1108,16 @@ function addSpawned(layer: SpawnedLayer): void {
       map: layer.mapMaterials[mesh.name],
     });
   }
+  // THE EDGES ARE NOT LAYERS, and that is the difference that matters:
+  // a layer is something the pass swap re-materials, and the outline has
+  // no business in the map pass. From above, an outline drawn around every
+  // box at every depth is the smear the map view exists to avoid — the
+  // same argument `makeMapMaterials` has always made about transparency —
+  // so these are hidden for pass two instead of swapped.
+  for (const mesh of layer.edgeMeshes) {
+    scene.add(mesh);
+    built.push(mesh);
+  }
 }
 
 function buildCircuit(circuit: Circuit): void {
@@ -533,34 +1125,44 @@ function buildCircuit(circuit: Circuit): void {
 
   // The centreline itself, as the spline it is. Drawn in BOTH passes: on
   // the map it is the circuit, and from the car it is the racing line.
+  //
+  // UNLIT AND UNTONED for the reason the car is: a line has no normal to
+  // shade and the racing line is a MARKING rather than a thing standing
+  // beside the road, so it should stay the colour it was given whatever
+  // the light is doing.
   const spline = new LineSegments(
     toLineGeometry(circuit.frames),
-    new LineBasicMaterial({ color: 0x00ff00 }),
+    new LineBasicMaterial({ color: look.centreline, toneMapped: false }),
   );
   spline.frustumCulled = false;
   scene.add(spline);
   built.push(spline);
-  layers.push({
-    obj: spline,
-    chase: spline.material,
-    map: new LineBasicMaterial({ color: 0x00ff00 }),
-  });
+  {
+    const map = new LineBasicMaterial({ color: look.centreline, toneMapped: false });
+    layers.push({ obj: spline, chase: spline.material, map });
+    pageMaterials.push({ chase: spline.material, map, hex: () => look.centreline });
+  }
 
-  // The road surface. Wireframe in both passes — from above, its
-  // tessellation is exactly what shows whether the sampling stayed even
-  // through the corners.
-  const road = new Mesh(
-    toBufferGeometry(circuit.road),
-    new MeshBasicMaterial({ color: 0x333333, wireframe: true }),
-  );
+  // The road surface. LIT WHEN THE LOOK IS LIT, which is the one place
+  // this page gained a surface rather than a diagram: the road is the
+  // only large continuous thing in frame, so it is what the hemisphere
+  // has to land on for the picture to read as having any depth at all.
+  // Under `blueprint` it falls back to the wireframe it always was, and
+  // that is not a special case here — `roadMaterial` asks the look.
+  const road = new Mesh(toBufferGeometry(circuit.road), roadMaterial());
   road.frustumCulled = false;
   scene.add(road);
   built.push(road);
-  layers.push({
-    obj: road,
-    chase: road.material,
-    map: new MeshBasicMaterial({ color: 0x333333, wireframe: true }),
-  });
+  {
+    const map = roadMaterial();
+    layers.push({ obj: road, chase: road.material as Material, map });
+    pageMaterials.push({
+      chase: road.material as Material,
+      map,
+      hex: () => look.road,
+      opacity: () => look.roadOpacity,
+    });
+  }
 
   // THE GENERATED DRESSING IS NOT BUILT HERE. It is the one population on
   // this page that streams, so its meshes come and go with the sectors
@@ -664,7 +1266,7 @@ interface StreamedDressing {
   /** Pose meshes AND their geometry; freed only after the binding is. */
   readonly assets: AssetMap;
   /** The one flat colour the whole population wears on the map. */
-  readonly mapMaterial: MeshBasicMaterial;
+  mapMaterial: Material;
   /** Cancels this world's in-flight update when it is torn down. */
   readonly abort: AbortController;
   /**
@@ -834,14 +1436,14 @@ function buildStreamedDressing(
   // carries no asset ord, so counting a vocabulary on it has to come at it
   // through the library. Built once here rather than per readout.
   const language = markers ? languagePoses(lib, markers) : undefined;
-  const assets = makePoseAssetMap(lib, circuit.lap.halfWidth, "generated");
+  const assets = makePoseAssetMap(lib, circuit.lap.halfWidth, look, "generated");
   const binding = new WorldThreeBinding({ group, assets });
   const rig: StreamedDressing = {
     world: undefined as unknown as World,
     group,
     binding,
     assets,
-    mapMaterial: makeStreamedMapMaterial("generated"),
+    mapMaterial: makeStreamedMapMaterial(look, "generated"),
     abort: new AbortController(),
     halfWidth: circuit.lap.halfWidth,
     sectorCount: built.sectorCount,
@@ -1000,8 +1602,11 @@ const overlay = createOverlay({
     "A centreline this page did not make, handed to pcg-ts: it sweeps the road and dresses the verges. " +
     "The rules settle the whole lap at once; the dressing then streams in arc sectors as the car " +
     "reaches them. The map frames the whole circuit from above; the chase view is the only viewpoint " +
-    "the result is ever consumed from. Both are wireframe, drawn over each other, and the car is one " +
-    "object in both.",
+    "the result is ever consumed from. They are drawn over each other and the car is one object in " +
+    "both. Nothing is art: the fill is flat and half-transparent with depth writing off, so " +
+    "overlap accumulates and brightness reads as how much structure is stacked along a ray. " +
+    "The look panel, top right, changes only how it is drawn — no value on it can move a " +
+    "placement — and its `monument` preset spends the same channel on structural role instead.",
 });
 
 const state = {
@@ -1260,6 +1865,14 @@ function showLapStats(): void {
 // where in its own panel the graph sits — under the readouts.
 const graphSlot = overlay.addSlot();
 
+// THE PLAYGROUND IS NOT IN THIS PANEL AT ALL, and that is the point. It
+// took a slot here first, which appends — so forty controls opened below
+// eleven readouts and were off the bottom of the window. It has its own
+// card in the opposite corner now; see `lookMount.ts`. This overlay keeps
+// what it is good at: the prose, the eight knobs that change the LAP, and
+// the numbers those produce.
+const lookPanel = attachLookPanel(look, { onRetint: retint, onRestyle: restyle });
+
 attachWordmark();
 
 // ------------------------------------------------------------------ //
@@ -1401,10 +2014,16 @@ function frame(): void {
     `${(state.station / circuit.lap.halfWidth).toFixed(1)} / ${circuit.lap.lengthW.toFixed(1)} W`,
   );
 
+  // PASS 0 — the sky. Colour AND depth are cleared first, then the
+  // gradient is laid down with depth testing off, so it fills the frame
+  // without ever occluding what pass 1 draws over it. This is where the
+  // clear happens now; the chase pass no longer clears anything.
+  renderer.clear();
+  renderer.render(skyScene, skyCamera);
+
   // PASS 1 — the chase view: near, fogged, warm.
   setPass("chase");
   scene.fog = CHASE_FOG;
-  renderer.clear();
   renderer.render(scene, chaseCamera);
 
   // PASS 2 — the map, as a wireframe over it. The depth buffer is cleared
@@ -1439,6 +2058,12 @@ function frame(): void {
 void loadReference()
   .then(() => cookAndBuild())
   .then(() => {
+    // ONCE, AFTER THE FIRST BUILD. Every light, fog and sky value was
+    // handed its look at construction, but the tone-mapping mode is a
+    // decision about the whole look rather than a field of it — and the
+    // page-owned materials do not exist until `buildCircuit` has run.
+    // One call here is cheaper than a second spelling of both rules.
+    retint();
     frame();
   });
 
@@ -1460,7 +2085,24 @@ void loadReference()
  */
 declare global {
   interface Window {
-    pcgRacetrack?: { seek(station: number): Promise<void>; pause(on: boolean): void };
+    pcgRacetrack?: {
+      seek(station: number): Promise<void>;
+      pause(on: boolean): void;
+      /** The live look, for a capture that wants a named one. */
+      look(): Look;
+      /**
+       * Patch the look and repaint.
+       *
+       * ON THE PROBE RATHER THAN ON THE PANEL, because the panel is the
+       * thing a capture cannot drive: its rows are Svelte-rendered inside
+       * a slot, and reaching them by label is the brittle scraping the
+       * capture script's own helpers exist to avoid. A patch through the
+       * same two entry points the panel uses runs the same code with none
+       * of that. It returns nothing and is synchronous, so a shot taken
+       * on the next frame is a shot of the look that was asked for.
+       */
+      setLook(patch: Partial<Look>, structural?: boolean): void;
+    };
   }
 }
 
@@ -1517,6 +2159,24 @@ window.pcgRacetrack = {
   },
   pause(on: boolean): void {
     state.paused = on;
+  },
+  look(): Look {
+    return look;
+  },
+  setLook(patch: Partial<Look>, structural = false): void {
+    // `roles` is the one nested key, so a patch naming it would otherwise
+    // REPLACE the record and drop any role it did not mention.
+    const { roles, ...rest } = patch;
+    Object.assign(look, rest);
+    if (roles) Object.assign(look.roles, roles);
+    if (structural) restyle();
+    else retint();
+    // AND THE PANEL, which is not repainting anything — it is being told
+    // that the record it is rendering is out of date. Without this a shot
+    // driven through the probe carries a panel describing the look it had
+    // before the patch, which is worse than no panel: it is a caption
+    // that disagrees with the picture it is on.
+    lookPanel.sync();
   },
 };
 

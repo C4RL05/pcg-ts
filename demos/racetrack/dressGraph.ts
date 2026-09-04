@@ -1391,6 +1391,23 @@ export interface PoseBoxW {
   readonly centre: readonly [number, number, number];
   /** Its span in the same units, floored — see {@link MIN_EXTENT_WORLD}. */
   readonly extent: readonly [number, number, number];
+  /**
+   * The kit's own structural role for this box, carried through unread.
+   *
+   * NOTHING IN THIS FILE USES IT and that is deliberate: the role decides
+   * how a box is DRAWN, which is `assets3d.ts`' business, and a merged
+   * pose is one mesh for a whole placement so the renderer has nowhere but
+   * the vertices to put it. Passing it through here rather than having the
+   * renderer re-read the kit keeps {@link poseBoxesW} the ONE derivation
+   * the header claims it is — a second reader of the same corners would be
+   * a second chance to floor an extent differently.
+   *
+   * A STRING RATHER THAN A ROLE ENUM, because that is what {@link
+   * LooseBoxes} carries and a kit may name a role this vocabulary has
+   * never heard of. Deciding what an unknown name draws as belongs to the
+   * palette, not to the geometry.
+   */
+  readonly role?: string;
 }
 
 /**
@@ -1431,6 +1448,7 @@ export function poseBoxesW(lib: PoseLibrary, halfWidth: number): readonly (reado
         Math.max(b.max[1] - b.min[1], minExtentW),
         Math.max(b.max[2] - b.min[2], minExtentW),
       ] as const,
+      role: b.role,
     })),
   );
 }
