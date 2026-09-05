@@ -348,6 +348,86 @@ describe.skipIf(!KIT)("enclosure, placed and then measured", () => {
 });
 
 /**
+ * THE CAP ON `along`, WHICH IS A BOUND ON THE ART RATHER THAN ON A LAP.
+ *
+ * NO KIT NEEDED, deliberately. What this pins is a rule about the
+ * VOCABULARY a kit is allowed to offer, and the failure it guards against
+ * arrives WITH a catalogue — so a test that could only run where the
+ * local catalogue is present would go quiet in exactly the checkout that
+ * introduces the long piece. Synthetic assets, one dimension varied at a
+ * time.
+ *
+ * See `coverCandidates` for the measured sweep behind 16W. Nothing here
+ * re-derives it; what is asserted is only that the cut exists, sits where
+ * that comment says it sits, and rejects on `along` ALONE.
+ */
+describe("the cover length cap", () => {
+  /**
+   * A piece that passes every OTHER cover rule — base exactly on the
+   * corridor ceiling, centred enough to reach across the span — so that
+   * `along` is the only thing a caller varies and a rejection is
+   * attributable to it.
+   */
+  function coverPiece(alongW: number): PlaceableAsset {
+    return {
+      id: Math.round(alongW * 100),
+      name: `rib-${alongW}W`,
+      shape: "box",
+      instances: 1,
+      size: { across: 1.4, along: alongW, tall: 0.4 },
+      where: {
+        lateral: { median: 0, p10: 0, p90: 0 },
+        // Base at exactly `CORRIDOR.ceilingW`: the underside the sweep
+        // in `coverCandidates` measured its ribs at.
+        height: { median: CORRIDOR.ceilingW + 0.2, p10: 0, p90: 0 },
+        rightOfTravel: 0.5,
+        gapCv: 0,
+        affinity: { straight: 1, easy: 1, medium: 1, tight: 1 },
+      },
+    };
+  }
+
+  it("admits a piece AT the cap and rejects one over it", () => {
+    // AT the bound, not merely under it. The cut is `>`, so 16W itself is
+    // still cover; a test that only offered 15.9W would pass against `>=`
+    // just as happily, and those two rules differ by exactly the length
+    // the sweep put its last measured-safe point on.
+    expect(
+      coverCandidates([coverPiece(ENCLOSE.maxAlongW)]).length,
+      `${ENCLOSE.maxAlongW}W is the bound and should still be cover`,
+    ).toBe(1);
+    expect(
+      coverCandidates([coverPiece(ENCLOSE.maxAlongW + 0.01)]).length,
+      "a piece just past the cap was admitted",
+    ).toBe(0);
+    // The length the sweep actually measured as blocking (1-4 ribs of 87).
+    expect(coverCandidates([coverPiece(44)]).length, "44W was admitted").toBe(0);
+  });
+
+  it("rejects on `along` alone", () => {
+    // THE CONTROL, and it is the half that makes the rejections above
+    // mean something: the same fixture under the cap IS cover, so what
+    // changed is the length and not one of the other two cuts quietly
+    // failing on a synthetic asset.
+    expect(
+      coverCandidates([coverPiece(10.29)]).length,
+      "the longest piece the enclosure kit shipped is no longer cover",
+    ).toBe(1);
+    expect(coverCandidates([coverPiece(2.2)]).length, "a short rib is not cover").toBe(1);
+  });
+
+  it("takes only the long piece out of a vocabulary", () => {
+    // The measured-safe rows of the sweep, all of which must survive.
+    const shipped = [2.2, 8, 10.29, ENCLOSE.maxAlongW].map(coverPiece);
+    expect(coverCandidates(shipped).length, "the cap ate a shipped length").toBe(4);
+    expect(
+      coverCandidates([...shipped, coverPiece(60)]).length,
+      "the cap took something other than the 60W piece",
+    ).toBe(4);
+  });
+});
+
+/**
  * THE Z-3 FALLBACK, WHICH NEVER FIRES ON A REAL LAP.
  *
  * `reduceEnclosure` stops trimming when taking another run would empty

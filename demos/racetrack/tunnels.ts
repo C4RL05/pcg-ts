@@ -66,6 +66,13 @@ export const ENCLOSE = {
   flareRiseW: 1.2,
   /** Half-width of the span the cover has to reach across. */
   coverW: 1.5,
+  /**
+   * The longest piece cover may be tiled from, along the road.
+   *
+   * A BOUND ON THE ART, MEASURED. See {@link coverCandidates} for the
+   * sweep it comes from and why 16 and not 24.
+   */
+  maxAlongW: 16,
   /** Stretches may not START inside a corner tighter than this. */
   noStartTighterThanW: SEVERITY.tightW,
   /** Keep this much clear between stretches, so two do not read as one. */
@@ -153,6 +160,39 @@ export function coverCandidates(assets: readonly PlaceableAsset[]): PlaceableAss
       // is here so that the kit which does sit on the line gets one
       // answer rather than two.
       if (w.height.median - a.size.tall / 2 < CORRIDOR.ceilingW - SAME_PLACE_W) return false;
+
+      // AND IT MAY NOT BE LONGER THAN THE MEASUREMENT COVERS.
+      //
+      // THE HEIGHT FLOOR IS NOT CLEARANCE, because the lap is not flat.
+      // `LAP.relief` is 26 against a half-width of 9, so the surface
+      // swings +/-2.89W, and a rib is horizontal in the frame of ITS OWN
+      // station while the road falls away under its far end — so a chord
+      // 0.3W above the road it is actually over passes under a rib pinned
+      // to the datum of a station behind. Long enough, a rib floored at
+      // `CORRIDOR.ceilingW` reaches L-1's sight cone. Measured with L-1's
+      // own `occludes`, 87 ribs per lap at an underside of exactly
+      // `CORRIDOR.ceilingW`, seeds 1-6, sweeping the rib's LENGTH — the
+      // first row is `along` in W, the second is how many of those 87
+      // ribs the predicate reported BLOCKED (a range is over the seeds):
+      //
+      //     along (W)      2.2   8   10.29   16   24   32    44     60
+      //     ribs blocked     0   0       0    0    0    0   1-4    4-9
+      //
+      // 16W IS A LENGTH THE SWEEP COVERS AND WHICH BLOCKS 0, with 1.55x
+      // headroom over the longest piece `shippedVocabulary()` contains
+      // (10.2931W across all 229 of its assets). It is NOT the
+      // largest such value — 24 and 32 also block 0 — and that is the
+      // choice, deliberately: the conservative end of the measured-safe
+      // range rather than the last point before it gives, because the
+      // sweep only BRACKETS the threshold (somewhere between 32 and 44)
+      // and a cap sitting on the bracket would rest on an interpolation.
+      //
+      // Before this cut the margin was a property of the VOCABULARY —
+      // the longest piece the art happened to contain — and it moved
+      // whenever the art did. The cap makes it a rule. The sweep is in
+      // `tests/racetrackSecondRepair.test.ts`; the cut itself is pinned
+      // in `tests/racetrackTunnels.test.ts`.
+      if (a.size.along > ENCLOSE.maxAlongW) return false;
 
       // And it has to reach the span it is meant to cover.
       return Math.abs(w.lateral.median) - a.size.across / 2 < ENCLOSE.coverW;

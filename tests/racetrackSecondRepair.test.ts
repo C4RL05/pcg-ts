@@ -70,18 +70,24 @@
  *      horizontal in the frame of its own station while the road falls
  *      away under its far end. Measured with L-1's own predicate: nothing
  *      blocks up to 32W of `along`, 1-4 ribs per seed block at 44W, 4-9 at
- *      60W. The longest asset in the shipped vocabulary is 10.29W and
- *      `coverCandidates` caps `across` but not `along`, so what holds the
- *      cone clear is a factor of four in the ART, not two constants.
+ *      60W. The longest asset in the shipped vocabulary is 10.2931W.
+ *      WHEN THIS WAS WRITTEN `coverCandidates` capped `across` and not
+ *      `along`, so what held the cone clear was a factor of four in the
+ *      ART rather than a rule. It now caps `along` at `ENCLOSE.maxAlongW`
+ *      = 16W, chosen off the sweep below. The measurement is why the cap
+ *      sits where it does, so this file did not become redundant when the
+ *      cap landed — it became the cap's justification.
  *
  * SO THERE IS EXACTLY ONE LOCK AND IT IS THE `include` GATE, which the
  * fixtures below leave SHUT because that is how the demo has it. That
  * matters more than it would if the geometry were the second lock it was
- * first written up as: (2) is the whole of the answer, and (3) is a margin
- * that moves when the vocabulary does. Someone adding a 44W cover asset
- * makes the geometry reachable and the pass still will not fire, because
- * the gate is shut; someone deleting the `include` param makes it fire on
- * that asset the same day. Both are measured, in that order of importance.
+ * first written up as: (2) is the whole of the answer, and (3) WAS a margin
+ * that moved when the vocabulary did, until the cap made it a rule.
+ * Someone adding a 44W cover asset now has it refused by
+ * `coverCandidates` before the geometry is reached at all; someone
+ * raising the cap AND deleting the `include` param makes the pass fire on
+ * that asset the same day. The gate is still the lock, and it is still
+ * shut. Both are measured, in that order of importance.
  *
  * WHAT THIS IS NOT. `tests/racetrackCoverSightline.test.ts` already gates
  * the exemption itself — that L-1, handed a cover piece it DOES block,
@@ -480,13 +486,25 @@ describe("the post-enclosure repair pass", () => {
    *     ribs        0   0       0    0    0    0   1-4       4-9
    *
    * So the reachable lever is not a lower kit. It is a LONGER one, and the
-   * threshold is somewhere between 32W and 44W of `along`. What protects
-   * the demo is data: the longest asset in the shipped vocabulary is
-   * 10.29W, a factor of about four short, and `coverCandidates` filters
-   * candidates on their height and their ACROSS extent with no cap on
-   * `along` at all. That is what this test gates — the margin, which can
-   * change when the vocabulary does — rather than the two constants, which
-   * cannot deliver it.
+   * threshold is somewhere between 32W and 44W of `along`.
+   *
+   * THIS SWEEP IS NOW LOAD-BEARING TWICE OVER. It began as a measurement
+   * of a margin: the longest asset in the shipped vocabulary is 10.2931W,
+   * a factor of about four short, and `coverCandidates` filtered on
+   * height and on the ACROSS extent with no cap on `along` at all — so
+   * what protected the demo was the art, which moves when the art does.
+   * The cap that closes that (`ENCLOSE.maxAlongW` = 16W) was placed off
+   * THESE ROWS, at the conservative end of the measured-safe range rather
+   * than on the 32-to-44 bracket. So this test no longer gates the demo
+   * on its own; it gates the numbers the cap was chosen from, which is
+   * the more durable job. The rows moving is what should force the cap to
+   * be re-chosen.
+   *
+   * IT IS NOT MADE VACUOUS BY THAT CAP: what is swept below are
+   * `Occluder`s handed straight to `occludes`, never candidates from
+   * `coverCandidates`, so the geometry is still measured at lengths the
+   * cap now refuses to admit. That is deliberate — a bound is only worth
+   * what the measurement past it is worth.
    */
   it("but the floor is not clearance: a long enough rib reaches the cone over a crest", async () => {
     const TALL = 0.4;
@@ -547,8 +565,10 @@ describe("the post-enclosure repair pass", () => {
     for (const n of at32) expect(n).toBe(0);
 
     // BUT NOT FOUR TIMES IT. This is the assertion that makes the two
-    // above mean something: the floor is held by the vocabulary's reach,
-    // not by the corridor's ceiling, and here is where it gives.
+    // above mean something: the floor is held by reach, not by the
+    // corridor's ceiling, and here is where it gives. It is also the row
+    // that puts an upper bracket on `ENCLOSE.maxAlongW` — the cap has to
+    // sit below wherever this starts reporting a block.
     const at44 = await at(44);
     rows.push(`  along 44.00 W                    ribs blocking: ${at44.join(" ")}`);
     expect(at44.some((n) => n > 0)).toBe(true);
@@ -559,7 +579,8 @@ describe("the post-enclosure repair pass", () => {
           ` ${stations} ribs per lap, seeds ${SEEDS.join("")}`,
         ...rows,
         `  control: the same rib at h=0.1 blocks ${inTheCone}/${stations}`,
-        `  nothing caps \`along\` in coverCandidates; the margin is ${(44 / shipped).toFixed(1)}x`,
+        `  \`coverCandidates\` caps \`along\` at ${ENCLOSE.maxAlongW} W;` +
+          ` longest shipped ${shipped.toFixed(2)} W, first blocking row 44 W`,
       ].join("\n"),
     );
   }, 300_000);
