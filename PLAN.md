@@ -4864,7 +4864,35 @@ deliberate and documented, and the reference one loses a mark on seed 3.
 This is a change to what is on screen, so it should be measured and LOOKED
 AT before it ships, the way Z-3's donor order still should be.
 
-### The corpus's own runFit demo has the two-rulers bug, and fixing it breaks what it teaches, 2026-08-28
+### ~~The corpus's own runFit demo has the two-rulers bug, and fixing it breaks what it teaches~~ -- TAKEN 2026-08-28, ruler and period moved together
+
+**TAKEN the same day this was written**, in `5858802` "graphs: the runFit demo
+measures the road it actually emits", seven hours after the entry below. It did
+exactly what "What the fix would be" specifies: `resampledLengthAttr` for the
+emitted total, `sampleArcAttr: "station"` for the coordinate, the `station`
+setAttribute deleted, and `runFit`'s `period` moved to the emitted length in the
+same edit. The commit carried `docs/graphs.json`, `docs/graphs.md`,
+`docs/gallery.html`, `graphs/panels/basics-fit-runs.json` and
+`tests/graphs.golden.json` with it.
+
+**THE TWO `promoteAttribute` NODES STAYED, and the brief below is wrong to say
+they go.** `runFit` resolves `period` on the primitive domain of the path
+`pointsToPath` builds out of the points, and a primitive attribute does not
+survive that trip -- drop either promote and the cook fails with `attribute
+"lapLength" not found`. The promotes are what the PERIOD costs; only the
+coordinate got free.
+
+**EVERY FIGURE QUOTED BELOW IS THE PRE-FIX ONE.** The graph now reads slope
+0.303882, worst residual 3.762323, `runStart` 179.67 and 305.27, and the seam
+row's residual is 0.00018 rather than the "0" the old prose called straight.
+That zero was measuring nothing: `off` is 0.3 x a counter advancing once per
+SAMPLE and `curveU` times a length IS that counter times a constant, so the row
+was fitted against a rescaled copy of what generated it. Colour buckets did not
+move -- 2 green, 2 red, 1 blue. Re-verified against a headless cook on
+2026-09-05: all of the above plus the panel spec's three claims reproduce, and
+`src/docs/graphIndex.test.ts` (the docs drift test) is green.
+
+The decision as it stood follows.
 
 Found while shipping `splineSample`'s length reports. `graphs/basics-fit-runs.json`
 contains exactly the pattern PLAN's ruler entry describes: `pathResample`
@@ -4923,6 +4951,51 @@ the two-rulers expression by name. That is worse than a stale number. It was
 not taken unattended only because a teaching graph's quoted figures are
 content, not output, and rewriting five of them silently is not a thing to
 do without the author looking at the result.
+
+### Two corpus graphs still build on the curve's ruler, and one of them contradicts the node it demonstrates, 2026-09-05
+
+Found by sweeping for the pattern after the runFit entry above was marked
+taken. `basics-fit-runs` is clean and is now the reference for the fixed
+shape; `src/` teaches it correctly everywhere. Two graphs are not.
+
+**`graphs/basics-scatter-along-a-path.json` is the one worth taking.**
+`pathResample` writes `lengthAttr: "length"` -- the INPUT curve, 100.4906 --
+and `pointScatterOnPath.count` is `mul(0.35, attribute("length"))`, while the
+scatter walks the EMITTED polyline and writes its `arcAttr: "station"` on that
+ruler. `pointScatterOnPath.count`'s own param doc
+(`src/nodes/pointScatterOnPath.ts:114`) states the idiom as
+`mul(0.05, attribute("pathLength"))` where `pathLength` is "whatever
+pathResample's `resampledLengthAttr` wrote". So the corpus graph that
+DEMONSTRATES the node uses the column the node's doc tells you not to. That is
+the same complaint that made the runFit fix worth doing -- a graph teaching
+the mistake -- and it is a one-word param change. The count almost certainly
+still rounds to 35, so the picture should not move, but `meta.description`
+quotes 100.4906 by name and would need re-measuring.
+
+**`graphs/basics-runs-along-a-path.json` is latent and the exact fix does not
+exist yet.** `lengthAttr: "lapLength"` then `seg = div(lapLength, 240)`, fed to
+two `pathRuns` as an accumulated DISTANCE along the emitted polyline. That
+expression is `stepAttr` written by hand, and `stepAttr`'s own doc confirms it
+is on the curve ruler by construction -- "the step is that path's OWN length
+divided by its divisions", which is what makes `stepAttr` times the divisions
+equal `lengthAttr` exactly. The only consumer, the colour ramp's
+`div(lapLength, 4)`, is in the same wrong ruler, so the drift is invisible.
+
+**Swapping in `resampledLengthAttr` there is BETTER BUT NOT RIGHT**, and the
+distinction is the reason this is an entry rather than a chore. It would make
+the ruler right and the lap total exact, but `seg` would still be a CONSTANT
+standing in for chords that are not uniform -- 0.87126 through the tightest
+bend against 0.87233 through the loosest, on the sibling graph's lap. Being
+exact needs each sample's OWN chord, and no report writes one: `sampleArcAttr`
+is cumulative and on the point domain, `stepAttr` is per-path and on the
+curve's ruler. `pathRuns` accumulates a per-point value and has no `arcAttr`
+to take a cumulative column instead.
+
+**So there is a third option under this, and it is a library change**: a
+per-sample `sampleStepAttr` on `pathResample`, the point-domain sibling of
+`stepAttr`, which is the column a segmented distance scan actually wants.
+Not surveyed for cost. Raised with Carlos 2026-09-05 alongside the two graph
+edits; no decision yet, and nothing in this entry is taken.
 
 ### The second repair pass has exactly one lock, and it is not the one anyone thought, 2026-08-28
 
