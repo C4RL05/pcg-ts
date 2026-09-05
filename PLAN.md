@@ -5112,6 +5112,62 @@ as a per-sample step. Decide it in the same edit and say so in its doc.
 each sample's own chord, and that this is not a column the library reports.
 That sentence and its copy in `docs/graphs.md` go the day this ships.
 
+**THE PLACEHOLDER IS SETTLED, 2026-09-05: `0`, and the demo already said so.**
+Checked after the survey because the recommendation turned on it. The open-path
+convention is not a new decision -- `dressGraph.ts:3720-3724` ships it, with the
+reasoning in the comment: "the source column's default is 0, so the LAST member
+of a run reads a gap-ahead of 0, and 0 is what 'there is nothing after me' has to
+contribute". Copy that, do not re-derive it.
+
+**NaN IS NOT MERELY WORSE, IT BREAKS A SHIPPED GRAPH, and this was cooked rather
+than argued.** Patching only the last sample of `examples-rig`'s step column to
+NaN fails the cook outright: `node "partScatter" failed: jitterPoints: param
+"amount" resolved to NaN at element 660 -- 1 of 661 elements are non-finite`,
+with `0` and the unmodified graph as controls that both cook. That is
+`requireFiniteColumn` via `resolveOn`, and it names the CONSUMING node rather
+than the source, which is the whole reason to refuse NaN here. NaN is genuinely
+better for the FOLD family -- `pathScan`/`pathRuns` skip it under sum, min and
+max alike -- but one column has to serve folds and field params both, and the
+field side is fatal.
+
+**THE OPEN-PATH CONSUMER IS REAL AND THE COST IS ONE POINT.** `examples-rig`'s
+`partDense` resamples `spineSpinePath`, which is `closed: false`, so this is the
+consumer that meets the placeholder. The last sample SURVIVES the `filterByDensity`
+downstream (curveU tail 0.9978 / 0.9989 / 1.0000, all live), so the placeholder
+reaches 1 point in 661. Its jitter goes from 0.007766 to 0, against a median of
+0.019 on a rig spanning 34 units. Invisible, and confirmed by cooking rather than
+assumed.
+
+**`0` IS ALSO THE ONLY CHOICE THAT KEEPS THE INVARIANT.** Measured both ways:
+open rig spine, 900 samples, sum of the column = 34.212988546 against
+`resampledLengthAttr` 34.212989807 (1.3e-6, f32 rounding); closed 24-gon,
+17 samples, 31.047059108 against 31.047060013. So `sum(column) ==
+resampledLengthAttr` holds on open AND closed paths, and `sampleArc[i] + step[i]
+= sampleArc[i+1]` chains into the last sample. Repeating the previous chord
+instead would double-count and break both.
+
+**A MIN FOLD NEEDS A MASK, AND THE DISCRIMINATOR IS FREE.** `curveU === 1`
+identifies the placeholder sample exactly, is unique, and never fires on a closed
+path -- verified in count AND spacing mode. So the idiom is
+`select(eq(curveU, 1), <sentinel>, sampleChord)`, structurally the same mask
+`stationGraph.ts:750` already uses, and NO companion `hitAttr` column is
+warranted (unlike `pathShift`, whose miss can also mean "point on no polyline" --
+a data-dependent fact this one is not).
+
+**A LATENT HAZARD FOUND ON THE WAY, worth knowing before anyone opens that path.**
+`stationGraph.ts:666` ALREADY builds this exact forward-gap column by hand, with
+`0` as its no-successor placeholder, and folds `min` over a key derived from it at
+`:750`. It is safe only because the path is closed (`:639-642`) and the shift
+wraps (`:648-657`), so the `0` branch is dead code. Open that path and the last
+station wins the argmin and is named the most crowded.
+
+**AND A SEPARATE `spacing`-MODE TRAP THAT NO PLACEHOLDER FIXES.** In `spacing`
+mode on an open path the node pushes `L` as the final sample (`paths.ts:742`), so
+the SECOND-TO-LAST chord is a genuine remainder and can be arbitrarily small --
+measured `[2.4999, 2.4999, 3.9959e-4]` on a length-10 line at spacing 2.4999. A
+naive min over this column is therefore meaningless on an open path REGARDLESS of
+what the last sample holds. The param doc has to say so; a mask is the only fix.
+
 ### The second repair pass has exactly one lock, and it is not the one anyone thought, 2026-08-28
 
 T4.4 asked for a fixture that makes the racetrack's post-enclosure repair
