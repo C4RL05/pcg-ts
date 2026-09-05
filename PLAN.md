@@ -5032,8 +5032,85 @@ to take a cumulative column instead.
 **So there is a third option under this, and it is a library change**: a
 per-sample `sampleStepAttr` on `pathResample`, the point-domain sibling of
 `stepAttr`, which is the column a segmented distance scan actually wants.
-Not surveyed for cost. Carlos took the two graph edits on 2026-09-05 and left
-this one; it stays open.
+Carlos took the two graph edits on 2026-09-05 and left this one. SURVEYED
+2026-09-05; the survey is below and the decision is still open.
+
+#### `sampleStepAttr` surveyed, 2026-09-05 -- cheap to build, and NOT a capability gap
+
+**THE NUMBER IS ALREADY COMPUTED AND THROWN AWAY.** `paths.ts:862` folds
+`Math.sqrt(...)` straight into the arc accumulator without ever binding it, so
+the param is one local hoist plus a store: no extra sqrt, no extra pass, nothing
+allocated when unset. Param-only is 6 files (2 hand-edited) and ~22 edit sites;
+wired into the graph, ~15 files and ~30 sites. `a6b865c` added TWO reports at
+once, inventing their refusals from scratch, for 7 files and 705 insertions. GPU
+implication is zero -- `pathResample` declares no `gpu` flag and `src/gpu` never
+names it.
+
+**BUT `pathShift` ALREADY DOES IT EXACTLY, IN TWO NODES, TODAY.** Shift `P`
+forward one with `wrap` and take `length(sub(nextP, P))`: max error 5.5e-8, 0.10
+ppm against the f64 chord, and on a closed path the seam is FREE because `wrap`
+makes the last sample's partner the first. That nearly kills the proposal and
+has to be the starting point of any argument for it. Differencing `sampleArcAttr`
+instead is the worse spelling -- three nodes, and 16.6 ppm per chord because
+subtracting two f32 values near 133 to recover 0.556 loses four digits.
+
+**WHAT KEEPS IT ALIVE IS A MEASURED FOOTGUN, not a missing capability.** On an
+OPEN path `pathShift(P, +1)` gives a wrong last value under EVERY `outOfRange`
+setting, and all three are finite plausible numbers rather than errors: `wrap`
+(the default) gives 1.607, the chord back to the FIRST sample, about 3x a real
+chord here and indistinguishable from one on a path whose ends are close;
+`clamp` gives 0, accidentally correct; `miss` gives 29.67, which is the distance
+to P's origin default. And `clamp` does not come round the seam on a closed
+path, so no single setting is safe for both. The right setting depends on a
+property of the path the author may not control.
+
+**NEITHER CHORD CONVENTION SERVES BOTH `pathRuns` DIRECTIONS**, which is the
+design finding and it is not what I assumed. `pathRuns` resets and writes BEFORE
+folding, so a point's own value pays for LEAVING it in the direction of travel:
+forward leaves along the next edge, backward along the previous one. Measured on
+the ring, forward chords give `since` 0.072 ppm and `ahead` 296 ppm; backward
+chords mirror it exactly. Since `b[i] = c[i-1]` bit for bit, ONE forward column
+plus one `pathShift(offset: -1, wrap)` makes both exact -- so the param buys the
+motivating graph 2 nodes (wrong) -> 1 (exact), against 3 without it, and does
+NOT eliminate `pathShift`. Take FORWARD: it is what `since` wants unshifted,
+what all three non-`pathRuns` consumers want, and the only convention under
+which a closed path's closing chord has an owner.
+
+**`0` AT AN OPEN PATH'S LAST SAMPLE, NEVER NaN.** `setAttribute` refuses to mint
+a non-finite column at all, and worse, `resolveOn` pipes every field param
+through `requireFiniteColumn` -- so a NaN would make any downstream field read
+refuse the WHOLE cook, with an error naming the consuming node rather than the
+source. `examples-rig.json:1211` already reads a step column that way.
+
+**FOUR CONSUMERS, not the one graph the entry above claimed.**
+`basics-runs-along-a-path` (the motivating case), `examples-rig.json:1120` and
+`:1215` (a per-SAMPLE jitter radius answered with the per-PATH mean, and the
+only live read of `stepAttr` in the repo), and `enclosureGraph.ts:434` and
+`:1358`, which BOTH hand-build the forward chord as `pathShift` plus a seam
+`select` under 13 and 4 lines of comment explaining why. Those two want the
+forward gap WITH the closing chord, which independently corroborates the
+convention.
+
+**TWO DEAD COLUMNS FOUND ON THE WAY**, worth deleting whatever is decided here:
+`demos/road/graph.ts:167` and `demos/racetrack/graph.ts:449` both write
+`stepAttr: "stepLen"` and promote it, and nothing anywhere reads it.
+
+**THE NAMING IS THE ONE THING TO SETTLE FIRST.** `stepAttr`'s own suggested
+column name is already `sampleStep` and seven tests spell it that way, so a
+POINT param suggesting the same string would put two identically-named report
+columns on different domains in the one node whose whole story is not mixing two
+rulers. Suggest `sampleChord`, and name the param for the direction it means.
+
+**`splineSample` SHOULD NOT GET THE SYMMETRIC PARAM.** It concatenates every
+polyline into one curve, so a sample crossing a join owns a chord that is the
+spatial JUMP between two unrelated curves -- `samplers.test.ts:705` already pins
+that join chord at sqrt(136). Honest inside a cumulative coordinate, misleading
+as a per-sample step. Decide it in the same edit and say so in its doc.
+
+**AND IT WOULD FALSIFY PROSE SHIPPED THE SAME DAY.**
+`basics-runs-along-a-path`'s description says being exact per step would need
+each sample's own chord, and that this is not a column the library reports.
+That sentence and its copy in `docs/graphs.md` go the day this ships.
 
 ### The second repair pass has exactly one lock, and it is not the one anyone thought, 2026-08-28
 
