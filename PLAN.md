@@ -4955,10 +4955,13 @@ shipped floor at h = 2.158 blocks 0 even at 44W.
 **SO THE LEVER IS A LONGER ASSET, NOT A LOWER ONE**, and the first test
 could not have found that -- its adversarial sweep varied `tall` and the
 stated height while PINNING `across: 1.4, along: 2.2`, which are the two
-dimensions that decide it. `coverCandidates` filters on height and on
-`across` and puts NO CAP ON `along` AT ALL. What protects the demo is data:
-the longest shipped asset is 10.29W, a 4.3x margin. That is a property of
-the vocabulary and it moves when the vocabulary does.
+dimensions that decide it. `coverCandidates` filtered on height and on
+`across` -- which is a REACH FLOOR and not a cap, since
+`|lateral| - across/2 < coverW` admits a piece for being WIDE -- and put
+NO CAP ON `along` AT ALL. What protected the demo was data: the longest
+shipped asset is 10.2931W, a 4.3x margin. That is a property of the
+vocabulary and it moves when the vocabulary does. **A cap has since been
+taken; see the decision at the end of this entry.**
 
 **AND THE PASS STILL WOULD NOT FIRE, because there is exactly one lock and
 it is shut.** `occlusionCull`'s `include` gate takes `1 - cover`, so cover
@@ -4973,8 +4976,34 @@ kit, and a MEASURED MARGIN test that gates the art's reach and asserts 44W
 does block -- so the tripwire cannot pass vacuously the way its predecessor
 did.
 
-**Worth a decision, not taken here:** nothing caps `along` in
-`coverCandidates`. A cap would make the margin a rule instead of a
-coincidence. The alternative is to leave it and rely on the margin test,
-which is what shipped. Either is defensible; the current state is the
-second one, deliberately.
+### ~~Worth a decision: nothing caps `along`~~ -- TAKEN 2026-09-05, at 16W
+
+The decision as it stood: nothing caps `along` in `coverCandidates`. A cap
+would make the margin a rule instead of a coincidence. The alternative is
+to leave it and rely on the margin test, which is what shipped. Either is
+defensible; the state at the time was the second one, deliberately.
+
+**TAKEN, at `ENCLOSE.maxAlongW` = 16W.** Not the largest safe row -- 24 and
+32 also block 0 -- because the sweep only BRACKETS the threshold between 32
+and 44, and a cap on the bracket would rest on an interpolation. 16W is the
+conservative end of the measured-safe range, 1.55x over the longest shipped
+piece, and nothing in the vocabulary is rejected by it: 0 of 229, measured.
+
+**AND THE SWEEP GREW THE ROW THE CAP IS NAMED FOR.** Verification caught
+that the committed test asserted 10.29, 32 and 44 only -- so 16 was
+straddled by two asserted zeros rather than measured, which is exactly the
+interpolation the choice was made to avoid. `at(ENCLOSE.maxAlongW)` is now
+asserted in its own right (0 on all six seeds), keyed to the constant, so
+moving the cap moves the row.
+
+The margin test did NOT become redundant. It sweeps `Occluder` literals
+handed straight to `occludes` and never routes through `coverCandidates`,
+so it still measures geometry at lengths the cap refuses to admit -- it has
+gone from being the demo's only protection to being the justification for
+where the cap sits. Its rows moving is what should force the cap to be
+re-chosen.
+
+**Still unverified here:** the enclosed catalogue (235 assets, 121 cover),
+which is the one L-6 is developed against, has not been checked for pieces
+over 16W -- `road-kits.local.json` is not in this checkout. The kit-free
+consumers are unaffected.

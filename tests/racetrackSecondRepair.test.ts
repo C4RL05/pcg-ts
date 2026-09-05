@@ -71,9 +71,11 @@
  *      away under its far end. Measured with L-1's own predicate: nothing
  *      blocks up to 32W of `along`, 1-4 ribs per seed block at 44W, 4-9 at
  *      60W. The longest asset in the shipped vocabulary is 10.2931W.
- *      WHEN THIS WAS WRITTEN `coverCandidates` capped `across` and not
- *      `along`, so what held the cone clear was a factor of four in the
- *      ART rather than a rule. It now caps `along` at `ENCLOSE.maxAlongW`
+ *      WHEN THIS WAS WRITTEN `coverCandidates` bounded no length at all:
+ *      its other cut on `across` is a REACH FLOOR and not a cap --
+ *      `|lateral| - across/2 < coverW` admits a piece for being WIDE --
+ *      so what held the cone clear was a factor of four in the ART
+ *      rather than a rule. It now caps `along` at `ENCLOSE.maxAlongW`
  *      = 16W, chosen off the sweep below. The measurement is why the cap
  *      sits where it does, so this file did not become redundant when the
  *      cap landed — it became the cap's justification.
@@ -559,7 +561,20 @@ describe("the post-enclosure repair pass", () => {
     rows.push(`  along ${shipped.toFixed(2)} W (longest shipped)  ribs blocking: ${atShipped.join(" ")}`);
     for (const n of atShipped) expect(n).toBe(0);
 
-    // And so does three times it, which is the margin this rests on.
+    // AND SO DOES THE CAP'S OWN LENGTH, which is the row that has to be
+    // here rather than bracketed. `ENCLOSE.maxAlongW` is named off this
+    // sweep, and a value the sweep only STRADDLES -- zero at 10.29 below
+    // it and zero at 32 above it -- is an interpolation, not a
+    // measurement. Asserting it here is what lets `coverCandidates` say
+    // its cap was measured. Move the cap and this row moves with it.
+    const atCap = await at(ENCLOSE.maxAlongW);
+    rows.push(
+      `  along ${ENCLOSE.maxAlongW.toFixed(2)} W (the cap)        ribs blocking: ${atCap.join(" ")}`,
+    );
+    for (const n of atCap) expect(n).toBe(0);
+
+    // And so does three times the shipped longest, which is the margin
+    // the cap sits inside.
     const at32 = await at(32);
     rows.push(`  along 32.00 W                    ribs blocking: ${at32.join(" ")}`);
     for (const n of at32) expect(n).toBe(0);
